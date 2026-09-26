@@ -4,12 +4,31 @@
 // by site/js/games/render-tetris.js's static-mode "Model" playback so the demo works without a
 // server. Requires server.py running on :8787 (uv run uvicorn server:app --port 8787).
 import fs from 'node:fs';
+import assert from 'node:assert/strict';
 import { Tetris, greedyPolicy, QUESTION } from '../site/js/games/tetris.js';
 
 const SERVER = 'http://localhost:8787';
-const SEED = 7;
+const SOLO = process.argv.includes('--solo');
+const SEED = SOLO ? 8 : 7;
 const MAX_TICKS = 400; // pieces, not frames
-const BOARD = { w: 8, h: 14 };
+const BOARD = SOLO ? { w: 10, h: 20 } : { w: 8, h: 14 };
+const OUTPUT = SOLO ? 'tetris-solo.json' : 'tetris.json';
+const OUTPUT_URL = new URL(`../site/data/replays/${OUTPUT}`, import.meta.url);
+
+function checkReplay({ frames, summary }) {
+  const engine = new Tetris({ ...BOARD, seed: SEED });
+  for (const frame of frames.filter((f) => f.move)) {
+    const state = engine.state();
+    assert.equal(frame.tick, state.pieces);
+    assert.deepEqual(frame.state.board, state.board);
+    assert.deepEqual(frame.candidates, engine.candidates());
+    assert.ok(frame.candidates.includes(frame.move));
+    engine.step(frame.move);
+  }
+  assert.equal(engine.dead, true);
+  assert.equal(engine.lines, summary.lines_cleared);
+  console.log(`[tetris] replay check OK: ${summary.decisions} decisions, ${summary.lines_cleared} lines`);
+}
 
 async function decide(state, queries) {
   const res = await fetch(`${SERVER}/api/decide`, {
@@ -63,6 +82,7 @@ async function main() {
   const summary = {
     game: 'tetris',
     seed: SEED,
+    ...BOARD,
     pieces: frames.length,
     lines_cleared: frames[frames.length - 1].state.lines,
     decisions: decided.length,
@@ -70,10 +90,13 @@ async function main() {
     mean_p_null: decided.reduce((s, f) => s + f.p_null, 0) / (decided.length || 1),
     mean_ms: decided.reduce((s, f) => s + f.ms, 0) / (decided.length || 1),
   };
-  fs.writeFileSync(new URL('../site/data/replays/tetris.json', import.meta.url), JSON.stringify({ frames, summary }));
+  const replay = { frames, summary };
+  checkReplay(replay);
+  fs.writeFileSync(OUTPUT_URL, JSON.stringify(replay));
   console.log(`[tetris] pieces=${frames.length} lines_cleared=${summary.lines_cleared} rule_agreement=${summary.rule_agreement}/${summary.decisions}`);
   console.log(`[tetris] mean p_null=${summary.mean_p_null.toFixed(3)} mean ms=${summary.mean_ms.toFixed(1)}`);
   console.log(`STATS_JSON ${JSON.stringify(summary)}`);
 }
 
-main();
+if (process.argv.includes('--check')) checkReplay(JSON.parse(fs.readFileSync(OUTPUT_URL)));
+else main();

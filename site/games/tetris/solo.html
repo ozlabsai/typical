@@ -139,7 +139,7 @@
 <main>
   <section class="rail left">
     <div>
-      <p class="eyebrow live"><i></i>Live · typical-small</p>
+      <p class="eyebrow live"><i></i><span id="source">Live · typical-small</span></p>
       <h1>Tetris</h1>
       <p class="lede">Every placement on this board is <b>typical-small</b>'s own choice.</p>
     </div>
@@ -171,6 +171,7 @@
 <script type="module">
 import { Tetris, SHAPES, QUESTION, dropRow } from '../../js/games/tetris.js';
 import { decide, fmtProb, mode, probeHealth } from '../../js/api.js';
+import { loadJSON, replayFrame } from '../../js/games/loop.js';
 
 const params = new URLSearchParams(location.search);
 const SEED = Number(params.get('seed') ?? 8);
@@ -183,6 +184,7 @@ const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms / SPEED));
 
 const engine = new Tetris({ w: W, h: H, seed: SEED });
+let cachedFrames = [], cached = false;
 const cells = Array.from({ length: W * H }, () => document.createElement('i'));
 $('board').append(...cells);
 $('question').textContent = QUESTION;
@@ -239,6 +241,18 @@ function veil(title, text) {
   $('veil').hidden = false;
 }
 
+function cachedDecision(s, options) {
+  const frame = replayFrame(cachedFrames, s.pieces);
+  if (!frame || frame.tick !== s.pieces || JSON.stringify(frame.state?.board) !== JSON.stringify(s.board)) return null;
+  const pick = options.find((o) => o.label === frame.move);
+  return pick ? { pick, probs: frame.probs, p_null: frame.p_null, ms: frame.ms } : null;
+}
+
+function useCache() {
+  cached = true;
+  $('source').textContent = 'Cached · typical-small';
+}
+
 async function play() {
   $('veil').hidden = true;
   while (!engine.dead) {
@@ -251,16 +265,30 @@ async function play() {
 
     let pick = options[0], probs = { [pick.label]: 1 };
     if (options.length > 1) {
-      const res = await decide(engine.describe(), [{ type: 'choice', question: QUESTION, labels: options.map((o) => o.label) }]);
-      const r = res?.results?.[0];
-      pick = options.find((o) => o.label === r?.argmax);
+      let r, res;
+      if (cached) pick = null;
+      if (!cached) {
+        res = await decide(engine.describe(), [{ type: 'choice', question: QUESTION, labels: options.map((o) => o.label) }]);
+        r = res?.results?.[0];
+        pick = options.find((o) => o.label === r?.argmax);
+      }
+      const saved = cached || !pick ? cachedDecision(s, options) : null;
+      if (saved) {
+        useCache();
+        ({ pick, probs } = saved);
+        $('meta').innerHTML = `none of these <b>${fmtProb(saved.p_null)}</b> · cached · <b>${Math.round(saved.ms)} ms</b> recorded`;
+      }
       // ponytail: no policy fallback on this page -- a silent substitute would put a move on video
-      // that the model did not make. If the server drops out, the run stops and says so.
+      // that the model did not make. The only fallback is the same model's recorded decision.
       if (!pick) return veil('Model went quiet', 'the server stopped answering; press <code>R</code> to restart');
-      probs = r.probs;
-      $('meta').innerHTML = `none of these <b>${fmtProb(r.p_null)}</b> · <b>${Math.round(res.ms)} ms</b> on ${res.device ?? 'device'}`;
+      if (!saved) {
+        probs = r.probs;
+        $('meta').innerHTML = `none of these <b>${fmtProb(r.p_null)}</b> · <b>${Math.round(res.ms)} ms</b> on ${res.device ?? 'device'}`;
+      }
     } else {
-      $('meta').innerHTML = 'only one legal drop';
+      const saved = cachedDecision(s, options);
+      if (cached && saved) probs = saved.probs;
+      $('meta').innerHTML = cached ? 'cached model run · only one legal drop' : 'only one legal drop';
     }
     drawOptions(options, pick, probs);
     draw(s.board, piece);
@@ -313,12 +341,18 @@ let started = null;
 
 drawSide(engine.state());
 draw(engine.state().board, { ...engine.state().current, row: 0 });
-if ((await probeHealth()) !== 'live') {
-  veil('Model offline', 'start the server from the repo root:<br><code>uv run uvicorn --app-dir site server:app --port 8787</code><br>then open this page from it');
-} else {
+const saved = await loadJSON('../../data/replays/tetris-solo.json');
+if (saved?.summary?.seed === SEED && saved.summary.w === W && saved.summary.h === H) cachedFrames = saved.frames ?? [];
+if ((await probeHealth()) === 'live') {
   // Waits for a key so the recording can start on a still board.
   veil('Ready', 'press <code>space</code> to start');
   started = play;
+} else if (cachedFrames.length) {
+  useCache();
+  veil('Ready', 'cached typical-small run · press <code>space</code> to start');
+  started = play;
+} else {
+  veil('Model offline', 'start the server from the repo root:<br><code>uv run uvicorn --app-dir site server:app --port 8787</code><br>then open this page from it');
 }
 </script>
 </body>
