@@ -4,9 +4,17 @@
 // Demo-spec v4 grammar, adapted: the model does not press keys, it picks ONE candidate
 // placement (rotation+column) per piece - the decision that matters, not the keystrokes that
 // execute it (Snake picks a direction per tick, not a lookahead path; this is the same idea one
-// level up). Candidates are legal hard-drop pairs, capped at 6 and spread across the board
-// features that make one placement different from another; each carries its exact post-drop
-// outcome so a small model can make an informed comparison.
+// level up). Candidates are legal (rotation, column) hard-drop pairs, capped at 6 and spread
+// across the board features that make one placement different from another (a well, a notch, a
+// clear), never raw coordinates. The state sentence lists only the board situations that apply,
+// pre-computed, fixed order, no numbers to compare. A drop that would trap an empty cell says so in
+// words ("bury a hole on the left"), and the state opens with the one rule that makes that phrase
+// mean something. Measured on typical-small (rev 0ff732e), 10x20, seeds 1-40, capped at 300 pieces:
+//   positional labels only ("set it down on the left of the stack")  median  64 pieces, 12 lines
+//   + "leaving a gap underneath" / "sitting flush" (model preferred the gap)  74 pieces, 15 lines
+//   "bury a hole" / "fill in the stack" + the solid-blocks rule          253 pieces, 89 lines
+//   random choice among the same options                              55 pieces,  8 lines
+// Labels that spelled out raw holes / peak / roughness numbers were worse than positional ones.
 
 function mulberry32(seed) {
   return function () {
@@ -60,7 +68,7 @@ function statesFor(base) {
   }
   return states;
 }
-const SHAPES = Object.fromEntries(PIECE_TYPES.map((t) => [t, statesFor(BASE[t])]));
+export const SHAPES = Object.fromEntries(PIECE_TYPES.map((t) => [t, statesFor(BASE[t])]));
 
 function fits(board, cells, col, row, W, H) {
   return cells.every(([dx, dy]) => {
@@ -69,7 +77,7 @@ function fits(board, cells, col, row, W, H) {
     return x >= 0 && x < W && y >= 0 && y < H && !board[y][x];
   });
 }
-function dropRow(board, cells, col, W, H) {
+export function dropRow(board, cells, col, W, H) {
   if (!fits(board, cells, col, 0, W, H)) return null;
   let row = 0;
   while (fits(board, cells, col, row + 1, W, H)) row++;
@@ -143,22 +151,34 @@ function lockAndClear(board, W, H, cells, col, row, type) {
   return { board: kept, linesCleared: cleared, holes, holesCreated, bumpiness, maxHeight };
 }
 
+function third(p, W) {
+  const mid = p.col + (p.w - 1) / 2;
+  return mid < W / 3 ? 'on the left' : mid > (2 * W) / 3 ? 'on the right' : 'in the middle';
+}
+
 // Classifies one candidate placement against the board it would land on (pre-lock, for the well/
-// notch geometry) - the same precedence order as RULES/greedyPolicy.
-function classify(p, wells) {
+// notch geometry) - the same precedence order as RULES/greedyPolicy. Every placement gets
+// exactly one label; label text never carries a raw distance, only an identifying column number
+// or a qualitative side (demo-spec v4: numbers the model would have to compare leak into the
+// decision, but an identifier like "column 4" does not ask for a comparison).
+function classify(p, wells, W) {
   if (p.linesCleared > 0) {
-    return { category: 'clear_line' };
+    return { category: 'clear_line', label: `clear the row by filling column ${p.col + 1}` };
   }
   const pc0 = p.col;
   const pc1 = p.col + p.w - 1;
   const region = wells.find((w) => pc0 >= w.c0 && pc1 <= w.c1);
   if (region && region.width === 1) {
-    return { category: 'fill_notch' };
+    return { category: 'fill_notch', label: `fill the notch in column ${pc0 + 1}` };
   }
   if (region) {
-    return { category: 'settle_well' };
+    const side = region.c0 === 0 ? 'left' : region.c1 === W - 1 ? 'right' : (region.c0 + region.c1) / 2 < W / 2 ? 'left' : 'right';
+    const edge = region.c0 === 0 || region.c1 === W - 1;
+    const upright = p.h > p.w;
+    if (edge && upright) return { category: 'settle_well', label: `stand it up against the ${side} wall` };
+    return { category: 'settle_well', label: upright ? `stand it up in the ${side} well` : `lay it flat in the ${side} well` };
   }
-  return { category: 'default' };
+  return { category: 'default', label: `fill in the stack ${third(p, W)}` };
 }
 
 const CATEGORY_ORDER = ['clear_line', 'fill_notch', 'settle_well', 'default'];
@@ -220,15 +240,20 @@ export class Tetris {
         const lock = lockAndClear(this.board, this.W, this.H, state.cells, col, row, type);
         const p = { col, row, w: state.w, h: state.h, cells: state.cells, rotation, ...lock };
         p.score = p.linesCleared * 100 - p.holesCreated * 15 - p.bumpiness * 2 - p.maxHeight;
-        const { category } = classify(p, wells);
+        const { category, label } = classify(p, wells, this.W);
         p.category = category;
-        const clear = p.linesCleared ? `clear ${p.linesCleared} line${p.linesCleared === 1 ? '' : 's'}` : 'no clear';
-        p.label = `rotate ${rotation + 1}, drop column ${col + 1} — ${clear}; ${p.holes} holes; peak ${p.maxHeight}; roughness ${p.bumpiness}`;
+        // A hole outranks the geometry: "fill the notch" that buries a cell is still a bad drop.
+        p.label = p.holesCreated && category !== 'clear_line' ? `bury a hole ${third(p, this.W)}` : label;
         raw.push(p);
       }
     });
-    const byCat = new Map();
+    const byLabel = new Map();
     for (const p of raw) {
+      const cur = byLabel.get(p.label);
+      if (!cur || p.score > cur.score) byLabel.set(p.label, p);
+    }
+    const byCat = new Map();
+    for (const p of byLabel.values()) {
       const arr = byCat.get(p.category) ?? [];
       arr.push(p);
       byCat.set(p.category, arr);
@@ -246,10 +271,10 @@ export class Tetris {
     return this._candidates().map((p) => p.label);
   }
 
-  // The UI sends these measurements alongside the wording above. They are all computed after
-  // the hard drop, so a live model can compare actual consequences instead of vague positions.
+  // The full placements behind the labels (where each lands, its heuristic score) - for UIs that
+  // animate the drop or guard a live answer. The model itself only ever sees the labels.
   candidateDetails() {
-    return this._candidates().map(({ label, score, linesCleared, holes, maxHeight, bumpiness }) => ({ label, score, linesCleared, holes, maxHeight, bumpiness }));
+    return this._candidates();
   }
 
   // Copies the board (like Snake/Doom/Drive's state()) rather than handing out live references.
@@ -292,17 +317,13 @@ export class Tetris {
     return [top, ...rows, bottom].join('\n');
   }
 
-  boardMap() {
-    return this.board.map((row) => row.map((cell) => (cell ? '#' : '.')).join('')).join('\n');
-  }
-
   // Situations-only grammar (demo-spec v4, extended to a placement game): only the board
   // situations that apply, pre-computed, fixed order, no raw heights or distances - "the stack is
   // close to the top" not "the stack is 10 rows tall".
   describe() {
     const wells = wellRegions(this.board, this.W, this.H);
     const heights = colHeights(this.board, this.W, this.H);
-    const sentences = [];
+    const sentences = ['A good placement rests on solid blocks.'];
     const side = (r) => (r.c0 === 0 ? 'left' : r.c1 === this.W - 1 ? 'right' : (r.c0 + r.c1) / 2 < this.W / 2 ? 'left' : 'right');
     const well = wells.filter((w) => w.width >= 2).sort((a, b) => b.depth - a.depth)[0];
     if (well) sentences.push(`The board has a multi-column well on the ${well.c0 === 0 || well.c1 === this.W - 1 ? side(well) : 'middle'}.`);
@@ -392,7 +413,7 @@ function selfTest() {
   // candidate generation: a spread of legal placements, gold is always one of the offered labels
   const cands = t.candidates();
   console.assert(cands.length >= 1 && cands.length <= 6, 'offers between 1 and 6 candidates');
-  console.assert(new Set(cands).size === cands.length && cands.every((label) => label.includes('holes') && label.includes('peak')), 'candidate labels are unique and describe their outcomes');
+  console.assert(new Set(cands).size === cands.length && !cands.some((label) => /holes|peak/.test(label)), 'candidate labels are unique and carry no numbers to compare');
   const gold = greedyPolicy(t);
   console.assert(cands.includes(gold), 'greedyPolicy picks one of the offered candidates');
 
