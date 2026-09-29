@@ -118,7 +118,7 @@ FAMILY = {
     "clinc": "intent", "clinc_test": "intent", "clinc_oos": "intent",
     "clinc_heldout": "intent", "clinc_k": "intent",
     "hwu64": "intent", "hwu64_test": "intent", "snips": "intent",
-    "massive": "intent", "mtop": "intent",
+    "massive": "intent", "massive_he": "intent", "mtop": "intent",
     "banking77_test": "intent", "banking77_k": "intent",
     "cse_clinc": "intent", "cse_hwu64": "intent", "cse_banking77": "intent",
     "ksweep_clinc": "intent", "ksweep_banking77": "intent",

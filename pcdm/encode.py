@@ -8,7 +8,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoProcessor, AutoTokenizer
 
 _printed_device = False
 
@@ -65,7 +65,8 @@ _LORA_MODULES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj",
 class Backbone(nn.Module):
     def __init__(self, name: str = "Qwen/Qwen3-1.7B-Base", lora_layers: int = 8, lora_r: int = 16,
                  lora_alpha: float = 32, lora_dropout: float = 0.05, device: str = "auto", tap_layer: int = 0,
-                 extra_tap: int = 0, dtype: torch.dtype = torch.bfloat16):
+                 extra_tap: int = 0, dtype: torch.dtype = torch.bfloat16, multimodal: bool = False,
+                 max_image_pixels: int = 262144):
         super().__init__()
         self.device = pick_device(device)
         self.tokenizer = AutoTokenizer.from_pretrained(name, padding_side="right")
@@ -74,14 +75,18 @@ class Backbone(nn.Module):
         # dtype: bf16 everywhere in training/serving; a test can pass float32 to isolate a
         # correctness question (e.g. KV-cache parity) from bf16 rounding noise.
         model = AutoModel.from_pretrained(name, dtype=dtype, attn_implementation="sdpa")
-        # Qwen3.5 family: AutoModel resolves to the VL wrapper (Qwen3_5Model, .visual + .language_model)
-        # even for a text-only "Base" checkpoint (its config always carries an unused vision_config).
-        # The text-only trunk is .language_model (a plain Qwen3_5TextModel, same shape of API as
-        # Qwen3Model below); .visual is never touched by this pipeline, so drop it immediately.
-        if hasattr(model, "language_model") and hasattr(model, "visual"):
-            model = model.language_model
-        self.model = model
+        wrapper = model if hasattr(model, "language_model") and hasattr(model, "visual") else None
+        if multimodal and wrapper is None:
+            raise ValueError(f"--multimodal requires a vision-language backbone, got {name}")
+        # Keep `model` as the text trunk: every existing text path and checkpoint key stays
+        # unchanged. The optional wrapper shares this exact trunk and only handles image rows.
+        self.model = wrapper.language_model if wrapper is not None else model
+        self.multimodal_model = wrapper if multimodal else None
+        self.processor = AutoProcessor.from_pretrained(name, padding_side="right") if multimodal else None
+        self.max_image_pixels = max_image_pixels
         self.model.requires_grad_(False)
+        if self.multimodal_model is not None:
+            self.multimodal_model.requires_grad_(False)
         self.d = self.model.config.hidden_size
         n_layers = self.model.config.num_hidden_layers
         # tap_layer: take the tower's memory from layer T (< n_layers) instead of the last layer —
@@ -122,6 +127,28 @@ class Backbone(nn.Module):
             self.info["lora_modules"] = sorted(lora_targets)
             print(f"Backbone: LoRA (r={lora_r}) on {sorted(lora_targets)}, last {lora_layers} layers")
         self.to(self.device)
+
+    def visual_prefix(self, texts: list[str], images, max_len: int):
+        """Processor output for one image + one truncated text state per row."""
+        if self.processor is None:
+            raise ValueError("image rows require Backbone(..., multimodal=True)")
+        from PIL import Image
+
+        opened = []
+        for image in images:
+            if isinstance(image, (str, os.PathLike)):
+                with Image.open(image) as src:
+                    opened.append(src.convert("RGB"))
+            elif isinstance(image, Image.Image):
+                opened.append(image.convert("RGB"))
+            else:
+                raise TypeError(f"image must be a path or PIL image, got {type(image).__name__}")
+        state_ids = self.tokenizer(texts, truncation=True, max_length=max_len,
+                                   add_special_tokens=False)["input_ids"]
+        placeholder = "<|vision_start|><|image_pad|><|vision_end|>\n"
+        prompt = [placeholder + self.tokenizer.decode(ids, skip_special_tokens=False) for ids in state_ids]
+        return self.processor(text=prompt, images=opened, padding=True, return_tensors="pt",
+                              max_pixels=self.max_image_pixels)
 
     def tokenize(self, texts: list[str], max_len: int):
         # eos prepended as an explicit attention sink: position 0 of a causal LM is

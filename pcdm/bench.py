@@ -132,7 +132,9 @@ def load_ours(run_dir, backbone_name, device):
         # native checkpoint: MCQHead (backbone + LoRA on the top lora_layers) + NativeHead; the
         # saved z_dim is an energy-tower arg (NativeHead's projection width is fixed), ignored.
         head = MCQHead(saved.get("backbone", backbone_name), lora_layers=saved.get("lora_layers", 8),
-                       lora_r=saved.get("lora_r", 16), device=device, tap_layer=saved.get("tap_layer", 0))
+                       lora_r=saved.get("lora_r", 16), device=device, tap_layer=saved.get("tap_layer", 0),
+                       multimodal=saved.get("multimodal", False),
+                       max_image_pixels=saved.get("max_image_pixels", 262144))
         head.load_lora_state_dict(ckpt["lora"])
         model = NativeHead(head.backbone.d, nc_head=saved.get("nc_head", "n2n3"), null=saved.get("null", "factored"),
                            render=saved.get("nc_render", "letters"), score_head=saved.get("score_head", "choice"),

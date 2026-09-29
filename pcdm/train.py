@@ -62,7 +62,11 @@ def family_of(task):
 
 def load_jsonl(path):
     with open(path) as f:
-        return [json.loads(line) for line in f if line.strip()]
+        rows = [json.loads(line) for line in f if line.strip()]
+    for row in rows:
+        if row.get("image") and not os.path.isabs(row["image"]):
+            row["image"] = str((Path(path).parent / row["image"]).resolve())
+    return rows
 
 
 def apply_hard_only(examples):
@@ -777,12 +781,16 @@ def calibrate_zscore_native(head, model, examples, seed, n=256, max_state=256):
     sample = random.Random(seed).sample(examples, min(n, len(examples)))
     hs, cs = [], []
     with torch.inference_mode():
-        for i in range(0, len(sample), 32):
-            chunk = sample[i:i + 32]
-            h, C3, cmask, _ = native_features(head, [ex["state"] for ex in chunk], [ex["query"] for ex in chunk],
-                                              [ex["candidates"] for ex in chunk], max_state=max_state, render=model.render)
-            valid = torch.cat([cmask, torch.ones_like(cmask[:, :1])], 1)
-            hs.append(h); cs.append(C3[valid])
+        for visual in (False, True):
+            rows = [ex for ex in sample if bool(ex.get("image")) == visual]
+            for i in range(0, len(rows), 32):
+                chunk = rows[i:i + 32]
+                kwargs = {"images": [ex["image"] for ex in chunk]} if visual else {}
+                h, C3, cmask, _ = native_features(
+                    head, [ex["state"] for ex in chunk], [ex["query"] for ex in chunk],
+                    [ex["candidates"] for ex in chunk], max_state=max_state, render=model.render, **kwargs)
+                valid = torch.cat([cmask, torch.ones_like(cmask[:, :1])], 1)
+                hs.append(h); cs.append(C3[valid])
     model.calibrate(torch.cat(hs), torch.cat(cs))
 
 
@@ -969,6 +977,12 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--name", required=True)
     p.add_argument("--backbone", default="Qwen/Qwen3-1.7B-Base")
+    p.add_argument("--multimodal", action="store_true",
+                   help="native readout only: allow examples with one image path in the state")
+    p.add_argument("--max_image_pixels", type=int, default=262144,
+                   help="processor cap per image; 262144 is roughly <=256 Qwen3.5 visual tokens")
+    p.add_argument("--freeze_lora", action="store_true",
+                   help="train only the decision head (E1 visual probe); load LoRA but keep it frozen")
     p.add_argument("--lora_layers", type=int, default=8)
     p.add_argument("--lora_r", type=int, default=16)
     p.add_argument("--steps", type=int, default=None)
@@ -1147,11 +1161,12 @@ def main():
         # this invocation happened to be called with -- otherwise a mismatched
         # --lora_layers/--tap_layer/--joint silently loads weights into the wrong shapes.
         ckpt = torch.load(best_path, map_location=device, weights_only=False)  # trusted, self-produced
-        for k in ("backbone", "tap_layer", "lora_layers", "lora_r", "no_hybrid", "no_cand_null", "joint", "tower_d", "tower_layers", "tower_heads", "listwise", "readout", "cand_encoder", "extra_tap", "null", "head", "z_dim", "z_probes", "tiny_layers", "nc_head", "nc_render", "score_head", "noul_head", "max_state"):
+        for k in ("backbone", "tap_layer", "lora_layers", "lora_r", "no_hybrid", "no_cand_null", "joint", "tower_d", "tower_layers", "tower_heads", "listwise", "readout", "cand_encoder", "extra_tap", "null", "head", "z_dim", "z_probes", "tiny_layers", "nc_head", "nc_render", "score_head", "noul_head", "max_state", "multimodal", "max_image_pixels", "freeze_lora"):
             if k in ckpt.get("args", {}):
                 setattr(args, k, ckpt["args"][k])
 
     if args.readout == "mcq":
+        assert not args.multimodal, "--multimodal currently requires --readout native"
         assert not args.zscore and not args.joint and not args.listwise, \
             "--zscore/--joint/--listwise are energy-only (mcq mode has no tower)"
         backbone = MCQHead(args.backbone, lora_layers=args.lora_layers, lora_r=args.lora_r, device=device,
@@ -1160,10 +1175,12 @@ def main():
     elif args.readout == "native":
         assert not args.joint and not args.listwise and not args.shots, "--joint/--listwise/--shots are not native options"
         backbone = MCQHead(args.backbone, lora_layers=args.lora_layers, lora_r=args.lora_r, device=device,
-                           tap_layer=args.tap_layer)  # same backbone + LoRA as mcq; its lm_head is simply unused
+                           tap_layer=args.tap_layer, multimodal=args.multimodal,
+                           max_image_pixels=args.max_image_pixels)  # same backbone + LoRA as mcq; its lm_head is simply unused
         model = NativeHead(backbone.backbone.d, nc_head=args.nc_head, null=args.null, render=args.nc_render,
                            score_head=args.score_head, noul_head=args.noul_head).to(device)
     else:
+        assert not args.multimodal, "--multimodal currently requires --readout native"
         assert not args.extra_tap or args.cand_encoder == "qwen3emb", "--extra_tap doubles the top width; candidates must come from the embedder"
         backbone = Backbone(args.backbone, lora_layers=args.lora_layers, lora_r=args.lora_r, device=device,
                             tap_layer=args.tap_layer, extra_tap=args.extra_tap)
@@ -1186,6 +1203,9 @@ def main():
         ck = torch.load(args.init_from, map_location=device, weights_only=False)  # trusted, self-produced
         model.load_state_dict(ck["tower"], strict=False)
         backbone.load_lora_state_dict(ck["lora"])
+    if args.freeze_lora:
+        for parameter in backbone.trainable_parameters():
+            parameter.requires_grad_(False)
     wb = init_wandb(args) if args.wandb else None
 
     if args.zero_shot:

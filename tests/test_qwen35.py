@@ -119,6 +119,35 @@ def test_native_kv_decide_matches_run_batch_qwen35_fp32():
         assert torch.allclose(dists[i].sum(), torch.tensor(1.0), atol=1e-4)
 
 
+def test_visual_native_cache_matches_full_qwen35_fp32():
+    """One-image state prefill must preserve Qwen3.5's M-RoPE offset in cached suffixes."""
+    from PIL import Image
+
+    from mcq import MCQHead, collate_mcq
+    from native import NativeHead, native_kv_decide, run_batch_native
+
+    torch.manual_seed(0)
+    head = MCQHead(name=NAME, lora_layers=0, lora_r=0, device="cpu", tap_layer=4,
+                   dtype=torch.float32, multimodal=True, max_image_pixels=65536).eval()
+    model = NativeHead(head.backbone.d, nc_head="n3", null="factored").eval()
+    image = Image.new("RGB", (64, 64), "red")
+    state = "Use the image as evidence."
+    queries = [("What is the dominant color?", ["red", "blue"]),
+               ("Does the image contain green?", ["yes", "no"])]
+    examples = [{"state": state, "query": query, "candidates": candidates,
+                 "target": [1.0, 0.0], "p_null": 0.0, "task": "scienceqa_image", "image": image}
+                for query, candidates in queries]
+    with torch.inference_mode():
+        probs = torch.softmax(run_batch_native(head, model, collate_mcq(examples), examples), dim=-1)
+        blue = [dict(example, image=Image.new("RGB", (64, 64), "blue")) for example in examples]
+        blue_probs = torch.softmax(run_batch_native(head, model, collate_mcq(blue), blue), dim=-1)
+    assert not torch.allclose(probs, blue_probs, atol=1e-5), "visual state ignored the image"
+    cached = native_kv_decide(head, model, state, queries, chunk=2, image=image)
+    for row, distribution in enumerate(cached):
+        expected = torch.cat([probs[row, :2], probs[row, -1:]])
+        assert torch.allclose(distribution, expected, atol=2e-3)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="fla's DeltaNet kernel is Triton/CUDA-only "
                      "(installed alongside this checkpoint on GPU pods) -- runs on CPU raise "
                      "'Pointer argument cannot be accessed from Triton', unrelated to this test")

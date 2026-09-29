@@ -52,10 +52,11 @@ class MCQHead(nn.Module):
     head, restricted at read time to the single-token option letters."""
 
     def __init__(self, name: str, lora_layers: int = 8, lora_r: int = 16, device: str = "auto", tap_layer: int = 0,
-                 dtype: torch.dtype = torch.bfloat16):
+                 dtype: torch.dtype = torch.bfloat16, multimodal: bool = False,
+                 max_image_pixels: int = 262144):
         super().__init__()
         self.backbone = Backbone(name, lora_layers=lora_layers, lora_r=lora_r, device=device, tap_layer=tap_layer,
-                                 dtype=dtype)
+                                 dtype=dtype, multimodal=multimodal, max_image_pixels=max_image_pixels)
         self.device = self.backbone.device
         if self.backbone.model.config.tie_word_embeddings:
             weight = self.backbone.model.embed_tokens.weight  # tied -> no second model load

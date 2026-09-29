@@ -332,7 +332,8 @@ def _pool_matrix(spans, offsets, base, Kmax, T, K=None):
     return pool / pool.sum(-1, keepdim=True).clamp_min(1.0)
 
 
-def native_features(head, states, queries, cand_lists, max_state=256, max_suffix=MAX_SUFFIX, render="letters"):
+def native_features(head, states, queries, cand_lists, max_state=256, max_suffix=MAX_SUFFIX, render="letters",
+                    images=None):
     """One suffix pass. -> (h_D [B, d], C3 [B, Kmax+1, d] (null line last; zero for tags), cmask
     [B, Kmax], n_tokens). Suffixes are assumed to fit max_suffix (run_batch_native chunks the
     rest); a truncated option pools to a zero vector. render: one RENDERS key for every row, or
@@ -359,7 +360,27 @@ def native_features(head, states, queries, cand_lists, max_state=256, max_suffix
     for i, c in enumerate(cand_lists):
         cmask[i, :len(c)] = True
 
-    out = head.backbone.model(input_ids=input_ids.to(dev), attention_mask=am.to(dev))
+    if images is None:
+        out = head.backbone.model(input_ids=input_ids.to(dev), attention_mask=am.to(dev))
+    else:
+        if len(images) != len(states) or any(image is None for image in images):
+            raise ValueError("visual batches require exactly one image per row")
+        prefix = head.backbone.visual_prefix(state_texts, images, max_state)
+        prefix_rows = [ids[mask.bool()].tolist() for ids, mask in zip(prefix["input_ids"], prefix["attention_mask"])]
+        type_rows = [ids[mask.bool()].tolist() for ids, mask in zip(prefix["mm_token_type_ids"], prefix["attention_mask"])]
+        prefix_rows = [row if b else [tok.eos_token_id] + row for row, b in zip(prefix_rows, is_semif)]
+        type_rows = [row if b else [0] + row for row, b in zip(type_rows, is_semif)]
+        input_ids, am, lengths = _pack(tok, prefix_rows, x_ids, tail=[], sink=False)
+        mm_types = torch.zeros_like(input_ids)
+        for i, (prefix_types, suffix) in enumerate(zip(type_rows, x_ids)):
+            row = prefix_types + [0] * len(suffix)
+            mm_types[i, :len(row)] = torch.tensor(row)
+        B, T = input_ids.shape
+        pool = torch.stack([_pool_matrix(r[1], o, len(s), Kmax, T, K=len(c))
+                            for r, o, s, c in zip(rendered, offs, prefix_rows, cand_lists)])
+        out = head.backbone.multimodal_model(
+            input_ids=input_ids.to(dev), attention_mask=am.to(dev), mm_token_type_ids=mm_types.to(dev),
+            pixel_values=prefix["pixel_values"].to(dev), image_grid_thw=prefix["image_grid_thw"].to(dev))
     H = out.last_hidden_state.float()                                         # [B, T, d], final norm applied
     h = H[torch.arange(B, device=dev), (lengths - 1).to(dev)]
     C3 = torch.bmm(pool.to(dev), H)
@@ -431,8 +452,11 @@ def run_batch_native(head, model, batch, examples, max_state: int = 256, max_suf
                if model.noul_head == "bern" else [False] * len(examples))
     renders = ["query_only" if b else base_render for b in is_bern]
 
-    def score(sts, qs, cls, rnds, bern_flags):
-        h, C3, cm, n_tok = native_features(head, sts, qs, cls, max_state, max_suffix, render=rnds)
+    images = [ex.get("image") for ex in examples]
+
+    def score(sts, qs, cls, rnds, bern_flags, imgs=None):
+        kwargs = {"images": imgs} if imgs is not None else {}
+        h, C3, cm, n_tok = native_features(head, sts, qs, cls, max_state, max_suffix, render=rnds, **kwargs)
         C2 = _n2_vectors(head, cls, vec_cache, dev) if model.use2 else None
         yi = _yes_idx(cls, dev) if model.noul_head == "bern" else None
         bm = torch.tensor(bern_flags, dtype=torch.bool, device=dev) if model.noul_head == "bern" else None
@@ -441,18 +465,23 @@ def run_batch_native(head, model, batch, examples, max_state: int = 256, max_suf
     n_suf = [len(x) for x in tok([_render_row(tok, r, q, c)[0] for r, q, c in zip(renders, queries, cand_lists)],
                                  add_special_tokens=False)["input_ids"]]
     direct_i = [i for i, n in enumerate(n_suf) if n <= max_suffix]
-    if direct_i:
-        sub, n_tok = score([states[i] for i in direct_i], [queries[i] for i in direct_i], [cand_lists[i] for i in direct_i],
-                           [renders[i] for i in direct_i], [is_bern[i] for i in direct_i])
+    for visual in (False, True):
+        idx = [i for i in direct_i if bool(images[i]) == visual]
+        if not idx:
+            continue
+        sub, n_tok = score([states[i] for i in idx], [queries[i] for i in idx], [cand_lists[i] for i in idx],
+                           [renders[i] for i in idx], [is_bern[i] for i in idx],
+                           [images[i] for i in idx] if visual else None)
         n_tokens += n_tok
-        for row, i in enumerate(direct_i):
+        for row, i in enumerate(idx):
             k = len(cand_lists[i])
             logits[i, :k] = sub[row, :k]
             logits[i, -1] = sub[row, -1]
     for i in (i for i, n in enumerate(n_suf) if n > max_suffix):
         chunks = _fit_chunks(tok, queries[i], cand_lists[i], max_suffix, render=renders[i])
         row, n_tok = _score_chunked(lambda cl: score([states[i]] * len(cl), [queries[i]] * len(cl), cl,
-                                                      [renders[i]] * len(cl), [is_bern[i]] * len(cl)),
+                                                      [renders[i]] * len(cl), [is_bern[i]] * len(cl),
+                                                      [images[i]] * len(cl) if images[i] else None),
                                     cand_lists[i], chunks)
         n_tokens += n_tok
         k = len(cand_lists[i])
@@ -519,7 +548,7 @@ def _causal_pad_mask(attn2d, q_len, dtype):
 
 
 def _kv_score_group(lm, tok, model, head, prefix_ids, idxs, queries, renders, tail_ids, vec_cache,
-                    chunk, max_suffix, dev, out):
+                    chunk, max_suffix, dev, out, state_cache=None, prefix_len=None, position_delta=None):
     """One KV cache built from `prefix_ids`, scored against `queries[i] for i in idxs` (each
     row's own `renders[i]`), `chunk` at a time -- writes native_kv_decide's [K_i+1] probability
     vector into out[i]. tail_ids: token(s) appended after every row's rendered suffix (letters/
@@ -527,9 +556,11 @@ def _kv_score_group(lm, tok, model, head, prefix_ids, idxs, queries, renders, ta
     assistant-turn opening, so [])."""
     if not idxs:
         return
-    prefix = torch.tensor([prefix_ids], device=dev)
-    state_cache = lm(input_ids=prefix, use_cache=True).past_key_values
-    Ls = prefix.shape[1]
+    if state_cache is None:
+        prefix = torch.tensor([prefix_ids], device=dev)
+        state_cache = lm(input_ids=prefix, use_cache=True).past_key_values
+        prefix_len = prefix.shape[1]
+    Ls = prefix_len
     for start in range(0, len(idxs), chunk):
         grp = idxs[start:start + chunk]
         qs = [queries[i] for i in grp]
@@ -551,6 +582,8 @@ def _kv_score_group(lm, tok, model, head, prefix_ids, idxs, queries, renders, ta
         _cache_batch_repeat_interleave(cache, m)
         attn = torch.cat([torch.ones(m, Ls, dtype=torch.long), am], dim=1).to(dev)
         position_ids = (torch.arange(T) + Ls).expand(m, -1).to(dev)
+        if position_delta is not None:
+            position_ids = position_ids.unsqueeze(0).expand(3, -1, -1) + position_delta
         H = lm(input_ids=input_ids.to(dev), attention_mask=_causal_pad_mask(attn, T, lm.dtype),
                position_ids=position_ids, past_key_values=cache, use_cache=False).last_hidden_state.float()
         h = H[torch.arange(m, device=dev), (lengths - 1).to(dev)]
@@ -565,9 +598,31 @@ def _kv_score_group(lm, tok, model, head, prefix_ids, idxs, queries, renders, ta
             out[i] = torch.cat([probs[row, :len(c)], probs[row, -1:]])
 
 
+def _visual_state_cache(head, state, image, max_state, semif=False):
+    """Encode one visual state and return its cache plus the M-RoPE suffix offset."""
+    bb, tok, dev = head.backbone, head.backbone.tokenizer, head.device
+    state_text = (_semif_head_tail(tok)[0] + state) if semif else state
+    batch = bb.visual_prefix([state_text], [image], max_state)
+    keep = batch["attention_mask"][0].bool()
+    ids = batch["input_ids"][0, keep]
+    types = batch["mm_token_type_ids"][0, keep]
+    if not semif:
+        ids = torch.cat([torch.tensor([tok.eos_token_id]), ids])
+        types = torch.cat([torch.zeros(1, dtype=types.dtype), types])
+    ids, types = ids.unsqueeze(0).to(dev), types.unsqueeze(0).to(dev)
+    am = torch.ones_like(ids)
+    grid = batch["image_grid_thw"].to(dev)
+    position_ids, delta = bb.multimodal_model.get_rope_index(
+        ids, types, image_grid_thw=grid, attention_mask=am)
+    result = bb.multimodal_model(
+        input_ids=ids, attention_mask=am, position_ids=position_ids, mm_token_type_ids=types,
+        pixel_values=batch["pixel_values"].to(dev), image_grid_thw=grid, use_cache=True)
+    return result.past_key_values, ids.shape[1], int(delta.item())
+
+
 @torch.inference_mode()
 def native_kv_decide(head, model, state, queries, chunk: int = 32, max_state: int = 256,
-                     max_suffix: int = MAX_SUFFIX, vec_cache=None):
+                     max_suffix: int = MAX_SUFFIX, vec_cache=None, image=None):
     """Serving path (PLAN5 sec 1): [eos] + state encoded ONCE into a KV cache on the native
     backbone (incl. its LoRA); every query's suffix (query + rendered options (+ null line +
     "Answer:" for letters) + terminal eos) then runs against that cached prefix, `chunk` queries per forward
@@ -583,24 +638,42 @@ def native_kv_decide(head, model, state, queries, chunk: int = 32, max_state: in
     is unaffected). A mixed call therefore needs two caches: bern rows are bucketed out and
     scored against a second, lazily-built plain prefix; everything else uses one cache, exactly
     like every other render."""
-    tok, dev, lm = head.backbone.tokenizer, head.device, head.backbone.model
+    tok, dev = head.backbone.tokenizer, head.device
+    lm = head.backbone.multimodal_model if image is not None else head.backbone.model
+    if image is not None and lm is None:
+        raise ValueError("image requires a multimodal checkpoint")
     base_render = getattr(model, "render", "letters")
     is_bern = [model.noul_head == "bern" and _is_bern_row(c) for _, c in queries]
     renders = ["query_only" if b else base_render for b in is_bern]
     out = [None] * len(queries)
     if base_render != "semif":
-        prefix_ids = [tok.eos_token_id] + _ids(tok, [state], max_state)[0]
+        if image is None:
+            prefix_ids = [tok.eos_token_id] + _ids(tok, [state], max_state)[0]
+            cache_args = {}
+        else:
+            cache, length, delta = _visual_state_cache(head, state, image, max_state)
+            prefix_ids, cache_args = None, {"state_cache": cache, "prefix_len": length,
+                                            "position_delta": delta}
         _kv_score_group(lm, tok, model, head, prefix_ids, list(range(len(queries))), queries, renders,
-                        [tok.eos_token_id], vec_cache, chunk, max_suffix, dev, out)
+                        [tok.eos_token_id], vec_cache, chunk, max_suffix, dev, out, **cache_args)
         return out
     non_bern = [i for i, b in enumerate(is_bern) if not b]
     bern = [i for i, b in enumerate(is_bern) if b]
-    semif_prefix = _ids(tok, [_semif_head_tail(tok)[0] + state], max_state)[0]
+    if image is None:
+        semif_prefix = _ids(tok, [_semif_head_tail(tok)[0] + state], max_state)[0]
+        semif_args, plain_args = {}, {}
+        eos_prefix = [tok.eos_token_id] + _ids(tok, [state], max_state)[0]
+    else:
+        cache, length, delta = _visual_state_cache(head, state, image, max_state, semif=True)
+        semif_prefix, semif_args = None, {"state_cache": cache, "prefix_len": length,
+                                          "position_delta": delta}
+        cache, length, delta = _visual_state_cache(head, state, image, max_state)
+        eos_prefix, plain_args = None, {"state_cache": cache, "prefix_len": length,
+                                        "position_delta": delta}
     _kv_score_group(lm, tok, model, head, semif_prefix, non_bern, queries, renders, [], vec_cache,
-                    chunk, max_suffix, dev, out)
-    eos_prefix = [tok.eos_token_id] + _ids(tok, [state], max_state)[0]
+                    chunk, max_suffix, dev, out, **semif_args)
     _kv_score_group(lm, tok, model, head, eos_prefix, bern, queries, renders, [tok.eos_token_id],
-                    vec_cache, chunk, max_suffix, dev, out)
+                    vec_cache, chunk, max_suffix, dev, out, **plain_args)
     return out
 
 
