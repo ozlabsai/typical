@@ -16,6 +16,7 @@ Eval files (data_co_*/eval/), all on held-out tickets:
   data_co_c    spike 2: company A's exact tickets, header numbers put into words with the user's thresholds
   data_co_e    spike 2: company A + random explicit rules on every trained question (anti-classifier augmentation)
   data_co_d    spike 2: imported with clean labels -- Bitext utterances, company-specific intent -> desk map
+  data_co_f/g  spike 3: e with 10% paired flips (f) / refund twins across the $300 or starter boundary (g)
 
 uv run scripts/typically_spike.py attrs     # -> .context/typically/body_specs.jsonl (what the agent must write)
 uv run scripts/typically_spike.py build     # -> data_co_a/, data_co_b/
@@ -175,7 +176,40 @@ def cmd_attrs():
                         f.write(json.dumps({"issue": issue, "mood": mood, "legal": legal, "variant": v}) + "\n")
 
 
-def build_a(rng, hdr=header, p="a", diverse_flips=False):
+REFUNDABLE = ("lost_package", "damaged_goods", "delivery_delay")
+
+
+def twin_attrs(a, trng):
+    """Spike 3: the same ticket with exactly one field moved so the refund label FLIPS ($300 value line, or starter
+    tier). None when no single move flips it (value >= $300 AND starter needs two)."""
+    low, paid = a["value"] < 300, a["tier"] != "starter"
+    if not (low or paid):
+        return None
+    t = dict(a)
+    if paid and (not low or trng.random() < 0.7):
+        t["value"] = trng.randint(300, 900) if low else trng.randint(60, 299)
+    else:
+        t["tier"] = "starter" if paid else "business"
+    assert refund(t) != refund(a)
+    return t
+
+
+def ticket_rows(a, state, p, written, tag, frng=None, flip_rate=0.0, pair=False, group=()):
+    """Train rows for one ticket, one base row per DECISION (+ a random-flip row when frng fires).
+    pair: a fired flip forces its base row to the plain one-liner and puts both in one micro-batch (meta.ms_group,
+    pcdm/train.py group_units); group: decision keys whose base row joins ms_group `tag_key` regardless (twins)."""
+    out = []
+    for w, (key, qtype, q, cands, fn, crit) in zip(written, DECISIONS):
+        flip = frng is not None and frng.random() < flip_rate
+        meta = {"ms_group": f"{tag}_{key}"} if (flip and pair) or key in group else {}
+        out.append(row(state, query(q, crit if w and not (flip and pair) else None, qtype), cands, fn(a), qtype, f"co_{p}_{key}", **meta))
+        if flip:
+            fq, fgold = random_flip(a, key, qtype, q, cands, frng)
+            out.append(row(state, fq, cands, fgold, qtype, f"co_{p}_rflip", **(meta if pair else {})))
+    return out
+
+
+def build_a(rng, hdr=header, p="a", diverse_flips=False, flip_rate=0.25, pair=False, twins=False):
     bodies, dropped = {}, 0
     for line in open(CTX / "bodies.jsonl"):
         b = json.loads(line)
@@ -184,25 +218,28 @@ def build_a(rng, hdr=header, p="a", diverse_flips=False):
             continue
         bodies.setdefault((b["issue"], b["mood"], b["legal"], b["variant"] in TEST_VARIANTS), []).append(b["text"])
     print(f"bodies: {sum(map(len, bodies.values()))} kept, {dropped} dropped")
-    frng = random.Random(1)   # own stream: diverse flips must not shift the ticket sampling
+    frng, trng = random.Random(1), random.Random(2)   # own streams: flips/twins must not shift the ticket sampling
     split = {"train": [], "val": [], **{f"{p}_{k}": [] for k in ("oneliner", "rubric", "flip", "flip_heldout", "novel")}}
     for n, test in ((N_TRAIN, False), (N_TEST, True)):
         for t in range(n):
             a = sample_attrs(rng)
-            state = hdr(a) + "\n\n" + rng.choice(bodies[(a["issue"], a["mood"], a["legal"], test)])
-            for key, qtype, q, cands, fn, crit in DECISIONS:
-                gold, task = fn(a), f"co_{p}_{key}"
-                if test:
+            body = rng.choice(bodies[(a["issue"], a["mood"], a["legal"], test)])
+            state = hdr(a) + "\n\n" + body
+            if test:
+                for key, qtype, q, cands, fn, crit in DECISIONS:
+                    gold, task = fn(a), f"co_{p}_{key}"
                     split[f"{p}_oneliner"].append(row(state, q, cands, gold, qtype, task))
                     split[f"{p}_rubric"].append(row(state, query(q, crit, qtype), cands, gold, qtype, task))
-                    continue
+            else:
                 # train mix: one-liner mostly, the written policy 30% of the time so the rubric stays load-bearing
-                written = rng.random() < 0.3
+                written = [rng.random() < 0.3 for _ in DECISIONS]
                 dest = "val" if t % 10 == 0 else "train"
-                split[dest].append(row(state, query(q, crit if written else None, qtype), cands, gold, qtype, task))
-                if diverse_flips and frng.random() < 0.25:
-                    fq, fgold = random_flip(a, key, qtype, q, cands, frng)
-                    split[dest].append(row(state, fq, cands, fgold, qtype, f"co_{p}_rflip"))
+                ta = twin_attrs(a, trng) if twins and dest == "train" and a["issue"] in REFUNDABLE else None
+                twin = ta is not None
+                split[dest] += ticket_rows(a, state, p, written, f"{p}{t}", frng if diverse_flips else None, flip_rate, pair,
+                                           ("refund",) if twin else ())
+                if twin:   # same body, header rebuilt from the moved field, plain one-liners, refund row grouped with the original's
+                    split[dest] += ticket_rows(ta, hdr(ta) + "\n\n" + body, p, [False] * len(DECISIONS), f"{p}{t}", group=("refund",))
             if not test and rng.random() < 0.25:   # rubric-flip augmentation: an explicit different rule wins
                 split["val" if t % 10 == 0 else "train"].append(
                     row(state, query(FLIP[0], FLIP[1], "noul"), ["no", "yes"], FLIP[2](a), "noul", f"co_{p}_flip"))
@@ -267,6 +304,48 @@ def build_d(rng):
     return split
 
 
+# ============================== typically UI import ==============================
+YESNO = {"yes": "yes", "true": "yes", "1": "yes", "no": "no", "false": "no", "0": "no"}
+
+
+def build_import(records, text_col, decisions, rng, balance=True):
+    """CSV rows (dicts) + the user's decisions [{"column", "question", "type"}] -> split dict for write().
+    Split by record 70/10/20 (eval = import_oneliner); balance oversamples minority labels in TRAIN only."""
+    order = list(range(len(records)))
+    rng.shuffle(order)
+    n_tr, n_va = int(0.7 * len(order)), int(0.1 * len(order))
+    part = {"train": order[:n_tr], "val": order[n_tr:n_tr + n_va], "import_oneliner": order[n_tr + n_va:]}
+    split = {k: [] for k in part}
+    for d in decisions:
+        col, typ = d["column"], d["type"]
+        vals = [r[col].strip() for r in records]
+        if "" in vals:
+            raise ValueError(f"column {col!r} has empty cells")
+        if typ == "noul":
+            bad = {v for v in vals if v.lower() not in YESNO}
+            if bad:
+                raise ValueError(f"column {col!r} is not yes/no: {sorted(bad)[:3]}")
+            vals, cands = [YESNO[v.lower()] for v in vals], ["no", "yes"]
+        else:
+            ints = typ == "score" and all(v.lstrip("-").isdigit() for v in vals)   # "10" must sort after "2"
+            cands = sorted(set(vals), key=int if ints else str)
+        if len(cands) < 2:
+            raise ValueError(f"column {col!r} needs at least 2 different values")
+        for name, idx in part.items():
+            rows = [row(records[i][text_col], d["question"], cands, vals[i], typ, f"import_{col}") for i in idx]
+            if balance and name == "train" and rows:
+                by = {}
+                for r in rows:
+                    by.setdefault(r["label"], []).append(r)
+                # ponytail: minority labels are duplicated up to 1/3 of the majority count, no further (more = memorising)
+                floor = max(map(len, by.values())) // 3
+                rows += [x for g in by.values() for x in (g * (floor // len(g) + 1))[:max(0, floor - len(g))]]
+            split[name] += rows
+    for rows in split.values():
+        rng.shuffle(rows)
+    return split
+
+
 def write(out, split):
     (out / "eval").mkdir(parents=True, exist_ok=True)
     for name, rows in split.items():
@@ -294,3 +373,10 @@ if __name__ == "__main__":
         write(ROOT / "data_co_c", build_a(random.Random(0), header_words, "c"))   # spike 2: same tickets, numbers in words
         write(ROOT / "data_co_d", build_d(random.Random(0)))
         write(ROOT / "data_co_e", build_a(random.Random(0), header, "e", diverse_flips=True))   # spike 2: flips on every question
+        # spike 3: f = fewer flips, each paired with a plain one-liner in one micro-batch; g = refund twins (policy vs rule-following)
+        for slug, kw in (("f", dict(flip_rate=0.10, pair=True)), ("g", dict(twins=True))):
+            write(ROOT / f"data_co_{slug}", build_a(random.Random(0), header, slug, diverse_flips=True, **kw))
+            for f in (ROOT / f"data_co_{slug}" / "eval").glob(f"{slug}_*.jsonl"):   # same tickets as a: states + labels row for row
+                ref = [json.loads(l) for l in open(ROOT / "data_co_a" / "eval" / f.name.replace(f"{slug}_", "a_", 1))]
+                got = [json.loads(l) for l in open(f)]
+                assert [(r["state"], r["label"]) for r in got] == [(r["state"], r["label"]) for r in ref], f

@@ -7,6 +7,7 @@ noul_head, score_head. z-score calibration (--zscore) needs no special handling 
 its buffers (mu_h/sd_h/mu_c/sd_c) are just part of ckpt["tower"]'s state_dict.
 """
 import json
+import os
 import time
 from collections import OrderedDict
 
@@ -78,7 +79,7 @@ class Typical:
                         revision: str | None = None, cache_dir: str | None = None,
                         max_state: int = 4096, max_states: int = 16,
                         max_option_tokens: int | None = DEFAULT_MAX_OPTION_TOKENS) -> "Typical":
-        path = hf_hub_download(repo_id, filename, revision=revision, cache_dir=cache_dir)
+        path = repo_id if os.path.isfile(repo_id) else hf_hub_download(repo_id, filename, revision=revision, cache_dir=cache_dir)
         ckpt = torch.load(path, map_location="cpu", weights_only=True)
         args = ckpt.get("args", {})
         if args.get("readout") != "native":

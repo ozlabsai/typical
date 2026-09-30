@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/favicon.png">
+<title>Typically — your own Typical, taught from your past decisions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Geist+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="exhibits.css">
+<style>
+  .step .claim{margin-bottom:var(--v-3)}
+  .step .panel{background:var(--color-white);border-radius:var(--radius-card);padding:30px}
+  .step table{border-collapse:collapse;width:100%;font-size:13px}
+  .step th{font-family:var(--font-mono);font-size:12px;letter-spacing:.72px;text-transform:uppercase;text-align:left;color:var(--color-mid)}
+  .step th,.step td{padding:8px 10px 8px 0;border-bottom:1px solid var(--color-lgray);vertical-align:top;max-width:34ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dec{display:grid;grid-template-columns:auto minmax(120px,180px) minmax(200px,1fr) 130px;gap:14px;align-items:center;padding:10px 0;border-bottom:1px solid var(--color-lgray)}
+  .dec.off{color:var(--color-mid)}
+  .step .tryit-input{margin:2px 0 0}
+  .step .row{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-top:18px}
+  .step .bar.is-winner .fill{background:var(--color-ours)}
+  .step h3{margin:18px 0 10px}
+  .side{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:30px}
+  @media(max-width:760px){.side{grid-template-columns:1fr}.dec{grid-template-columns:auto 1fr}}
+</style>
+</head>
+<body>
+<nav class="nav"><a class="brand" href="index.html">Typical</a><a class="lab" href="https://ozlabs.ai" target="_blank" rel="noopener">Oz Labs</a><span class="links"><a href="product.html">Product</a><a href="research.html">Research</a></span><a class="cta" href="index.html#tryit">Try it live</a></nav>
+
+<header class="page chapter">
+  <div class="claim">
+    <p class="t-eyebrow">Typically</p>
+    <h2>Your own Typical, taught from the decisions you already made.</h2>
+    <p>Upload a spreadsheet of past cases and what you decided. We build a version of Typical that decides the way you do, then show it next to the standard one.</p>
+  </div>
+</header>
+
+<section class="page chapter step" id="s1">
+  <div class="claim"><p class="t-eyebrow">Step 1</p><h2>Bring your past decisions.</h2><p>A spreadsheet saved as CSV: one row per case, one column describing the case, and one or more columns with what you decided.</p></div>
+  <div class="panel">
+    <div class="row" style="margin-top:0"><input type="file" id="file" accept=".csv,text/csv"><button class="btn ghost" type="button" id="sample">Use sample</button><span class="note" id="s1-note"></span></div>
+    <div id="preview" class="mt-30" style="overflow-x:auto"></div>
+  </div>
+</section>
+
+<section class="page chapter step" id="s2" hidden>
+  <div class="claim"><p class="t-eyebrow">Step 2</p><h2>Say which decisions to learn.</h2><p>Pick the column that describes each case. For every other column you want Typical to learn, tick it and word the question the way you would ask it.</p></div>
+  <div class="panel">
+    <label class="t-eyebrow muted" for="textcol">The case is described in</label>
+    <select id="textcol" class="tryit-input" style="max-width:320px"></select>
+    <h3 class="t-eyebrow muted">Decisions</h3>
+    <div id="decs"></div>
+  </div>
+</section>
+
+<section class="page chapter step" id="s3" hidden>
+  <div class="claim"><p class="t-eyebrow">Step 3</p><h2>Teach it.</h2><p>We split your history into examples to learn from and cases we keep back to test it on, and make sure rare answers are not drowned out by common ones.</p></div>
+  <div class="panel">
+    <div class="row" style="margin-top:0"><label class="t-eyebrow muted" for="name">Name</label><input id="name" class="tryit-input" style="max-width:260px;margin:0" value="my typical"><button class="btn dark" type="button" id="build">Build my dataset</button><span class="note" id="s3-note"></span></div>
+    <div id="built" hidden>
+      <div id="counts" class="note mt-30"></div>
+      <div id="balance"></div>
+      <p class="mt-30">Training takes ~10 minutes on one GPU. Run this on the machine that has it:</p>
+      <div class="code"><pre id="cmd"></pre></div>
+    </div>
+  </div>
+</section>
+
+<section class="page chapter step" id="s4" hidden>
+  <div class="claim"><p class="t-eyebrow">Step 4</p><h2>Try it.</h2><p>Paste a new case. Both models read it and say how likely each answer is. The likeliest answer is in bold.</p></div>
+  <div class="panel">
+    <textarea id="case" class="tryit-input tryit-textarea" rows="6" aria-label="A new case"></textarea>
+    <div class="row" style="margin-top:0"><label class="t-eyebrow muted" for="tuned">Your model</label><select id="tuned" class="tryit-input" style="max-width:260px;margin:0"></select><button class="btn dark" type="button" id="ask">Ask both</button><span class="note" id="s4-note"></span></div>
+    <div id="answers" class="mt-30"></div>
+  </div>
+</section>
+
+<footer class="footer"><div class="page"><div class="rule t-eyebrow" style="color:var(--color-mid)">Local prototype. Your file stays on this machine.</div></div></footer>
+<script type="module" src="js/typically.js"></script>
+</body>
+</html>
