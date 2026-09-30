@@ -240,15 +240,20 @@ def main():
     ap.add_argument("--files", nargs="+", required=True)
     ap.add_argument("--limit", type=int, default=None, help="stratified seeded sample size per file; 0 = all rows")
     ap.add_argument("--max_state", type=int, default=4096)
+    ap.add_argument("--batch", type=int, default=BATCH,
+                    help="native forward-pass batch size; lower it for very long states or huge K "
+                         "(BATCH=16 OOMs a 14B at 12k-token states)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     dec = PCDMDecider(args.run, mode=args.mode, max_state=args.max_state)
-    out = {"run": args.run, "mode": args.mode, "max_state": args.max_state, "limit": args.limit, "eval": {}}
+    out = {"run": args.run, "mode": args.mode, "max_state": args.max_state, "limit": args.limit,
+           "batch": args.batch, "eval": {}}
     for f in sorted(p for pat in args.files for p in glob.glob(pat)):
         rows_all = [json.loads(l) for l in open(f)]
         rows = stratified_limit(rows_all, args.limit, seed=0)
         target, label = _build_target_label(rows)
-        probs, overflow = _score_native(dec, rows) if args.mode == "native" else _score_energy(dec, rows)
+        probs, overflow = (_score_native(dec, rows, batch_size=args.batch) if args.mode == "native"
+                           else _score_energy(dec, rows))
 
         name = Path(f).stem
         result = {
