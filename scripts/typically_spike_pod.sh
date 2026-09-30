@@ -2,7 +2,7 @@
 # typically spike, one GPU pod: released typical-small vs per-company fine-tunes (scripts/typically_spike.py).
 # Expects the repo + data_co_a/ + data_co_b/ at /workspace/pcdm, secrets in /workspace/.env.
 # bash scripts/typically_spike_pod.sh [1|2|3|e] > /workspace/spike.log 2>&1   (spike 2 needs runs/co_a/best.pt from spike 1;
-# spike 3 needs data_co_a,d,e,f,g)
+# spike 3 needs data_co_a,d,e,f,g). `job <slug>` (scripts/typically_job.py): base eval + one fine-tune on data_co_<slug>, JOB=1 trims the evals.
 set -eo pipefail
 cd /workspace/pcdm
 { set +x; } 2>/dev/null; set -a; . /workspace/.env; set +a
@@ -21,7 +21,8 @@ EV="uv run --no-sync python scripts/eval_wf.py --mode native"
 REG="data_wf/eval/wf_heldout_noul.jsonl data_wf/eval/wf_heldout_choice.jsonl data_wf/eval/wf_heldout_score.jsonl data_wf/eval/wf_rubric_flip.jsonl data_wh/eval/wh_heldout_family.jsonl"
 evals() {  # $1 run dir, $2 company files (eval_wf reads $1/best.pt)
   $EV --run "$1" --files $2 --limit 0 --out "$1/eval_co.json"
-  $EV --run "$1" --files $REG --limit 500 --out "$1/eval_reg.json"   # ponytail: 500-row stratified regression sample
+  # ponytail: JOB=1 (job mode) skips the regression evals: a user's own model is judged on its own held-out rows only
+  [ -n "$JOB" ] || $EV --run "$1" --files $REG --limit 500 --out "$1/eval_reg.json"   # ponytail: 500-row stratified regression sample
 }
 
 # the Release-1 v3 recipe (releases/typical-small.md), warm-started, company data = bucket C at half of every batch
@@ -38,9 +39,16 @@ train() {  # $1 company, $2 steps, $3 run name
 l=torch.load(sys.argv[1]+'/last.pt',weights_only=False); torch.save({k:l[k] for k in ('tower','lora','step','best_val','args')},sys.argv[1]+'_last/best.pt'); \
 print(sys.argv[1],'last step',l['step'])" "runs/$3"
   evals "runs/$3" "data_co_$1/eval/*.jsonl"
-  evals "runs/$3_last" "data_co_$1/eval/*.jsonl"
+  [ -n "$JOB" ] || evals "runs/$3_last" "data_co_$1/eval/*.jsonl"   # ponytail: job mode skips the _last eval too (best.pt only)
 }
-if [ "${1:-2}" = e ]; then   # spike 2 arm e (eval tickets == data_co_a's, so base numbers carry over)
+if [ "${1:-2}" = job ]; then   # $2 = slug; the UI's "Teach it" (eval + train only that company's held-out rows)
+  [[ "${2:-}" =~ ^[a-z0-9_]{1,40}$ ]] || { echo "job: bad slug '${2:-}'" >&2; exit 2; }   # same rule as typically_job.SLUG_RE
+  [ -f "data_co_$2/train.jsonl" ] || { echo "job: data_co_$2/train.jsonl missing" >&2; exit 2; }
+  JOB=1
+  evals runs/base "data_co_$2/eval/*.jsonl"
+  train "$2" 400 "co_$2"
+  exit 0   # success is the exit code: job.sh's EXIT trap writes /workspace/job.exit for the poller (no log-string protocol)
+elif [ "${1:-2}" = e ]; then   # spike 2 arm e (eval tickets == data_co_a's, so base numbers carry over)
   train e 400 co_e
 elif [ "${1:-2}" = 3 ]; then   # spike 3: best.pt on company val + final step; e/f/g vary the augmentation, d is the clean-import arm
   train a 400 a_sel

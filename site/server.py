@@ -3,9 +3,13 @@
 .choice/.score/.noul). Serves site/ as static files at "/".
 
 Run: uv run uvicorn --app-dir site server:app --port 8787
+
+Bind to 127.0.0.1 only (the uvicorn default; never --host 0.0.0.0): /api/typically/train rents GPUs and has no auth.
+ponytail: auth + per-user quotas are required before this is ever public.
 """
 import csv
 import io
+import json
 import os
 import re
 import random
@@ -31,19 +35,27 @@ if _env_file.exists():
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from typical import Typical
 from typical.core import to_labels
 from typical.native import native_kv_decide
+import typically_job
+from typically_reveal import reveal
 from typically_spike import build_import, write
 
 TYPICALLY = REPO_ROOT / ".context" / "typically"
 REPOS = {"typical-small": "OzLabs/typical-small", "typical-medium": "OzLabs/typical-medium"}
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:8787", "http://127.0.0.1:8787"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.on_event("startup")
+def _reconcile_pods():   # a crashed server may have left a rented pod running; off-thread so startup is not blocked
+    threading.Thread(target=typically_job.reconcile, daemon=True).start()
 
 # ponytail: at most two models in memory -- the base plus one tuned; loading another of the same kind
 # evicts the old one. A real LRU only matters if the site ever serves many tuned models at once.
@@ -184,11 +196,21 @@ def _dist(rows: list[dict]) -> dict:
     return {k: dict(v) for k, v in d.items()}
 
 
+_job_lock = threading.Lock()   # ponytail: one rented GPU job at a time, in-process; a second server process would not see it
+_job_slug: str | None = None   # the slug being trained; /build refuses it (the job snapshots the dataset when it starts)
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
 @app.post("/api/typically/build")
 def build(req: BuildRequest):
+    slug = _slug(req.name)
+    if slug == _job_slug:   # ponytail: check-then-write race is a few ms wide; a per-slug lock if builds ever run concurrently
+        raise HTTPException(409, "that model is being taught right now; wait for it to finish before rebuilding its data")
     columns, records = read_csv(req.csv_text)
-    slug = re.sub(r"[^a-z0-9]+", "_", req.name.lower()).strip("_")
-    if not slug or not req.decisions or req.text_col not in columns or any(d.column not in columns for d in req.decisions):
+    if not typically_job.SLUG_RE.fullmatch(slug) or not req.decisions or req.text_col not in columns or any(d.column not in columns for d in req.decisions):
         raise HTTPException(400, "need a name, a text column and at least one decision column from the file")
     decisions = [d.model_dump() for d in req.decisions]
     try:
@@ -210,9 +232,145 @@ def build(req: BuildRequest):
             "balance": {"before": _dist(raw["train"]), "after": _dist(split["train"])}, "command": cmd}
 
 
+def start_job(slug: str) -> dict:
+    """409 if a job is already running, else start `typically_job.run` in a daemon thread and return the queued status."""
+    global _job_slug
+    if not _job_lock.acquire(blocking=False):
+        raise HTTPException(409, "another model is being taught right now; wait for it to finish")
+    _job_slug = slug
+
+    def end():
+        global _job_slug
+        _job_slug = None
+        _job_lock.release()
+
+    def work():
+        try:
+            typically_job.run(slug, typically_job.file_log(slug))
+        finally:
+            end()
+    try:
+        status = typically_job.write_status(slug, "queued", "Waiting to start.")
+        threading.Thread(target=work, daemon=True).start()
+    except BaseException:
+        end()
+        raise
+    return status
+
+
+class TrainRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/typically/train")
+def train(req: TrainRequest):
+    slug = _slug(req.name)
+    if not typically_job.SLUG_RE.fullmatch(slug) or not (TYPICALLY / "jobs" / slug / "train.jsonl").exists():
+        raise HTTPException(404, "no dataset with that name; import and build it first")
+    return start_job(slug)
+
+
+def _held_out(path: Path) -> tuple[float, int, dict]:
+    """eval_wf.py output -> (overall acc pooled over eval sets, rows, {decision: (acc, rows)})."""
+    ev = json.loads(path.read_text())["eval"].values()
+    rows = sum(s["n"] for s in ev)
+    # ponytail: one eval set per job (import_oneliner); a decision repeated across sets would keep only the last
+    return (sum(s["raw"]["acc"] * s["n"] for s in ev) / rows, rows,
+            {f.removeprefix("import_"): (m["acc"], m["n"]) for s in ev for f, m in s["by_family"].items()})
+
+
+def agreement(slug: str) -> dict:
+    res = TYPICALLY / "results" / f"co_{slug}"
+    (b_acc, _, b_dec), (y_acc, n, y_dec) = _held_out(res / "base_eval_co.json"), _held_out(res / "eval_co.json")
+    return {"n": n, "overall": {"base": b_acc, "yours": y_acc},
+            "decisions": {t: {"base": b_dec[t][0], "yours": a, "n": k} for t, (a, k) in y_dec.items() if t in b_dec}}
+
+
+@app.get("/api/typically/train/{slug}")
+def train_status(slug: str):
+    st = typically_job.read_status(slug) if typically_job.SLUG_RE.fullmatch(slug) else None
+    if st is None:
+        raise HTTPException(404, "no such job")
+    return {**st, "run": f"co_{slug}", "agreement": agreement(slug)} if st["phase"] == "done" else st
+
+
+_reveal_lock = threading.Lock()
+_reveals: dict[str, dict] = {}   # run -> {"done", "total", "error"} while its background pass runs
+# ponytail: in-process progress only; a second server process would start its own pass
+
+
+def _reveal_target(project: str) -> tuple[str, Path, str]:
+    """project -> (run, eval file, company): "northwind" is the demo (co_f); anything else is a job slug (co_<slug>)."""
+    if project == "northwind":
+        return "co_f", REPO_ROOT / "data_co_a/eval/a_oneliner.jsonl", "Northwind Freight"
+    if not typically_job.SLUG_RE.fullmatch(project):
+        raise HTTPException(404, "no such project")
+    return f"co_{project}", TYPICALLY / "jobs" / project / "eval" / "import_oneliner.jsonl", project.replace("_", " ").title()
+
+
+@app.get("/api/typically/results/{project}")
+def results(project: str):
+    run, eval_file, company = _reveal_target(project)
+    best = TYPICALLY / "results" / run / "best.pt"
+    cache = best.with_name("reveal.json")
+    if not best.exists() or not eval_file.exists():
+        raise HTTPException(404, "that model is not trained yet")
+    with _reveal_lock:
+        if cache.exists() and cache.stat().st_mtime >= best.stat().st_mtime:
+            return json.loads(cache.read_text())
+        job = _reveals.get(run)
+        if job and job.get("error"):
+            _reveals.pop(run)
+            raise HTTPException(500, f"scoring failed: {job['error']}")
+        if job is None:
+            rows = [json.loads(line) for line in eval_file.open()]
+            job = _reveals[run] = {"done": 0, "total": len({r["state"] for r in rows})}
+            threading.Thread(target=_reveal_work, args=(run, rows, company, cache), daemon=True).start()
+        return JSONResponse({"status": "computing", "done": job["done"], "total": job["total"]}, status_code=202)
+
+
+def _reveal_work(run: str, rows: list[dict], company: str, cache: Path) -> None:
+    job, tuned = _reveals[run], f"local:{run}"
+
+    def run_models(state, group):   # one held-out case, base then tuned, through the same _run as /compare
+        qs = [Query(type=r["meta"]["qtype"], question=r["query"], labels=r["candidates"]) for r in group]
+        with _lock:
+            out = [_run(get_model(n), state, qs)["results"] for n in ("typical-small", tuned)]
+        job["done"] += 1
+        return out
+    try:
+        res = reveal(rows, run_models, company, tuned)
+        cache.write_text(json.dumps(res))
+    except BaseException as e:   # surfaced on the next poll instead of a poll that never finishes
+        job["error"] = f"{type(e).__name__}: {e}"
+        return
+    with _reveal_lock:
+        _reveals.pop(run)
+
+
+@app.get("/api/typically/download/{run}")
+def download(run: str):
+    f = TYPICALLY / "results" / run / "best.pt"
+    if not typically_job.SLUG_RE.fullmatch(run) or not f.exists():
+        raise HTTPException(404, "no such model")
+    return FileResponse(f, filename=f"{run}.pt")
+
+
 @app.get("/api/health")
 def health():
     return {"models": {n: m.device for n, m in _cache.items()}}
+
+
+@app.get("/app")
+@app.get("/app/{path:path}")
+def spa(path: str = ""):   # the product app (typically-app/, built to site/app/): real files are served, anything else is a client route
+    root = (REPO_ROOT / "site" / "app").resolve()
+    f = (root / path).resolve()
+    if f.is_file() and f.is_relative_to(root):
+        return FileResponse(f)
+    if not (root / "index.html").exists():
+        raise HTTPException(404, "the app is not built; run `npm run build` in typically-app/")
+    return FileResponse(root / "index.html")
 
 
 app.mount("/", StaticFiles(directory=REPO_ROOT / "site", html=True), name="site")

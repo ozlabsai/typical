@@ -24,6 +24,7 @@ uv run scripts/typically_spike.py build     # -> data_co_a/, data_co_b/
 import json
 import math
 import random
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -284,7 +285,6 @@ AT_RISK = {"cancel_order", "delete_account", "complaint", "check_cancellation_fe
 
 
 def build_d(rng):
-    import re
     from datasets import load_dataset
     desk_of = {i: d for d, intents in DESKS.items() for i in intents}
     ds = load_dataset("bitext/Bitext-customer-support-llm-chatbot-training-dataset", split="train")
@@ -308,14 +308,39 @@ def build_d(rng):
 YESNO = {"yes": "yes", "true": "yes", "1": "yes", "no": "no", "false": "no", "0": "no"}
 
 
-def build_import(records, text_col, decisions, rng, balance=True):
+def import_flips(rows, typ, cands, words, toks, rate, frng):
+    """Spike 3 arm f, generic: each TRAIN row fires with prob `rate` -> a rule-flip row on the same case whose condition is
+    'the case mentions <word>'; both share meta.ms_group (one micro-batch, as build_a pair=True). Returns the flip rows."""
+    out = []
+    for n, r in enumerate({id(r): r for r in rows}.values()):   # balancing repeats row objects: one draw per distinct row
+        if frng.random() >= rate:
+            continue
+        w, q, g = frng.choice(words), r["query"], f"{r['task']}_{n}"
+        hit = w in toks[r["state"]]
+        if typ == "noul":
+            fq, gold = f'{q} For this question, answer yes only when the case mentions "{w}".', "yes" if hit else "no"
+        else:
+            x, y = frng.sample(cands, 2)
+            fq, gold = f'{q} For this question, pick {x} when the case mentions "{w}", otherwise {y}.', x if hit else y
+        r["meta"] = {**r["meta"], "ms_group": g}
+        out.append(row(r["state"], fq, cands, gold, typ, "import_rflip", ms_group=g))
+    return out
+
+
+def build_import(records, text_col, decisions, rng, balance=True, flips=0.10):
     """CSV rows (dicts) + the user's decisions [{"column", "question", "type"}] -> split dict for write().
-    Split by record 70/10/20 (eval = import_oneliner); balance oversamples minority labels in TRAIN only."""
+    Split by record 70/10/20 (eval = import_oneliner); balance oversamples minority labels in TRAIN only;
+    flips = per (case, decision) chance of a paired rule-flip row in TRAIN only (own rng stream: 0 leaves output unchanged)."""
     order = list(range(len(records)))
     rng.shuffle(order)
     n_tr, n_va = int(0.7 * len(order)), int(0.1 * len(order))
     part = {"train": order[:n_tr], "val": order[n_tr:n_tr + n_va], "import_oneliner": order[n_tr + n_va:]}
     split = {k: [] for k in part}
+    frng = random.Random(1)
+    toks = {r[text_col]: set(re.findall(r"[a-z]{4,}", r[text_col].lower())) for r in records}
+    df = Counter(w for t in toks.values() for w in t)
+    # ponytail: candidate rule words = alphabetic tokens in 5-40% of the cases; none -> no flips
+    words = sorted(w for w, c in df.items() if 0.05 <= c / len(toks) <= 0.40)
     for d in decisions:
         col, typ = d["column"], d["type"]
         vals = [r[col].strip() for r in records]
@@ -340,6 +365,8 @@ def build_import(records, text_col, decisions, rng, balance=True):
                 # ponytail: minority labels are duplicated up to 1/3 of the majority count, no further (more = memorising)
                 floor = max(map(len, by.values())) // 3
                 rows += [x for g in by.values() for x in (g * (floor // len(g) + 1))[:max(0, floor - len(g))]]
+            if flips and name == "train" and words:
+                rows += import_flips(rows, typ, cands, words, toks, flips, frng)
             split[name] += rows
     for rows in split.values():
         rng.shuffle(rows)
