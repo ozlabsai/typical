@@ -222,7 +222,7 @@ function Playground({ project }: { project: Project }) {
     setBusy(true)
     setError(null)
     try {
-      setOut(await api.compare({ state: text.trim(), decisions: qs, models: ["typical-small", mine] }))
+      setOut(await api.compare({ state: text.trim(), decisions: qs, models: ["base", mine] }))
     } catch (e) {
       setError(msg(e))
     } finally {
@@ -271,7 +271,7 @@ function Playground({ project }: { project: Project }) {
               </TableHeader>
               <TableBody>
                 {decisions.map((d, i) => {
-                  const a = out?.models["typical-small"]?.results[i], b = out?.models[mine]?.results[i]
+                  const a = out?.models["base"]?.results[i], b = out?.models[mine]?.results[i]
                   return (
                     <TableRow key={d.column}>
                       <TableCell className="pl-6 whitespace-normal">

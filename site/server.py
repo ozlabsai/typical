@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -34,6 +35,7 @@ if _env_file.exists():
             k, _, v = line.partition("=")
             os.environ.setdefault(k.strip(), v.strip())
 
+import torch
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -63,7 +65,8 @@ def _reconcile_pods():   # a crashed server may have left a rented pod running; 
 # Multi-LoRA: every model (the base too) keeps only its LoRA + head; checkpoints with the same architecture share ONE Backbone,
 # and Typical.activate() (called by get_model, under _lock) copies the wanted LoRA into it in place.
 # ponytail: adapters are never evicted (~50 MB each on the CPU); add an LRU if one process ever serves hundreds of tuned models.
-_cache: dict[str, Typical] = {}
+# name -> (best.pt mtime_ns, model): a retrain writes a new best.pt, and the stale entry is replaced (get_model runs under _lock).
+_cache: dict[str, tuple[int, Typical]] = {}
 _backbones: dict[tuple, object] = {}
 # ponytail: one lock, one GPU -- concurrent forward passes on MPS from FastAPI's threadpool crash
 # Metal (MTLCommandBufferStatusCommitted assertion); serialize instead of queueing.
@@ -87,18 +90,35 @@ def tuned_models() -> list[str]:
 
 def get_model(name: str) -> Typical:
     name = name or "typical-small"
-    if name not in _cache:
-        if name in REPOS:
-            source = REPOS[name]
-        elif name in tuned_models():
-            source = str(TYPICALLY / "results" / name.removeprefix("local:") / "best.pt")
-        else:
-            raise HTTPException(400, f"unknown model {name!r}")
+    if name in REPOS:
+        source, stamp = REPOS[name], 0
+    elif name in tuned_models():
+        best = TYPICALLY / "results" / name.removeprefix("local:") / "best.pt"
+        source, stamp = str(best), best.stat().st_mtime_ns
+    else:
+        raise HTTPException(400, f"unknown model {name!r}")
+    if _cache.get(name, (None,))[0] != stamp:   # new, or retrained since it was loaded: the old entry is dropped
         model = Typical.from_pretrained(source, device="auto", backbones=_backbones)
         _warm(model)
-        _cache[name] = model
-    _cache[name].activate()
-    return _cache[name]
+        _cache[name] = (stamp, model)
+    _cache[name][1].activate()
+    return _cache[name][1]
+
+
+@lru_cache(maxsize=None)
+def _base_of(path: str, mtime_ns: int) -> str:
+    backbone = torch.load(path, map_location="cpu", weights_only=True)["args"]["backbone"]
+    if (base := next((b for b, a in typically_job.RELEASED_ARGS.items() if a["backbone"] == backbone), None)) is None:
+        raise HTTPException(400, f"unknown backbone {backbone!r}")
+    return f"typical-{base}"
+
+
+def base_of(tuned: str) -> str:
+    """The released model a tuned model ("local:<run>") was fine-tuned from, e.g. "typical-medium": the baseline to compare it against."""
+    if tuned not in tuned_models():
+        raise HTTPException(400, f"unknown model {tuned!r}")
+    best = TYPICALLY / "results" / tuned.removeprefix("local:") / "best.pt"
+    return _base_of(str(best), best.stat().st_mtime_ns)
 
 
 class Query(BaseModel):
@@ -150,8 +170,17 @@ class CompareRequest(BaseModel):
 
 @app.post("/api/typically/compare")
 def compare(req: CompareRequest):
+    """models may hold the literal "base": the base of the tuned ("local:...") model in the same request. Results stay keyed as asked;
+    each says which model ran, and `base` names the one used (null when "base" was not asked for)."""
+    base = None
+    if "base" in req.models:
+        tuned = next((n for n in req.models if n.startswith("local:")), None)
+        if tuned is None:
+            raise HTTPException(400, '"base" needs a tuned (local:...) model in the same request')
+        base = base_of(tuned)
+    ran = {n: base if n == "base" else n for n in req.models}
     with _lock:
-        return {"models": {n: {**_run(get_model(n), req.state, req.decisions), "model": n} for n in req.models}}
+        return {"models": {n: {**_run(get_model(m), req.state, req.decisions), "model": m} for n, m in ran.items()}, "base": base}
 
 
 @app.get("/api/typically/models")
@@ -376,8 +405,8 @@ def results(project: str):
     if not best.exists() or not eval_file.exists():
         raise HTTPException(404, "that model is not trained yet")
     with _reveal_lock:
-        if cache.exists() and cache.stat().st_mtime >= best.stat().st_mtime:
-            return json.loads(cache.read_text())
+        if cache.exists() and cache.stat().st_mtime >= best.stat().st_mtime and (c := json.loads(cache.read_text())).get("base", "typical-small") == base_of(f"local:{run}"):   # caches from before "base" was recorded are small's
+            return c
         job = _reveals.get(run)
         if job and job.get("error"):
             _reveals.pop(run)
@@ -392,14 +421,15 @@ def results(project: str):
 def _reveal_work(run: str, rows: list[dict], company: str, cache: Path) -> None:
     job, tuned = _reveals[run], f"local:{run}"
 
-    def run_models(state, group):   # one held-out case, base then tuned, through the same _run as /compare
+    def run_models(state, group):   # one held-out case, the base it started from then tuned, through the same _run as /compare
         qs = [Query(type=r["meta"]["qtype"], question=r["query"], labels=r["candidates"]) for r in group]
         with _lock:
-            out = [_run(get_model(n), state, qs)["results"] for n in ("typical-small", tuned)]
+            out = [_run(get_model(n), state, qs)["results"] for n in (base, tuned)]
         job["done"] += 1
         return out
     try:
-        res = reveal(rows, run_models, company, tuned)
+        base = base_of(tuned)
+        res = {**reveal(rows, run_models, company, tuned), "base": base}
         cache.write_text(json.dumps(res))
     except BaseException as e:   # surfaced on the next poll instead of a poll that never finishes
         job["error"] = f"{type(e).__name__}: {e}"
@@ -418,7 +448,7 @@ def download(run: str):
 
 @app.get("/api/health")
 def health():
-    return {"models": {n: m.device for n, m in _cache.items()}}
+    return {"models": {n: m.device for n, (_, m) in _cache.items()}}
 
 
 @app.get("/app")

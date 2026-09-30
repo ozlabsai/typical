@@ -65,6 +65,7 @@ import copy
 from types import SimpleNamespace
 
 from scripts import typically_plan as tp
+from scripts import typically_spike as ts
 from scripts.typically_spike import build_from_plan
 
 ENRICH = {"balance": True, "dedupe_soft": True, "policy": {}, "synthetic": False, "languages": []}
@@ -162,13 +163,14 @@ def test_build_from_plan_llm_flags_without_key_are_ignored():
 
 class FakeLLM:
     """Stands in for anthropic.Anthropic: translates by prefixing [lang], writes numbered synthetic cases."""
-    def __init__(self):
-        self.calls = []
+    def __init__(self, fixed=None, usage=None):
+        self.calls, self.max_tokens, self.fixed, self.usage = [], [], fixed, usage   # fixed: every returned text; usage: (in, out) tokens per call
         self.messages = SimpleNamespace(create=self.create)
 
     def create(self, **kw):
         prompt = kw["messages"][0]["content"]
         self.calls.append(prompt)
+        self.max_tokens.append(kw["max_tokens"])
         assert kw["output_config"]["format"]["type"] == "json_schema" and kw["model"] == "claude-opus-5-5"
         if prompt.startswith("Translate"):
             lang = re.search(r"code '(\w+)'", prompt).group(1)
@@ -176,7 +178,10 @@ class FakeLLM:
         else:
             n = int(re.search(r"Write (\d+) NEW", prompt).group(1))
             texts = [f"synthetic case {len(self.calls)}-{k} in the style of the real ones" for k in range(n)]
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps({"texts": texts}))])
+        texts = [self.fixed] * len(texts) if self.fixed else texts
+        text = json.dumps({"texts": texts})
+        i, o = self.usage or (len(prompt) // 4, len(text) // 4)
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], usage=SimpleNamespace(input_tokens=i, output_tokens=o))
 
 
 def test_build_from_plan_llm_enrichment_with_fake_client():
@@ -200,6 +205,43 @@ def test_build_from_plan_llm_enrichment_with_fake_client():
     assert ev and st["translated"]["eval"] == {"es": len(ev)} and all(r["state"].startswith("[es] ") for r in ev)
     orig = {r["state"] for r in split["import_oneliner"]}
     assert all(r["state"][5:] in orig for r in ev) and not {r["state"] for r in ev} & {r["state"] for r in split["train"]}
+
+
+def test_soft_dedup_groups_by_normalised_state_and_score_stays_hard():
+    choice = {"column": "c", "question": "q?", "labels": ["a", "b"], "type": "choice"}
+    (r,) = ts.plan_rows([("Hello  World!", "a"), ("hello world", "b"), ("HELLO-world", "b")], choice, True)
+    assert r["state"] == "Hello  World!" and r["meta"]["soft"] and r["target"] == pytest.approx([1 / 3, 2 / 3]) and r["label"] == 1
+    score = {**choice, "labels": ["0", "1", "2"], "type": "score"}   # train.py --ordinal_smooth would overwrite a soft target
+    (r,) = ts.plan_rows([("x", "0"), ("X", "2"), ("x.", "2")], score, True)
+    assert r["candidates"][r["label"]] == "2" and "soft" not in r["meta"] and r["target"] == [0, 0, 1]
+    assert len(ts.plan_rows([("x", "0"), ("X", "0")], score, False)) == 2
+
+
+def test_llm_enrichment_drops_normalised_collisions_with_the_other_side():
+    recs = company()
+    plan = company_plan(recs)
+    plain, _ = build(recs, plan)
+    val = plain["val"][0]["state"]
+    split, st = build(recs, plan, FakeLLM(fixed=val.upper() + "!"), languages=["es"])   # every translation is the val case, respelled
+    norm_of = lambda rows: {tp.norm(r["state"]) for r in rows}
+    assert tp.norm(val) not in norm_of(split["train"]) and st["collisions"] > 0 and st["translated"]["train"] == 0
+    train = plain["train"][0]["state"]
+    split, st = build(recs, plan, FakeLLM(fixed=train.upper() + "!"), languages=["es"])   # every translation is a train case, respelled
+    assert split["import_es"] == [] and st["translated"]["eval"] == {"es": 0} and st["collisions"] > 0
+    assert not norm_of(split["import_oneliner"]) & norm_of(split["train"])
+
+
+def test_llm_spend_is_reserved_and_charged_from_usage(monkeypatch):
+    recs = company()
+    plan = company_plan(recs)
+    llm = FakeLLM(usage=(1000, 2000))   # $0.044 a call
+    _, st = build(recs, plan, llm, synthetic=True, languages=["es", "de"])
+    assert len(llm.calls) > 3 and st["warnings"] == [] and st["llm_cost_usd"] == round(0.044 * len(llm.calls), 2)
+    assert all(m < 16000 for m in llm.max_tokens)   # sized to the call, not the old 16000
+    monkeypatch.setattr(ts, "LLM_CAP_USD", 0.15)
+    llm = FakeLLM(usage=(1000, 2000))
+    _, st = build(recs, plan, llm, synthetic=True, languages=["es", "de"])
+    assert 0 < len(llm.calls) < 4 and "stopped early" in st["warnings"][0] and st["llm_cost_usd"] <= 0.15
 
 
 def test_build_from_plan_llm_cost_cap_and_bad_language():

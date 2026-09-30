@@ -224,7 +224,7 @@ def _decision_stats(c: str, cols: dict, N: dict, keys: list, texts: dict) -> dic
             if pur >= 0.95 and pur - base >= 0.5 * (1 - base):   # removes at least half the error left by guessing the majority
                 leaks.append({"column": x, "purity": round(pur, 4)})
     text_leaks = []
-    for x, ts in texts.items():
+    for x, ts in texts.items():   # ts covers only the first rows: zip stops there
         rows = [(a, t) for a, t in zip(ans, ts) if a and len(a) >= 4 and a not in YES | NO and not _NUMBER.fullmatch(a)]
         if len(rows) >= 20:
             share = sum(f" {a} " in t for a, t in rows) / len(rows)
@@ -261,7 +261,7 @@ def profile(records: list[dict]) -> dict:
         "n_rows": n, "text_columns": text_cols, "columns": cols,
         "duplicates": {"rows": dup_rows, "share": round(dup_rows / max(n, 1), 4)},
         "languages": [{"code": c, "share": round(k / sum(langs.values()), 4)} for c, k in langs.most_common(5)],
-        "decisions": {c: _decision_stats(c, cols, N, keys, {x: ts + [None] * (n - len(ts)) for x, ts in texts.items()}) for c in cand},
+        "decisions": {c: _decision_stats(c, cols, N, keys, texts) for c in cand},
     }
 
 

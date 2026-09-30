@@ -2,6 +2,7 @@
 uv run --no-sync --with pytest --with httpx pytest tests/test_typically_deploy.py -q"""
 import hashlib
 import json
+import os
 import stat
 import sys
 from pathlib import Path
@@ -180,6 +181,50 @@ def test_push_errors_never_echo_the_token(env, tmp_path, hub):
     r = push(env)
     assert r.status_code == 502 and TOKEN not in r.text and "***" in r.text
     assert push(env, repo="no-slash").status_code == 400 and push(env, run="co_missing").status_code == 404
+
+
+def test_push_card_skips_results_scored_against_another_base(env, tmp_path, hub):
+    _, api = hub
+    trained(tmp_path, "co_acme", "Qwen/Qwen3.5-4B-Base")
+    reveal = {"n_cases": 200, "score": {"standard": 0.57, "yours": 0.78}, "decisions": []}
+    card = lambda: next(o for o in api.create_commit.call_args.kwargs["operations"] if o.path_in_repo == "README.md").path_or_fileobj.decode()
+    for base, shown in (("typical-small", False), ("typical-medium", True)):
+        (tmp_path / "results" / "co_acme" / "reveal.json").write_text(json.dumps({**reveal, "base": base}))
+        assert push(env, run="co_acme").status_code == 200 and ("Held-out results" in card()) is shown
+
+
+def test_compare_base_is_the_base_the_tuned_model_started_from(env, tmp_path, monkeypatch):
+    ran = []
+    monkeypatch.setattr(server, "get_model", lambda n: n)
+    monkeypatch.setattr(server, "_run", lambda m, state, qs: ran.append(m) or {"results": []})
+    trained(tmp_path, "co_small")
+    trained(tmp_path, "co_acme", "Qwen/Qwen3.5-4B-Base")
+    body = lambda *models: {"state": "s", "decisions": [], "models": list(models)}
+    r = env.post("/api/typically/compare", json=body("base", "local:co_acme")).json()
+    assert r["base"] == "typical-medium" and r["models"]["base"]["model"] == "typical-medium" and ran == ["typical-medium", "local:co_acme"]
+    r = env.post("/api/typically/compare", json=body("local:co_small", "base")).json()
+    assert r["base"] == "typical-small" and r["models"]["base"]["model"] == "typical-small"
+    r = env.post("/api/typically/compare", json=body("typical-small", "local:co_acme")).json()   # explicit names still work
+    assert r["base"] is None and list(r["models"]) == ["typical-small", "local:co_acme"]
+    assert env.post("/api/typically/compare", json=body("base")).status_code == 400
+    assert env.post("/api/typically/compare", json=body("base", "local:nope")).status_code == 400
+
+
+def test_get_model_reloads_after_the_checkpoint_changes(env, tmp_path, monkeypatch):
+    loads = []
+
+    def load(source, **kw):
+        loads.append(source)
+        return SimpleNamespace(activate=lambda: None, tag=len(loads))
+    monkeypatch.setattr(server.Typical, "from_pretrained", load)
+    monkeypatch.setattr(server, "_warm", lambda m: None)
+    monkeypatch.setattr(server, "_cache", {})
+    trained(tmp_path, "co_f")
+    best = tmp_path / "results/co_f/best.pt"
+    assert server.get_model("local:co_f").tag == 1 and server.get_model("local:co_f").tag == 1 and len(loads) == 1   # cached
+    os.utime(best, ns=(1, best.stat().st_mtime_ns + 10**9))   # a retrain replaced best.pt
+    assert server.get_model("local:co_f").tag == 2 and server.get_model("local:co_f").tag == 2 and len(loads) == 2
+    assert list(server._cache) == ["local:co_f"]   # the stale entry is gone, not kept beside the new one
 
 
 # -- adapter swap

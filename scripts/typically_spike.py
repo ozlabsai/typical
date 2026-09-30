@@ -398,14 +398,17 @@ def case_split(state, seed, holdout):
 
 
 def plan_rows(pairs, d, soft):
-    """[(state, label)] -> one row per pair; soft: identical states merge into one row whose target is the answer mix (label = argmax)."""
+    """[(state, label)] -> one row per pair; soft: cases with the same normalised state (the split's identity) merge into one row
+    (the first state is kept) whose target is the answer mix (label = argmax)."""
     groups = {}
     for i, (s, g) in enumerate(pairs):
-        groups.setdefault(s if soft else i, (s, Counter()))[1][g] += 1
+        groups.setdefault(tp.norm(s) if soft else i, (s, Counter()))[1][g] += 1
     out = []
     for s, c in groups.values():
         r = row(s, d["question"], d["labels"], max(d["labels"], key=lambda l: c[l]), d["type"], f"import_{d['column']}")   # first label on ties
-        if len(c) > 1:
+        # ponytail: score decisions merge to the majority hard label, never a soft target: train.py --ordinal_smooth (always on for
+        # imports) overwrites a score row's target with smoothing around its argmax, so a soft mix would be silently discarded.
+        if len(c) > 1 and d["type"] != "score":
             r["target"], r["meta"]["soft"] = [c[l] / sum(c.values()) for l in d["labels"]], True
         out.append(r)
     return out
@@ -481,9 +484,16 @@ def _translate_tasks(states, lang, emit):
              + json.dumps(c, ensure_ascii=False), 1.5 * sum(map(len, c)), lambda texts, c=c: apply(texts, c)) for c in chunks]
 
 
-def _ask(llm, prompt):
-    resp = llm.messages.create(model=tp.MODEL, max_tokens=16000, messages=[{"role": "user", "content": prompt}],
+def _usd(tokens_in, tokens_out):
+    return (tokens_in * USD_PER_MTOK[0] + tokens_out * USD_PER_MTOK[1]) / 1e6
+
+
+def _ask(llm, prompt, max_tokens):
+    return llm.messages.create(model=tp.MODEL, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}],
                                output_config={"format": {"type": "json_schema", "schema": TEXTS}})
+
+
+def _texts(resp):
     return json.loads(next(b.text for b in resp.content if b.type == "text"))["texts"]
 
 
@@ -534,7 +544,7 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None):
             split[name] += rows
     if any(not v for v in split.values()):
         raise ValueError("not enough usable rows: a split came out empty; add more rows or lower the held-out share")
-    syn, tr, ev, cost = [], [], {}, 0.0
+    syn, tr, ev, cost, collisions = [], [], {}, 0.0, 0
     langs = enrich.get("languages") or []
     if (enrich.get("synthetic") or langs) and llm is None:
         warnings.append("Synthetic cases and added languages need an Anthropic key; they were skipped.")
@@ -557,22 +567,38 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None):
             tr_states = rng.sample(sorted(base["train"]), max(1, round(TRANSLATE_RATE * len(base["train"]))))
             tasks += _translate_tasks(tr_states, lang, lambda l, s, t: tr.extend(_copy(base["train"][s], t, l)))
             tasks += _translate_tasks(ev_states, lang, lambda l, s, t: ev.setdefault(l, []).extend(_copy(base["import_oneliner"][s], t, l)))
-        cost = sum(len(p) / 4 * USD_PER_MTOK[0] + o / 4 * USD_PER_MTOK[1] for p, o, _ in tasks) / 1e6
-        if cost > LLM_CAP_USD:
-            raise ValueError(f"AI enrichment would cost about ${cost:.2f}, over the ${LLM_CAP_USD:.2f} limit; "
+        est = sum(_usd(len(p) / 4, o / 4) for p, o, _ in tasks)
+        if est > LLM_CAP_USD:
+            raise ValueError(f"AI enrichment would cost about ${est:.2f}, over the ${LLM_CAP_USD:.2f} limit; "
                              "turn off synthetic cases or add fewer languages")
-        for prompt, _, apply in tasks:
+        for prompt, out_chars, apply in tasks:
+            # the hard cap: reserve this call's worst case (chars/3 input tokens + all max_tokens out), then charge the real usage
+            max_tokens = min(16000, int(out_chars / 2) + 500)
+            if cost + _usd(len(prompt) / 3, max_tokens) > LLM_CAP_USD:
+                warnings.append(f"AI enrichment stopped early to stay under the ${LLM_CAP_USD:.2f} limit; the remaining cases were skipped.")
+                break
             try:
-                apply(_ask(llm, prompt))
+                resp = _ask(llm, prompt, max_tokens)
+                cost += _usd(resp.usage.input_tokens, resp.usage.output_tokens)
+                apply(_texts(resp))
             except Exception as e:   # experimental: one failed call skips its cases; never echo the message (may hold the key)
                 warnings.append(f"An AI enrichment call failed ({type(e).__name__}); its cases were skipped.")
-        split["train"] += syn + tr
+        # a synthetic / translated case must not share a normalised state with the other side: train side vs val + real eval + eval
+        # translations, then eval translations vs the final train
+        norms = lambda rows: {tp.norm(r["state"]) for r in rows}
+        held = norms(split["val"]) | norms(split["import_oneliner"]) | norms(r for v in ev.values() for r in v)
+        new = [r for r in syn + tr if tp.norm(r["state"]) not in held]
+        train_n = norms(split["train"]) | norms(new)
+        kept = {l: [r for r in v if tp.norm(r["state"]) not in train_n] for l, v in ev.items()}
+        collisions = len(syn) + len(tr) - len(new) + sum(len(v) for v in ev.values()) - sum(len(v) for v in kept.values())
+        syn, tr, ev = [r for r in new if r["meta"].get("synthetic")], [r for r in new if not r["meta"].get("synthetic")], kept
+        split["train"] += new
         split.update({f"import_{l}": rows for l, rows in ev.items()})
     for rows in split.values():
         rng.shuffle(rows)
     return split, {"rows": {k: len(v) for k, v in split.items()}, "labels": {"before": before, "after": label_dist(split["train"])},
                    "flips": sum(r["task"] == "import_rflip" for r in split["train"]), "soft_rows": soft, "dropped": dropped,
-                   "synthetic": len(syn), "translated": {"train": len(tr), "eval": {l: len(v) for l, v in ev.items()}},
+                   "synthetic": len(syn), "collisions": collisions, "translated": {"train": len(tr), "eval": {l: len(v) for l, v in ev.items()}},
                    "llm_cost_usd": round(cost, 2), "warnings": warnings}
 
 

@@ -199,6 +199,8 @@ def push(req: PushRequest):
     if base is None:
         raise HTTPException(400, f"unknown backbone {ckpt['args']['backbone']!r}")
     reveal = json.loads((res / "reveal.json").read_text()) if (res / "reveal.json").exists() else None
+    if reveal and reveal.get("base", "typical-small") != f"typical-{base}":   # scored against another base: the card must not claim it
+        reveal = None
     api = HfApi(token=req.token)
     try:
         manifest = {"base_repo": f"OzLabs/typical-{base}", "base_sha": api.model_info(f"OzLabs/typical-{base}").sha, "run": req.run,

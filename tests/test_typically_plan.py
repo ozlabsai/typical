@@ -52,6 +52,13 @@ def test_leakage_flagged():
     assert tp.profile(recs)["decisions"]["a"]["leaks"] == [{"column": "copy", "purity": 1.0}]
 
 
+def test_profile_beyond_the_3000_row_text_scan():
+    words = ["alpha", "bravo", "charlie", "delta"]
+    recs = [{"t": f"ticket {i} says {words[i % 4]} loudly", "label": words[i % 4]} for i in range(5000)]
+    d = tp.profile(recs)["decisions"]["label"]   # used to raise TypeError (`text in None`) past 3,000 rows
+    assert d["text_leaks"] == [{"column": "t", "share": 1.0}]
+
+
 def test_validate_plan_rejections():
     def broken(fn):
         p = copy.deepcopy(PLAN)

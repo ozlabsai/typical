@@ -52,6 +52,7 @@ export interface Run {
 
 export interface Compare {
   models: Record<string, Run & { model: string }>
+  base: string | null   // the released model "base" resolved to
 }
 
 export const PHASES = ["queued", "starting_gpu", "uploading", "training", "evaluating", "downloading", "done", "failed"] as const
