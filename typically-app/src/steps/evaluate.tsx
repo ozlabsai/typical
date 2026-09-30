@@ -14,16 +14,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { api, downloadUrl, results, type Compare, type DecisionType, type Reveal } from "@/lib/api"
+import { useI18n } from "@/lib/i18n"
 import { included, pct, queries, SAMPLE, say, type Project } from "@/lib/project"
 import { cn } from "@/lib/utils"
 
 export function EvaluateStep({ project, next }: { project: Project; next: () => void }) {
+  const { t } = useI18n()
   const [tab, setTab] = useState("results")
   return (
     <Tabs value={tab} onValueChange={setTab}>
       <TabsList className="mb-6">
-        <TabsTrigger value="results">Results</TabsTrigger>
-        <TabsTrigger value="playground">Playground</TabsTrigger>
+        <TabsTrigger value="results">{t("ev.results")}</TabsTrigger>
+        <TabsTrigger value="playground">{t("ev.playground")}</TabsTrigger>
       </TabsList>
       <TabsContent value="results"><Results project={project} next={next} /></TabsContent>
       <TabsContent value="playground"><Playground project={project} /></TabsContent>
@@ -42,6 +44,7 @@ function mixed(rows: Reveal["disagreements"]) {
 }
 
 function Results({ project, next }: { project: Project; next: () => void }) {
+  const { t } = useI18n()
   const [data, setData] = useState<Reveal | null>(null)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -63,18 +66,19 @@ function Results({ project, next }: { project: Project; next: () => void }) {
     return () => ((alive = false), clearTimeout(timer))
   }, [project.resultsKey])
 
-  const who = project.sample ? "Northwind's" : "your"
+  const who = t(project.sample ? "ev.whoNorthwind" : "ev.whoYour")
+  const yoursCol = t(project.sample ? "ev.northwindCol" : "ev.yoursCol")
   if (error)
     return (
-      <Alert variant="destructive"><AlertCircle /><AlertTitle>Couldn't load the results</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>
+      <Alert variant="destructive"><AlertCircle /><AlertTitle>{t("ev.loadFail")}</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>
     )
   if (!data)
     return (
       <>
-        <PageHead title="Results">Scoring both models on the cases we kept back.</PageHead>
+        <PageHead title={t("ev.results")}>{t("ev.scoring")}</PageHead>
         <Card>
           <CardContent className="space-y-3">
-            <p className="text-sm tabular">{progress ? `Scored ${progress.done} of ${progress.total} cases` : "Starting…"}</p>
+            <p className="text-sm tabular">{progress ? t("ev.scored", { a: progress.done, b: progress.total }) : t("ev.starting")}</p>
             <Progress value={progress ? (progress.done / Math.max(1, progress.total)) * 100 : 0} className="h-1.5" />
             <div className="grid gap-4 pt-3 sm:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-24" />)}</div>
           </CardContent>
@@ -83,49 +87,49 @@ function Results({ project, next }: { project: Project; next: () => void }) {
     )
 
   const gain = Math.round((data.score.yours - data.score.standard) * 100)
-  const summary = `Standard Typical agrees with ${who} past decisions ${pct(data.score.standard)} of the time. ${project.sample ? "Northwind's own" : "Our own"} Typical: ${pct(data.score.yours)}. Measured on ${data.n_cases} cases neither model saw while learning.`
+  const summary = t("ev.summary", { who, a: pct(data.score.standard), mine: t(project.sample ? "ev.mineNorthwind" : "ev.mineOur"), b: pct(data.score.yours), n: data.n_cases })
 
   return (
     <>
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Results</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{t("ev.results")}</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            How often each model gives the answer {project.sample ? "Northwind" : "you"} actually gave, on {data.n_cases} cases neither saw while learning ({data.n_answers} answers).
+            {t("ev.lede", { who: project.sample ? "Northwind" : t("ev.you"), n: data.n_cases, a: data.n_answers })}
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigator.clipboard.writeText(summary).then(() => toast.success("Summary copied"))}>
-            <Copy data-icon="inline-start" /> Copy summary
+          <Button variant="outline" onClick={() => navigator.clipboard.writeText(summary).then(() => toast.success(t("ev.summaryCopied")))}>
+            <Copy data-icon="inline-start" /> {t("ev.copySummary")}
           </Button>
           <Button variant="outline" asChild>
-            <a href={downloadUrl(project.run!)} download><Download data-icon="inline-start" /> Download model</a>
+            <a href={downloadUrl(project.run!)} download><Download data-icon="inline-start" /> {t("ev.download")}</a>
           </Button>
-          <Button onClick={next}>Deploy <ArrowRight data-icon="inline-end" /></Button>
+          <Button onClick={next}>{t("ev.deploy")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></Button>
         </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Card size="sm">
-          <CardHeader><CardDescription>Standard Typical</CardDescription><p className="font-mono text-3xl font-medium tabular text-standard">{pct(data.score.standard)}</p></CardHeader>
-          <CardContent className="text-sm text-muted-foreground">agrees with {who} decisions</CardContent>
+          <CardHeader><CardDescription>{t("ev.standard")}</CardDescription><p className="font-mono text-3xl font-medium tabular text-standard">{pct(data.score.standard)}</p></CardHeader>
+          <CardContent className="text-sm text-muted-foreground">{t("ev.agrees", { who })}</CardContent>
         </Card>
         <Card size="sm" className="ring-1 ring-primary/30">
-          <CardHeader><CardDescription>{project.sample ? "Northwind's" : "Your"} Typical</CardDescription><p className="font-mono text-3xl font-medium tabular text-yours">{pct(data.score.yours)}</p></CardHeader>
-          <CardContent className="text-sm text-muted-foreground">agrees with {who} decisions</CardContent>
+          <CardHeader><CardDescription>{t(project.sample ? "ev.northwindTitle" : "ev.yoursTitle")}</CardDescription><p className="font-mono text-3xl font-medium tabular text-yours">{pct(data.score.yours)}</p></CardHeader>
+          <CardContent className="text-sm text-muted-foreground">{t("ev.agrees", { who })}</CardContent>
         </Card>
         <Card size="sm">
-          <CardHeader><CardDescription>Difference</CardDescription><p className="font-mono text-3xl font-medium tabular">{gain >= 0 ? "+" : ""}{gain} pts</p></CardHeader>
-          <CardContent className="text-sm text-muted-foreground tabular">fixed {data.fixed} answers, broke {data.broken}</CardContent>
+          <CardHeader><CardDescription>{t("ev.difference")}</CardDescription><p className="font-mono text-3xl font-medium tabular">{gain >= 0 ? "+" : ""}{gain} {t("ev.pts")}</p></CardHeader>
+          <CardContent className="text-sm text-muted-foreground tabular">{t("ev.fixed", { a: data.fixed, b: data.broken })}</CardContent>
         </Card>
       </div>
 
       <Card className="mt-4">
         <CardHeader>
-          <CardTitle>By decision</CardTitle>
+          <CardTitle>{t("ev.byDecision")}</CardTitle>
           {data.abstained.standard > 0 && (
             <CardDescription>
-              Standard Typical said “none of these fit” {data.abstained.standard} times; we count its best guess anyway.
+              {t("ev.abstained", { n: data.abstained.standard })}
             </CardDescription>
           )}
         </CardHeader>
@@ -133,10 +137,10 @@ function Results({ project, next }: { project: Project; next: () => void }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-6">Question</TableHead>
-                <TableHead className="w-[26%]"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-standard" />Standard</span></TableHead>
-                <TableHead className="w-[26%]"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-yours" />{project.sample ? "Northwind's" : "Yours"}</span></TableHead>
-                <TableHead className="w-20 pr-6 text-right">Change</TableHead>
+                <TableHead className="ps-6">{t("ev.question")}</TableHead>
+                <TableHead className="w-[26%]"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-standard" />{t("ev.standardCol")}</span></TableHead>
+                <TableHead className="w-[26%]"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-yours" />{yoursCol}</span></TableHead>
+                <TableHead className="w-20 pe-6 text-end">{t("ev.change")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -144,10 +148,10 @@ function Results({ project, next }: { project: Project; next: () => void }) {
                 const delta = Math.round((d.yours - d.standard) * 100)
                 return (
                   <TableRow key={d.key}>
-                    <TableCell className="pl-6 whitespace-normal">{d.question}</TableCell>
+                    <TableCell className="ps-6 whitespace-normal"><span dir="auto">{d.question}</span></TableCell>
                     <TableCell><Meter value={d.standard} tone="standard" /></TableCell>
                     <TableCell><Meter value={d.yours} tone="yours" /></TableCell>
-                    <TableCell className={cn("pr-6 text-right font-mono tabular", delta > 0 ? "text-yours" : "text-muted-foreground")}>
+                    <TableCell className={cn("pe-6 text-end font-mono tabular", delta > 0 ? "text-yours" : "text-muted-foreground")}>
                       {delta > 0 ? "+" : ""}{delta}
                     </TableCell>
                   </TableRow>
@@ -160,18 +164,18 @@ function Results({ project, next }: { project: Project; next: () => void }) {
 
       <Card className="mt-4">
         <CardHeader>
-          <CardTitle>Where they disagree</CardTitle>
-          <CardDescription>Cases from the held-back set where the two models gave different answers, with what {project.sample ? "Northwind" : "you"} actually decided.</CardDescription>
+          <CardTitle>{t("ev.disagree")}</CardTitle>
+          <CardDescription>{t("ev.disagreeLede", { who: project.sample ? "Northwind" : t("ev.you") })}</CardDescription>
         </CardHeader>
         <CardContent className="px-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-6">Case</TableHead>
-                <TableHead>Question</TableHead>
-                <TableHead>Standard</TableHead>
-                <TableHead>{project.sample ? "Northwind's" : "Yours"}</TableHead>
-                <TableHead className="pr-6">{project.sample ? "They decided" : "You decided"}</TableHead>
+                <TableHead className="ps-6">{t("ev.case")}</TableHead>
+                <TableHead>{t("ev.question")}</TableHead>
+                <TableHead>{t("ev.standardCol")}</TableHead>
+                <TableHead>{yoursCol}</TableHead>
+                <TableHead className="pe-6">{t(project.sample ? "ev.theyDecided" : "ev.youDecided")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -180,20 +184,20 @@ function Results({ project, next }: { project: Project; next: () => void }) {
                 const cell = (x: { answer: string; p: number }) => (
                   <span className="inline-flex items-center gap-1.5">
                     {x.answer === c.decided ? <Check className="size-3.5 text-yours" /> : <X className="size-3.5 text-muted-foreground" />}
-                    <span className="font-medium">{say(type, x.answer)}</span>
+                    <span className="font-medium">{say(t, type, x.answer)}</span>
                     <span className="font-mono text-xs text-muted-foreground tabular">{pct(x.p)}</span>
                   </span>
                 )
                 const body = c.case.split("\n\n").at(-1)
                 return (
                   <TableRow key={i}>
-                    <TableCell className="max-w-0 w-[38%] pl-6 whitespace-normal">
-                      <span className="line-clamp-2 text-muted-foreground" title={c.case}>{body}</span>
+                    <TableCell className="max-w-0 w-[38%] ps-6 whitespace-normal">
+                      <span dir="auto" className="line-clamp-2 text-muted-foreground" title={c.case}>{body}</span>
                     </TableCell>
-                    <TableCell className="whitespace-normal">{c.question}</TableCell>
+                    <TableCell className="whitespace-normal"><span dir="auto">{c.question}</span></TableCell>
                     <TableCell>{cell(c.standard)}</TableCell>
                     <TableCell>{cell(c.yours)}</TableCell>
-                    <TableCell className="pr-6 font-medium">{say(type, c.decided)}</TableCell>
+                    <TableCell className="pe-6 font-medium">{say(t, type, c.decided)}</TableCell>
                   </TableRow>
                 )
               })}
@@ -208,6 +212,7 @@ function Results({ project, next }: { project: Project; next: () => void }) {
 /* ---------------------------------------------------------------- 5. Playground */
 
 function Playground({ project }: { project: Project }) {
+  const { t } = useI18n()
   const first = project.analysis.preview_cases[0]?.case ?? ""
   const [text, setText] = useState(project.sample ? SAMPLE.tryCase : first)
   const [out, setOut] = useState<Compare | null>(null)
@@ -233,7 +238,7 @@ function Playground({ project }: { project: Project }) {
   const cell = (r: { argmax: string; probs: Record<string, number> } | undefined, type: DecisionType, tone: "standard" | "yours") =>
     r && (
       <div className="space-y-1.5">
-        <div className="flex items-baseline gap-2"><span className="font-medium">{say(type, r.argmax)}</span><span className="font-mono text-xs text-muted-foreground tabular">{pct(r.probs[r.argmax])}</span></div>
+        <div className="flex items-baseline gap-2"><span className="font-medium">{say(t, type, r.argmax)}</span><span className="font-mono text-xs text-muted-foreground tabular">{pct(r.probs[r.argmax])}</span></div>
         <div className="h-1 w-full max-w-40 overflow-hidden rounded-full bg-muted">
           <div className={cn("h-full rounded-full", tone === "standard" ? "bg-standard" : "bg-yours")} style={{ width: `${r.probs[r.argmax] * 100}%` }} />
         </div>
@@ -242,16 +247,16 @@ function Playground({ project }: { project: Project }) {
 
   return (
     <>
-      <PageHead title="Playground">Write or paste a new case. Both models answer every question, so you can see where yours differs.</PageHead>
+      <PageHead title={t("pg.title")}>{t("pg.lede")}</PageHead>
       <Card>
         <CardContent className="space-y-3">
-          <Label htmlFor="case">Case</Label>
-          <Textarea id="case" value={text} rows={6} onChange={(e) => setText(e.target.value)}
+          <Label htmlFor="case">{t("pg.case")}</Label>
+          <Textarea id="case" dir="auto" value={text} rows={6} onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === "Enter" && run()} className="font-normal" />
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-muted-foreground">⌘ Enter to run. The first run loads both models and takes a few seconds.</span>
+            <span className="text-xs text-muted-foreground">{t("pg.hint")}</span>
             <Button onClick={run} disabled={busy || !text.trim()}>
-              {busy && <Loader2 data-icon="inline-start" className="animate-spin" />} Ask both
+              {busy && <Loader2 data-icon="inline-start" className="animate-spin" />} {t("pg.ask")}
             </Button>
           </div>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
@@ -264,9 +269,9 @@ function Playground({ project }: { project: Project }) {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="pl-6">Question</TableHead>
-                  <TableHead className="w-[26%]"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-standard" />Standard</span></TableHead>
-                  <TableHead className="w-[26%] pr-6"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-yours" />{project.sample ? "Northwind's" : "Yours"}</span></TableHead>
+                  <TableHead className="ps-6">{t("ev.question")}</TableHead>
+                  <TableHead className="w-[26%]"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-standard" />{t("ev.standardCol")}</span></TableHead>
+                  <TableHead className="w-[26%] pe-6"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-yours" />{t(project.sample ? "ev.northwindCol" : "ev.yoursCol")}</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -274,12 +279,12 @@ function Playground({ project }: { project: Project }) {
                   const a = out?.models["base"]?.results[i], b = out?.models[mine]?.results[i]
                   return (
                     <TableRow key={d.column}>
-                      <TableCell className="pl-6 whitespace-normal">
-                        {d.question}
-                        {a && b && a.argmax !== b.argmax && <Badge variant="secondary" className="ml-2">Disagree</Badge>}
+                      <TableCell className="ps-6 whitespace-normal">
+                        <span dir="auto">{d.question}</span>
+                        {a && b && a.argmax !== b.argmax && <Badge variant="secondary" className="ms-2">{t("pg.disagree")}</Badge>}
                       </TableCell>
                       <TableCell>{busy ? <Skeleton className="h-8 w-28" /> : cell(a, d.type, "standard")}</TableCell>
-                      <TableCell className="pr-6">{busy ? <Skeleton className="h-8 w-28" /> : cell(b, d.type, "yours")}</TableCell>
+                      <TableCell className="pe-6">{busy ? <Skeleton className="h-8 w-28" /> : cell(b, d.type, "yours")}</TableCell>
                     </TableRow>
                   )
                 })}

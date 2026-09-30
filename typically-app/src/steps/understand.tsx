@@ -10,15 +10,15 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import type { DecisionType } from "@/lib/api"
-import { labelCounts, merges, TYPE_LABEL, type PlanDecision, type Project } from "@/lib/project"
+import { useI18n } from "@/lib/i18n"
+import { labelCounts, merges, TYPES, type PlanDecision, type Project } from "@/lib/project"
 import { cn } from "@/lib/utils"
 
-const WHY: Record<string, string> = {
-  id: "an ID", timestamp: "a date or time", pii: "personal data", leakage: "it gives the answer away",
-  after_decision: "only known after the decision", near_unique: "different on every row", constant: "the same on every row",
-}
+const WHY_KEYS = ["id", "timestamp", "pii", "leakage", "after_decision", "near_unique", "constant"] as const
+
 
 function DecisionCard({ p, d, set }: { p: Project; d: PlanDecision; set: (patch: Partial<PlanDecision>) => void }) {
+  const { t } = useI18n()
   const counts = labelCounts(p, d)
   const merged = merges(p, d)
   const move = (i: number, by: number) => {
@@ -31,17 +31,17 @@ function DecisionCard({ p, d, set }: { p: Project; d: PlanDecision; set: (patch:
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <span className="font-mono text-sm">{d.column}</span>
-          {d.needs_review && <Badge variant="outline" className="border-amber-500/50 text-amber-700 dark:text-amber-400">Check</Badge>}
+          {d.needs_review && <Badge variant="outline" className="border-amber-500/50 text-amber-700 dark:text-amber-400">{t("und.check")}</Badge>}
         </CardTitle>
         <CardDescription>{d.reasons[0] ?? ""}</CardDescription>
-        <CardAction><Switch checked={d.include} onCheckedChange={(v) => set({ include: v })} aria-label={`Learn ${d.column}`} /></CardAction>
+        <CardAction><Switch checked={d.include} onCheckedChange={(v) => set({ include: v })} aria-label={t("und.learn", { c: d.column })} /></CardAction>
       </CardHeader>
       <CardContent className="grid gap-3">
         <div className="grid gap-3 sm:grid-cols-[1fr_150px]">
-          <Input value={d.question} disabled={!d.include} onChange={(e) => set({ question: e.target.value })} aria-label={`Question for ${d.column}`} />
+          <Input dir="auto" value={d.question} disabled={!d.include} onChange={(e) => set({ question: e.target.value })} aria-label={t("und.question", { c: d.column })} />
           <Select value={d.type} disabled={!d.include} onValueChange={(v) => set({ type: v as DecisionType })}>
-            <SelectTrigger className="w-full" aria-label={`Answer type for ${d.column}`}><SelectValue /></SelectTrigger>
-            <SelectContent>{(Object.keys(TYPE_LABEL) as DecisionType[]).map((t) => <SelectItem key={t} value={t}>{TYPE_LABEL[t]}</SelectItem>)}</SelectContent>
+            <SelectTrigger className="w-full" aria-label={t("und.type", { c: d.column })}><SelectValue /></SelectTrigger>
+            <SelectContent>{TYPES.map((ty) => <SelectItem key={ty} value={ty}>{t(`type.${ty}`)}</SelectItem>)}</SelectContent>
           </Select>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -51,9 +51,9 @@ function DecisionCard({ p, d, set }: { p: Project; d: PlanDecision; set: (patch:
               <Badge variant="outline" className="gap-1.5 font-normal">
                 {l}<span className="text-muted-foreground tabular">{counts[l] ?? 0}</span>
                 {d.type === "score" && d.include && (
-                  <span className="-mr-1 inline-flex">
-                    <button type="button" aria-label={`Move ${l} lower`} disabled={i === 0} onClick={() => move(i, -1)} className="rounded p-0.5 hover:bg-muted disabled:opacity-30"><ArrowUp className="size-3 -rotate-90" /></button>
-                    <button type="button" aria-label={`Move ${l} higher`} disabled={i === d.labels.length - 1} onClick={() => move(i, 1)} className="rounded p-0.5 hover:bg-muted disabled:opacity-30"><ArrowDown className="size-3 -rotate-90" /></button>
+                  <span className="-me-1 inline-flex">
+                    <button type="button" aria-label={t("und.lower", { l })} disabled={i === 0} onClick={() => move(i, -1)} className="rounded p-0.5 hover:bg-muted disabled:opacity-30"><ArrowUp className="size-3 -rotate-90 rtl:rotate-90" /></button>
+                    <button type="button" aria-label={t("und.higher", { l })} disabled={i === d.labels.length - 1} onClick={() => move(i, 1)} className="rounded p-0.5 hover:bg-muted disabled:opacity-30"><ArrowDown className="size-3 -rotate-90 rtl:rotate-90" /></button>
                   </span>
                 )}
               </Badge>
@@ -62,7 +62,7 @@ function DecisionCard({ p, d, set }: { p: Project; d: PlanDecision; set: (patch:
         </div>
         {Object.keys(merged).length > 0 && (
           <p className="text-xs text-muted-foreground">
-            Merged: {Object.entries(merged).map(([to, from]) => `${to} ← ${from.join(", ")}`).join(" · ")}
+            {t("und.merged")}: {Object.entries(merged).map(([to, from]) => `${to} ← ${from.join(", ")}`).join(" · ")}
           </p>
         )}
       </CardContent>
@@ -71,6 +71,7 @@ function DecisionCard({ p, d, set }: { p: Project; d: PlanDecision; set: (patch:
 }
 
 export function UnderstandStep({ project, update, back, next }: { project: Project; update: (p: Partial<Project>) => void; back: () => void; next: () => void }) {
+  const { t } = useI18n()
   const { plan, analysis } = project
   const setDecision = (i: number, patch: Partial<PlanDecision>) =>
     update({ plan: { ...plan, decisions: plan.decisions.map((d, j) => (j === i ? { ...d, ...patch, needs_review: false } : d)) } })
@@ -86,24 +87,24 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
   return (
     <>
       <PageHead
-        title="Here's what we understood"
-        action={<Badge variant="secondary" className="gap-1.5"><Bot className="size-3.5" /> {analysis.plan_source === "llm" ? "Read by Claude" : "Read by built-in rules"}</Badge>}
+        title={t("und.title")}
+        action={<Badge variant="secondary" className="gap-1.5"><Bot className="size-3.5" /> {t(analysis.plan_source === "llm" ? "und.byClaude" : "und.byRules")}</Badge>}
       >
-        Check how each case is described and what you decided. Edit anything that's off; nothing is sent for training until the Train step.
+        {t("und.lede")}
       </PageHead>
 
       <Card className="mb-4">
         <CardHeader>
-          <CardTitle>Each case is</CardTitle>
+          <CardTitle>{t("und.caseIs")}</CardTitle>
           <CardDescription>
-            {[...facts, ...body].length ? <>{facts.length > 0 && <>facts from <b className="font-medium text-foreground">{facts.join(", ")}</b>{body.length ? ", then " : ""}</>}{body.length > 0 && <>the text in <b className="font-medium text-foreground">{body.join(", ")}</b></>}</> : "No text column found"}
-            {" · "}<span className="tabular">{usable.toLocaleString()} rows</span>
+            {[...facts, ...body].length ? <>{facts.length > 0 && <>{t("und.factsFrom")}<b className="font-medium text-foreground">{facts.join(", ")}</b>{body.length ? t("und.then") : ""}</>}{body.length > 0 && <>{t("und.textIn")}<b className="font-medium text-foreground">{body.join(", ")}</b></>}</> : t("und.noText")}
+            {" · "}<span className="tabular">{t("und.rows", { n: usable.toLocaleString() })}</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-3">
           {analysis.preview_cases.slice(0, 3).map((c, i) => (
             <div key={i} className="rounded-lg bg-muted/50 p-3 text-xs">
-              <p className="line-clamp-6 whitespace-pre-wrap text-muted-foreground">{c.case}</p>
+              <p dir="auto" className="line-clamp-6 whitespace-pre-wrap text-muted-foreground">{c.case}</p>
               <div className="mt-2 flex flex-wrap gap-1">{Object.entries(c.answers).map(([k, v]) => <Badge key={k} variant="outline" className="font-normal">{k}: {v}</Badge>)}</div>
             </div>
           ))}
@@ -113,14 +114,14 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
       {review.length > 0 && (
         <Alert className="mb-4">
           <AlertTriangle />
-          <AlertTitle>Needs your eye</AlertTitle>
-          <AlertDescription><ul className="list-disc pl-4">{review.map((r) => <li key={r}>{r}</li>)}</ul></AlertDescription>
+          <AlertTitle>{t("und.review")}</AlertTitle>
+          <AlertDescription><ul className="list-disc ps-4">{review.map((r) => <li key={r}>{r}</li>)}</ul></AlertDescription>
         </Alert>
       )}
 
       <div className="mb-2 flex items-center justify-between">
-        <h2 className="flex items-center gap-2 text-sm font-medium"><ListChecks className="size-4" /> Decisions</h2>
-        <span className="text-sm text-muted-foreground tabular">{chosen} of {plan.decisions.length} selected</span>
+        <h2 className="flex items-center gap-2 text-sm font-medium"><ListChecks className="size-4" /> {t("und.decisions")}</h2>
+        <span className="text-sm text-muted-foreground tabular">{t("und.selected", { a: chosen, b: plan.decisions.length })}</span>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         {plan.decisions.map((d, i) => <DecisionCard key={d.column} p={project} d={d} set={(patch) => setDecision(i, patch)} />)}
@@ -128,7 +129,7 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
 
       {plan.issues.length > 0 && (
         <Card className="mt-4" size="sm">
-          <CardHeader><CardTitle>Data health</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t("und.health")}</CardTitle></CardHeader>
           <CardContent>
             <ul className="grid gap-1.5 text-sm">
               {plan.issues.map((s, i) => (
@@ -142,11 +143,11 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
       {plan.excluded.length > 0 && (
         <Collapsible className="mt-4">
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm" className="-ml-2">Ignored columns ({plan.excluded.length}) <ChevronDown data-icon="inline-end" /></Button>
+            <Button variant="ghost" size="sm" className="-ms-2">{t("und.ignored", { n: plan.excluded.length })} <ChevronDown data-icon="inline-end" /></Button>
           </CollapsibleTrigger>
           <CollapsibleContent>
             <ul className="grid gap-1 pt-2 text-sm">
-              {plan.excluded.map((e) => <li key={e.column}><span className="font-mono">{e.column}</span> <span className="text-muted-foreground">: {WHY[e.why] ?? e.why}. {e.reason}</span></li>)}
+              {plan.excluded.map((e) => <li key={e.column}><span className="font-mono">{e.column}</span> <span className="text-muted-foreground">: {(WHY_KEYS as readonly string[]).includes(e.why) ? t(`why.${e.why as (typeof WHY_KEYS)[number]}`) : e.why}. {e.reason}</span></li>)}
             </ul>
           </CollapsibleContent>
         </Collapsible>
@@ -154,8 +155,8 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
 
       <Card className="mt-6" size="sm">
         <CardFooter className="justify-between">
-          <Button variant="ghost" onClick={back}>Back</Button>
-          <Button onClick={next} disabled={!chosen || usable < 100}>{usable < 100 ? "Need at least 100 rows" : <>Continue <ArrowRight data-icon="inline-end" /></>}</Button>
+          <Button variant="ghost" onClick={back}>{t("common.back")}</Button>
+          <Button onClick={next} disabled={!chosen || usable < 100}>{usable < 100 ? t("und.need100") : <>{t("common.continue")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></>}</Button>
         </CardFooter>
       </Card>
     </>

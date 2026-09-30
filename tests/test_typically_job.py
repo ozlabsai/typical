@@ -211,6 +211,7 @@ def test_deadline_mid_run_fails_and_still_deletes_pod(env, monkeypatch):
     cli = use(monkeypatch, FakeCli(POLLS, on_get=lambda: threading.Event().wait(0.6)))   # the budget runs out while the pod boots
     tj.run(SLUG, lambda m: None)
     assert tj.read_status(SLUG)["phase"] == "failed" and "minutes" in tj.read_status(SLUG)["message"]
+    assert tj.read_status(SLUG)["code"] == "failed_timeout"
     assert cli.deleted_ids() == {"pod1"} and cli.pods == []
 
 
@@ -226,7 +227,7 @@ def test_poll_timeout_deletes_pod(env, monkeypatch):
 def test_exception_mid_upload_deletes_pod(env, monkeypatch):
     cli = use(monkeypatch, FakeCli(POLLS, fail_on=lambda a: a[0] == "scp" and a[-2].endswith("repo.tar.gz")))
     tj.run(SLUG, lambda m: None)
-    assert tj.read_status(SLUG)["phase"] == "failed" and env[-1] == "failed"
+    assert tj.read_status(SLUG)["phase"] == "failed" and env[-1] == "failed" and tj.read_status(SLUG)["code"] == "failed_infra"
     assert not any(a[0] == "ssh" and "job.sh" in a[-1] for a in cli.calls)   # never launched
     assert len(cli.deleted()) == 1 and cli.pods == []
 
@@ -241,13 +242,13 @@ def test_nonzero_exit_fails_even_if_the_log_says_done(env, monkeypatch):
     cli = use(monkeypatch, FakeCli([ALIVE + "step 50 x\n", "EXIT 1\nTraceback (most recent call last)\nJOB_DONE\n"]))
     tj.run(SLUG, lambda m: None)
     st = tj.read_status(SLUG)
-    assert st["phase"] == "failed" and "exit 1" in st["message"] and "traceback" in st["message"] and len(cli.deleted()) == 1
+    assert st["phase"] == "failed" and st["code"] == "failed_training" and "exit 1" in st["message"] and "traceback" in st["message"] and len(cli.deleted()) == 1
 
 
 def test_traceback_in_log_alone_does_not_fail_a_zero_exit(env, monkeypatch):
     use(monkeypatch, FakeCli([ALIVE + "Traceback (a warning)\n", "EXIT 0\nTraceback (a warning)\n"]))
     tj.run(SLUG, lambda m: None)
-    assert tj.read_status(SLUG)["phase"] == "done"
+    assert tj.read_status(SLUG)["phase"] == "done" and tj.read_status(SLUG)["code"] == "done"
 
 
 def test_train_endpoint_409_and_404(env, monkeypatch):
@@ -372,3 +373,10 @@ def test_train_and_build_endpoints_take_base_and_steps(env, monkeypatch):
     cmd = c.post("/api/typically/build", json={**build, "base": "medium", "steps": 200}).json()["command"]
     assert "--backbone Qwen/Qwen3.5-4B-Base" in cmd and "--steps 200" in cmd and "--nc_render letters_nonull" in cmd
     assert "--backbone Qwen/Qwen3-1.7B-Base" in c.post("/api/typically/build", json=build).json()["command"]
+
+
+def test_status_code_field(env):
+    assert tj.write_status(SLUG, "starting_gpu", "x")["code"] == "gpu_starting"
+    assert tj.write_status(SLUG, "training", "x", "baseline")["code"] == "baseline"
+    assert tj.write_status(SLUG, "done", "x")["code"] == "done"
+    assert tj.read_status(SLUG)["code"] == "done"

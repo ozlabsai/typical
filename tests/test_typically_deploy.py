@@ -133,13 +133,16 @@ def test_snippets_use_the_saved_plan_and_escape_shell_quotes(env, tmp_path):
 def hub(monkeypatch):
     api = MagicMock()
     api.model_info.return_value = SimpleNamespace(sha="basesha123")
+    api.whoami.return_value = {"name": "me", "orgs": [{"name": "OzLabs"}]}
+    monkeypatch.setenv("HF_TOKEN", TOKEN)
+    td._namespaces.clear()
     cls = MagicMock(return_value=api)
     monkeypatch.setattr(td, "HfApi", cls)
     return cls, api
 
 
 def push(c, **kw):
-    return c.post("/api/typically/push", json={"run": "co_f", "repo": "me/northwind-triage", "token": TOKEN, **kw})
+    return c.post("/api/typically/push", json={"run": "co_f", "repo": "me/northwind-triage", **kw})
 
 
 def test_push_is_private_by_default_and_uploads_weights_card_and_manifest(env, tmp_path, hub):
@@ -150,7 +153,7 @@ def test_push_is_private_by_default_and_uploads_weights_card_and_manifest(env, t
         "decisions": [{"question": "Which team should handle this ticket?", "standard": 0.6, "yours": 0.86}]}))
     r = push(env)
     assert r.status_code == 200 and r.json() == {"url": "https://huggingface.co/me/northwind-triage", "files": ["best.pt", "README.md", "MANIFEST.json"]}
-    cls.assert_called_once_with(token=TOKEN)
+    cls.assert_called_once_with(token=TOKEN)   # the server's token, never one from the request
     api.create_repo.assert_called_once_with("me/northwind-triage", private=True, exist_ok=True)
     ops = {o.path_in_repo: o.path_or_fileobj for o in api.create_commit.call_args.kwargs["operations"]}
     assert set(ops) == {"best.pt", "README.md", "MANIFEST.json"} and ops["best.pt"] == str(tmp_path / "results/co_f/best.pt")
@@ -240,3 +243,34 @@ def test_activate_swaps_the_lora_in_place_only_when_needed():
     solo.head, solo.lora = SimpleNamespace(backbone=bb), None   # not sharing a backbone: activate is a no-op
     solo.activate()
     assert len(loaded) == 3
+
+
+def test_push_default_repo_is_namespace_slash_model_id_and_ignores_a_token_field(env, tmp_path, hub):
+    _, api = hub
+    trained(tmp_path, "co_acme_co")
+    r = env.post("/api/typically/push", json={"run": "co_acme_co", "token": "hf_from_the_request"})   # extra field: ignored
+    assert r.status_code == 200 and r.json()["url"] == "https://huggingface.co/OzLabs/acme-co"
+    api.create_repo.assert_called_once_with("OzLabs/acme-co", private=True, exist_ok=True)
+    assert (tmp_path / "results" / "co_acme_co" / "hf_repo.txt").read_text() == "OzLabs/acme-co"
+
+
+def test_push_without_a_server_token_is_503(env, tmp_path, hub, monkeypatch):
+    trained(tmp_path, "co_f")
+    monkeypatch.delenv("HF_TOKEN")
+    monkeypatch.setattr(td, "get_token", lambda: None)
+    assert push(env).status_code == 503
+
+
+def test_capabilities(env, hub, monkeypatch):
+    _, api = hub
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    assert env.get("/api/typically/capabilities").json() == {"ai": True, "hf_namespace": "OzLabs", "languages": ["en", "he"]}
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    td._namespaces.clear()
+    api.whoami.return_value = {"name": "me", "orgs": [{"name": "Other"}]}   # not in the org: the token owner's own name
+    assert env.get("/api/typically/capabilities").json() == {"ai": False, "hf_namespace": "me", "languages": ["en", "he"]}
+    env.get("/api/typically/capabilities")
+    assert api.whoami.call_count == 2   # cached per token
+    monkeypatch.delenv("HF_TOKEN")
+    monkeypatch.setattr(td, "get_token", lambda: None)
+    assert env.get("/api/typically/capabilities").json()["hf_namespace"] is None

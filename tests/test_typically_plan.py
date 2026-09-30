@@ -1,6 +1,7 @@
 """scripts/typically_plan.py: profile, heuristic plan, validation, rendering, LLM path with a fake client. No network."""
 import copy
 import json
+import re
 from types import SimpleNamespace
 
 import anthropic
@@ -166,3 +167,26 @@ def test_llm_prompt_cap_and_sample_rows():
     assert source == "heuristic" and not c.calls and "too large" in warnings[0]
     rows = tp.sample_rows(PROF, RECORDS)
     assert len(rows) == 25 and len({r["team"] for r in rows}) == 4
+
+
+def test_hebrew_heuristic_plan_and_analyze_lang(monkeypatch):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "site"))
+    import typically_analyze
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(typically_analyze, "UPLOADS", Path(__import__("tempfile").mkdtemp()))
+    app = FastAPI()
+    app.include_router(typically_analyze.router)
+    c = TestClient(app)
+    en = c.post("/api/typically/analyze", json={"source": {"kind": "sample"}}).json()
+    he = c.post("/api/typically/analyze", json={"source": {"kind": "sample"}, "lang": "he"}).json()
+    assert en["lang"] == "en" and he["lang"] == "he" and he["name_hint"] == en["name_hint"] == "Northwind"
+    q = {d["column"]: d["question"] for d in he["plan"]["decisions"]}
+    assert q == {"team": "איזה team מתאים?", "escalate": "האם escalate?", "urgency": "מה רמת הurgency?", "refund": "האם refund?"}
+    assert all(re.search("[א-ת]", d["reasons"][0]) for d in he["plan"]["decisions"])
+    assert [d["labels"] for d in he["plan"]["decisions"]] == [d["labels"] for d in en["plan"]["decisions"]]   # data labels are not translated
+    assert all(re.search("[א-ת]", i["detail"] + i["action"]) for i in he["plan"]["issues"])
+    assert all(re.search("[א-ת]", e["reason"]) for e in he["plan"]["excluded"])

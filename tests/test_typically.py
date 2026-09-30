@@ -157,7 +157,7 @@ def test_build_from_plan_null_mapping_and_soft_targets():
 def test_build_from_plan_llm_flags_without_key_are_ignored():
     recs = company()
     split, st = build(recs, company_plan(recs), synthetic=True, languages=["es"])
-    assert set(split) == {"train", "val", "import_oneliner"} and st["synthetic"] == 0 and "Anthropic key" in st["warnings"][0]
+    assert set(split) == {"train", "val", "import_oneliner"} and st["synthetic"] == 0 and "not available" in st["warnings"][0]
     assert not any(r["meta"].get("synthetic") or "lang" in r["meta"] for r in split["train"])
 
 

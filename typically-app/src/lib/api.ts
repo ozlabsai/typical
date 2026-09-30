@@ -102,7 +102,6 @@ export interface BuildV2 {
   base: "small" | "medium"
   enrich: import("@/lib/project").Enrich
   settings: { steps: number; holdout: number; seed: number }
-  anthropic_key?: string
 }
 
 export interface Snippets { curl: string; python: string; javascript: string; sdk: string }
@@ -114,13 +113,13 @@ export const api = {
   compare: (req: { state: string; decisions: Query[]; models: string[] }) => call<Compare>("compare", req),
   train: (name: string) => call<TrainStatus>("train", { name }),
   trainStatus: (slug: string) => call<TrainStatus>(`train/${encodeURIComponent(slug)}`),
-  analyze: (source: Source, anthropic_key?: string) =>
-    call<import("@/lib/project").Analysis>("analyze", { source, ...(anthropic_key ? { anthropic_key } : {}) }),
+  analyze: (source: Source, lang: "en" | "he") => call<import("@/lib/project").Analysis>("analyze", { source, lang }),
+  capabilities: () => call<{ ai: boolean; hf_namespace: string | null; languages: string[] }>("capabilities"),
   buildPlan: (req: BuildV2) => call<Build>("build", req),
   trainV2: (req: { name: string; base: "small" | "medium"; steps: number }) => call<TrainStatus>("train", req),
   createKey: (model_id: string) => call<{ key: string; prefix: string }>("keys", { model_id }),
   snippets: (model_id: string) => call<Snippets>(`snippets/${encodeURIComponent(model_id)}`),
-  push: (req: { run: string; repo: string; token: string; private: boolean }) => call<{ url: string; files: string[] }>("push", req),
+  push: (req: { run: string; repo?: string; private: boolean }) => call<{ url: string; files: string[] }>("push", req),
 }
 
 export interface Call {

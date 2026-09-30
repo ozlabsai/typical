@@ -54,6 +54,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+class TrainingFailed(RuntimeError):   # the run on the pod exited badly (vs. infrastructure trouble)
+    pass
+
+
 class Deadline(Exception):   # not a RuntimeError: the poll/ssh-retry loops must not swallow it
     pass
 
@@ -69,11 +73,14 @@ def read_status(slug: str) -> dict | None:
     return json.loads(p.read_text()) if p.exists() else None
 
 
-def write_status(slug: str, phase: str, message: str, **extra) -> dict:
+CODES = {"starting_gpu": "gpu_starting"}   # phase -> code when they differ; `code` is the stable key the frontend localises, `message` stays English for logs
+
+
+def write_status(slug: str, phase: str, message: str, code: str | None = None, **extra) -> dict:
     assert phase in PHASES
     prev = (read_status(slug) or {}) if phase != "queued" else {}
     st = {"phase": phase, "started_at": prev.get("started_at", _now()), "updated_at": _now(), "message": message,
-          "pod_id": prev.get("pod_id"), **extra}
+          "code": code or CODES.get(phase, phase), "pod_id": prev.get("pod_id"), **extra}
     (job_dir(slug) / "status.json").write_text(json.dumps(st))
     return st
 
@@ -116,9 +123,9 @@ class Job:
             raise Deadline(f"the job took longer than {DEADLINE_S * BASES[self.base]['scale'] / 60:.0f} minutes")
         return _run(argv, min(cap, left), out)
 
-    def to(self, phase: str, message: str, **extra):
+    def to(self, phase: str, message: str, code: str | None = None, **extra):
         self.log(f"[{phase}] {message}")
-        write_status(self.slug, phase, message, pod_id=self.pod_id, job_id=self.id, base=self.base, steps=self.steps, **extra)
+        write_status(self.slug, phase, message, code, pod_id=self.pod_id, job_id=self.id, base=self.base, steps=self.steps, **extra)
 
     def ssh(self, cmd: str, timeout: int = 60) -> str:
         return self.call(["ssh", "-n", *SSH_OPTS, "-p", self.host[1], f"root@{self.host[0]}", cmd], timeout)
@@ -227,13 +234,13 @@ class Job:
                 if code == "0":
                     return
                 hint = " (Python traceback in the log)" if "Traceback" in out else ""
-                raise RuntimeError(f"the training run failed (exit {code or 'unknown'}){hint}; see job.log")
+                raise TrainingFailed(f"the training run failed (exit {code or 'unknown'}){hint}; see job.log")
             if "best step" in out:
                 self.to("evaluating", "Training finished. Scoring your model on held-out examples.", progress=1.0)
             else:
                 p = min(max(steps, default=0) / self.steps, 1.0)
                 self.to("training", f"Learning from your examples ({p:.0%} done)." if steps else
-                        "Setting up and measuring the starting model.", progress=p)
+                        "Setting up and measuring the starting model.", None if steps else "baseline", progress=p)
 
     def download(self):
         dest = TYPICALLY / "results" / f"co_{self.slug}"
@@ -295,14 +302,14 @@ def run(slug: str, log=None, base: str = "small", steps: int = 400) -> None:
             j.to("uploading", "Sending your examples to the GPU.")
             j.upload()
             j.launch()
-            j.to("training", "Setting up and measuring the starting model.", progress=0.0)
+            j.to("training", "Setting up and measuring the starting model.", "baseline", progress=0.0)
             j.poll()
             j.to("downloading", "Bringing your model back.")
             j.download()
             j.to("done", "Your model is ready.", progress=1.0)
         except BaseException as e:   # incl. KeyboardInterrupt from the CLI; the pod must still go
             log(f"FAILED: {type(e).__name__}: {e}")
-            j.to("failed", f"Training did not finish: {e}")
+            j.to("failed", f"Training did not finish: {e}", "failed_timeout" if isinstance(e, Deadline) else "failed_training" if isinstance(e, TrainingFailed) else "failed_infra")
         finally:
             j.delete()
             _ACTIVE.discard(j.id)

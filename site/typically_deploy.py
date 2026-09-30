@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import torch
 from fastapi import APIRouter, Header, HTTPException, Request
-from huggingface_hub import CommitOperationAdd, HfApi
+from huggingface_hub import CommitOperationAdd, HfApi, get_token
 from pydantic import BaseModel
 
 import server as S
@@ -163,11 +163,38 @@ def snippets(model_id: str, request: Request):
     }
 
 
+# -- Hugging Face: the operator's token only (HF_TOKEN or the cached `hf auth login`); users never paste one
+ORG = "OzLabs"
+_namespaces: dict[str, str] = {}   # ponytail: token -> default push namespace, per process; a failed whoami is not cached
+
+
+def _hf_token() -> str | None:
+    return os.environ.get("HF_TOKEN") or get_token()
+
+
+def _namespace(api: HfApi, token: str | None) -> str | None:
+    """OzLabs when the server token's user belongs to that org, else the user's own name; None without a (working) token."""
+    if not token:
+        return None
+    if token not in _namespaces:
+        try:
+            me = api.whoami()
+        except Exception:
+            return None
+        _namespaces[token] = ORG if any(o.get("name") == ORG for o in me.get("orgs") or []) else me["name"]
+    return _namespaces[token]
+
+
+@router.get("/api/typically/capabilities")
+def capabilities():
+    token = _hf_token()
+    return {"ai": bool(os.environ.get("ANTHROPIC_API_KEY")), "hf_namespace": _namespace(HfApi(token=token), token), "languages": ["en", "he"]}
+
+
 # -- push to Hugging Face
 class PushRequest(BaseModel):
     run: str
-    repo: str
-    token: str   # ponytail: used for this one call only -- never written to disk, never logged
+    repo: str | None = None   # default: <hf_namespace>/<model id with - for _>
     private: bool = True
 
 
@@ -188,7 +215,7 @@ def _card(base: str, repo: str, model_id: str, step: int, reveal: dict | None) -
 
 @router.post("/api/typically/push")
 def push(req: PushRequest):
-    if not typically_job.SLUG_RE.fullmatch(req.run) or not REPO_RE.fullmatch(req.repo):
+    if not typically_job.SLUG_RE.fullmatch(req.run) or (req.repo is not None and not REPO_RE.fullmatch(req.repo)):
         raise HTTPException(400, "need a valid run and a repo like user/name")
     res = S.TYPICALLY / "results" / req.run
     best = res / "best.pt"
@@ -201,16 +228,22 @@ def push(req: PushRequest):
     reveal = json.loads((res / "reveal.json").read_text()) if (res / "reveal.json").exists() else None
     if reveal and reveal.get("base", "typical-small") != f"typical-{base}":   # scored against another base: the card must not claim it
         reveal = None
-    api = HfApi(token=req.token)
+    token = _hf_token()
+    if not token:
+        raise HTTPException(503, "Hugging Face push is not set up on this server")
+    api = HfApi(token=token)
+    repo = req.repo or (f"{ns}/{model_id_of(req.run).replace('_', '-')}" if (ns := _namespace(api, token)) else None)
+    if not repo:
+        raise HTTPException(502, "could not work out the Hugging Face namespace; is the server token valid?")
     try:
         manifest = {"base_repo": f"OzLabs/typical-{base}", "base_sha": api.model_info(f"OzLabs/typical-{base}").sha, "run": req.run,
                     "step": ckpt["step"], "best_pt_sha256": hashlib.sha256(best.read_bytes()).hexdigest()}
-        api.create_repo(req.repo, private=req.private, exist_ok=True)
-        api.create_commit(req.repo, commit_message=f"Typical fine-tune {req.run}", operations=[
+        api.create_repo(repo, private=req.private, exist_ok=True)
+        api.create_commit(repo, commit_message=f"Typical fine-tune {req.run}", operations=[
             CommitOperationAdd("best.pt", str(best)),
-            CommitOperationAdd("README.md", _card(base, req.repo, model_id_of(req.run), ckpt["step"], reveal).encode()),
+            CommitOperationAdd("README.md", _card(base, repo, model_id_of(req.run), ckpt["step"], reveal).encode()),
             CommitOperationAdd("MANIFEST.json", json.dumps(manifest, indent=2).encode())])
     except Exception as e:   # hub errors can echo request headers: never hand the token back
-        raise HTTPException(502, f"Hugging Face said: {type(e).__name__}: {str(e).replace(req.token, '***')[:300]}")
-    _hf_repo_file(req.run).write_text(req.repo)
-    return {"url": f"https://huggingface.co/{req.repo}", "files": ["best.pt", "README.md", "MANIFEST.json"]}
+        raise HTTPException(502, f"Hugging Face said: {type(e).__name__}: {str(e).replace(token, '***')[:300]}")
+    _hf_repo_file(req.run).write_text(repo)
+    return {"url": f"https://huggingface.co/{repo}", "files": ["best.pt", "README.md", "MANIFEST.json"]}

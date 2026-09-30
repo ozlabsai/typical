@@ -147,14 +147,15 @@ def guess_lang(text: str) -> str:
 def _ordinal(values: list[str]) -> dict | None:
     """Observed (normalised) values -> {labels: low..high, why} when they form a scale. Order is LEAST to MOST."""
     if len(values) >= 3 and all(v in RANK for v in values):
-        return {"labels": sorted(values, key=RANK.index), "why": "low-to-high words"}
+        return {"labels": sorted(values, key=RANK.index), "why": msg("en", "why_words"), "how": ("why_words", {})}
     m = [re.fullmatch(r"([a-z]+) ?(\d+)", v) for v in values]
     if len(values) >= 2 and all(m) and len({x[1] for x in m}) == 1:
         sev = m[0][1] in SEVERITY
         labels = [x[0] for x in sorted(zip(values, m), key=lambda t: int(t[1][2]), reverse=sev)]
-        return {"labels": labels, "why": f"{m[0][1].upper()} numbers" + (": 1 is the most severe" if sev else ": higher is more")}
+        how = ("why_sev" if sev else "why_more", {"p": m[0][1].upper()})
+        return {"labels": labels, "why": msg("en", how[0], **how[1]), "how": how}
     if 3 <= len(values) <= 10 and all(re.fullmatch(r"-?\d+", v) for v in values):
-        return {"labels": sorted(values, key=int), "why": "small whole-number scale"}
+        return {"labels": sorted(values, key=int), "why": msg("en", "why_whole"), "how": ("why_whole", {})}
     return None
 
 
@@ -267,6 +268,68 @@ def profile(records: list[dict]) -> dict:
 
 # ---------------------------------------------------------------- plans
 
+LANGS = {"en": "English", "he": "Hebrew"}
+# Every user-facing string of a heuristic plan / warning, per language. Column names, labels and values are interpolated untouched.
+TEXT = {
+    "en": {
+        "q_noul": "Should we {h}?", "q_score": "What {h} level?", "q_choice": "Which {h}?",
+        "r_yesno": "Answers look like yes/no ({vals}).",
+        "r_scale": "Answers form a scale ({why}); ordered {lo} to {hi}.",
+        "r_choice": "{n} different answers, none that look like yes/no or a scale.",
+        "why_words": "low-to-high words", "why_whole": "small whole-number scale",
+        "why_sev": "{p} numbers: 1 is the most severe", "why_more": "{p} numbers: higher is more",
+        "x_constant": "Every row has the same value.", "x_timestamp": "A date or time; the decision is not made from it.",
+        "x_near_unique": "Almost every row has a different value.", "x_pii": "Looks like personal data ({kinds}).",
+        "x_after_decision": "Reads like something written after the decision was made.",
+        "x_leakage": "Predicts a decision almost perfectly on its own.", "x_other": "The plan did not use this column.",
+        "p_body": "Free text: the case itself.", "p_fact": "Short column kept as context.", "p_longest": "The longest column, used as the case.",
+        "unmapped": "Answer {v!r} was not mapped; it is ignored until you map it.",
+        "i_dup": "{n} rows repeat another case.", "a_dup": "merge into soft answers",
+        "i_conflict": "The same case has different answers; expect about {pct}% at best.", "a_conflict": "review or merge into soft answers",
+        "i_rare": "Rare answers: {vals}.", "a_rare": "balance rare answers",
+        "i_empty": "Rows with no answer are not used.", "a_empty": "skip those rows",
+        "i_leak": "Predicts '{c}' {pct}% of the time by itself.", "a_leak": "remove from the case",
+        "i_textleak": "The text often contains the answer to '{c}' word for word.", "a_textleak": "review",
+        "i_pii": "Contains {kinds}.", "a_pii": "review or remove",
+        "i_long": "{n} cases are longer than {t} tokens; the end is cut.", "a_long": "truncate",
+        "w_nodecision": "No column looks like a decision (2-20 different answers); add one in the next step.",
+        "w_big": "The data profile is too large for AI analysis; used the built-in rules instead.",
+        "w_fail": "AI analysis failed ({err}); used the built-in rules instead.",
+        "w_invalid": "The AI plan did not pass validation ({err}); used the built-in rules instead.",
+    },
+    "he": {
+        "q_noul": "האם {h}?", "q_score": "מה רמת ה{h}?", "q_choice": "איזה {h} מתאים?",
+        "r_yesno": "התשובות נראות כמו כן/לא ({vals}).",
+        "r_scale": "התשובות יוצרות סולם ({why}); מסודרות מ-{lo} עד {hi}.",
+        "r_choice": "{n} תשובות שונות, אף אחת מהן לא נראית כמו כן/לא או כסולם.",
+        "why_words": "מילים מנמוך לגבוה", "why_whole": "סולם קטן של מספרים שלמים",
+        "why_sev": "מספרי {p}: 1 הוא החמור ביותר", "why_more": "מספרי {p}: גבוה יותר פירושו יותר",
+        "x_constant": "לכל השורות אותו ערך.", "x_timestamp": "תאריך או שעה; ההחלטה לא מתקבלת על סמך זה.",
+        "x_near_unique": "כמעט לכל שורה ערך שונה.", "x_pii": "נראה כמו מידע אישי ({kinds}).",
+        "x_after_decision": "נראה כמו משהו שנכתב אחרי שההחלטה התקבלה.",
+        "x_leakage": "מנבא החלטה כמעט בדיוק גם לבדו.", "x_other": "התוכנית לא השתמשה בעמודה הזו.",
+        "p_body": "טקסט חופשי: המקרה עצמו.", "p_fact": "עמודה קצרה שנשמרה כהקשר.", "p_longest": "העמודה הארוכה ביותר, משמשת כמקרה.",
+        "unmapped": "התשובה {v!r} לא מופתה; היא תתעלם עד שתמפו אותה.",
+        "i_dup": "{n} שורות חוזרות על מקרה אחר.", "a_dup": "לאחד לתשובות רכות",
+        "i_conflict": "לאותו מקרה יש תשובות שונות; צפו לדיוק של כ-{pct}% לכל היותר.", "a_conflict": "לבדוק או לאחד לתשובות רכות",
+        "i_rare": "תשובות נדירות: {vals}.", "a_rare": "לאזן תשובות נדירות",
+        "i_empty": "שורות ללא תשובה אינן בשימוש.", "a_empty": "לדלג על השורות האלה",
+        "i_leak": "מנבא את '{c}' ב-{pct}% מהמקרים גם לבדו.", "a_leak": "להסיר מהמקרה",
+        "i_textleak": "הטקסט מכיל לעיתים קרובות את התשובה ל-'{c}' מילה במילה.", "a_textleak": "לבדוק",
+        "i_pii": "מכיל {kinds}.", "a_pii": "לבדוק או להסיר",
+        "i_long": "{n} מקרים ארוכים מ-{t} טוקנים; הסוף נחתך.", "a_long": "לחתוך",
+        "w_nodecision": "אף עמודה לא נראית כהחלטה (2-20 תשובות שונות); הוסיפו אחת בשלב הבא.",
+        "w_big": "פרופיל הנתונים גדול מדי לניתוח בבינה מלאכותית; נעשה שימוש בכללים המובנים.",
+        "w_fail": "הניתוח בבינה מלאכותית נכשל ({err}); נעשה שימוש בכללים המובנים.",
+        "w_invalid": "התוכנית של הבינה המלאכותית לא עברה בדיקה ({err}); נעשה שימוש בכללים המובנים.",
+    },
+}
+
+
+def msg(lang: str, key: str, **kw) -> str:
+    return TEXT.get(lang, TEXT["en"])[key].format(**kw)
+
+
 def _human(col: str) -> str:
     return re.sub(r"[\W_]+", " ", col).strip().lower()
 
@@ -279,97 +342,98 @@ def _labels(col_profile: dict) -> dict[str, str]:
     return {v["value"]: v["raws"][0] for v in col_profile["values"]}   # normalised -> most common spelling
 
 
-def _heuristic_decision(c: str, p: dict, d: dict) -> dict:
+def _heuristic_decision(c: str, p: dict, d: dict, lang: str = "en") -> dict:
     disp, h = _labels(p), _human(c)
     if d["yes_no"]:
         typ, labels = "noul", ["no", "yes"]
         mapping, conf = {v: "yes" if v in YES else "no" for v in disp}, 0.85
-        reasons = [f"Answers look like yes/no ({', '.join(disp.values())})."]
+        reasons = [msg(lang, "r_yesno", vals=", ".join(disp.values()))]
     elif d["ordinal"]:
         typ, labels = "score", [disp[v] for v in d["ordinal"]["labels"]]
         mapping, conf = {v: disp[v] for v in disp}, 0.75
-        reasons = [f"Answers form a scale ({d['ordinal']['why']}); ordered {labels[0]} to {labels[-1]}."]
+        key, kw = d["ordinal"]["how"]
+        reasons = [msg(lang, "r_scale", why=msg(lang, key, **kw), lo=labels[0], hi=labels[-1])]
     else:
         typ, labels = "choice", sorted(disp.values(), key=str.casefold)
         mapping, conf = dict(disp), 0.6
-        reasons = [f"{len(labels)} different answers, none that look like yes/no or a scale."]
-    question = {"noul": f"Should we {h}?", "score": f"What {h} level?", "choice": f"Which {h}?"}[typ]
+        reasons = [msg(lang, "r_choice", n=len(labels))]
+    question = msg(lang, "q_" + typ, h=h)
     return {"column": c, "include": True, "question": question, "type": typ, "labels": labels, "mapping": mapping,
             "confidence": conf, "reasons": reasons,
             "needs_review": bool(d["leaks"] or d["text_leaks"] or d["conflicts"]["share"] > 0.1)}
 
 
-def heuristic_plan(prof: dict, records: list[dict] | None = None) -> dict:
+def heuristic_plan(prof: dict, records: list[dict] | None = None, lang: str = "en") -> dict:
     """The always-available plan: free text is the case body, short categorical columns (2-20 answers) are decisions,
     ids/dates/constants/pii are left out, other short columns are facts."""
     cols, cand = prof["columns"], prof["decisions"]
     parts, decisions, excluded = [], [], []
-    ex = lambda c, why, reason: excluded.append({"column": c, "why": why, "confidence": 0.7, "reason": reason})
+    ex = lambda c, why, key=None, **kw: excluded.append({"column": c, "why": why, "confidence": 0.7, "reason": msg(lang, "x_" + (key or why), **kw)})
     for c, p in cols.items():
         kind = p["kind"]
         if c in cand and p["distinct"] <= 20:
-            decisions.append(_heuristic_decision(c, p, cand[c]))
+            decisions.append(_heuristic_decision(c, p, cand[c], lang))
         elif kind == "constant":
-            ex(c, "constant", "Every row has the same value.")
+            ex(c, "constant")
         elif kind == "date":
-            ex(c, "timestamp", "A date or time; the decision is not made from it.")
+            ex(c, "timestamp")
         elif kind == "id-like":
-            ex(c, "id" if _ID_NAME.search(c) else "near_unique", "Almost every row has a different value.")
+            ex(c, "id" if _ID_NAME.search(c) else "near_unique", "near_unique")
         elif p["pii"] and max(p["pii"].values()) >= 0.5 and kind != "text":
-            ex(c, "pii", f"Looks like personal data ({', '.join(p['pii'])}).")
+            ex(c, "pii", kinds=", ".join(p["pii"]))
         elif kind == "text" and _AFTER_NAME.search(c):
-            ex(c, "after_decision", "Reads like something written after the decision was made.")
+            ex(c, "after_decision")
         elif kind == "text":
-            parts.append({"column": c, "role": "body", "sentence": None, "confidence": 0.7, "reason": "Free text: the case itself."})
+            parts.append({"column": c, "role": "body", "sentence": None, "confidence": 0.7, "reason": msg(lang, "p_body")})
         else:
-            parts.append({"column": c, "role": "fact", "sentence": None, "confidence": 0.5, "reason": "Short column kept as context."})
+            parts.append({"column": c, "role": "fact", "sentence": None, "confidence": 0.5, "reason": msg(lang, "p_fact")})
     for part in [q for q in parts if q["role"] == "fact"]:   # a fact that gives a decision away is not a fact
         if any(l["column"] == part["column"] for d in decisions for l in cand[d["column"]]["leaks"]):
             parts.remove(part)
-            ex(part["column"], "leakage", "Predicts a decision almost perfectly on its own.")
+            ex(part["column"], "leakage")
     if not any(q["role"] == "body" for q in parts):
         facts = sorted((q for q in parts if q["role"] == "fact"), key=lambda q: -cols[q["column"]]["median_len"])
         if not facts:
             raise ValueError("no free-text column found to describe each case")
-        facts[0].update(role="body", reason="The longest column, used as the case.")
+        facts[0].update(role="body", reason=msg(lang, "p_longest"))
     return _finish({"case": {"parts": parts, "max_tokens": MAX_CASE_TOKENS, "overflow": "truncate"},
-                    "decisions": decisions, "excluded": excluded}, prof, records)
+                    "decisions": decisions, "excluded": excluded}, prof, records, lang)
 
 
-def _finish(plan: dict, prof: dict, records: list[dict] | None) -> dict:
+def _finish(plan: dict, prof: dict, records: list[dict] | None, lang: str = "en") -> dict:
     """Fill the parts of the plan the data decides (issues, languages), never the model."""
     used = {q["column"] for q in plan["case"]["parts"]}
     issues, cand = [], prof["decisions"]
     dup = prof["duplicates"]
     if dup["rows"]:
-        issues.append({"kind": "duplicates", "count": dup["rows"], "detail": f"{dup['rows']} rows repeat another case.", "action": "merge into soft answers"})
+        issues.append({"kind": "duplicates", "count": dup["rows"], "detail": msg(lang, "i_dup", n=dup["rows"]), "action": msg(lang, "a_dup")})
     for d in (d for d in plan["decisions"] if d["include"] and d["column"] in cand):
         c, s = d["column"], cand[d["column"]]
         if s["conflicts"]["rows"]:
             issues.append({"kind": "conflicts", "column": c, "count": s["conflicts"]["rows"],
-                           "detail": f"The same case has different answers; expect about {round(100 * s['conflicts']['best_accuracy'])}% at best.", "action": "review or merge into soft answers"})
+                           "detail": msg(lang, "i_conflict", pct=round(100 * s["conflicts"]["best_accuracy"])), "action": msg(lang, "a_conflict")})
         if s["rare"]:
-            issues.append({"kind": "rare_labels", "column": c, "count": len(s["rare"]), "detail": f"Rare answers: {', '.join(s['rare'][:5])}.", "action": "balance rare answers"})
+            issues.append({"kind": "rare_labels", "column": c, "count": len(s["rare"]), "detail": msg(lang, "i_rare", vals=", ".join(s["rare"][:5])), "action": msg(lang, "a_rare")})
         if s["empty"]:
-            issues.append({"kind": "empty", "column": c, "count": s["empty"], "detail": "Rows with no answer are not used.", "action": "skip those rows"})
+            issues.append({"kind": "empty", "column": c, "count": s["empty"], "detail": msg(lang, "i_empty"), "action": msg(lang, "a_empty")})
         for l in s["leaks"]:
             if l["column"] in used:
-                issues.append({"kind": "leakage", "column": l["column"], "count": prof["n_rows"], "detail": f"Predicts '{c}' {round(100 * l['purity'])}% of the time by itself.", "action": "remove from the case"})
+                issues.append({"kind": "leakage", "column": l["column"], "count": prof["n_rows"], "detail": msg(lang, "i_leak", c=c, pct=round(100 * l["purity"])), "action": msg(lang, "a_leak")})
         for l in s["text_leaks"]:
             if l["column"] in used:
-                issues.append({"kind": "leakage", "column": l["column"], "count": round(l["share"] * prof["n_rows"]), "detail": f"The text often contains the answer to '{c}' word for word.", "action": "review"})
+                issues.append({"kind": "leakage", "column": l["column"], "count": round(l["share"] * prof["n_rows"]), "detail": msg(lang, "i_textleak", c=c), "action": msg(lang, "a_textleak")})
     for c in used:
         if c in prof["columns"] and prof["columns"][c]["pii"]:
             p = prof["columns"][c]
-            issues.append({"kind": "pii", "column": c, "count": round(max(p["pii"].values()) * p["non_empty"]), "detail": f"Contains {', '.join(p['pii'])}.", "action": "review or remove"})
+            issues.append({"kind": "pii", "column": c, "count": round(max(p["pii"].values()) * p["non_empty"]), "detail": msg(lang, "i_pii", kinds=", ".join(p["pii"])), "action": msg(lang, "a_pii")})
     if records:
         long = sum(len(render_case(r, plan)) > 4 * plan["case"]["max_tokens"] for r in records)   # ~4 chars per token
         if long:
-            issues.append({"kind": "long_cases", "count": long, "detail": f"{long} cases are longer than {plan['case']['max_tokens']} tokens; the end is cut.", "action": "truncate"})
+            issues.append({"kind": "long_cases", "count": long, "detail": msg(lang, "i_long", n=long, t=plan["case"]["max_tokens"]), "action": msg(lang, "a_long")})
     return {**plan, "issues": issues, "languages": prof["languages"]}
 
 
-def validate_plan(plan: dict, prof: dict) -> list[str]:
+def validate_plan(plan: dict, prof: dict, lang: str = "en") -> list[str]:
     """Hard problems -> list of messages (empty = fine). Soft ones are fixed in place: an observed value with >= 1% of
     the rows that the plan forgot maps to null with needs_review; columns the plan never mentions are excluded."""
     cols, errs = prof["columns"], []
@@ -414,7 +478,7 @@ def validate_plan(plan: dict, prof: dict) -> list[str]:
                 if v not in d["mapping"] and k >= 0.01 * cols[c]["non_empty"]:
                     d["mapping"][v] = None
                     d["needs_review"] = True
-                    d["reasons"] = [*d["reasons"], f"Answer {v!r} was not mapped; it is ignored until you map it."]
+                    d["reasons"] = [*d["reasons"], msg(lang, "unmapped", v=v)]
     for e in plan["excluded"]:
         if e["column"] not in cols:
             errs.append(f"excluded column {e['column']!r} is not in the data")
@@ -423,7 +487,7 @@ def validate_plan(plan: dict, prof: dict) -> list[str]:
     if not any(d["include"] for d in plan["decisions"]):
         errs.append("the plan has no included decision")
     named = part_cols | seen | {e["column"] for e in plan["excluded"]}
-    plan["excluded"] += [{"column": c, "why": "other", "confidence": 0.5, "reason": "The plan did not use this column."}
+    plan["excluded"] += [{"column": c, "why": "other", "confidence": 0.5, "reason": msg(lang, "x_other")}
                          for c in cols if c not in named]
     return errs
 
@@ -483,34 +547,35 @@ def _from_llm(raw: dict) -> dict:
     }
 
 
-def llm_plan(prof: dict, sample: list[dict], key: str | None, records: list[dict] | None = None, client=None):
+def llm_plan(prof: dict, sample: list[dict], key: str | None, records: list[dict] | None = None, client=None, lang: str = "en"):
     """One structured-output call (plus one retry with the validation errors) -> (plan, "llm"|"heuristic", warnings).
     Any API failure, an oversized prompt or two invalid plans fall back to heuristic_plan with a warning."""
-    fallback = lambda why: (heuristic_plan(prof, records), "heuristic", [why])
+    fallback = lambda why: (heuristic_plan(prof, records, lang), "heuristic", [why])
     user = json.dumps({"profile": prof, "sample_rows": sample}, ensure_ascii=False)
     if (len(SYSTEM) + len(user)) / 4 > MAX_PROMPT_TOKENS:   # chars/4 ~ tokens
-        return fallback("The data profile is too large for AI analysis; used the built-in rules instead.")
+        return fallback(msg(lang, "w_big"))
     import anthropic
     client = client or anthropic.Anthropic(api_key=key)
+    system = SYSTEM if lang == "en" else SYSTEM + f"\n- Write every question, reason and sentence template in {LANGS[lang]} (natural, neutral phrasing). Keep column names, labels, values and the {{value}} placeholder exactly as they are."
     messages, errs = [{"role": "user", "content": user}], []
     for _ in range(2):
         try:
             resp = client.messages.create(
-                model=MODEL, max_tokens=16000, system=SYSTEM, messages=messages,
+                model=MODEL, max_tokens=16000, system=system, messages=messages,
                 output_config={"format": {"type": "json_schema", "schema": PLAN_SCHEMA}, "effort": "medium"})
         except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:   # never echo the key: type + status only
-            return fallback(f"AI analysis failed ({type(e).__name__}{getattr(e, 'status_code', '') and ' ' + str(e.status_code)}); used the built-in rules instead.")
+            return fallback(msg(lang, "w_fail", err=f"{type(e).__name__}{getattr(e, 'status_code', '') and ' ' + str(e.status_code)}"))
         text = next((b.text for b in resp.content if b.type == "text"), "")
         try:
             plan = _from_llm(json.loads(text))
-            errs = validate_plan(plan, prof)
+            errs = validate_plan(plan, prof, lang)
         except (ValueError, KeyError, TypeError) as e:
             errs = [f"the JSON does not match the schema: {e!r}"]
         if not errs:
-            return _finish(plan, prof, records), "llm", []
+            return _finish(plan, prof, records, lang), "llm", []
         messages += [{"role": "assistant", "content": text},
                      {"role": "user", "content": "The plan has these problems, return a corrected full plan:\n- " + "\n- ".join(errs[:20])}]
-    return fallback(f"The AI plan did not pass validation ({errs[0][:120]}); used the built-in rules instead.")
+    return fallback(msg(lang, "w_invalid", err=errs[0][:120]))
 
 
 # ---------------------------------------------------------------- rendering

@@ -3,6 +3,7 @@ import { Check, Copy } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { useI18n } from "@/lib/i18n"
 import { pct } from "@/lib/project"
 import { cn } from "@/lib/utils"
 
@@ -23,7 +24,7 @@ export function PageHead({ title, children, action }: { title: string; children:
 export function Meter({ value, tone }: { value: number; tone: "standard" | "yours" }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="w-10 text-right font-mono text-sm tabular">{pct(value)}</span>
+      <span className="w-10 text-end font-mono text-sm tabular">{pct(value)}</span>
       <div className="h-1.5 w-full min-w-16 overflow-hidden rounded-full bg-muted">
         <div className={cn("h-full rounded-full transition-[width] duration-200", tone === "standard" ? "bg-standard" : "bg-yours")} style={{ width: `${value * 100}%` }} />
       </div>
@@ -31,11 +32,12 @@ export function Meter({ value, tone }: { value: number; tone: "standard" | "your
   )
 }
 
-export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+export function CopyButton({ text, label }: { text: string; label?: string }) {
+  const { t } = useI18n()
   const [done, setDone] = useState(false)
   return (
-    <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(text).then(() => (setDone(true), toast.success("Copied"), setTimeout(() => setDone(false), 1500)))}>
-      {done ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />} {label}
+    <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(text).then(() => (setDone(true), toast.success(t("common.copied")), setTimeout(() => setDone(false), 1500)))}>
+      {done ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />} {label ?? t("common.copy")}
     </Button>
   )
 }
@@ -43,8 +45,8 @@ export function CopyButton({ text, label = "Copy" }: { text: string; label?: str
 export function CodeBlock({ code }: { code: string }) {
   return (
     <div className="relative rounded-lg border bg-muted/40">
-      <div className="absolute top-2 right-2"><CopyButton text={code} /></div>
-      <pre className="max-h-80 overflow-auto p-4 pr-24 font-mono text-xs leading-relaxed"><code>{code}</code></pre>
+      <div className="absolute end-2 top-2"><CopyButton text={code} /></div>
+      <pre className="max-h-80 overflow-auto p-4 pe-24 font-mono text-xs leading-relaxed"><code>{code}</code></pre>
     </div>
   )
 }

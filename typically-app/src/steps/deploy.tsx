@@ -13,24 +13,31 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, downloadUrl, type Snippets } from "@/lib/api"
+import { useI18n } from "@/lib/i18n"
 import { modelId, slugify, type Project } from "@/lib/project"
 
-const TABS: [keyof Snippets, string][] = [["curl", "cURL"], ["python", "Python"], ["javascript", "JavaScript"], ["sdk", "Python SDK"]]
+const TABS: (keyof Snippets)[] = ["curl", "python", "javascript", "sdk"]
 
 export function DeployStep({ project }: { project: Project }) {
+  const { t } = useI18n()
   const id = modelId(project)
   const url = `${window.location.origin}/v1/models/${id}/decide`
   const [key, setKey] = useState<string | null>(null)
   const [snips, setSnips] = useState<Snippets | null>(null)
   const [snipError, setSnipError] = useState<string | null>(null)
   const [busy, setBusy] = useState<"key" | "push" | null>(null)
-  const [hf, setHf] = useState({ repo: `your-username/${slugify(project.name).replace(/_/g, "-")}`, token: "", private: true })
+  const [ns, setNs] = useState<string | null>(null)
+  const [hf, setHf] = useState({ repo: "", private: true })
   const [pushed, setPushed] = useState<string | null>(null)
   const [pushError, setPushError] = useState<string | null>(null)
 
   useEffect(() => {
     api.snippets(id).then(setSnips).catch((e) => setSnipError(msg(e)))
-  }, [id])
+    api.capabilities().then((c) => {
+      setNs(c.hf_namespace)
+      if (c.hf_namespace) setHf((h) => (h.repo ? h : { ...h, repo: `${c.hf_namespace}/${slugify(project.name).replace(/_/g, "-")}` }))
+    }).catch(() => setNs(null))
+  }, [id, project.name])
 
   async function createKey() {
     setBusy("key")
@@ -47,10 +54,9 @@ export function DeployStep({ project }: { project: Project }) {
     setBusy("push")
     setPushError(null)
     try {
-      const r = await api.push({ run: project.run!, repo: hf.repo.trim(), token: hf.token, private: hf.private })
+      const r = await api.push({ run: project.run!, repo: hf.repo.trim() || undefined, private: hf.private })
       setPushed(r.url)
-      setHf((h) => ({ ...h, token: "" }))
-      toast.success("Pushed to Hugging Face")
+      toast.success(t("dep.pushed"))
     } catch (e) {
       setPushError(msg(e))
     } finally {
@@ -60,40 +66,40 @@ export function DeployStep({ project }: { project: Project }) {
 
   return (
     <>
-      <PageHead title="Deploy" action={<Button variant="outline" asChild><a href={downloadUrl(project.run!)} download><Download data-icon="inline-start" /> Download weights</a></Button>}>
-        Call {project.name} from your own software, or take the weights with you.
+      <PageHead title={t("dep.title")} action={<Button variant="outline" asChild><a href={downloadUrl(project.run!)} download><Download data-icon="inline-start" /> {t("dep.weights")}</a></Button>}>
+        {t("dep.lede", { name: project.name })}
       </PageHead>
 
       <div className="grid gap-4">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">Endpoint <Badge variant="secondary" className="gap-1"><span className="size-1.5 rounded-full bg-primary" />Live</Badge></CardTitle>
-            <CardDescription>Send a case and your questions; get a probability for every answer. Requests need an API key.</CardDescription>
-            <CardAction><Badge variant="outline" className="gap-1 font-normal"><Lock className="size-3" /> Protected</Badge></CardAction>
+            <CardTitle className="flex items-center gap-2">{t("dep.endpoint")} <Badge variant="secondary" className="gap-1"><span className="size-1.5 rounded-full bg-primary" />{t("dep.live")}</Badge></CardTitle>
+            <CardDescription>{t("dep.endpointBody")}</CardDescription>
+            <CardAction><Badge variant="outline" className="gap-1 font-normal"><Lock className="size-3" /> {t("dep.protected")}</Badge></CardAction>
           </CardHeader>
           <CardContent className="grid gap-4">
             <div className="flex items-center gap-2">
-              <Input readOnly value={url} className="font-mono text-xs" aria-label="Endpoint URL" />
+              <Input readOnly dir="ltr" value={url} className="font-mono text-xs" aria-label={t("dep.urlLabel")} />
               <CopyButton text={url} />
             </div>
-            <p className="text-xs text-muted-foreground">This prototype serves from this machine, so the URL works where the app runs. Hosted endpoints come next.</p>
+            <p className="text-xs text-muted-foreground">{t("dep.localNote")}</p>
             {key ? (
               <Alert>
                 <KeyRound />
-                <AlertTitle>Your API key</AlertTitle>
+                <AlertTitle>{t("dep.key")}</AlertTitle>
                 <AlertDescription className="grid gap-2">
-                  <span>Copy it now. We only store a fingerprint, so we can't show it again.</span>
-                  <span className="flex items-center gap-2"><code className="rounded bg-muted px-2 py-1 font-mono text-xs break-all">{key}</code><CopyButton text={key} /></span>
+                  <span>{t("dep.keyOnce")}</span>
+                  <span className="flex items-center gap-2"><code dir="ltr" className="rounded bg-muted px-2 py-1 font-mono text-xs break-all">{key}</code><CopyButton text={key} /></span>
                 </AlertDescription>
               </Alert>
             ) : (
-              <div><Button onClick={createKey} disabled={busy === "key"}>{busy === "key" ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <KeyRound data-icon="inline-start" />} Create API key</Button></div>
+              <div><Button onClick={createKey} disabled={busy === "key"}>{busy === "key" ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <KeyRound data-icon="inline-start" />} {t("dep.createKey")}</Button></div>
             )}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Use it</CardTitle><CardDescription>Set <code className="font-mono text-xs">TYPICAL_API_KEY</code> in your environment, then:</CardDescription></CardHeader>
+          <CardHeader><CardTitle>{t("dep.use")}</CardTitle><CardDescription>{t("dep.useHint", { env: "TYPICAL_API_KEY" })}</CardDescription></CardHeader>
           <CardContent>
             {snipError ? (
               <p className="text-sm text-destructive">{snipError}</p>
@@ -101,8 +107,8 @@ export function DeployStep({ project }: { project: Project }) {
               <Skeleton className="h-40" />
             ) : (
               <Tabs defaultValue="curl">
-                <TabsList>{TABS.map(([k, l]) => <TabsTrigger key={k} value={k}>{l}</TabsTrigger>)}</TabsList>
-                {TABS.map(([k]) => <TabsContent key={k} value={k} className="pt-3"><CodeBlock code={snips[k]} /></TabsContent>)}
+                <TabsList>{TABS.map((k) => <TabsTrigger key={k} value={k}>{t(`dep.snippet.${k}`)}</TabsTrigger>)}</TabsList>
+                {TABS.map((k) => <TabsContent key={k} value={k} className="pt-3" dir="ltr"><CodeBlock code={snips[k]} /></TabsContent>)}
               </Tabs>
             )}
           </CardContent>
@@ -110,21 +116,20 @@ export function DeployStep({ project }: { project: Project }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>Hugging Face</CardTitle>
-            <CardDescription>Keep a copy in your own Hugging Face account. The repo is created under your account; the token is used once and not stored.</CardDescription>
+            <CardTitle>{t("dep.hf")}</CardTitle>
+            <CardDescription>{t("dep.hfBody", { ns: ns ?? "Hugging Face" })}</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
-            <div className="grid gap-1.5"><Label htmlFor="repo">Repository</Label><Input id="repo" value={hf.repo} onChange={(e) => setHf({ ...hf, repo: e.target.value })} className="font-mono text-xs" /></div>
-            <div className="grid gap-1.5"><Label htmlFor="hf-token">Access token (write)</Label><Input id="hf-token" type="password" autoComplete="off" placeholder="hf_…" value={hf.token} onChange={(e) => setHf({ ...hf, token: e.target.value })} /></div>
+            <div className="grid gap-1.5 sm:col-span-2 sm:max-w-md"><Label htmlFor="repo">{t("dep.repo")}</Label><Input id="repo" dir="ltr" value={hf.repo} onChange={(e) => setHf({ ...hf, repo: e.target.value })} className="font-mono text-xs" /></div>
             <Label className="flex items-center gap-3 font-normal sm:col-span-2">
-              <Switch checked={hf.private} onCheckedChange={(v) => setHf({ ...hf, private: v })} /> Private repository
+              <Switch checked={hf.private} onCheckedChange={(v) => setHf({ ...hf, private: v })} /> {t("dep.private")}
             </Label>
             {pushError && <p role="alert" className="flex items-center gap-2 text-sm text-destructive sm:col-span-2"><AlertCircle className="size-4" /> {pushError}</p>}
           </CardContent>
           <CardFooter className="justify-between">
             {pushed ? <a href={pushed} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline">{pushed.replace("https://", "")} <ExternalLink className="size-3.5" /></a> : <span />}
-            <Button onClick={push} disabled={!hf.token || !hf.repo.includes("/") || busy === "push"}>
-              {busy === "push" ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <UploadCloud data-icon="inline-start" />} Push to Hugging Face
+            <Button onClick={push} disabled={!ns || !hf.repo.includes("/") || busy === "push"}>
+              {busy === "push" ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <UploadCloud data-icon="inline-start" />} {t("dep.push")}
             </Button>
           </CardFooter>
         </Card>

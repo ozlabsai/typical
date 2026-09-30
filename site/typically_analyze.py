@@ -37,7 +37,7 @@ class Source(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     source: Source
-    anthropic_key: str | None = None   # BYOK: used for this request only, never stored or logged
+    lang: Literal["en", "he"] = "en"   # language of the questions, reasons and warnings we write
 
 
 def load_upload(token: str) -> list[dict]:
@@ -63,16 +63,16 @@ def analyze(req: AnalyzeRequest):
     try:
         records = tp.load_records(src)
         prof = tp.profile(records)
-        key = req.anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
+        key = os.environ.get("ANTHROPIC_API_KEY")   # the operator's key only: users never bring one
         warnings: list[str] = []
         if key:
-            plan, source, warnings = tp.llm_plan(prof, tp.sample_rows(prof, records), key, records)
+            plan, source, warnings = tp.llm_plan(prof, tp.sample_rows(prof, records), key, records, lang=req.lang)
         else:
-            plan, source = tp.heuristic_plan(prof, records), "heuristic"
+            plan, source = tp.heuristic_plan(prof, records, req.lang), "heuristic"
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not plan["decisions"]:
-        warnings.append("No column looks like a decision (2-20 different answers); add one in the next step.")
+        warnings.append(tp.msg(req.lang, "w_nodecision"))
     token = uuid.uuid4().hex
     _records[token] = records
     while len(_records) > 16:
@@ -82,7 +82,7 @@ def analyze(req: AnalyzeRequest):
     pick = sorted(random.Random(0).sample(range(len(records)), min(3, len(records))))
     return {
         "name_hint": tp.name_hint(src), "n_rows": len(records), "columns": list(prof["columns"]),
-        "profile": trim(prof), "plan": plan, "plan_source": source,
+        "profile": trim(prof), "plan": plan, "plan_source": source, "lang": req.lang,
         "preview_cases": [{"case": tp.render_case(records[i], plan), "answers": tp.answers(records[i], plan)} for i in pick],
         "records_token": token, "warnings": warnings,
     }

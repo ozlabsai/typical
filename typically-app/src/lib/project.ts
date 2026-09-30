@@ -1,4 +1,5 @@
 import type { DecisionType, Query } from "@/lib/api"
+import type { T } from "@/lib/i18n"
 
 // ---- DatasetPlan: the agent's reading of the data (.context/typically/FLOW.md), confirmed by the user
 
@@ -37,14 +38,10 @@ export interface Analysis {
 
 export type Base = "small" | "medium"
 export type Preset = "quick" | "balanced" | "thorough"
-export const PRESETS: Record<Preset, { steps: number; label: string; note: string }> = {
-  quick: { steps: 200, label: "Quick", note: "A first look" },
-  balanced: { steps: 400, label: "Balanced", note: "Recommended" },
-  thorough: { steps: 800, label: "Thorough", note: "Large or messy data" },
-}
-export const BASES: Record<Base, { label: string; size: string; minutes: number; dollars: number; note: string; beta?: boolean }> = {
-  small: { label: "typical-small", size: "1.7B", minutes: 10, dollars: 1, note: "Fast and cheap. Right for most decisions." },
-  medium: { label: "typical-medium", size: "4B", minutes: 25, dollars: 8, note: "More accurate on harder decisions.", beta: true },
+export const PRESETS: Record<Preset, { steps: number }> = { quick: { steps: 200 }, balanced: { steps: 400 }, thorough: { steps: 800 } }
+export const BASES: Record<Base, { label: string; size: string; minutes: number; beta?: boolean }> = {
+  small: { label: "typical-small", size: "1.7B", minutes: 10 },
+  medium: { label: "typical-medium", size: "4B", minutes: 25, beta: true },
 }
 
 export interface Enrich { balance: boolean; dedupe_soft: boolean; policy: Record<string, string>; synthetic: boolean; languages: string[] }
@@ -55,7 +52,6 @@ export interface Project {
   base: Base
   source: string // "northwind_tickets.csv", "hf: bitext/...", ...
   sample: boolean
-  anthropicKey?: string // BYOK, memory only
   analysis: Analysis
   plan: DatasetPlan
   enrich: Enrich
@@ -94,10 +90,10 @@ export function merges(p: Project, d: PlanDecision) {
   return by
 }
 
-export const say = (type: DecisionType, label: string) => (type === "noul" ? (label === "yes" ? "Yes" : "No") : label)
+export const say = (t: T, type: DecisionType, label: string) => (type === "noul" ? t(label === "yes" ? "ans.yes" : "ans.no") : label)
 export const pct = (x: number) => `${Math.round(x * 100)}%`
 
-export const TYPE_LABEL: Record<DecisionType, string> = { choice: "Pick one", noul: "Yes or no", score: "Scale" }
+export const TYPES: DecisionType[] = ["choice", "noul", "score"]
 
 // The Northwind sample: the questions its model was taught, in the candidate order it was trained with
 // (scripts/typically_spike.py DECISIONS), and the arm-f model from spike 3 (.context/typically/RESULTS.md).
@@ -116,4 +112,4 @@ export const SAMPLE = {
     "Hi, two cases of glassware arrived cracked this morning. Photos attached. Can you sort out a replacement?",
 }
 
-export const LANGUAGES: [string, string][] = [["es", "Spanish"], ["fr", "French"], ["de", "German"], ["pt", "Portuguese"], ["he", "Hebrew"], ["ar", "Arabic"]]
+export const LANGUAGES = ["es", "fr", "de", "pt", "he", "ar"] as const

@@ -547,7 +547,7 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None):
     syn, tr, ev, cost, collisions = [], [], {}, 0.0, 0
     langs = enrich.get("languages") or []
     if (enrich.get("synthetic") or langs) and llm is None:
-        warnings.append("Synthetic cases and added languages need an Anthropic key; they were skipped.")
+        warnings.append("Synthetic cases and added languages are not available right now; they were skipped.")
     elif enrich.get("synthetic") or langs:
         if bad := [c for c in langs if not re.fullmatch(r"[a-z]{2,3}", str(c))]:
             raise ValueError(f"unknown language code {bad[0]!r}; use a two-letter code such as es or de")

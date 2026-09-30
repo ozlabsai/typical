@@ -243,8 +243,8 @@ class Enrich(BaseModel):
     balance: bool = True
     dedupe_soft: bool = True
     policy: dict[str, str] = {}
-    synthetic: bool = False   # experimental: needs an Anthropic key
-    languages: list[str] = []   # experimental: needs an Anthropic key
+    synthetic: bool = False   # experimental: ignored (with a warning) when the server has no ANTHROPIC_API_KEY
+    languages: list[str] = []   # experimental: ignored (with a warning) when the server has no ANTHROPIC_API_KEY
 
 
 class Settings(BaseModel):
@@ -260,7 +260,6 @@ class BuildPlanRequest(BaseModel):   # /build v2: a confirmed DatasetPlan over a
     base: Literal["small", "medium"] = "small"
     enrich: Enrich = Enrich()
     settings: Settings = Settings()
-    anthropic_key: str | None = None   # BYOK, used for this request only, never stored
 
 
 def _train_command(slug: str, steps: int, base: str) -> str:
@@ -280,7 +279,7 @@ def _build_plan(req: BuildPlanRequest, slug: str) -> dict:
     if not typically_job.SLUG_RE.fullmatch(slug):
         raise HTTPException(400, "need a model name (letters and digits, up to 40 characters)")
     records, plan = typically_analyze.load_upload(req.records_token), req.plan
-    key = req.anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
+    key = os.environ.get("ANTHROPIC_API_KEY")   # the operator's key only
     llm = None
     if key and (req.enrich.synthetic or req.enrich.languages):
         import anthropic
