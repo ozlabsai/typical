@@ -7,16 +7,21 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import type { Project } from "@/lib/project"
 import { cn } from "@/lib/utils"
-import { DataStep, DecisionsStep, PlaygroundStep, ResultsStep, TrainStep } from "@/steps"
+import { CreateStep } from "@/steps/create"
+import { DeployStep } from "@/steps/deploy"
+import { EnrichStep } from "@/steps/enrich"
+import { EvaluateStep } from "@/steps/evaluate"
+import { TrainStep } from "@/steps/train"
+import { UnderstandStep } from "@/steps/understand"
 
-const STEPS = ["Data", "Decisions", "Train", "Results", "Playground"] as const
+const STEPS = ["Create", "Understand", "Enrich", "Train", "Evaluate", "Deploy"] as const
 export type Step = (typeof STEPS)[number]
 
 function reachable(step: Step, p: Project | null) {
-  if (step === "Data") return true
+  if (step === "Create") return true
   if (!p) return false
-  if (step === "Decisions") return true
-  if (step === "Train") return p.decisions.some((d) => d.include)
+  if (step === "Understand" || step === "Enrich") return true
+  if (step === "Train") return p.plan.decisions.some((d) => d.include)
   return Boolean(p.run)
 }
 
@@ -72,7 +77,7 @@ function ThemeToggle() {
 }
 
 export default function App() {
-  const [step, setStep] = useState<Step>("Data")
+  const [step, setStep] = useState<Step>("Create")
   const [project, setProject] = useState<Project | null>(null)
   const update = (patch: Partial<Project>) => setProject((p) => (p ? { ...p, ...patch } : p))
 
@@ -96,7 +101,7 @@ export default function App() {
               </div>
               <div className="flex items-center gap-1">
                 {project && (
-                  <Button variant="ghost" size="sm" onClick={() => (setProject(null), setStep("Data"))}>
+                  <Button variant="ghost" size="sm" onClick={() => (setProject(null), setStep("Create"))}>
                     <RotateCcw data-icon="inline-start" /> Start over
                   </Button>
                 )}
@@ -106,11 +111,12 @@ export default function App() {
           </header>
           <Stepper step={step} project={project} go={setStep} />
           <main className="mx-auto max-w-6xl px-6 py-8">
-            {step === "Data" && <DataStep project={project} setProject={setProject} next={() => setStep("Decisions")} />}
-            {step === "Decisions" && project && <DecisionsStep project={project} update={update} back={() => setStep("Data")} next={() => setStep("Train")} />}
-            {step === "Train" && project && <TrainStep project={project} update={update} back={() => setStep("Decisions")} next={() => setStep("Results")} />}
-            {step === "Results" && project && <ResultsStep project={project} next={() => setStep("Playground")} />}
-            {step === "Playground" && project && <PlaygroundStep project={project} />}
+            {step === "Create" && <CreateStep project={project} setProject={setProject} next={() => setStep("Understand")} />}
+            {step === "Understand" && project && <UnderstandStep project={project} update={update} back={() => setStep("Create")} next={() => setStep("Enrich")} />}
+            {step === "Enrich" && project && <EnrichStep project={project} update={update} back={() => setStep("Understand")} next={() => setStep("Train")} />}
+            {step === "Train" && project && <TrainStep project={project} update={update} back={() => setStep("Enrich")} next={() => setStep("Evaluate")} />}
+            {step === "Evaluate" && project && <EvaluateStep project={project} next={() => setStep("Deploy")} />}
+            {step === "Deploy" && project && <DeployStep project={project} />}
           </main>
         </div>
         <Toaster position="bottom-right" />

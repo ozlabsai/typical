@@ -88,6 +88,24 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
   return res.json()
 }
 
+export type Source =
+  | { kind: "csv"; text: string; name?: string }
+  | { kind: "hf"; dataset: string; config?: string; split?: string; limit?: number }
+  | { kind: "sheets"; url: string }
+  | { kind: "sample" }
+
+export interface BuildV2 {
+  records_token: string
+  plan: import("@/lib/project").DatasetPlan
+  name: string
+  base: "small" | "medium"
+  enrich: import("@/lib/project").Enrich
+  settings: { steps: number; holdout: number; seed: number }
+  anthropic_key?: string
+}
+
+export interface Snippets { curl: string; python: string; javascript: string; sdk: string }
+
 export const api = {
   models: () => call<Models>("models"),
   preview: (csv_text: string) => call<Preview>("preview", { csv_text }),
@@ -95,6 +113,13 @@ export const api = {
   compare: (req: { state: string; decisions: Query[]; models: string[] }) => call<Compare>("compare", req),
   train: (name: string) => call<TrainStatus>("train", { name }),
   trainStatus: (slug: string) => call<TrainStatus>(`train/${encodeURIComponent(slug)}`),
+  analyze: (source: Source, anthropic_key?: string) =>
+    call<import("@/lib/project").Analysis>("analyze", { source, ...(anthropic_key ? { anthropic_key } : {}) }),
+  buildPlan: (req: BuildV2) => call<Build>("build", req),
+  trainV2: (req: { name: string; base: "small" | "medium"; steps: number }) => call<TrainStatus>("train", req),
+  createKey: (model_id: string) => call<{ key: string; prefix: string }>("keys", { model_id }),
+  snippets: (model_id: string) => call<Snippets>(`snippets/${encodeURIComponent(model_id)}`),
+  push: (req: { run: string; repo: string; token: string; private: boolean }) => call<{ url: string; files: string[] }>("push", req),
 }
 
 export interface Call {

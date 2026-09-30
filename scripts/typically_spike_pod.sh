@@ -2,8 +2,11 @@
 # typically spike, one GPU pod: released typical-small vs per-company fine-tunes (scripts/typically_spike.py).
 # Expects the repo + data_co_a/ + data_co_b/ at /workspace/pcdm, secrets in /workspace/.env.
 # bash scripts/typically_spike_pod.sh [1|2|3|e] > /workspace/spike.log 2>&1   (spike 2 needs runs/co_a/best.pt from spike 1;
-# spike 3 needs data_co_a,d,e,f,g). `job <slug>` (scripts/typically_job.py): base eval + one fine-tune on data_co_<slug>, JOB=1 trims the evals.
+# spike 3 needs data_co_a,d,e,f,g). `job <slug> [small|medium] [steps]` (scripts/typically_job.py): base eval + one fine-tune on
+# data_co_<slug>, JOB=1 trims the evals. Every fine-tune's architecture flags are read from runs/base/best.pt (typically_job.train_flags).
 set -eo pipefail
+if [ "${1:-2}" = job ]; then BASE=${3:-small}; STEPS=${4:-400}; else BASE=small; fi
+[[ "$BASE" =~ ^(small|medium)$ && "${STEPS:-400}" =~ ^[0-9]+$ ]] || { echo "job: bad base/steps '$BASE'/'${STEPS:-}'" >&2; exit 2; }   # same rule as typically_job.BASES / STEPS
 cd /workspace/pcdm
 { set +x; } 2>/dev/null; set -a; . /workspace/.env; set +a
 export UV_PROJECT_ENVIRONMENT=/workspace/venv
@@ -11,11 +14,15 @@ uv sync
 if [[ "$(nvidia-smi)" == *"CUDA Version: 12.8"* ]]; then   # docs/plan/PROJECT.md torch/driver rule (no grep -q pipe: pipefail + SIGPIPE)
   uv pip install --python /workspace/venv/bin/python "torch==2.11.0" --index-url https://download.pytorch.org/whl/cu128
 fi
+if [ "$BASE" = medium ]; then   # Qwen3.5 hybrid: without these two the Gated-DeltaNet layers fall back to a slow reference path (still correct)
+  uv pip install --python /workspace/venv/bin/python --no-build-isolation flash-linear-attention causal-conv1d || echo "WARN: fla/causal-conv1d install failed"
+  uv run --no-sync python -c "import fla, causal_conv1d" || echo "WARN: fla/causal-conv1d missing; continuing on the slower reference path"
+fi
 for d in v5 wf wh u; do   # one call per dir: --include takes ONE pattern, extra ones become filenames (and disable it)
   uv run --no-sync hf download guychuk/pcdm-data --repo-type dataset --include "$d/*" --local-dir data
 done
 for d in v5 wf wh u; do ln -sfn data/$d data_$d; done
-uv run --no-sync hf download OzLabs/typical-small best.pt --local-dir runs/base
+uv run --no-sync hf download "OzLabs/typical-$BASE" best.pt --local-dir runs/base
 
 EV="uv run --no-sync python scripts/eval_wf.py --mode native"
 REG="data_wf/eval/wf_heldout_noul.jsonl data_wf/eval/wf_heldout_choice.jsonl data_wf/eval/wf_heldout_score.jsonl data_wf/eval/wf_rubric_flip.jsonl data_wh/eval/wh_heldout_family.jsonl"
@@ -27,13 +34,9 @@ evals() {  # $1 run dir, $2 company files (eval_wf reads $1/best.pt)
 
 # the Release-1 v3 recipe (releases/typical-small.md), warm-started, company data = bucket C at half of every batch
 train() {  # $1 company, $2 steps, $3 run name
-  uv run --no-sync python pcdm/train.py --name "$3" --init_from runs/base/best.pt \
-    --readout native --nc_head n3 --nc_render semif --null factored --noul_head bern --score_head choice \
-    --ordinal_smooth 0.7 --tap_layer 20 --zscore --lora_r 16 --lora_layers 8 --max_state 1024 \
-    --data data_v5 --extra_data "data_wf,data_wh,data_u,data_co_$1" --bucket_map "data_wh=W,data_u=U,data_co_$1=C" \
-    --family_weights C:0.5,W:0.3,E:0.15,U:0.05 --null_aug W:0.20 \
-    --steps "$2" --bs 64 --grad_accum 8 --val_every 50 --ckpt_every 100 --eval_every "$2" --eval_limit 200 --eval_bs 8 \
-    --best_on "data_co_$1_val"   # pick best.pt on the company's own val, not general replay (spike 3; site/server.py build copies this)
+  local flags   # assigned on its own line so set -e sees a failing flag builder; no value has a space, so $flags is safe unquoted
+  flags=$(uv run --no-sync python scripts/typically_job.py --train-flags "$1" "$2" "$3" "$BASE")   # best.pt is picked on the company's own val (spike 3)
+  uv run --no-sync python pcdm/train.py $flags
   mkdir -p "runs/$3_last"   # ponytail: last.pt carries opt/sched/rng; strip to what bench.load_ours reads (weights_only load) instead of symlinking
   uv run --no-sync python -c "import sys,torch; b=torch.load(sys.argv[1]+'/best.pt',weights_only=False); print(sys.argv[1],'best step',b['step']); \
 l=torch.load(sys.argv[1]+'/last.pt',weights_only=False); torch.save({k:l[k] for k in ('tower','lora','step','best_val','args')},sys.argv[1]+'_last/best.pt'); \
@@ -46,7 +49,7 @@ if [ "${1:-2}" = job ]; then   # $2 = slug; the UI's "Teach it" (eval + train on
   [ -f "data_co_$2/train.jsonl" ] || { echo "job: data_co_$2/train.jsonl missing" >&2; exit 2; }
   JOB=1
   evals runs/base "data_co_$2/eval/*.jsonl"
-  train "$2" 400 "co_$2"
+  train "$2" "$STEPS" "co_$2"
   exit 0   # success is the exit code: job.sh's EXIT trap writes /workspace/job.exit for the poller (no log-string protocol)
 elif [ "${1:-2}" = e ]; then   # spike 2 arm e (eval tickets == data_co_a's, so base numbers carry over)
   train e 400 co_e

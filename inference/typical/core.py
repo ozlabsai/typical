@@ -62,8 +62,10 @@ class Typical:
     """from_pretrained("OzLabs/typical-small") -> a ready-to-decide native-readout model."""
 
     def __init__(self, head: _Head, model: NativeHead, device: str, max_state: int = 4096,
-                max_states: int = 16, max_option_tokens: int | None = DEFAULT_MAX_OPTION_TOKENS):
+                max_states: int = 16, max_option_tokens: int | None = DEFAULT_MAX_OPTION_TOKENS,
+                lora: dict | None = None):
         self.head, self.model, self.device, self.max_state = head, model, device, max_state
+        self.lora = lora  # only set when the backbone is shared between checkpoints: see activate()
         self.max_option_tokens = max_option_tokens
         self.tok = head.backbone.tokenizer
         # Persistent state -> prefix-KV cache (LRU, keyed on the exact state text): choice/
@@ -78,23 +80,41 @@ class Typical:
     def from_pretrained(cls, repo_id: str, device: str = "auto", filename: str = "best.pt",
                         revision: str | None = None, cache_dir: str | None = None,
                         max_state: int = 4096, max_states: int = 16,
-                        max_option_tokens: int | None = DEFAULT_MAX_OPTION_TOKENS) -> "Typical":
+                        max_option_tokens: int | None = DEFAULT_MAX_OPTION_TOKENS,
+                        backbones: dict | None = None) -> "Typical":
+        """`backbones`: pass one dict to several calls to share a single Backbone between checkpoints with the same
+        (backbone, tap_layer, lora_layers, lora_r); each model then keeps only its LoRA + head, and activate() swaps the LoRA in place."""
         path = repo_id if os.path.isfile(repo_id) else hf_hub_download(repo_id, filename, revision=revision, cache_dir=cache_dir)
         ckpt = torch.load(path, map_location="cpu", weights_only=True)
         args = ckpt.get("args", {})
         if args.get("readout") != "native":
             raise ValueError(f"{repo_id}/{filename} is not a native-readout checkpoint (readout={args.get('readout')!r})")
         dev = pick_device(device)
-        backbone = Backbone(args["backbone"], lora_layers=args.get("lora_layers", 8),
-                            lora_r=args.get("lora_r", 16), device=dev, tap_layer=args.get("tap_layer", 0))
+        key = (args["backbone"], args.get("tap_layer", 0), args.get("lora_layers", 8), args.get("lora_r", 16))
+        backbone = backbones.get(key) if backbones is not None else None
+        if backbone is None:
+            backbone = Backbone(key[0], lora_layers=key[2], lora_r=key[3], device=dev, tap_layer=key[1])
+            if backbones is not None:
+                backbones[key] = backbone
         backbone.load_lora_state_dict(ckpt["lora"])
         model = NativeHead(backbone.d, nc_head=args.get("nc_head", "n2n3"), null=args.get("null", "factored"),
                            render=args.get("nc_render", "letters"), score_head=args.get("score_head", "choice"),
                            noul_head=args.get("noul_head", "choice")).to(dev)
         model.load_state_dict(ckpt["tower"])
         model.eval()
-        return cls(_Head(backbone), model, dev, max_state=max_state, max_states=max_states,
-                   max_option_tokens=max_option_tokens)
+        m = cls(_Head(backbone), model, dev, max_state=max_state, max_states=max_states,
+                max_option_tokens=max_option_tokens, lora=ckpt["lora"] if backbones is not None else None)
+        backbone.active = m
+        return m
+
+    def activate(self) -> None:
+        """Make this model's LoRA the live one on its (shared) backbone; no-op when it already is. Callers sharing a backbone
+        across threads must hold their own lock. The state->KV caches stay valid across swaps: a cached KV was computed under
+        this model's own LoRA, and reactivating restores exactly those weights."""
+        bb = self.head.backbone
+        if self.lora is not None and getattr(bb, "active", None) is not self:
+            bb.load_lora_state_dict(self.lora)
+            bb.active = self
 
     def _state_kv_for(self, state: str):
         """LRU lookup/insert of (past_key_values, Ls) for this exact state text. A hit skips
@@ -113,6 +133,7 @@ class Typical:
     def _raw(self, state, query: str, labels: list[str]) -> torch.Tensor:
         if not isinstance(state, str):
             state = json.dumps(state, ensure_ascii=False)
+        self.activate()
         with torch.inference_mode():
             cache = self._state_kv_for(state)
             return native_kv_decide(self.head, self.model, state, [(query, labels)],

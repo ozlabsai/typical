@@ -1,9 +1,10 @@
-"""Teach it: rent one H100 on RunPod, fine-tune typical-small on .context/typically/jobs/<slug>/, fetch the result, delete the pod.
+"""Teach it: rent one H100 on RunPod, fine-tune typical-small|medium on .context/typically/jobs/<slug>/, fetch the result, delete the pod.
 
-uv run --no-project python scripts/typically_job.py <slug>      (stdlib + the runpodctl/ssh/scp/git binaries only)
+uv run --no-project python scripts/typically_job.py <slug> [small|medium] [steps]   (stdlib + the runpodctl/ssh/scp/git binaries only)
 Progress for the UI: .context/typically/jobs/<slug>/status.json; full log: jobs/<slug>/job.log (never contains the HF token).
-The pod (named typically-job-<slug>-<job_id>, job_id in status.json) is deleted in a `finally` on every path; a single 75 min
-deadline caps every subprocess call. `--reconcile` (also run at server start and before every job) deletes orphaned typically-job-* pods.
+The pod (named typically-job-<slug>-<job_id>, job_id in status.json) is deleted in a `finally` on every path; a single deadline (75 min small,
+150 min medium) caps every subprocess call. `--reconcile` (also run at server start and before every job) deletes orphaned typically-job-* pods.
+`--train-flags <company> <steps> <run>` (run on the pod by scripts/typically_spike_pod.sh) prints the pcdm/train.py flags.
 """
 import json
 import re
@@ -22,7 +23,18 @@ KEY = Path.home() / ".runpod" / "ssh" / "RunPod-Key-Go"
 IMAGE = "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
 SSH_OPTS = ["-i", str(KEY), "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20"]
 NOT_SHIPPED = ("site/", "figures/", "paper/", "blog/", "docs/", "vendor/")   # ponytail: nothing the training chain reads
-POLL_S, READY_S, DEADLINE_S, STALE_S, STEPS = 60, 300, 75 * 60, 90 * 60, 400
+POLL_S, READY_S, DEADLINE_S, STALE_S = 60, 300, 75 * 60, 90 * 60   # DEADLINE_S / STALE_S are the small base's; x BASES[base]["scale"]
+STEPS = (200, 400, 800)   # Quick / Balanced / Thorough
+# scale: deadline + stale multiplier. mem: the memory profile of each release's own recipe (medium = 4B: grad-checkpointing, smaller micro-batch).
+BASES = {"small": {"scale": 1, "mem": ["--grad_accum", "8"]}, "medium": {"scale": 2, "mem": ["--grad_ckpt", "--grad_accum", "16"]}}
+# The released checkpoints' ckpt["args"] the fine-tune must match. The pod reads the real ones from runs/base/best.pt (train_flags);
+# this table only feeds the command the UI displays -- ponytail: verified against both releases 2026-09-30, re-check when a release changes.
+RELEASED_ARGS = {
+    "small": {"backbone": "Qwen/Qwen3-1.7B-Base", "tap_layer": 20, "nc_render": "semif", "lora_r": 16, "lora_layers": 8,
+              "nc_head": "n3", "null": "factored", "noul_head": "bern", "score_head": "choice"},
+    "medium": {"backbone": "Qwen/Qwen3.5-4B-Base", "tap_layer": 23, "nc_render": "letters_nonull", "lora_r": 16, "lora_layers": 8,
+               "nc_head": "n3", "null": "factored", "noul_head": "bern", "score_head": "choice"},
+}
 PHASES = ("queued", "starting_gpu", "uploading", "training", "evaluating", "downloading", "done", "failed")
 ACTIVE = PHASES[:6]
 SLUG_RE = re.compile(r"^[a-z0-9_]{1,40}$")
@@ -34,7 +46,7 @@ set -e
 export PATH=$HOME/.local/bin:$PATH
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 cd {REMOTE}
-bash scripts/typically_spike_pod.sh job {slug}
+bash scripts/typically_spike_pod.sh job {slug} {base} {steps}
 """
 
 
@@ -88,22 +100,25 @@ def delete_pod(pod_id: str) -> None:
 
 
 class Job:
-    def __init__(self, slug: str, log, tmp: Path):
-        self.slug, self.log, self.tmp, self.id = slug, log, tmp, secrets.token_hex(4)
+    def __init__(self, slug: str, log, tmp: Path, base: str = "small", steps: int = 400):
+        if base not in BASES or steps not in STEPS:
+            raise ValueError(f"bad base/steps {base!r}/{steps!r}: need one of {list(BASES)} and {list(STEPS)}")
+        self.slug, self.log, self.tmp, self.id, self.base, self.steps = slug, log, tmp, secrets.token_hex(4), base, steps
         self.name = f"{POD_PREFIX}{slug}-{self.id}"   # unique per job: nothing else can ever match it
-        self.dir, self.deadline, self.pod_id, self.host = job_dir(slug), time.monotonic() + DEADLINE_S, None, None
+        self.dir, self.pod_id, self.host = job_dir(slug), None, None
+        self.deadline = time.monotonic() + DEADLINE_S * BASES[base]["scale"]
         self.tar = tmp / "repo.tar.gz"
 
     def call(self, argv: list[str], cap: float, out: Path | None = None) -> str:
         """_run under the job's single deadline. Cleanup (delete) calls _run directly so it still works after the deadline."""
         left = self.deadline - time.monotonic()
         if left <= 0:
-            raise Deadline("the job took longer than 75 minutes")
+            raise Deadline(f"the job took longer than {DEADLINE_S * BASES[self.base]['scale'] / 60:.0f} minutes")
         return _run(argv, min(cap, left), out)
 
     def to(self, phase: str, message: str, **extra):
         self.log(f"[{phase}] {message}")
-        write_status(self.slug, phase, message, pod_id=self.pod_id, job_id=self.id, **extra)
+        write_status(self.slug, phase, message, pod_id=self.pod_id, job_id=self.id, base=self.base, steps=self.steps, **extra)
 
     def ssh(self, cmd: str, timeout: int = 60) -> str:
         return self.call(["ssh", "-n", *SSH_OPTS, "-p", self.host[1], f"root@{self.host[0]}", cmd], timeout)
@@ -178,7 +193,7 @@ class Job:
         env, sh = self.tmp / "env", self.tmp / "job.sh"
         env.write_text(f"HF_TOKEN={token}\n")
         env.chmod(0o600)
-        sh.write_text(JOB_SH.format(REMOTE=REMOTE, slug=self.slug))
+        sh.write_text(JOB_SH.format(REMOTE=REMOTE, slug=self.slug, base=self.base, steps=self.steps))
         addr = f"root@{self.host[0]}:"
         scp = ["scp", *SSH_OPTS, "-P", self.host[1]]
         self.ssh(f"mkdir -p {REMOTE}")
@@ -216,7 +231,7 @@ class Job:
             if "best step" in out:
                 self.to("evaluating", "Training finished. Scoring your model on held-out examples.", progress=1.0)
             else:
-                p = min(max(steps, default=0) / STEPS, 1.0)
+                p = min(max(steps, default=0) / self.steps, 1.0)
                 self.to("training", f"Learning from your examples ({p:.0%} done)." if steps else
                         "Setting up and measuring the starting model.", progress=p)
 
@@ -231,7 +246,7 @@ class Job:
 
 def reconcile(log=print) -> list[str]:
     """Delete typically-job-* pods this process is not actively running: no status file, not an active phase / not ours, or stale
-    (> 90 min). Never touches pods with other names. Returns the deleted pod ids."""
+    (> 90 min small / 180 min medium). Never touches pods with other names. Returns the deleted pod ids."""
     known = {}   # job_id / pod_id -> status, from every job dir (the latest job per slug wins: status.json is overwritten)
     for p in (TYPICALLY / "jobs").glob("*/status.json"):
         try:
@@ -249,8 +264,8 @@ def reconcile(log=print) -> list[str]:
             why = "no status file"
         elif st.get("phase") not in ACTIVE or st.get("job_id") not in _ACTIVE:
             why = f"not running here (phase {st.get('phase')})"
-        elif datetime.now(timezone.utc) - datetime.fromisoformat(st["updated_at"]) > timedelta(seconds=STALE_S):
-            why = "status older than 90 min"
+        elif datetime.now(timezone.utc) - datetime.fromisoformat(st["updated_at"]) > timedelta(seconds=STALE_S * BASES.get(st.get("base"), BASES["small"])["scale"]):
+            why = "status older than its deadline + 15 min"
         else:
             continue
         log(f"reconcile: deleting {name} ({pod['id']}): {why}")
@@ -262,12 +277,12 @@ def reconcile(log=print) -> list[str]:
     return gone
 
 
-def run(slug: str, log=None) -> None:
-    """Raises ValueError on a bad slug; otherwise never raises: the outcome is in status.json (done / failed)."""
+def run(slug: str, log=None, base: str = "small", steps: int = 400) -> None:
+    """Raises ValueError on a bad slug/base/steps; otherwise never raises: the outcome is in status.json (done / failed)."""
     job_dir(slug).mkdir(parents=True, exist_ok=True)   # validates the slug
     log = log or file_log(slug)
     with tempfile.TemporaryDirectory() as tmp:
-        j = Job(slug, log, Path(tmp))
+        j = Job(slug, log, Path(tmp), base, steps)
         _ACTIVE.add(j.id)
         try:
             j.to("queued", "Waiting to start.")
@@ -293,6 +308,18 @@ def run(slug: str, log=None) -> None:
             _ACTIVE.discard(j.id)
 
 
+def train_flags(company: str, steps: int, run: str, base_args: dict, base: str = "small") -> list[str]:
+    """pcdm/train.py argv for a fine-tune of data_co_<company>, warm-started from runs/base/best.pt. The architecture flags come
+    from that checkpoint's own ckpt["args"] (`base_args`), so small and medium share this one code path. No value has a space."""
+    d = f"data_co_{company}"
+    arch = [x for k in RELEASED_ARGS[base] for x in (f"--{k}", str(base_args[k]))]   # the keys, not the values, of the table
+    return ["--name", run, "--init_from", "runs/base/best.pt", "--readout", "native", *arch, "--zscore", "--ordinal_smooth", "0.7",
+            "--max_state", "1024", *BASES[base]["mem"], "--data", "data_v5", "--extra_data", f"data_wf,data_wh,data_u,{d}",
+            "--bucket_map", f"data_wh=W,data_u=U,{d}=C", "--family_weights", "C:0.5,W:0.3,E:0.15,U:0.05", "--null_aug", "W:0.20",
+            "--steps", str(steps), "--bs", "64", "--val_every", "50", "--ckpt_every", "100", "--eval_every", str(steps),
+            "--eval_limit", "200", "--eval_bs", "8", "--best_on", f"{d}_val"]
+
+
 def file_log(slug: str):
     def log(msg: str):
         line = f"{_now()} {msg}"
@@ -304,6 +331,13 @@ def file_log(slug: str):
 
 if __name__ == "__main__":
     try:
-        reconcile() if sys.argv[1:] == ["--reconcile"] else run(sys.argv[1])
+        if sys.argv[1:2] == ["--train-flags"]:   # on the pod, after runs/base/best.pt is downloaded (needs torch: uv run --no-sync)
+            import torch
+            company, steps, name, *base = sys.argv[2:]
+            print(" ".join(train_flags(company, int(steps), name, torch.load("runs/base/best.pt", map_location="cpu", weights_only=True)["args"], *base)))
+        elif sys.argv[1:] == ["--reconcile"]:
+            reconcile()
+        else:
+            run(sys.argv[1], None, (sys.argv[2:3] or ["small"])[0], int((sys.argv[3:4] or ["400"])[0]))
     except ValueError as e:
         sys.exit(str(e))

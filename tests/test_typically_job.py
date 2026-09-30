@@ -202,13 +202,15 @@ def test_calls_are_capped_by_the_remaining_budget(env, monkeypatch):
     j.deadline = time.monotonic() + 5
     j.call(["true"], 10_000)
     assert seen[0] <= tj.DEADLINE_S and seen[1] <= 5
+    j = tj.Job(SLUG, lambda m: None, Path("."), "medium")   # the medium base gets twice the budget
+    assert j.deadline - time.monotonic() > tj.DEADLINE_S * 1.9
 
 
 def test_deadline_mid_run_fails_and_still_deletes_pod(env, monkeypatch):
     monkeypatch.setattr(tj, "DEADLINE_S", 0.5)
     cli = use(monkeypatch, FakeCli(POLLS, on_get=lambda: threading.Event().wait(0.6)))   # the budget runs out while the pod boots
     tj.run(SLUG, lambda m: None)
-    assert tj.read_status(SLUG)["phase"] == "failed" and "75 minutes" in tj.read_status(SLUG)["message"]
+    assert tj.read_status(SLUG)["phase"] == "failed" and "minutes" in tj.read_status(SLUG)["message"]
     assert cli.deleted_ids() == {"pod1"} and cli.pods == []
 
 
@@ -217,7 +219,7 @@ def test_poll_timeout_deletes_pod(env, monkeypatch):
     monkeypatch.setattr(tj.time, "sleep", lambda s: time.monotonic() and threading.Event().wait(0.01))
     cli = use(monkeypatch, FakeCli([ALIVE + "step 10 x\n"] * 10_000))
     tj.run(SLUG, lambda m: None)
-    assert tj.read_status(SLUG)["phase"] == "failed" and "75 minutes" in tj.read_status(SLUG)["message"]
+    assert tj.read_status(SLUG)["phase"] == "failed" and "minutes" in tj.read_status(SLUG)["message"]
     assert len(cli.deleted()) == 1 and cli.pods == []
 
 
@@ -253,7 +255,7 @@ def test_train_endpoint_409_and_404(env, monkeypatch):
     assert c.post("/api/typically/train", json={"name": "nope"}).status_code == 404
     assert c.post("/api/typically/train", json={"name": "x" * 60}).status_code == 404   # slug over 40 chars
     gate = threading.Event()
-    monkeypatch.setattr(tj, "run", lambda slug, log: gate.wait(5))
+    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps: gate.wait(5))
     r = c.post("/api/typically/train", json={"name": "Acme"})
     assert r.status_code == 200 and r.json()["phase"] == "queued"
     assert c.post("/api/typically/train", json={"name": "Acme"}).status_code == 409
@@ -290,3 +292,83 @@ def test_cors_is_local_only():
     c = TestClient(server.app)
     hdr = lambda o: c.get("/api/health", headers={"Origin": o}).headers.get("access-control-allow-origin")
     assert hdr("http://127.0.0.1:8787") == "http://127.0.0.1:8787" and hdr("https://evil.example") is None
+
+
+def test_deadline_message_names_the_bases_budget():
+    for base, minutes in (("small", 75), ("medium", 150)):
+        j = tj.Job(SLUG, lambda m: None, Path("."), base)
+        j.deadline = time.monotonic() - 1
+        with pytest.raises(tj.Deadline, match=f"{minutes} minutes"):
+            j.call(["true"], 10)
+
+
+def test_base_and_steps_reach_the_pod_script_and_status(env, monkeypatch):
+    sh = []
+    class Cli(FakeCli):
+        def __call__(self, argv, timeout, out=None):
+            if argv[0] == "scp" and argv[-1].endswith("/workspace/job.sh"):
+                sh.append(Path(argv[-2]).read_text())
+            return super().__call__(argv, timeout, out)
+    use(monkeypatch, Cli(["ALIVE\nstep 200 x\n", "EXIT 0\n"]))
+    tj.run(SLUG, lambda m: None, "medium", 800)
+    assert f"typically_spike_pod.sh job {SLUG} medium 800" in sh[0]
+    st = tj.read_status(SLUG)
+    assert st["phase"] == "done" and st["base"] == "medium" and st["steps"] == 800
+
+
+def test_progress_is_measured_against_the_requested_steps(env, monkeypatch):
+    seen, real = [], tj.write_status
+    monkeypatch.setattr(tj, "write_status", lambda *a, **k: seen.append(k.get("progress")) or real(*a, **k))
+    use(monkeypatch, FakeCli([ALIVE + "step 100 x\n", "EXIT 0\n"]))
+    tj.run(SLUG, lambda m: None, "small", 200)
+    assert 0.5 in seen   # 100 of 200 steps
+
+
+def test_bad_base_or_steps_rejected(env):
+    for base, steps in (("large", 400), ("small", 123)):
+        with pytest.raises(ValueError):
+            tj.run(SLUG, lambda m: None, base, steps)
+
+
+def test_reconcile_uses_the_bases_stale_limit(env, monkeypatch):
+    age = lambda m: (datetime.now(timezone.utc) - timedelta(minutes=m)).isoformat(timespec="seconds")
+    put_status("s", phase="training", job_id="aaaa1111", updated_at=age(100), base="small")
+    put_status("m", phase="training", job_id="bbbb2222", updated_at=age(100), base="medium")   # 100 min < 180 min
+    tj._ACTIVE.update({"aaaa1111", "bbbb2222"})
+    pod = lambda i, n: {"id": i, "name": n}
+    cli = use(monkeypatch, FakeCli(pods=[pod("ps", "typically-job-s-aaaa1111"), pod("pm", "typically-job-m-bbbb2222")]))
+    assert tj.reconcile(lambda m: None) == ["ps"] and cli.deleted_ids() == {"ps"}
+
+
+def test_train_flags_come_from_the_base_checkpoint_args():
+    def flags(base, args):
+        f = tj.train_flags("acme", 200, "co_acme", args, base)
+        return {f[i]: f[i + 1] for i in range(len(f) - 1) if f[i].startswith("--")}, f
+    small, _ = flags("small", tj.RELEASED_ARGS["small"])
+    medium, m_all = flags("medium", tj.RELEASED_ARGS["medium"])
+    assert (small["--backbone"], small["--tap_layer"], small["--nc_render"], small["--grad_accum"]) == ("Qwen/Qwen3-1.7B-Base", "20", "semif", "8")
+    assert (medium["--backbone"], medium["--tap_layer"], medium["--nc_render"], medium["--grad_accum"]) == ("Qwen/Qwen3.5-4B-Base", "23", "letters_nonull", "16")
+    assert "--grad_ckpt" in m_all and medium["--steps"] == medium["--eval_every"] == "200" and medium["--best_on"] == "data_co_acme_val"
+    assert not any(" " in x for x in m_all)   # the pod script word-splits this list
+    # a checkpoint the table has never seen still drives the flags (runtime args win over the table)
+    other, _ = flags("small", {**tj.RELEASED_ARGS["small"], "tap_layer": 99})
+    assert other["--tap_layer"] == "99"
+
+
+def test_train_and_build_endpoints_take_base_and_steps(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps: seen.append((base, steps)))
+    monkeypatch.setattr(server, "write", lambda *a: None)   # the command string is what is under test, not the files
+    c = TestClient(server.app)
+    assert c.post("/api/typically/train", json={"name": "Acme", "base": "medium", "steps": 800}).status_code == 200
+    for _ in range(100):
+        if not server._job_lock.locked():
+            break
+        time.sleep(0.02)
+    assert seen == [("medium", 800)]
+    assert c.post("/api/typically/train", json={"name": "Acme", "steps": 123}).status_code == 422
+    assert c.post("/api/typically/train", json={"name": "Acme", "base": "huge"}).status_code == 422
+    build = {"csv_text": "t,l\nx,y\nx2,y\nx3,z\n", "text_col": "t", "decisions": [{"column": "l", "question": "q", "type": "choice"}], "name": "b1"}
+    cmd = c.post("/api/typically/build", json={**build, "base": "medium", "steps": 200}).json()["command"]
+    assert "--backbone Qwen/Qwen3.5-4B-Base" in cmd and "--steps 200" in cmd and "--nc_render letters_nonull" in cmd
+    assert "--backbone Qwen/Qwen3-1.7B-Base" in c.post("/api/typically/build", json=build).json()["command"]

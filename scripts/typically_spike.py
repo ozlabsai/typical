@@ -21,6 +21,7 @@ Eval files (data_co_*/eval/), all on held-out tickets:
 uv run scripts/typically_spike.py attrs     # -> .context/typically/body_specs.jsonl (what the agent must write)
 uv run scripts/typically_spike.py build     # -> data_co_a/, data_co_b/
 """
+import hashlib
 import json
 import math
 import random
@@ -30,6 +31,8 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import typically_plan as tp
 CTX = ROOT / ".context" / "typically"
 ISSUES = ["lost_package", "damaged_goods", "invoice_dispute", "delivery_delay", "address_change", "quote_request"]
 MOODS = ["calm", "annoyed", "furious"]
@@ -308,23 +311,39 @@ def build_d(rng):
 YESNO = {"yes": "yes", "true": "yes", "1": "yes", "no": "no", "false": "no", "0": "no"}
 
 
-def import_flips(rows, typ, cands, words, toks, rate, frng):
+def import_flips(rows, typ, cands, conds, rate, frng):
     """Spike 3 arm f, generic: each TRAIN row fires with prob `rate` -> a rule-flip row on the same case whose condition is
-    'the case mentions <word>'; both share meta.ms_group (one micro-batch, as build_a pair=True). Returns the flip rows."""
+    one of conds [(text, pred(state) -> bool)]; both share meta.ms_group (one micro-batch, as build_a pair=True). Returns the flip rows."""
     out = []
     for n, r in enumerate({id(r): r for r in rows}.values()):   # balancing repeats row objects: one draw per distinct row
         if frng.random() >= rate:
             continue
-        w, q, g = frng.choice(words), r["query"], f"{r['task']}_{n}"
-        hit = w in toks[r["state"]]
+        (text, pred), q, g = frng.choice(conds), r["query"], f"{r['task']}_{n}"
+        hit = pred(r["state"])
         if typ == "noul":
-            fq, gold = f'{q} For this question, answer yes only when the case mentions "{w}".', "yes" if hit else "no"
+            fq, gold = f"{q} For this question, answer yes only when {text}.", "yes" if hit else "no"
         else:
             x, y = frng.sample(cands, 2)
-            fq, gold = f'{q} For this question, pick {x} when the case mentions "{w}", otherwise {y}.', x if hit else y
+            fq, gold = f"{q} For this question, pick {x} when {text}, otherwise {y}.", x if hit else y
         r["meta"] = {**r["meta"], "ms_group": g}
         out.append(row(r["state"], fq, cands, gold, typ, "import_rflip", ms_group=g))
     return out
+
+
+def keyword_conds(states):
+    """Rule conditions on the case text: alphabetic tokens (4+ letters) that occur in 5-40% of the states."""
+    toks = {s: set(re.findall(r"[a-z]{4,}", s.lower())) for s in states}
+    df = Counter(w for t in toks.values() for w in t)
+    return [(f'the case mentions "{w}"', lambda s, w=w: w in toks[s]) for w in sorted(df) if 0.05 <= df[w] / len(toks) <= 0.40]
+
+
+def balance_rows(rows):
+    """Oversample minority labels up to 1/3 of the majority count, no further (more = memorising)."""
+    by = {}
+    for r in rows:
+        by.setdefault(r["label"], []).append(r)
+    floor = max(map(len, by.values())) // 3
+    return rows + [x for g in by.values() for x in (g * (floor // len(g) + 1))[:max(0, floor - len(g))]]
 
 
 def build_import(records, text_col, decisions, rng, balance=True, flips=0.10):
@@ -337,10 +356,7 @@ def build_import(records, text_col, decisions, rng, balance=True, flips=0.10):
     part = {"train": order[:n_tr], "val": order[n_tr:n_tr + n_va], "import_oneliner": order[n_tr + n_va:]}
     split = {k: [] for k in part}
     frng = random.Random(1)
-    toks = {r[text_col]: set(re.findall(r"[a-z]{4,}", r[text_col].lower())) for r in records}
-    df = Counter(w for t in toks.values() for w in t)
-    # ponytail: candidate rule words = alphabetic tokens in 5-40% of the cases; none -> no flips
-    words = sorted(w for w, c in df.items() if 0.05 <= c / len(toks) <= 0.40)
+    conds = keyword_conds([r[text_col] for r in records])   # none -> no flips
     for d in decisions:
         col, typ = d["column"], d["type"]
         vals = [r[col].strip() for r in records]
@@ -359,18 +375,205 @@ def build_import(records, text_col, decisions, rng, balance=True, flips=0.10):
         for name, idx in part.items():
             rows = [row(records[i][text_col], d["question"], cands, vals[i], typ, f"import_{col}") for i in idx]
             if balance and name == "train" and rows:
-                by = {}
-                for r in rows:
-                    by.setdefault(r["label"], []).append(r)
-                # ponytail: minority labels are duplicated up to 1/3 of the majority count, no further (more = memorising)
-                floor = max(map(len, by.values())) // 3
-                rows += [x for g in by.values() for x in (g * (floor // len(g) + 1))[:max(0, floor - len(g))]]
-            if flips and name == "train" and words:
-                rows += import_flips(rows, typ, cands, words, toks, flips, frng)
+                rows = balance_rows(rows)
+            if flips and name == "train" and conds:
+                rows += import_flips(rows, typ, cands, conds, flips, frng)
             split[name] += rows
     for rows in split.values():
         rng.shuffle(rows)
     return split
+
+
+# ============================== typically UI import v2: from a confirmed DatasetPlan ==============================
+FLIP_RATE, POLICY_RATE, SYNTH_SHARE, SYNTH_MIN, TRANSLATE_RATE, EVAL_TRANSLATE_RATE = 0.10, 0.30, 0.15, 10, 0.20, 0.10
+LLM_CAP_USD, USD_PER_MTOK = 2.0, (4.0, 20.0)   # claude-opus-5-5 input / output; estimate = chars / 4 tokens
+TEXTS = {"type": "object", "properties": {"texts": {"type": "array", "items": {"type": "string"}}}, "required": ["texts"],
+         "additionalProperties": False}
+
+
+def case_split(state, seed, holdout):
+    """Split by the hash of the normalised state, so duplicate cases never straddle splits: holdout% -> eval, 10% of the rest -> val."""
+    h = hashlib.sha1(f"{seed}|{tp.norm(state)}".encode()).hexdigest()
+    return "import_oneliner" if int(h[:8], 16) / 2**32 < holdout / 100 else "val" if int(h[8:16], 16) / 2**32 < 0.10 else "train"
+
+
+def plan_rows(pairs, d, soft):
+    """[(state, label)] -> one row per pair; soft: identical states merge into one row whose target is the answer mix (label = argmax)."""
+    groups = {}
+    for i, (s, g) in enumerate(pairs):
+        groups.setdefault(s if soft else i, (s, Counter()))[1][g] += 1
+    out = []
+    for s, c in groups.values():
+        r = row(s, d["question"], d["labels"], max(d["labels"], key=lambda l: c[l]), d["type"], f"import_{d['column']}")   # first label on ties
+        if len(c) > 1:
+            r["target"], r["meta"]["soft"] = [c[l] / sum(c.values()) for l in d["labels"]], True
+        out.append(r)
+    return out
+
+
+def fact_conds(facts):
+    """Rule conditions on the case's fact columns ("the case says <column> is <value>") for values in 3-70% of the states."""
+    cnt = Counter((c, v) for f in facts.values() for c, v in f.items() if v)
+    return [(f"the case says {c} is {v}", lambda s, c=c, v=v: facts[s][c] == v) for (c, v), k in sorted(cnt.items())
+            if 0.03 <= k / len(facts) <= 0.70]
+
+
+def label_dist(rows):
+    d = {}
+    for r in rows:
+        if r["task"] != "import_rflip":
+            d.setdefault(r["task"].removeprefix("import_"), Counter())[r["candidates"][r["label"]]] += 1
+    return {k: dict(v) for k, v in d.items()}
+
+
+def _copy(rows, text, lang):   # a translated case keeps its labels; ms_group must not leave its pair
+    return [{**r, "state": text, "meta": {**{k: v for k, v in r["meta"].items() if k != "ms_group"}, "lang": lang}} for r in rows]
+
+
+def _synthetic_tasks(d, pairs, budget, rng, emit):
+    """LLM tasks (prompt, estimated output chars, apply(texts)) that write new cases for the decision's rare labels
+    (< max(10, 1% of its train rows)): 5 real cases of the label + 5 of a confusable one; then as many for the majority label
+    (style balance). Capped at 1x the real count per label; budget = [rows left of the 15%-of-train cap]."""
+    labels, by = d["labels"], {}
+    for s, g in pairs:
+        by.setdefault(g, []).append(s)
+    n_of = lambda l: len(by.get(l, ()))
+    major, tasks = max(labels, key=n_of), []
+    for lab in labels:
+        if lab == major or not 0 < n_of(lab) < max(SYNTH_MIN, 0.01 * len(pairs)):
+            continue
+        n = min(n_of(lab), budget[0] // 2)
+        if n < 1:
+            break
+        budget[0] -= 2 * n
+        others = [l for l in labels if l != lab and n_of(l)]   # never empty: the majority label is in it
+        conf = min(others, key=lambda l: abs(labels.index(l) - labels.index(lab))) if d["type"] == "score" else max(others, key=n_of)
+        for target, shown in ((lab, [lab, conf]), (major, [major])):
+            ex = [(l, rng.sample(by[l], min(5, n_of(l)))) for l in shown]
+            prompt = (f'A company labelled its past cases for the question "{d["question"]}". Possible labels: {", ".join(labels)}.\n\n'
+                      + "\n\n".join(f'Real cases labelled "{l}":\n' + "\n".join(f"---\n{s}" for s in ss) + "\n---" for l, ss in ex)
+                      + f'\n\nWrite {n} NEW, different cases that this company would label "{target}". Match the format, length, language '
+                        f'and tone of the real cases; do not copy them and do not mention the label. Return {{"texts": [...]}} with exactly {n} strings.')
+            avg = sum(len(s) for _, ss in ex for s in ss) / sum(len(ss) for _, ss in ex)
+            tasks.append((prompt, n * avg, lambda texts, t=target, n=n: emit(d, t, texts[:n])))
+    return tasks
+
+
+def _translate_tasks(states, lang, emit):
+    """LLM tasks that translate cases (in chunks of <= 20 cases / 20k chars); emit(lang, state, translation) per case."""
+    chunks, cur, size = [], [], 0
+    for s in states:
+        if cur and (len(cur) >= 20 or size + len(s) > 20_000):
+            chunks.append(cur)
+            cur, size = [], 0
+        cur.append(s)
+        size += len(s)
+    chunks += [cur] if cur else []
+
+    def apply(texts, chunk):
+        if len(texts) != len(chunk):
+            raise ValueError("wrong number of translations")
+        for s, t in zip(chunk, texts):
+            if isinstance(t, str) and t.strip():
+                emit(lang, s, t)
+    return [(f"Translate each case into the language with ISO 639-1 code '{lang}'. Keep names, numbers, ids, product codes and line "
+             f'breaks unchanged. Return {{"texts": [...]}} with exactly {len(c)} strings in the same order.\n\n'
+             + json.dumps(c, ensure_ascii=False), 1.5 * sum(map(len, c)), lambda texts, c=c: apply(texts, c)) for c in chunks]
+
+
+def _ask(llm, prompt):
+    resp = llm.messages.create(model=tp.MODEL, max_tokens=16000, messages=[{"role": "user", "content": prompt}],
+                               output_config={"format": {"type": "json_schema", "schema": TEXTS}})
+    return json.loads(next(b.text for b in resp.content if b.type == "text"))["texts"]
+
+
+def build_from_plan(records, plan, enrich, settings, rng, llm=None):
+    """records + a confirmed DatasetPlan -> (split dict for write(), stats). enrich = {balance, dedupe_soft, policy: {column: text},
+    synthetic, languages: [code]}, settings = {holdout %, seed}; llm = an Anthropic client, needed only for synthetic / languages.
+    Eval and val are never enriched (except the separate translated eval files import_<lang>). Rule flips are always on (10%, paired).
+    ponytail: split is by case hash only; a time split (newest held out) for a timestamp column is not implemented."""
+    decisions = [d for d in plan["decisions"] if d["include"]]
+    if not decisions:
+        raise ValueError("the plan has no included decision")
+    seed, holdout = settings.get("seed", 0), settings.get("holdout", 20)
+    fact_cols = [q["column"] for q in plan["case"]["parts"] if q["role"] == "fact"]
+    part, facts, warnings = {"train": [], "val": [], "import_oneliner": []}, {}, []
+    for r in records:
+        state = tp.render_case(r, plan)
+        if state:
+            name = case_split(state, seed, holdout)
+            part[name].append((state, tp.answers(r, plan)))
+            if name == "train":
+                facts.setdefault(state, {c: tp.norm(r.get(c, "")) for c in fact_cols})
+    conds = (fact_conds(facts) if fact_cols else []) or keyword_conds(list(facts))   # fact conditions first, keywords when there are none
+    frng = random.Random(seed + 1)   # own stream: flips must not shift the other draws
+    split, base, pairs, before, dropped, soft = {k: [] for k in part}, {"train": {}, "import_oneliner": {}}, {}, {}, {}, 0
+    for d in decisions:
+        col, policy = d["column"], ((enrich.get("policy") or {}).get(d["column"]) or "").strip()
+        dropped[col] = sum(a.get(col) is None for v in part.values() for _, a in v)
+        for name, items in part.items():
+            ps = [(s, a[col]) for s, a in items if a.get(col) is not None]
+            rows = plan_rows(ps, d, name == "train" and enrich.get("dedupe_soft", True))
+            if name == "val":
+                split[name] += rows
+                continue
+            for r in rows:
+                base[name].setdefault(r["state"], []).append(r)   # unbalanced, unflipped: what translation copies
+            if name == "import_oneliner":
+                split[name] += rows
+                continue
+            pairs[col], before[col] = ps, dict(Counter(g for _, g in ps))
+            soft += sum("soft" in r["meta"] for r in rows)
+            for r in rows if policy else []:
+                if rng.random() < POLICY_RATE:
+                    r["query"], r["meta"] = f"{r['query']}\n{policy}", {**r["meta"], "policy": True}
+            if enrich.get("balance", True) and rows:
+                rows = balance_rows(rows)
+            if conds:
+                rows += import_flips(rows, d["type"], d["labels"], conds, FLIP_RATE, frng)
+            split[name] += rows
+    if any(not v for v in split.values()):
+        raise ValueError("not enough usable rows: a split came out empty; add more rows or lower the held-out share")
+    syn, tr, ev, cost = [], [], {}, 0.0
+    langs = enrich.get("languages") or []
+    if (enrich.get("synthetic") or langs) and llm is None:
+        warnings.append("Synthetic cases and added languages need an Anthropic key; they were skipped.")
+    elif enrich.get("synthetic") or langs:
+        if bad := [c for c in langs if not re.fullmatch(r"[a-z]{2,3}", str(c))]:
+            raise ValueError(f"unknown language code {bad[0]!r}; use a two-letter code such as es or de")
+        seen, tasks = {r["state"] for v in split.values() for r in v}, []
+
+        def emit_syn(d, lab, texts):
+            for t in texts:
+                if isinstance(t, str) and t.strip() and t not in seen:
+                    seen.add(t)
+                    syn.append(row(t, d["question"], d["labels"], lab, d["type"], f"import_{d['column']}", synthetic=True))
+        if enrich.get("synthetic"):
+            budget = [int(SYNTH_SHARE * len(split["train"]))]
+            for d in decisions:
+                tasks += _synthetic_tasks(d, pairs[d["column"]], budget, rng, emit_syn)
+        ev_states = rng.sample(sorted(base["import_oneliner"]), max(1, round(EVAL_TRANSLATE_RATE * len(base["import_oneliner"]))))
+        for lang in langs:
+            tr_states = rng.sample(sorted(base["train"]), max(1, round(TRANSLATE_RATE * len(base["train"]))))
+            tasks += _translate_tasks(tr_states, lang, lambda l, s, t: tr.extend(_copy(base["train"][s], t, l)))
+            tasks += _translate_tasks(ev_states, lang, lambda l, s, t: ev.setdefault(l, []).extend(_copy(base["import_oneliner"][s], t, l)))
+        cost = sum(len(p) / 4 * USD_PER_MTOK[0] + o / 4 * USD_PER_MTOK[1] for p, o, _ in tasks) / 1e6
+        if cost > LLM_CAP_USD:
+            raise ValueError(f"AI enrichment would cost about ${cost:.2f}, over the ${LLM_CAP_USD:.2f} limit; "
+                             "turn off synthetic cases or add fewer languages")
+        for prompt, _, apply in tasks:
+            try:
+                apply(_ask(llm, prompt))
+            except Exception as e:   # experimental: one failed call skips its cases; never echo the message (may hold the key)
+                warnings.append(f"An AI enrichment call failed ({type(e).__name__}); its cases were skipped.")
+        split["train"] += syn + tr
+        split.update({f"import_{l}": rows for l, rows in ev.items()})
+    for rows in split.values():
+        rng.shuffle(rows)
+    return split, {"rows": {k: len(v) for k, v in split.items()}, "labels": {"before": before, "after": label_dist(split["train"])},
+                   "flips": sum(r["task"] == "import_rflip" for r in split["train"]), "soft_rows": soft, "dropped": dropped,
+                   "synthetic": len(syn), "translated": {"train": len(tr), "eval": {l: len(v) for l, v in ev.items()}},
+                   "llm_cost_usd": round(cost, 2), "warnings": warnings}
 
 
 def write(out, split):
@@ -378,7 +581,7 @@ def write(out, split):
     for name, rows in split.items():
         path = out / (f"{name}.jsonl" if name in ("train", "val") else f"eval/{name}.jsonl")
         path.write_text("".join(json.dumps(r) + "\n" for r in rows))
-        print(f"{path.relative_to(ROOT)}: {len(rows)}  {Counter(r['task'] for r in rows).most_common(3)}")
+        print(f"{path.relative_to(ROOT) if path.is_relative_to(ROOT) else path}: {len(rows)}  {Counter(r['task'] for r in rows).most_common(3)}")
 
 
 def selftest():
