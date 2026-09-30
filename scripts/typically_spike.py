@@ -14,6 +14,7 @@ Eval files (data_co_*/eval/), all on held-out tickets:
   a_flip_heldout  an explicit rule on a field no training rubric uses (region) -- the real not-a-classifier check
   a_novel      a question never trained on these states (general ability kept?)
   data_co_c    spike 2: company A's exact tickets, header numbers put into words with the user's thresholds
+  data_co_e    spike 2: company A + random explicit rules on every trained question (anti-classifier augmentation)
   data_co_d    spike 2: imported with clean labels -- Bitext utterances, company-specific intent -> desk map
 
 uv run scripts/typically_spike.py attrs     # -> .context/typically/body_specs.jsonl (what the agent must write)
@@ -93,6 +94,26 @@ FLIP_HELDOUT = [
      {"Claims": "not used this week", "Billing": "not used this week", "Dispatch": "every customer outside APAC",
       "Sales": "every APAC customer"}, lambda a: "Sales" if a["region"] == "APAC" else "Dispatch"),
 ]
+# spike 2 arm e: random explicit rules on every trained question (never on region -- FLIP_HELDOUT's field)
+CONDS = [(f"the customer is on the {t} plan", lambda a, t=t: a["tier"] == t) for t in TIERS] + \
+        [(f"the customer sounds {m}", lambda a, m=m: a["mood"] == m) for m in MOODS] + \
+        [(f"the ticket is a {i.replace('_', ' ')}", lambda a, i=i: a["issue"] == i) for i in ISSUES] + \
+        [("the customer mentions legal action", lambda a: a["legal"])]
+
+
+def random_flip(a, key, qtype, q, cands, rng):
+    text, cond = rng.choice(CONDS)
+    hit = cond(a)
+    if qtype == "noul":
+        return query(q, {"true": text, "false": "otherwise"}, qtype) if rng.random() < 0.5 else \
+            f"{q} For this question, answer yes only when {text}.", ("yes" if hit else "no")
+    x, y = rng.sample(cands, 2)
+    if qtype == "score":
+        return f"{q} For this question, rate {x} when {text} and {y} otherwise.", (x if hit else y)
+    return (query(q, {c: (text if c == x else "everything else" if c == y else "not used") for c in cands}, qtype),
+            x if hit else y)
+
+
 NOVEL = ("Does the customer mention legal action or a lawyer?", lambda a: "yes" if a["legal"] else "no")
 
 
@@ -154,7 +175,7 @@ def cmd_attrs():
                         f.write(json.dumps({"issue": issue, "mood": mood, "legal": legal, "variant": v}) + "\n")
 
 
-def build_a(rng, hdr=header, p="a"):
+def build_a(rng, hdr=header, p="a", diverse_flips=False):
     bodies, dropped = {}, 0
     for line in open(CTX / "bodies.jsonl"):
         b = json.loads(line)
@@ -163,6 +184,7 @@ def build_a(rng, hdr=header, p="a"):
             continue
         bodies.setdefault((b["issue"], b["mood"], b["legal"], b["variant"] in TEST_VARIANTS), []).append(b["text"])
     print(f"bodies: {sum(map(len, bodies.values()))} kept, {dropped} dropped")
+    frng = random.Random(1)   # own stream: diverse flips must not shift the ticket sampling
     split = {"train": [], "val": [], **{f"{p}_{k}": [] for k in ("oneliner", "rubric", "flip", "flip_heldout", "novel")}}
     for n, test in ((N_TRAIN, False), (N_TEST, True)):
         for t in range(n):
@@ -178,6 +200,9 @@ def build_a(rng, hdr=header, p="a"):
                 written = rng.random() < 0.3
                 dest = "val" if t % 10 == 0 else "train"
                 split[dest].append(row(state, query(q, crit if written else None, qtype), cands, gold, qtype, task))
+                if diverse_flips and frng.random() < 0.25:
+                    fq, fgold = random_flip(a, key, qtype, q, cands, frng)
+                    split[dest].append(row(state, fq, cands, fgold, qtype, f"co_{p}_rflip"))
             if not test and rng.random() < 0.25:   # rubric-flip augmentation: an explicit different rule wins
                 split["val" if t % 10 == 0 else "train"].append(
                     row(state, query(FLIP[0], FLIP[1], "noul"), ["no", "yes"], FLIP[2](a), "noul", f"co_{p}_flip"))
@@ -268,3 +293,4 @@ if __name__ == "__main__":
         write(ROOT / "data_co_b", build_b(random.Random(0)))
         write(ROOT / "data_co_c", build_a(random.Random(0), header_words, "c"))   # spike 2: same tickets, numbers in words
         write(ROOT / "data_co_d", build_d(random.Random(0)))
+        write(ROOT / "data_co_e", build_a(random.Random(0), header, "e", diverse_flips=True))   # spike 2: flips on every question

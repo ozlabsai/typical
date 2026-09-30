@@ -10,8 +10,9 @@ uv sync
 if [[ "$(nvidia-smi)" == *"CUDA Version: 12.8"* ]]; then   # docs/plan/PROJECT.md torch/driver rule (no grep -q pipe: pipefail + SIGPIPE)
   uv pip install --python /workspace/venv/bin/python "torch==2.11.0" --index-url https://download.pytorch.org/whl/cu128
 fi
-uv run --no-sync hf download guychuk/pcdm-data --repo-type dataset --include "wf/*" "wh/*" "u/*" --local-dir data
-uv run --no-sync hf download guychuk/pcdm-data --repo-type dataset --include "v5/*" --local-dir data   # separate call: multi-pattern --include skipped v5
+for d in v5 wf wh u; do   # one call per dir: --include takes ONE pattern, extra ones become filenames (and disable it)
+  uv run --no-sync hf download guychuk/pcdm-data --repo-type dataset --include "$d/*" --local-dir data
+done
 for d in v5 wf wh u; do ln -sfn data/$d data_$d; done
 uv run --no-sync hf download OzLabs/typical-small best.pt --local-dir runs/base
 
@@ -32,14 +33,16 @@ train() {  # $1 company, $2 steps, $3 run name
     --steps "$2" --bs 64 --grad_accum 8 --val_every 50 --ckpt_every 100 --eval_every "$2" --eval_limit 200 --eval_bs 8
   evals "runs/$3" "data_co_$1/eval/*.jsonl"
 }
-if [ "${1:-2}" = 1 ]; then
+if [ "${1:-2}" = e ]; then   # spike 2 arm e (eval tickets == data_co_a's, so base numbers carry over)
+  train e 400 co_e
+elif [ "${1:-2}" = 1 ]; then
   evals runs/base "data_co_a/eval/*.jsonl data_co_b/eval/*.jsonl"
   train a 400 co_a
   train b 400 co_b
   train a 100 co_a_s100
 else   # spike 2: numbers in words (c), clean imported labels (d), held-out flip rules for base + spike-1 co_a
-  $EV --run runs/base --files data_co_a/eval/a_flip_heldout.jsonl data_co_c/eval/*.jsonl data_co_d/eval/*.jsonl --limit 0 --out runs/base/eval_co2.json
-  $EV --run runs/co_a --files data_co_a/eval/a_flip_heldout.jsonl --limit 0 --out runs/co_a/eval_co2.json
+  [ -f runs/base/eval_co2.json ] || $EV --run runs/base --files data_co_a/eval/a_flip_heldout.jsonl data_co_c/eval/*.jsonl data_co_d/eval/*.jsonl --limit 0 --out runs/base/eval_co2.json
+  [ -f runs/co_a/eval_co2.json ] || $EV --run runs/co_a --files data_co_a/eval/a_flip_heldout.jsonl --limit 0 --out runs/co_a/eval_co2.json
   train c 400 co_c
   train d 400 co_d
 fi
