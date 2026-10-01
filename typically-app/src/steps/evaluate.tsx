@@ -88,7 +88,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
         </>}
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-3 gap-2 sm:gap-4">
         <Stat label={t("ev.standard")} value={pct(data.score.standard)} tone="standard" note={t("ev.agrees", { who })} />
         <Stat label={t(model.sample ? "ev.northwindTitle" : "ev.yoursTitle")} value={pct(data.score.yours)} tone="yours" note={t("ev.agrees", { who })} highlight />
         <Stat label={t("ev.difference")} value={`${gain >= 0 ? "+" : ""}${gain} ${t("ev.pts")}`} note={t("ev.fixed", { a: data.fixed, b: data.broken })} />
@@ -110,7 +110,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
                 <TableHead className="ps-6">{t("ev.question")}</TableHead>
                 <TableHead className="w-[26%]"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-standard" />{t("ev.standardCol")}</span></TableHead>
                 <TableHead className="w-[26%]"><span className="inline-flex items-center gap-2"><span className="size-2 rounded-full bg-yours" />{yoursCol}</span></TableHead>
-                <TableHead className="w-20 pe-6 text-end">{t("ev.change")}</TableHead>
+                <TableHead className="hidden md:table-cell w-20 pe-6 text-end">{t("ev.change")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -121,7 +121,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
                     <TableCell className="ps-6 whitespace-normal"><span dir="auto">{d.question}</span></TableCell>
                     <TableCell><Meter value={d.standard} tone="standard" /></TableCell>
                     <TableCell><Meter value={d.yours} tone="yours" /></TableCell>
-                    <TableCell className={cn("pe-6 text-end font-mono tabular", delta > 0 ? "text-yours" : "text-muted-foreground")}>
+                    <TableCell className={cn("hidden md:table-cell pe-6 text-end font-mono tabular", delta > 0 ? "text-yours" : "text-muted-foreground")}>
                       {delta > 0 ? "+" : ""}{delta}
                     </TableCell>
                   </TableRow>
@@ -142,10 +142,10 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
             <TableHeader>
               <TableRow>
                 <TableHead className="ps-6">{t("ev.case")}</TableHead>
-                <TableHead>{t("ev.question")}</TableHead>
+                <TableHead className="hidden md:table-cell">{t("ev.question")}</TableHead>
                 <TableHead>{t("ev.standardCol")}</TableHead>
                 <TableHead>{yoursCol}</TableHead>
-                <TableHead className="pe-6">{t(model.sample ? "ev.theyDecided" : "ev.youDecided")}</TableHead>
+                <TableHead className="hidden md:table-cell pe-6">{t(model.sample ? "ev.theyDecided" : "ev.youDecided")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -163,11 +163,12 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
                   <TableRow key={i}>
                     <TableCell className="max-w-0 w-[38%] ps-6 whitespace-normal">
                       <span dir="auto" className="line-clamp-2 text-muted-foreground" title={c.case}>{body}</span>
+                      <span dir="auto" className="mt-1 block text-xs font-medium md:hidden">{c.question}</span>
                     </TableCell>
-                    <TableCell className="whitespace-normal"><span dir="auto">{c.question}</span></TableCell>
+                    <TableCell className="hidden md:table-cell whitespace-normal"><span dir="auto">{c.question}</span></TableCell>
                     <TableCell>{cell(c.standard)}</TableCell>
                     <TableCell>{cell(c.yours)}</TableCell>
-                    <TableCell className="pe-6 font-medium">{say(t, type, c.decided)}</TableCell>
+                    <TableCell className="hidden md:table-cell pe-6 font-medium">{say(t, type, c.decided)}</TableCell>
                   </TableRow>
                 )
               })}

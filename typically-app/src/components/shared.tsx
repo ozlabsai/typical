@@ -19,7 +19,7 @@ export function Meter({ value, tone }: { value: number; tone: "standard" | "your
   return (
     <div className="flex items-center gap-3">
       <span className="w-10 text-end font-mono text-sm tabular">{pct(value)}</span>
-      <div className="h-1.5 w-full min-w-16 overflow-hidden rounded-full bg-muted">
+      <div className="h-1.5 w-full min-w-8 overflow-hidden rounded-full bg-muted sm:min-w-16">
         <div className={cn("h-full rounded-full transition-[width] duration-200", tone === "standard" ? "bg-standard" : "bg-yours")} style={{ width: `${value * 100}%` }} />
       </div>
     </div>

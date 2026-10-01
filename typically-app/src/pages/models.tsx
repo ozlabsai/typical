@@ -82,31 +82,31 @@ export function ModelsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="ps-6">{t("models.name")}</TableHead>
-                  <TableHead>{t("models.from")}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t("models.from")}</TableHead>
                   <TableHead>{t("models.status")}</TableHead>
-                  <TableHead>{t("models.agreement")}</TableHead>
-                  <TableHead>{t("models.created")}</TableHead>
-                  <TableHead className="w-28 pe-6"><span className="sr-only">Actions</span></TableHead>
+                  <TableHead className="whitespace-normal">{t("models.agreement")}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t("models.created")}</TableHead>
+                  <TableHead className="hidden w-28 pe-6 md:table-cell"><span className="sr-only">Actions</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {lib.custom.map((m) => (
                   <TableRow key={m.id} className="cursor-pointer" onClick={() => go({ name: "model", id: m.id })}>
-                    <TableCell className="ps-6">
-                      <span className="flex items-center gap-2 font-medium">
+                    <TableCell className="ps-6 whitespace-normal">
+                      <span className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
                         <span dir="auto">{m.name}</span>
                         {m.sample && <Badge variant="secondary">{t("app.sample")}</Badge>}
                       </span>
                       <span className="text-xs text-muted-foreground">{t("models.questions", { n: m.decisions?.length ?? 0 })}</span>
                     </TableCell>
-                    <TableCell className="font-mono text-xs">{BASES[m.base].label}</TableCell>
+                    <TableCell className="hidden md:table-cell font-mono text-xs">{BASES[m.base].label}</TableCell>
                     <TableCell><StatusLabel m={m} /></TableCell>
                     <TableCell><Agreement m={m} /></TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{when(m.created_at, lang)}</TableCell>
-                    <TableCell className="pe-6" onClick={(e) => e.stopPropagation()}>
+                    <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{when(m.created_at, lang)}</TableCell>
+                    <TableCell className="hidden pe-6 md:table-cell" onClick={(e) => e.stopPropagation()}>
                       <div className="flex justify-end gap-1">
                         <Button variant="ghost" size="sm" disabled={m.status !== "ready"} onClick={() => go({ name: "chat", model: m.id })}>
-                          <MessageSquare data-icon="inline-start" /> {t("models.chat")}
+                          <MessageSquare data-icon="inline-start" /> <span className="hidden md:inline">{t("models.chat")}</span>
                         </Button>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
@@ -189,7 +189,7 @@ function Corrections({ m }: { m: LibraryModel }) {
           <TableHeader>
             <TableRow>
               <TableHead className="ps-6">{t("corr.case")}</TableHead>
-              <TableHead>{t("corr.question")}</TableHead>
+              <TableHead className="hidden md:table-cell">{t("corr.question")}</TableHead>
               <TableHead>{t("corr.change")}</TableHead>
               <TableHead className="w-12 pe-6"><span className="sr-only">{t("corr.remove")}</span></TableHead>
             </TableRow>
@@ -198,7 +198,7 @@ function Corrections({ m }: { m: LibraryModel }) {
             {items.map((c) => (
               <TableRow key={c.n}>
                 <TableCell className="max-w-72 ps-6 whitespace-normal"><span dir="auto" className="line-clamp-2 text-sm text-muted-foreground">{c.case.split("\n\n").at(-1)}</span></TableCell>
-                <TableCell className="whitespace-normal"><span dir="auto" className="text-sm">{c.question}</span></TableCell>
+                <TableCell className="hidden md:table-cell whitespace-normal"><span dir="auto" className="text-sm">{c.question}</span></TableCell>
                 <TableCell>
                   <span className="inline-flex items-center gap-2 text-sm whitespace-nowrap">
                     <span dir="auto" className="text-muted-foreground line-through decoration-muted-foreground/50">{c.model_answer ? say(t, c.type, c.model_answer) : "—"}</span>
@@ -279,7 +279,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
         </TabsList>
         <TabsContent value="overview" className="grid gap-4">
           {m.metrics && (
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-3 gap-2 sm:gap-4">
               <Stat label={t("ev.standard")} value={pct(m.metrics.standard)} tone="standard" />
               <Stat label={m.name} value={pct(m.metrics.yours)} tone="yours" highlight />
               <Stat label={t("ev.difference")} value={`+${Math.round((m.metrics.yours - m.metrics.standard) * 100)} ${t("ev.pts")}`} />

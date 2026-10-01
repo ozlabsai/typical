@@ -43,10 +43,10 @@ export function SectionHeader({ title, description, actions }: { title: React.Re
 
 export function Stat({ label, value, tone, note, highlight }: { label: React.ReactNode; value: React.ReactNode; tone?: "standard" | "yours"; note?: React.ReactNode; highlight?: boolean }) {
   return (
-    <div className={cn("grid gap-1 rounded-xl border bg-card p-4", highlight && "border-primary/40")}>
-      <span className="text-xs text-muted-foreground" dir="auto">{label}</span>
-      <span className={cn("font-mono text-2xl font-semibold tabular", tone === "standard" && "text-standard", tone === "yours" && "text-yours")}>{value}</span>
-      {note && <span className="text-xs text-muted-foreground">{note}</span>}
+    <div className={cn("grid min-w-0 content-start gap-1 rounded-xl border bg-card p-3 sm:p-4", highlight && "border-primary/40")}>
+      <span className="truncate text-xs text-muted-foreground" dir="auto">{label}</span>
+      <span className={cn("font-mono text-xl font-semibold tabular sm:text-2xl", tone === "standard" && "text-standard", tone === "yours" && "text-yours")}>{value}</span>
+      {note && <span className="hidden text-xs text-muted-foreground sm:block">{note}</span>}
     </div>
   )
 }

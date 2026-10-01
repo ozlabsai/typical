@@ -49,36 +49,36 @@ export function DataPage() {
                 <TableRow>
                   <TableHead className="ps-6">{t("data.name")}</TableHead>
                   <TableHead className="text-end">{t("data.rows")}</TableHead>
-                  <TableHead>{t("data.models")}</TableHead>
-                  <TableHead>{t("data.created")}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t("data.models")}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t("data.created")}</TableHead>
                   <TableHead className="pe-6"><span className="sr-only">Actions</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((d) => (
                   <TableRow key={d.token}>
-                    <TableCell className="ps-6">
-                      <span className="flex items-center gap-2 font-medium">
+                    <TableCell className="max-w-0 ps-6 md:max-w-none">
+                      <span className="flex min-w-0 items-center gap-2 font-medium">
                         <Database className="size-4 shrink-0 text-muted-foreground" />
                         <span dir="auto" className="truncate">{d.name}</span>
                         {d.sample && <Badge variant="secondary">{t("app.sample")}</Badge>}
                       </span>
-                      <span className="block max-w-96 truncate ps-6 text-xs text-muted-foreground" title={d.columns.join(", ")}>
+                      <span className="block truncate ps-6 text-xs text-muted-foreground md:max-w-96" title={d.columns.join(", ")}>
                         {t("data.cols", { n: d.columns.length })}: <bdi>{d.columns.slice(0, 4).join(", ")}{d.columns.length > 4 ? ", …" : ""}</bdi>
                       </span>
                     </TableCell>
                     <TableCell className="text-end font-mono text-sm tabular">{d.rows.toLocaleString()}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div className="flex flex-wrap gap-1">
                         {d.models.length ? d.models.map((m) => (
                           <Badge key={m.id} variant="outline" asChild><a href={href({ name: "model", id: m.id })} dir="auto">{m.name}</a></Badge>
                         )) : <span className="text-muted-foreground">—</span>}
                       </div>
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{when(d.created, lang)}</TableCell>
+                    <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{when(d.created, lang)}</TableCell>
                     <TableCell className="pe-6">
                       <div className="flex justify-end gap-1">
-                        <Button variant="outline" size="sm" asChild><a href={href({ name: "new", data: d.token })}><Plus data-icon="inline-start" /> {t("data.new")}</a></Button>
+                        <Button variant="outline" size="sm" asChild><a href={href({ name: "new", data: d.token })}><Plus data-icon="inline-start" /> <span className="hidden sm:inline">{t("data.new")}</span></a></Button>
                         {!d.sample && (
                           <Tooltip>
                             <TooltipTrigger asChild>
