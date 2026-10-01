@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { StatusDot } from "@/components/app-sidebar"
 import { Page, PageHeader, SectionHeader, Stat } from "@/components/layout"
 import { CodeBlock, msg } from "@/components/shared"
+import { TrainingCurve, useTrainStatus } from "@/components/training-curve"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -217,6 +218,20 @@ function Corrections({ m }: { m: LibraryModel }) {
   )
 }
 
+function TrainingCard({ m }: { m: LibraryModel }) {
+  const { t } = useI18n()
+  const st = useTrainStatus(m.id, true)
+  return (
+    <Card>
+      <CardHeader><CardTitle>{t("models.training")}</CardTitle><CardDescription>{m.message ?? t("models.notReady")}</CardDescription></CardHeader>
+      <CardContent className="grid gap-5">
+        <Progress value={(m.progress ?? 0) * 100} className="h-1.5" aria-label={t("tr.progress")} />
+        {st?.series && <TrainingCurve status={st} />}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function ModelPage({ id, tab }: { id: string; tab?: string }) {
   const { t, lang } = useI18n()
   const { lib, find } = useLibrary()
@@ -251,12 +266,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
         </>}
       />
 
-      {m.status === "training" && (
-        <Card>
-          <CardHeader><CardTitle>{t("models.training")}</CardTitle><CardDescription>{m.message ?? t("models.notReady")}</CardDescription></CardHeader>
-          <CardContent><Progress value={(m.progress ?? 0) * 100} className="h-1.5" /></CardContent>
-        </Card>
-      )}
+      {m.status === "training" && <TrainingCard m={m} />}
       {m.status === "failed" && (
         <Alert variant="destructive"><AlertCircle /><AlertTitle>{t("models.failed")}</AlertTitle><AlertDescription>{m.message}</AlertDescription></Alert>
       )}

@@ -267,7 +267,7 @@ def test_build_endpoint_v2(tmp_path, monkeypatch):
     out, res = tmp_path / "jobs" / "acme_co", r.json()
     assert res["job"] == "acme_co" and res["stats"]["rows"] == res["splits"] and "--steps 200" in res["command"] and "Qwen3.5-4B" in res["command"]
     assert len((out / "train.jsonl").read_text().splitlines()) == res["splits"]["train"] and (out / "eval" / "import_oneliner.jsonl").exists()
-    assert json.loads((out / "job.json").read_text()) == {"name": "Acme Co", "base": "medium", "steps": 200}
+    assert json.loads((out / "job.json").read_text()) == {"name": "Acme Co", "base": "medium", "steps": 200, "records_token": "a" * 32}
     assert json.loads((out / "settings.json").read_text())["holdout"] == 25 and json.loads((out / "enrich.json").read_text())["policy"]
     assert json.loads((out / "plan.json").read_text())["decisions"]
     bad = copy.deepcopy(body)

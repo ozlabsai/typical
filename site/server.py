@@ -293,7 +293,7 @@ def _build_plan(req: BuildPlanRequest, slug: str) -> dict:
     shutil.rmtree(out / "eval", ignore_errors=True)   # a rebuild must not keep the previous build's eval files (e.g. an old language)
     write(out, split)
     for name, body in (("plan", plan), ("enrich", req.enrich.model_dump()), ("settings", req.settings.model_dump()),
-                       ("job", {"name": req.name, "base": req.base, "steps": req.settings.steps})):   # /train defaults from job.json
+                       ("job", {"name": req.name, "base": req.base, "steps": req.settings.steps, "records_token": req.records_token})):   # /train defaults from job.json; the token links the model to its dataset
         (out / f"{name}.json").write_text(json.dumps(body, indent=1))
     return {"job": slug, "data_dir": f"data_co_{slug}", "splits": stats["rows"], "balance": stats["labels"],
             "command": _train_command(slug, req.settings.steps, req.base), "plan_saved": str(out / "plan.json"), "stats": stats}
@@ -380,6 +380,8 @@ def train_status(slug: str):
     st = typically_job.read_status(slug) if typically_job.SLUG_RE.fullmatch(slug) else None
     if st is None:
         raise HTTPException(404, "no such job")
+    if st["phase"] in ("training", "evaluating"):
+        st["series"] = typically_job.log_series(typically_job.job_dir(slug) / "pod.log")
     return {**st, "run": f"co_{slug}", "agreement": agreement(slug)} if st["phase"] == "done" else st
 
 

@@ -19,7 +19,7 @@ const reachable = (s: Step, p: Project | null) =>
   s === "Create" || (Boolean(p) && (s !== "Train" || p!.plan.decisions.some((d) => d.include)))
 
 /** Customize: the four-step fine-tune flow. Training continues in the background; the model then lives under Models. */
-export function CustomizePage() {
+export function CustomizePage({ data }: { data?: string }) {
   const { t } = useI18n()
   const { refresh } = useLibrary()
   const [step, setStep] = useState<Step>("Create")
@@ -52,7 +52,7 @@ export function CustomizePage() {
           })}
         </ol>
       } />
-      {step === "Create" && <CreateStep project={project} setProject={setProject} next={() => setStep("Understand")} />}
+      {step === "Create" && <CreateStep project={project} setProject={setProject} next={() => setStep("Understand")} from={data} />}
       {step === "Understand" && project && <UnderstandStep project={project} update={update} back={() => setStep("Create")} next={() => setStep("Enrich")} />}
       {step === "Enrich" && project && <EnrichStep project={project} update={update} back={() => setStep("Understand")} next={() => setStep("Train")} />}
       {step === "Train" && project && (

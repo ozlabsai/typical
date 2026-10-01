@@ -7,6 +7,7 @@ The pod (named typically-job-<slug>-<job_id>, job_id in status.json) is deleted 
 `--train-flags <company> <steps> <run>` (run on the pod by scripts/typically_spike_pod.sh) prints the pcdm/train.py flags.
 """
 import json
+import math
 import re
 import secrets
 import subprocess
@@ -293,6 +294,7 @@ def reconcile(log=print) -> list[str]:
 def run(slug: str, log=None, base: str = "small", steps: int = 400) -> None:
     """Raises ValueError on a bad slug/base/steps; otherwise never raises: the outcome is in status.json (done / failed)."""
     job_dir(slug).mkdir(parents=True, exist_ok=True)   # validates the slug
+    (job_dir(slug) / "pod.log").unlink(missing_ok=True)   # a retrain must not chart the previous run's log
     log = log or file_log(slug)
     with tempfile.TemporaryDirectory() as tmp:
         j = Job(slug, log, Path(tmp), base, steps)
@@ -331,6 +333,34 @@ def train_flags(company: str, steps: int, run: str, base_args: dict, base: str =
             "--bucket_map", f"data_wh=W,data_u=U,{d}=C", "--family_weights", "C:0.5,W:0.3,E:0.15,U:0.05", "--null_aug", "W:0.20",
             "--steps", str(steps), "--bs", "64", "--val_every", "50", "--ckpt_every", "100", "--eval_every", str(steps),
             "--eval_limit", "200", "--eval_bs", "8", "--best_on", f"{d}_val"]
+
+
+def log_series(path: Path, limit: int = 200, tail: int = 64_000) -> dict:
+    """The last `limit` logged steps of a pod.log (only its last `tail` bytes are read): train loss, val_nll and the
+    company-val nll best.pt is chosen on, aligned on `step` (None where a step has no value), and the mean recent step_time."""
+    try:
+        with path.open("rb") as f:
+            size = f.seek(0, 2)
+            f.seek(max(0, size - tail))
+            lines = f.read().decode("utf-8", "replace").splitlines()[1 if size > tail else 0:]   # drop the cut first line
+    except FileNotFoundError:
+        lines = []
+    cols: dict[str, dict[int, float]] = {"loss": {}, "val": {}, "best_on": {}}
+    times = []
+    for line in lines:
+        if not (m := re.match(r"step (\d+) (?:val_nll (\S+)|best_on_nll (\S+)|.*?\bloss (\S+)(?:.*?\bstep_time ([\d.]+)s)?)", line)):
+            continue
+        for col, v in zip(cols, (m[4], m[2], m[3])):
+            try:
+                if v is not None and math.isfinite(x := float(v)):   # a nan loss is dropped: JSON has no NaN
+                    cols[col][int(m[1])] = x
+            except ValueError:
+                pass
+        if m[5]:
+            times.append(float(m[5]))
+    steps = sorted({s for c in cols.values() for s in c})[-limit:]
+    return {"step": steps, **{k: [c.get(s) for s in steps] for k, c in cols.items()},
+            "step_time": sum(times[-5:]) / len(times[-5:]) if times else None}
 
 
 def file_log(slug: str):

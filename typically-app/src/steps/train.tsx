@@ -3,6 +3,7 @@ import { AlertCircle, ArrowRight, Check, ChevronDown, Circle, Loader2, X } from 
 import { toast } from "sonner"
 
 import { msg, OptionCard, PageHead } from "@/components/shared"
+import { TrainingCurve } from "@/components/training-curve"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -159,6 +160,7 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
                         {phase === "training" && state === "current" && typeof status.progress === "number" && (
                           <Progress value={(status.progress as number) * 100} className="mt-2 h-1.5" aria-label={t("tr.progress")} />
                         )}
+                        {phase === "training" && status.series && <div className="mt-4"><TrainingCurve status={status} /></div>}
                       </div>
                     </li>
                   )

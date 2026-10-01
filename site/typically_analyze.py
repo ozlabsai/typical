@@ -1,12 +1,14 @@
-"""POST /api/typically/analyze: read a table (csv / Hugging Face / Google Sheets / sample), profile it and return the
-DatasetPlan (.context/typically/FLOW.md). Parsed records are kept server-side under `records_token` so /build does not
-need the file again: in memory and in .context/typically/uploads/<token>.jsonl (see load_upload)."""
+"""POST /api/typically/analyze: read a table (csv / xlsx / Hugging Face / Google Sheets / sample / an earlier upload), profile it and
+return the DatasetPlan (.context/typically/FLOW.md). Parsed records are kept server-side under `records_token` so /build does not
+need the file again: in memory and in .context/typically/uploads/<token>.jsonl (see load_upload), described by <token>.meta.json.
+GET/DELETE /api/typically/datasets: those uploads, and the models built from them (jobs/<slug>/job.json "records_token")."""
 import json
 import random
 import re
 import sys
 import uuid
 from collections import OrderedDict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -25,9 +27,12 @@ router = APIRouter()
 
 
 class Source(BaseModel):
-    kind: Literal["csv", "hf", "sheets", "sample"]
+    kind: Literal["csv", "xlsx", "hf", "sheets", "sample", "upload"]
     text: str | None = None
-    name: str | None = None   # csv file name
+    data_base64: str | None = None   # xlsx bytes
+    sheet: str | None = None   # xlsx sheet; None = the first
+    token: str | None = None   # upload: a records_token from an earlier /analyze
+    name: str | None = None   # csv / xlsx file name
     dataset: str | None = None
     config: str | None = None
     split: str | None = None
@@ -40,15 +45,20 @@ class AnalyzeRequest(BaseModel):
     lang: Literal["en", "he"] = "en"   # language of the questions, reasons and warnings we write
 
 
-def load_upload(token: str) -> list[dict]:
+def _upload_file(token: str, must_exist: bool = True) -> Path:
     if not re.fullmatch(r"[0-9a-f]{32}", token):
         raise HTTPException(400, "bad records_token")
+    f = UPLOADS / f"{token}.jsonl"
+    if must_exist and not f.exists():
+        raise HTTPException(404, "unknown records_token; analyze the data again")
+    return f
+
+
+def load_upload(token: str) -> list[dict]:
+    _upload_file(token, must_exist=False)   # validates the token
     if token in _records:
         return _records[token]
-    f = UPLOADS / f"{token}.jsonl"
-    if not f.exists():
-        raise HTTPException(404, "unknown records_token; analyze the data again")
-    return [json.loads(line) for line in f.read_text().splitlines()]
+    return [json.loads(line) for line in _upload_file(token).read_text().splitlines()]
 
 
 def trim(prof: dict) -> dict:
@@ -60,8 +70,14 @@ def trim(prof: dict) -> dict:
 @router.post("/api/typically/analyze")
 def analyze(req: AnalyzeRequest):
     src = req.source.model_dump(exclude_none=True)
+    sheets, token = None, None
     try:
-        records = tp.load_records(src)
+        if src["kind"] == "upload":   # start again from a table we already have: no new upload
+            token = src.get("token") or ""
+            name, records = _meta(token)["name"], load_upload(token)
+        else:
+            sheets, records = tp.read_xlsx(src.get("data_base64") or "", src.get("sheet")) if src["kind"] == "xlsx" else (None, tp.load_records(src))
+            name = tp.name_hint(src)
         prof = tp.profile(records)
         warnings: list[str] = []
         if tllm.available():   # the operator's key only: users never bring one
@@ -72,16 +88,67 @@ def analyze(req: AnalyzeRequest):
         raise HTTPException(400, str(e))
     if not plan["decisions"]:
         warnings.append(tp.msg(req.lang, "w_nodecision"))
-    token = uuid.uuid4().hex
-    _records[token] = records
-    while len(_records) > 16:
-        _records.popitem(last=False)
-    UPLOADS.mkdir(parents=True, exist_ok=True)
-    (UPLOADS / f"{token}.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
+    if token is None:
+        token = uuid.uuid4().hex
+        _records[token] = records
+        while len(_records) > 16:
+            _records.popitem(last=False)
+        UPLOADS.mkdir(parents=True, exist_ok=True)
+        (UPLOADS / f"{token}.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
+        sheet = src.get("sheet") or (sheets[0] if sheets else None)
+        meta = {"name": name + (f" ({sheet})" if sheets and len(sheets) > 1 else ""), "kind": src["kind"], "rows": len(records),
+                "columns": list(prof["columns"]), "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        (UPLOADS / f"{token}.meta.json").write_text(json.dumps(meta, ensure_ascii=False))
     pick = sorted(random.Random(0).sample(range(len(records)), min(3, len(records))))
     return {
-        "name_hint": tp.name_hint(src), "n_rows": len(records), "columns": list(prof["columns"]),
+        "name_hint": name, "n_rows": len(records), "columns": list(prof["columns"]),
         "profile": trim(prof), "plan": plan, "plan_source": source, "lang": req.lang,
         "preview_cases": [{"case": tp.render_case(records[i], plan), "answers": tp.answers(records[i], plan)} for i in pick],
         "records_token": token, "warnings": warnings,
+        **({"sheets": sheets, "sheet": src.get("sheet") or sheets[0]} if sheets else {}),   # xlsx: the UI offers the other sheets
     }
+
+
+# ---------------------------------------------------------------- datasets (the Data page)
+
+def _meta(token: str) -> dict:
+    """<token>.meta.json; uploads from before it existed get one from the jsonl itself."""
+    f = _upload_file(token)
+    if (m := f.with_suffix(".meta.json")).exists():
+        return json.loads(m.read_text())
+    with f.open() as fh:
+        first, rows = fh.readline(), 1 + sum(1 for _ in fh)
+    return {"name": f"Upload {token[:6]}", "kind": None, "rows": rows, "columns": list(json.loads(first)) if first else [],
+            "created": datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")}
+
+
+def _models_by_token() -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for j in (UPLOADS.parent / "jobs").glob("*/job.json"):
+        job = json.loads(j.read_text())
+        if t := job.get("records_token"):
+            out.setdefault(t, []).append({"id": j.parent.name, "name": job.get("name") or j.parent.name})
+    return out
+
+
+@router.get("/api/typically/datasets")
+def datasets():
+    used = _models_by_token()
+    up = [{"token": f.stem, **_meta(f.stem), "sample": False, "models": used.get(f.stem, [])} for f in UPLOADS.glob("*.jsonl")]
+    # ponytail: re-analyses of the sample are copies of the Northwind row below; they stay on disk, hidden here
+    up = sorted((d for d in up if d["kind"] != "sample"), key=lambda d: d["created"], reverse=True)
+    rows = tp.load_records({"kind": "sample"})
+    sample = {"token": "sample", "name": "Northwind sample", "kind": "sample", "rows": len(rows), "columns": list(rows[0]), "created": None,
+              "sample": True, "models": [{"id": "northwind", "name": "Northwind triage"}]}
+    return {"datasets": up + [sample]}
+
+
+@router.delete("/api/typically/datasets/{token}")
+def delete_dataset(token: str):
+    _meta(token)   # 400 / 404
+    if names := [m["name"] for m in _models_by_token().get(token, [])]:
+        raise HTTPException(409, "models were trained from this data: " + ", ".join(names))
+    for f in (UPLOADS / f"{token}.jsonl", UPLOADS / f"{token}.meta.json"):
+        f.unlink(missing_ok=True)
+    _records.pop(token, None)
+    return {"deleted": token}

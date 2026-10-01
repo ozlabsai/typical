@@ -1,5 +1,5 @@
-import { useRef, useState } from "react"
-import { AlertCircle, ArrowRight, FileSpreadsheet, Loader2, Upload } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { AlertCircle, ArrowRight, Database, FileSpreadsheet, Loader2, Upload } from "lucide-react"
 
 import { msg, OptionCard, PageHead } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
@@ -8,20 +8,34 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { api, type Source } from "@/lib/api"
+import { api, type Dataset, type Source } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
-import { BASES, SAMPLE, slugify, type Base, type Project } from "@/lib/project"
+import { BASES, SAMPLE, slugify, type Analysis, type Base, type Project } from "@/lib/project"
+import { go as navigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
 type Tab = "upload" | "hf" | "sheets" | "sample"
+type Picked = { name: string; text: string } | { name: string; b64: string }
 
-export function CreateStep({ project, setProject, next }: { project: Project | null; setProject: (p: Project) => void; next: () => void }) {
+const base64 = (f: File) => new Promise<string>((ok, fail) => {
+  const r = new FileReader()
+  r.onload = () => ok(String(r.result).split(",")[1] ?? "")
+  r.onerror = () => fail(r.error)
+  r.readAsDataURL(f)
+})
+
+/** `from`: start from a dataset already uploaded (its records_token, or "sample"), as opened from the Data page. */
+export function CreateStep({ project, setProject, next, from }: { project: Project | null; setProject: (p: Project) => void; next: () => void; from?: string }) {
   const { t, lang } = useI18n()
   const [name, setName] = useState(project?.name ?? "")
   const [base, setBase] = useState<Base>(project?.base ?? "small")
-  const [tab, setTab] = useState<Tab>("upload")
-  const [file, setFile] = useState<{ name: string; text: string } | null>(null)
+  const [tab, setTab] = useState<Tab>(from === "sample" ? "sample" : "upload")
+  const [file, setFile] = useState<Picked | null>(null)
+  const [book, setBook] = useState<Analysis | null>(null) // the last xlsx analysis: its `sheets` drive the picker
+  const [sheetName, setSheetName] = useState<string>()
+  const [dataset, setDataset] = useState<Dataset | null>(null)
   const [hf, setHf] = useState({ dataset: "", split: "train" })
   const [sheet, setSheet] = useState("")
   const [over, setOver] = useState(false)
@@ -29,19 +43,33 @@ export function CreateStep({ project, setProject, next }: { project: Project | n
   const [error, setError] = useState<string | null>(null)
   const input = useRef<HTMLInputElement>(null)
 
+  useEffect(() => {   // the page is keyed on `from`, so this runs once per dataset
+    if (!from || from === "sample") return
+    api.datasets().then((all) => {
+      const d = all.find((x) => x.token === from)
+      if (!d) return navigate({ name: "new" })   // deleted since: plain Create
+      setDataset(d)
+      setName((n) => n || d.name.replace(/\.(csv|xlsx)( \(.*\))?$/i, "").replace(/[_-]+/g, " "))
+    }).catch((e) => setError(msg(e)))
+  }, [from])
+
   const source: Source | null =
-    tab === "upload" ? (file ? { kind: "csv", text: file.text, name: file.name } : null)
+    dataset ? { kind: "upload", token: dataset.token }
+    : tab === "upload" ? (!file ? null : "text" in file ? { kind: "csv", text: file.text, name: file.name } : { kind: "xlsx", data_base64: file.b64, name: file.name, sheet: sheetName })
     : tab === "hf" ? (hf.dataset.includes("/") ? { kind: "hf", dataset: hf.dataset.trim(), split: hf.split || "train", limit: 5000 } : null)
     : tab === "sheets" ? (/docs\.google\.com\/spreadsheets\/d\//.test(sheet) ? { kind: "sheets", url: sheet.trim() } : null)
     : { kind: "sample" }
-  const label = tab === "upload" ? file?.name : tab === "hf" ? `Hugging Face: ${hf.dataset}` : tab === "sheets" ? "Google Sheet" : "Northwind sample"
+  const label = dataset ? dataset.name : tab === "upload" ? (file && sheetName ? `${file.name} (${sheetName})` : file?.name) : tab === "hf" ? `Hugging Face: ${hf.dataset}` : tab === "sheets" ? "Google Sheet" : "Northwind sample"
 
   async function pick(f?: File) {
     if (!f) return
-    if (!/\.csv$/i.test(f.name)) return setError(t("upload.csvOnly"))
+    const xlsx = /\.xlsx$/i.test(f.name)
+    if (!xlsx && !/\.csv$/i.test(f.name)) return setError(t("upload.fileTypes"))
     setError(null)
-    setFile({ name: f.name, text: await f.text() })
-    if (!name) setName(f.name.replace(/\.csv$/i, "").replace(/[_-]+/g, " "))
+    setBook(null)
+    setSheetName(undefined)
+    setFile(xlsx ? { name: f.name, b64: await base64(f) } : { name: f.name, text: await f.text() })
+    if (!name) setName(f.name.replace(/\.(csv|xlsx)$/i, "").replace(/[_-]+/g, " "))
   }
 
   async function go() {
@@ -49,7 +77,12 @@ export function CreateStep({ project, setProject, next }: { project: Project | n
     setBusy(true)
     setError(null)
     try {
-      const analysis = await api.analyze(source, lang)
+      const analysis = book && book.sheet === sheetName ? book : await api.analyze(source, lang)
+      if (source.kind === "xlsx") {
+        setBook(analysis)
+        // a workbook with more sheets: stop once on the first sheet's result, so the picker is seen before moving on
+        if (!book && (analysis.sheets?.length ?? 0) > 1) return setSheetName(analysis.sheet)
+      }
       const sample = source.kind === "sample"
       if (sample)
         for (const d of analysis.plan.decisions) {
@@ -110,6 +143,16 @@ export function CreateStep({ project, setProject, next }: { project: Project | n
         <Card>
           <CardHeader><CardTitle>{t("create.data")}</CardTitle><CardDescription>{t("create.dataHint")}</CardDescription></CardHeader>
           <CardContent>
+            {dataset ? (
+              <div className="flex items-start gap-3 rounded-lg border p-4">
+                <Database className="mt-0.5 size-5 shrink-0 text-primary" />
+                <div className="grid min-w-0 flex-1 gap-0.5">
+                  <p className="text-sm font-medium"><span className="text-muted-foreground">{t("create.fromData")}: </span><span dir="auto">{dataset.name}</span></p>
+                  <p className="text-xs text-muted-foreground tabular">{t("create.fromDataBody", { rows: dataset.rows.toLocaleString(), cols: dataset.columns.length })}</p>
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => navigate({ name: "new" })}>{t("create.otherData")}</Button>
+              </div>
+            ) : (
             <Tabs value={tab} onValueChange={(v) => (setTab(v as Tab), setError(null))}>
               <TabsList>
                 <TabsTrigger value="upload">{t("tab.upload")}</TabsTrigger>
@@ -130,8 +173,20 @@ export function CreateStep({ project, setProject, next }: { project: Project | n
                   {file ? <FileSpreadsheet className="size-5 text-primary" /> : <Upload className="size-5 text-muted-foreground" />}
                   <p className="text-sm font-medium">{file ? file.name : t("upload.drop")}</p>
                   <p className="text-xs text-muted-foreground">{file ? t("upload.replace") : t("upload.private")}</p>
-                  <input ref={input} type="file" accept=".csv,text/csv" className="sr-only" onChange={(e) => pick(e.target.files?.[0])} />
+                  <input ref={input} type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" onChange={(e) => pick(e.target.files?.[0])} />
                 </div>
+                {book?.sheets && book.sheets.length > 1 && (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-[220px_1fr] sm:items-end sm:gap-4">
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="xlsx-sheet">{t("create.sheet")}</Label>
+                      <Select value={sheetName} onValueChange={setSheetName}>
+                        <SelectTrigger id="xlsx-sheet" className="w-full"><SelectValue /></SelectTrigger>
+                        <SelectContent>{book.sheets.map((n) => <SelectItem key={n} value={n}><span dir="auto">{n}</span></SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <p className="text-xs text-muted-foreground sm:pb-2">{t("create.sheetHint", { n: book.sheets.length, sheet: book.sheet ?? "" })}</p>
+                  </div>
+                )}
               </TabsContent>
               <TabsContent value="hf" className="grid gap-3 pt-3 sm:grid-cols-[1fr_140px]">
                 <div className="grid gap-2"><Label htmlFor="hf-ds">{t("hf.dataset")}</Label><Input id="hf-ds" dir="ltr" placeholder="owner/dataset" value={hf.dataset} onChange={(e) => setHf({ ...hf, dataset: e.target.value })} /></div>
@@ -150,6 +205,7 @@ export function CreateStep({ project, setProject, next }: { project: Project | n
                 </div>
               </TabsContent>
             </Tabs>
+            )}
 
           </CardContent>
           <CardFooter className="justify-between">

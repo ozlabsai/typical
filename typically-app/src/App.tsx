@@ -1,6 +1,8 @@
+import { useState } from "react"
 import { ThemeProvider } from "next-themes"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { CommandPalette } from "@/components/command-palette"
 import { HeaderSlotProvider } from "@/components/layout"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 import { Separator } from "@/components/ui/separator"
@@ -12,23 +14,27 @@ import { LibraryProvider, useLibrary } from "@/lib/library"
 import { href, useRoute } from "@/lib/router"
 import { ChatPage } from "@/pages/chat"
 import { CustomizePage } from "@/pages/customize"
+import { DataPage } from "@/pages/data"
 import { ModelPage, ModelsPage } from "@/pages/models"
 
 function Shell() {
   const { t, lang } = useI18n()
   const { find } = useLibrary()
   const route = useRoute()
+  const [search, setSearch] = useState(false)
   const crumbs: { label: string; to?: string }[] =
     route.name === "chat" ? [{ label: t("app.chat") }]
     : route.name === "new" ? [{ label: t("app.new") }]
     : route.name === "models" ? [{ label: t("app.models") }]
+    : route.name === "data" ? [{ label: t("app.data") }]
     : [{ label: t("app.models"), to: href({ name: "models" }) }, { label: find(route.id)?.name ?? route.id }]
 
   return (
     <HeaderSlotProvider>
       {(setSlot) => (
         <SidebarProvider className="h-svh overflow-hidden">
-          <AppSidebar route={route} />
+          <AppSidebar route={route} onSearch={() => setSearch(true)} />
+          <CommandPalette open={search} setOpen={setSearch} />
           {/* the window never scrolls; one scroll container with a reserved gutter, so width never jumps between routes */}
           <SidebarInset className="h-svh min-w-0 overflow-hidden">
             <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">
@@ -50,7 +56,8 @@ function Shell() {
               {route.name === "chat" && <ChatPage modelId={route.model} />}
               {route.name === "models" && <ModelsPage />}
               {route.name === "model" && <ModelPage id={route.id} tab={route.tab} />}
-              {route.name === "new" && <CustomizePage />}
+              {route.name === "new" && <CustomizePage key={route.data} data={route.data} />}
+              {route.name === "data" && <DataPage />}
             </div>
           </SidebarInset>
           <Toaster position={lang === "he" ? "bottom-left" : "bottom-right"} />
