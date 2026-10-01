@@ -415,8 +415,9 @@ export function ChatPage({ modelId }: { modelId?: string }) {
       )}
 
       {!shown.length ? (
-        /* empty: everything centred, composer in the middle (ChatGPT / Gemini / Perplexity) */
-        <div className="flex flex-1 items-center overflow-y-auto">
+        /* empty: everything centred, composer in the middle (ChatGPT / Gemini / Perplexity); top-anchored on phones,
+           where the column is taller than the screen and re-centring as examples load would shift it (CLS .23) */
+        <div className="flex flex-1 items-start overflow-y-auto md:items-center">
           <div className="mx-auto grid w-full max-w-3xl gap-6 px-4 py-10 md:px-6">
             <div className="grid justify-items-center gap-3 text-center">
               <div className="grid size-10 place-items-center rounded-xl bg-primary/10"><Sparkles className="size-5 text-primary" /></div>

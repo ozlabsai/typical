@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { AlertCircle, ArrowRight, Check, ChevronDown, Circle, Loader2, X } from "lucide-react"
 import { toast } from "sonner"
 
-import { msg, OptionCard, PageHead } from "@/components/shared"
+import { msg, OptionCard, PageHead, StatusCopy } from "@/components/shared"
 import { TrainingCurve } from "@/components/training-curve"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -18,7 +18,6 @@ import { BASES, included, PRESETS, type Preset, type Project } from "@/lib/proje
 import { cn } from "@/lib/utils"
 
 const PHASES = ["starting_gpu", "uploading", "training", "evaluating", "downloading"] as const
-const CODES = ["queued", "gpu_starting", "uploading", "baseline", "training", "evaluating", "downloading", "done", "failed_provider"] as const
 const ORDER = ["queued", "starting_gpu", "uploading", "training", "evaluating", "downloading", "done"]
 
 function useElapsed(since?: string) {
@@ -142,7 +141,7 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
           <Card>
             <CardHeader>
               <CardTitle>{t(status.phase === "done" ? "tr.trained" : status.phase === "failed" ? "tr.stopped" : "tr.training")}</CardTitle>
-              <CardDescription>{(CODES as readonly string[]).includes(String(status.code)) ? t(`code.${status.code as (typeof CODES)[number]}`) : status.message}</CardDescription>
+              <CardDescription><StatusCopy code={status.code} message={status.message} /></CardDescription>
               {elapsed && <CardAction><span className="font-mono text-sm text-muted-foreground tabular">{elapsed}</span></CardAction>}
             </CardHeader>
             <CardContent>

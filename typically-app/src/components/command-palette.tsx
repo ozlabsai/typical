@@ -41,7 +41,7 @@ export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (o: 
     <CommandDialog open={open} onOpenChange={setOpen} title={t("cmd.title")} description={t("cmd.description")}>
       <Command>
       <CommandInput placeholder={t("cmd.placeholder")} />
-      <CommandList className="max-h-96">
+      <CommandList className="max-h-96" label={t("cmd.description")}>
         <CommandEmpty>{t("cmd.empty")}</CommandEmpty>
         <CommandGroup heading={t("cmd.go")}>
           {pages.map((p) => (

@@ -62,7 +62,7 @@ function Shell() {
               {route.name === "data" && <DataPage />}
             </div>
           </SidebarInset>
-          <Toaster position={lang === "he" ? "bottom-left" : "bottom-right"} />
+          <Toaster position={lang === "he" ? "bottom-left" : "bottom-right"} containerAriaLabel={t("common.notifications")} />
         </SidebarProvider>
       )}
     </HeaderSlotProvider>

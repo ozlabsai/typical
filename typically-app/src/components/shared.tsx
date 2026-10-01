@@ -10,6 +10,18 @@ import { cn } from "@/lib/utils"
 
 export const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
+const CODES = ["queued", "gpu_starting", "uploading", "baseline", "training", "evaluating", "downloading", "done",
+  "failed_provider", "failed_infra", "failed_timeout", "failed_training"] as const
+const DETAILED = ["failed_infra", "failed_timeout", "failed_training"] // generic copy; the server's message carries the cause
+
+/** A training job's status line: the translated copy for its `code`, else the server's message (code "failed": shutdown unconfirmed). */
+export function StatusCopy({ code, message }: { code?: unknown; message?: string }) {
+  const { t } = useI18n()
+  const c = CODES.find((x) => x === code)
+  if (!c) return <>{message}</>
+  return <>{t(`code.${c}`)}{DETAILED.includes(c) && message && <span dir="auto" className="mt-1 block text-xs opacity-80">{message}</span>}</>
+}
+
 /** Step / panel heading inside a page (the page itself owns the h1). Spacing comes from the parent grid. */
 export function PageHead({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return <SectionHeader title={title} description={children} actions={action} />

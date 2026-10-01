@@ -48,10 +48,10 @@ export function DataPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="ps-6">{t("data.name")}</TableHead>
-                  <TableHead className="text-end">{t("data.rows")}</TableHead>
+                  <TableHead className="hidden text-end sm:table-cell">{t("data.rows")}</TableHead>
                   <TableHead className="hidden md:table-cell">{t("data.models")}</TableHead>
                   <TableHead className="hidden md:table-cell">{t("data.created")}</TableHead>
-                  <TableHead className="pe-6"><span className="sr-only">Actions</span></TableHead>
+                  <TableHead className="w-0 pe-6"><span className="sr-only">{t("common.actions")}</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -64,10 +64,10 @@ export function DataPage() {
                         {d.sample && <Badge variant="secondary">{t("app.sample")}</Badge>}
                       </span>
                       <span className="block truncate ps-6 text-xs text-muted-foreground md:max-w-96" title={d.columns.join(", ")}>
-                        {t("data.cols", { n: d.columns.length })}: <bdi>{d.columns.slice(0, 4).join(", ")}{d.columns.length > 4 ? ", …" : ""}</bdi>
+                        <span className="sm:hidden">{t("data.rowsN", { n: d.rows.toLocaleString() })} · </span>{t("data.cols", { n: d.columns.length })}: <bdi>{d.columns.slice(0, 4).join(", ")}{d.columns.length > 4 ? ", …" : ""}</bdi>
                       </span>
                     </TableCell>
-                    <TableCell className="text-end font-mono text-sm tabular">{d.rows.toLocaleString()}</TableCell>
+                    <TableCell className="hidden text-end font-mono text-sm tabular sm:table-cell">{d.rows.toLocaleString()}</TableCell>
                     <TableCell className="hidden md:table-cell">
                       <div className="flex flex-wrap gap-1">
                         {d.models.length ? d.models.map((m) => (

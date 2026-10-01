@@ -199,6 +199,7 @@ export interface LibraryModel {
   status: "ready" | "training" | "failed" | "queued"
   progress?: number
   message?: string
+  code?: string // the job's status code (code.* copy); "failed" = shutdown unconfirmed, show `message`
   description?: string
   sample?: boolean
   run?: string

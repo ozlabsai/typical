@@ -32,7 +32,7 @@ export function CustomizePage({ data }: { data?: string }) {
   return (
     <Page>
       <PageHeader title={t("new.title")} description={t("new.lede")} actions={
-        <ol className="flex items-center gap-1" aria-label="Progress">
+        <ol className="flex items-center gap-1" aria-label={t("new.progress")}>
           {STEPS.map((s, i) => {
             const done = i < at
             return (

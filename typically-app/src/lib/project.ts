@@ -94,6 +94,8 @@ export function merges(p: Project, d: PlanDecision) {
 
 export const say = (t: T, type: DecisionType, label: string) => (type === "noul" ? t(label === "yes" ? "ans.yes" : "ans.no") : label)
 export const pct = (x: number) => `${Math.round(x * 100)}%`
+/** +12 / -3 / 0; the LRM keeps the sign on the left of the digits in RTL text ("+12", not "12+"). */
+export const signed = (n: number) => `\u200e${n > 0 ? "+" : ""}${n}`
 
 export const TYPES: DecisionType[] = ["choice", "noul", "score"]
 

@@ -5,7 +5,7 @@ import { toast } from "sonner"
 import { StatusDot } from "@/components/app-sidebar"
 import { ShareButton } from "@/components/share-dialog"
 import { Page, PageHeader, SectionHeader, Stat } from "@/components/layout"
-import { CodeBlock, msg } from "@/components/shared"
+import { CodeBlock, msg, StatusCopy } from "@/components/shared"
 import { TrainingCurve, useTrainStatus } from "@/components/training-curve"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -19,7 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { corrections, library, type CorrectionItem, type LibraryModel } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { refOf, useLibrary } from "@/lib/library"
-import { BASES, pct, say } from "@/lib/project"
+import { BASES, pct, say, signed } from "@/lib/project"
 import { go, href } from "@/lib/router"
 import { DeployPanel } from "@/steps/deploy"
 import { Results } from "@/steps/evaluate"
@@ -87,7 +87,7 @@ export function ModelsPage() {
                   <TableHead>{t("models.status")}</TableHead>
                   <TableHead className="whitespace-normal">{t("models.agreement")}</TableHead>
                   <TableHead className="hidden md:table-cell">{t("models.created")}</TableHead>
-                  <TableHead className="hidden w-28 pe-6 md:table-cell"><span className="sr-only">Actions</span></TableHead>
+                  <TableHead className="hidden w-28 pe-6 md:table-cell"><span className="sr-only">{t("common.actions")}</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -110,7 +110,7 @@ export function ModelsPage() {
                           <MessageSquare data-icon="inline-start" /> <span className="hidden md:inline">{t("models.chat")}</span>
                         </Button>
                         <DropdownMenu>
-                          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
+                          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={t("common.more")}><MoreHorizontal /></Button></DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => go({ name: "model", id: m.id })}>{t("models.open")}</DropdownMenuItem>
                             <DropdownMenuItem disabled={m.sample || m.status === "training"} onClick={() => archive(m)}><Archive /> {t("models.archive")}</DropdownMenuItem>
@@ -224,7 +224,7 @@ function TrainingCard({ m }: { m: LibraryModel }) {
   const st = useTrainStatus(m.id, true)
   return (
     <Card>
-      <CardHeader><CardTitle>{t("models.training")}</CardTitle><CardDescription>{m.message ?? t("models.notReady")}</CardDescription></CardHeader>
+      <CardHeader><CardTitle>{t("models.training")}</CardTitle><CardDescription>{m.code || m.message ? <StatusCopy code={m.code} message={m.message} /> : t("models.notReady")}</CardDescription></CardHeader>
       <CardContent className="grid gap-5">
         <Progress value={(m.progress ?? 0) * 100} className="h-1.5" aria-label={t("tr.progress")} />
         {st?.series && <TrainingCurve status={st} />}
@@ -249,16 +249,18 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
         badge={m.sample ? <Badge variant="secondary">{t("app.sample")}</Badge> : undefined}
         description={
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <StatusLabel m={m} />
-            {(m.version ?? 1) > 1 && m.parent && <>
-              <span aria-hidden>·</span>
-              <a href={href({ name: "model", id: m.parent })} className="underline-offset-4 hover:text-foreground hover:underline" dir="auto">
-                {t("models.versionOf", { n: m.version!, name: find(m.parent)?.name ?? m.parent })}
-              </a>
-            </>}
-            <span aria-hidden>·</span><span className="font-mono text-xs">{BASES[m.base].label}</span>
-            {m.steps && <><span aria-hidden>·</span><span>{t("models.steps", { n: m.steps })}</span></>}
-            {m.created_at && <><span aria-hidden>·</span><span>{when(m.created_at, lang)}</span></>}
+            {/* each separator travels with the item after it, so a wrapped line never ends on a dangling dot */}
+            {[
+              <StatusLabel m={m} />,
+              (m.version ?? 1) > 1 && m.parent && (
+                <a href={href({ name: "model", id: m.parent })} className="underline-offset-4 hover:text-foreground hover:underline" dir="auto">
+                  {t("models.versionOf", { n: m.version!, name: find(m.parent)?.name ?? m.parent })}
+                </a>
+              ),
+              <span className="font-mono text-xs">{BASES[m.base].label}</span>,
+              m.steps && <span>{t("models.steps", { n: m.steps })}</span>,
+              m.created_at && <span>{when(m.created_at, lang)}</span>,
+            ].filter(Boolean).map((x, i) => <span key={i} className="inline-flex items-center gap-3">{i > 0 && <span aria-hidden>·</span>}{x}</span>)}
           </span>
         }
         actions={<>
@@ -270,7 +272,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
 
       {m.status === "training" && <TrainingCard m={m} />}
       {m.status === "failed" && (
-        <Alert variant="destructive"><AlertCircle /><AlertTitle>{t("models.failed")}</AlertTitle><AlertDescription>{m.message}</AlertDescription></Alert>
+        <Alert variant="destructive"><AlertCircle /><AlertTitle>{t("models.failed")}</AlertTitle><AlertDescription><p><StatusCopy code={m.code} message={m.message} /></p></AlertDescription></Alert>
       )}
 
       <Tabs value={ready ? tab ?? "overview" : "overview"} onValueChange={(v) => go({ name: "model", id, tab: v === "overview" ? undefined : v })}>
@@ -284,7 +286,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
             <div className="grid grid-cols-3 gap-2 sm:gap-4">
               <Stat label={t("ev.standard")} value={pct(m.metrics.standard)} tone="standard" />
               <Stat label={m.name} value={pct(m.metrics.yours)} tone="yours" highlight />
-              <Stat label={t("ev.difference")} value={`+${Math.round((m.metrics.yours - m.metrics.standard) * 100)} ${t("ev.pts")}`} />
+              <Stat label={t("ev.difference")} value={`${signed(Math.round((m.metrics.yours - m.metrics.standard) * 100))} ${t("ev.pts")}`} />
             </div>
           )}
           <Corrections m={m} />
@@ -298,7 +300,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
                       <TableCell className="ps-6 whitespace-normal"><span dir="auto" className="font-medium">{d.question}</span></TableCell>
                       <TableCell className="text-sm text-muted-foreground">{t(`type.${d.type}`)}</TableCell>
                       <TableCell className="pe-6">
-                        <div className="flex flex-wrap gap-1">{d.labels.map((l) => <Badge key={l} variant="outline" className="font-normal" dir="auto">{l}</Badge>)}</div>
+                        <div className="flex flex-wrap gap-1">{d.labels.map((l) => <Badge key={l} variant="outline" className="font-normal" dir="auto">{say(t, d.type, l)}</Badge>)}</div>
                       </TableCell>
                     </TableRow>
                   ))}

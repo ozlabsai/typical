@@ -1,9 +1,10 @@
+import { useEffect } from "react"
 import { Boxes, Database, Languages, LogOut, MessageSquare, Moon, Plus, Search, SlidersHorizontal, Sun, UserRound } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupAction, SidebarGroupContent, SidebarGroupLabel,
-  SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarMenuSkeleton,
+  SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarMenuSkeleton, useSidebar,
 } from "@/components/ui/sidebar"
 import { SHORTCUT } from "@/components/command-palette"
 import type { LibraryModel } from "@/lib/api"
@@ -29,6 +30,9 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
   const { resolvedTheme, setTheme } = useTheme()
   const dark = resolvedTheme === "dark"
   const activeId = route.name === "model" ? route.id : undefined
+  const { setOpenMobile } = useSidebar()
+  const at = href(route)
+  useEffect(() => setOpenMobile(false), [at, setOpenMobile]) // phones: a tapped link must not leave the sheet over the page
 
   return (
     <Sidebar side="left" collapsible="icon">  {/* "left" = inline-start: sidebar.tsx uses logical start/end, so this mirrors in RTL */}
@@ -40,7 +44,7 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
                 <span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground">
                   <span className="size-2.5 rounded-full bg-primary-foreground" />
                 </span>
-                <span className="grid leading-tight">
+                <span className="grid leading-tight group-data-[collapsible=icon]:hidden">
                   <span className="font-semibold">typically</span>
                   <span className="text-xs text-muted-foreground">by Typical</span>
                 </span>
@@ -48,7 +52,7 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton onClick={onSearch} tooltip={`${t("app.search")} (${SHORTCUT})`} className="text-muted-foreground">
+            <SidebarMenuButton onClick={() => (setOpenMobile(false), onSearch())} tooltip={`${t("app.search")} (${SHORTCUT})`} className="text-muted-foreground">
               <Search /> <span>{t("app.search")}</span>
               <kbd dir="ltr" className="ms-auto rounded border bg-muted px-1.5 font-mono text-[10px] leading-4 group-data-[collapsible=icon]:hidden">{SHORTCUT}</kbd>
             </SidebarMenuButton>

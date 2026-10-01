@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { downloadUrl, results, type Reveal } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import type { ModelRef } from "@/lib/library"
-import { pct, say } from "@/lib/project"
+import { pct, say, signed } from "@/lib/project"
 import { cn } from "@/lib/utils"
 
 /* ---------------------------------------------------------------- 4. Results */
@@ -76,7 +76,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
     <>
       <SectionHeader
         title={t("ev.results")}
-        description={t("ev.lede", { who: model.sample ? "Northwind" : t("ev.you"), n: data.n_cases, a: data.n_answers })}
+        description={t("ev.lede", { who: t(model.sample ? "ev.gaveNorthwind" : "ev.gaveYou"), n: data.n_cases, a: data.n_answers })}
         actions={<>
           <Button variant="outline" onClick={() => navigator.clipboard.writeText(summary).then(() => toast.success(t("ev.summaryCopied")))}>
             <Copy data-icon="inline-start" /> {t("ev.copySummary")}
@@ -91,7 +91,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
         <Stat label={t("ev.standard")} value={pct(data.score.standard)} tone="standard" note={t("ev.agrees", { who })} />
         <Stat label={t(model.sample ? "ev.northwindTitle" : "ev.yoursTitle")} value={pct(data.score.yours)} tone="yours" note={t("ev.agrees", { who })} highlight />
-        <Stat label={t("ev.difference")} value={`${gain >= 0 ? "+" : ""}${gain} ${t("ev.pts")}`} note={t("ev.fixed", { a: data.fixed, b: data.broken })} />
+        <Stat label={t("ev.difference")} value={`${signed(gain)} ${t("ev.pts")}`} note={t("ev.fixed", { a: data.fixed, b: data.broken })} />
       </div>
 
       <Card>
@@ -122,7 +122,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
                     <TableCell><Meter value={d.standard} tone="standard" /></TableCell>
                     <TableCell><Meter value={d.yours} tone="yours" /></TableCell>
                     <TableCell className={cn("hidden md:table-cell pe-6 text-end font-mono tabular", delta > 0 ? "text-yours" : "text-muted-foreground")}>
-                      {delta > 0 ? "+" : ""}{delta}
+                      {signed(delta)}
                     </TableCell>
                   </TableRow>
                 )
@@ -135,7 +135,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
       <Card>
         <CardHeader>
           <CardTitle>{t("ev.disagree")}</CardTitle>
-          <CardDescription>{t("ev.disagreeLede", { who: model.sample ? "Northwind" : t("ev.you") })}</CardDescription>
+          <CardDescription>{t("ev.disagreeLede", { who: t(model.sample ? "ev.decidedNorthwind" : "ev.decidedYou") })}</CardDescription>
         </CardHeader>
         <CardContent className="px-0">
           <Table>
