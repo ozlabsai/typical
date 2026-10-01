@@ -1,4 +1,5 @@
-import { AlertCircle, Archive, Boxes, MessageSquare, MoreHorizontal, Plus, Rocket } from "lucide-react"
+import { useEffect, useState } from "react"
+import { AlertCircle, Archive, Boxes, Loader2, MessageSquare, MoreHorizontal, Plus, RefreshCw, Rocket, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { StatusDot } from "@/components/app-sidebar"
@@ -13,10 +14,10 @@ import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { library, type LibraryModel } from "@/lib/api"
+import { corrections, library, type CorrectionItem, type LibraryModel } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { refOf, useLibrary } from "@/lib/library"
-import { BASES, pct } from "@/lib/project"
+import { BASES, pct, say } from "@/lib/project"
 import { go, href } from "@/lib/router"
 import { DeployPanel } from "@/steps/deploy"
 import { Results } from "@/steps/evaluate"
@@ -141,6 +142,81 @@ export function ModelsPage() {
   )
 }
 
+/** Chat's "Wrong?" answers for this model, and the button that retrains them into the next version (<root>_v<N>). */
+function Corrections({ m }: { m: LibraryModel }) {
+  const { t } = useI18n()
+  const { lib, refresh } = useLibrary()
+  const [items, setItems] = useState<CorrectionItem[]>([])
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { corrections.list(m.id).then((r) => setItems(r.items)).catch(() => setItems([])) }, [m.id, m.corrections])
+  if (!m.corrections) return null
+  // the server names versions <root>_v<N>, N = next free; mirror it for the label
+  const root = (m.version ?? 1) > 1 ? m.id.replace(/_v\d+$/, "") : m.id
+  const next = 1 + Math.max(1, ...(lib?.custom ?? []).filter((x) => x.id === root || x.id.startsWith(`${root}_v`)).map((x) => x.version ?? 1))
+  const jobRunning = lib?.custom.some((x) => x.status === "training" || x.status === "queued")
+
+  async function remove(n: number) {
+    try { await corrections.remove(m.id, n); refresh() } catch (e) { toast.error(msg(e)) }
+  }
+  async function retrain() {
+    setBusy(true)
+    try {
+      const r = await corrections.retrain(m.id)
+      toast.success(t("corr.started", { name: r.name }))
+      await refresh() // the new version must be in the library before its page opens
+      go({ name: "model", id: r.id })
+    } catch (e) {
+      toast.error(msg(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{m.corrections === 1 ? t("corr.titleOne") : t("corr.title", { n: m.corrections })}</CardTitle>
+        <CardDescription>{t("corr.lede")}</CardDescription>
+        <CardAction>
+          <Button onClick={retrain} disabled={busy || jobRunning || m.status !== "ready"}>
+            {busy ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <RefreshCw data-icon="inline-start" />} {t("corr.retrain", { n: next })}
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="px-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="ps-6">{t("corr.case")}</TableHead>
+              <TableHead>{t("corr.question")}</TableHead>
+              <TableHead>{t("corr.change")}</TableHead>
+              <TableHead className="w-12 pe-6"><span className="sr-only">{t("corr.remove")}</span></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((c) => (
+              <TableRow key={c.n}>
+                <TableCell className="max-w-72 ps-6 whitespace-normal"><span dir="auto" className="line-clamp-2 text-sm text-muted-foreground">{c.case.split("\n\n").at(-1)}</span></TableCell>
+                <TableCell className="whitespace-normal"><span dir="auto" className="text-sm">{c.question}</span></TableCell>
+                <TableCell>
+                  <span className="inline-flex items-center gap-2 text-sm whitespace-nowrap">
+                    <span dir="auto" className="text-muted-foreground line-through decoration-muted-foreground/50">{c.model_answer ? say(t, c.type, c.model_answer) : "—"}</span>
+                    <span aria-hidden className="inline-block text-muted-foreground rtl:rotate-180">→</span>
+                    <span dir="auto" className="font-medium text-yours">{say(t, c.type, c.answer)}</span>
+                  </span>
+                </TableCell>
+                <TableCell className="pe-6">
+                  <Button variant="ghost" size="icon-sm" onClick={() => remove(c.n)} aria-label={t("corr.remove")} title={t("corr.remove")}><X /></Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  )
+}
+
 export function ModelPage({ id, tab }: { id: string; tab?: string }) {
   const { t, lang } = useI18n()
   const { lib, find } = useLibrary()
@@ -158,6 +234,12 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
         description={
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <StatusLabel m={m} />
+            {(m.version ?? 1) > 1 && m.parent && <>
+              <span aria-hidden>·</span>
+              <a href={href({ name: "model", id: m.parent })} className="underline-offset-4 hover:text-foreground hover:underline" dir="auto">
+                {t("models.versionOf", { n: m.version!, name: find(m.parent)?.name ?? m.parent })}
+              </a>
+            </>}
             <span aria-hidden>·</span><span className="font-mono text-xs">{BASES[m.base].label}</span>
             {m.steps && <><span aria-hidden>·</span><span>{t("models.steps", { n: m.steps })}</span></>}
             {m.created_at && <><span aria-hidden>·</span><span>{when(m.created_at, lang)}</span></>}
@@ -193,6 +275,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
               <Stat label={t("ev.difference")} value={`+${Math.round((m.metrics.yours - m.metrics.standard) * 100)} ${t("ev.pts")}`} />
             </div>
           )}
+          <Corrections m={m} />
           <Card>
             <CardHeader><CardTitle>{t("models.decisions")}</CardTitle></CardHeader>
             <CardContent className="px-0">

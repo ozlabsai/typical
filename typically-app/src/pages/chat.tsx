@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, FileText, ListChecks, Loader2, Pencil, Sparkles, Trash2, X } from "lucide-react"
+import { ArrowUp, Check, FileText, ListChecks, Loader2, Pencil, Sparkles, Trash2, Undo2, X } from "lucide-react"
+import { toast } from "sonner"
 
 import { StatusDot } from "@/components/app-sidebar"
 import { HeaderActions } from "@/components/layout"
@@ -12,7 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { library, type AskQuestion, type AskResult, type LibraryModel, type Result } from "@/lib/api"
+import { corrections, library, type AskQuestion, type AskResult, type LibraryModel, type Result } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { useLibrary } from "@/lib/library"
 import { pct, say, TYPES } from "@/lib/project"
@@ -28,7 +29,9 @@ interface Turn {
   compare: boolean
   result?: AskResult
   error?: string
+  fixes?: Record<number, Fix> // question index -> the correction saved for it
 }
+interface Fix { answer: string; n: number } // n: its line in the model's corrections file (DELETE .../corrections/{n})
 
 const STORE = "typically.chat"
 const load = (): Turn[] => {
@@ -93,7 +96,47 @@ function Answer({ q, r, tone, label }: { q: AskQuestion; r: Result; tone: "stand
   )
 }
 
-function TurnView({ turn }: { turn: Turn }) {
+const optionsOf = (q: AskQuestion, r: Result) => (q.type === "noul" ? ["no", "yes"] : q.labels?.length ? q.labels : Object.keys(r.probs))
+
+/** "Wrong?" on an answer card: pick the right option; once saved it becomes a "Correct: X" chip (click to change) with an undo. */
+function WrongAction({ q, r, fix, onPick, onUndo }: { q: AskQuestion; r: Result; fix?: Fix; onPick: (answer: string) => void; onUndo: () => void }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const options = optionsOf(q, r)
+  return (
+    <span className="flex items-center gap-0.5">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          {fix ? (
+            <button type="button" className="inline-flex items-center gap-1 rounded-full border border-yours/40 bg-yours/10 py-0.5 ps-1.5 pe-2 text-xs text-yours hover:bg-yours/15">
+              <Check className="size-3" /> <span dir="auto">{t("chat.correct", { answer: say(t, q.type, fix.answer) })}</span>
+            </button>
+          ) : (
+            <Button variant="ghost" size="xs" className="text-muted-foreground">{t("chat.wrong")}</Button>
+          )}
+        </PopoverTrigger>
+        <PopoverContent align="end" className="grid w-60 gap-0.5 p-1.5">
+          <p className="px-2 pt-1 pb-1.5 text-xs font-medium">{t("chat.wrongTitle")}</p>
+          {options.map((l) => (
+            <button key={l} type="button" disabled={l === r.argmax || l === fix?.answer} onClick={() => { setOpen(false); onPick(l) }}
+              className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-muted disabled:pointer-events-none disabled:text-muted-foreground">
+              <span dir="auto" className="truncate">{say(t, q.type, l)}</span>
+              {l === r.argmax ? <span className="shrink-0 text-xs">{t("chat.modelSaid")}</span> : l === fix?.answer && <Check className="size-3.5 shrink-0" />}
+            </button>
+          ))}
+          <p className="px-2 pt-1.5 pb-1 text-xs text-muted-foreground">{t("chat.wrongHint")}</p>
+        </PopoverContent>
+      </Popover>
+      {fix && (
+        <Button variant="ghost" size="icon-xs" className="text-muted-foreground" onClick={onUndo} aria-label={t("chat.undo")} title={t("chat.undo")}>
+          <Undo2 />
+        </Button>
+      )}
+    </span>
+  )
+}
+
+function TurnView({ turn, onFix, onUndo }: { turn: Turn; onFix?: (i: number, answer: string) => void; onUndo?: (i: number) => void }) {
   const { t } = useI18n()
   return (
     <div className="grid gap-4">
@@ -120,7 +163,10 @@ function TurnView({ turn }: { turn: Turn }) {
               <div key={i} className="grid gap-3 rounded-xl border bg-card p-4">
                 <div className="flex items-start justify-between gap-3">
                   <p dir="auto" className="text-sm font-medium">{q.question}</p>
-                  {base && base.argmax !== mine.argmax && <Badge variant="secondary">{t("pg.disagree")}</Badge>}
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    {base && base.argmax !== mine.argmax && <Badge variant="secondary">{t("pg.disagree")}</Badge>}
+                    {onFix && onUndo && <WrongAction q={q} r={mine} fix={turn.fixes?.[i]} onPick={(a) => onFix(i, a)} onUndo={() => onUndo(i)} />}
+                  </span>
                 </div>
                 {base ? (
                   <div className="grid gap-5 sm:grid-cols-2">
@@ -197,7 +243,7 @@ function ModelPicker({ model }: { model?: LibraryModel }) {
 
 export function ChatPage({ modelId }: { modelId?: string }) {
   const { t, lang } = useI18n()
-  const { lib, find } = useLibrary()
+  const { lib, find, refresh } = useLibrary()
   const [turns, setTurns] = useState<Turn[]>(load)
   const [caseText, setCaseText] = useState("")
   const [caseCard, setCaseCard] = useState(false) // collapsed into a Case card
@@ -218,7 +264,9 @@ export function ChatPage({ modelId }: { modelId?: string }) {
 
   useEffect(() => { localStorage.setItem(STORE, JSON.stringify(turns.slice(-50))) }, [turns])
   // braces: scrollIntoView returns a Promise in newer Chromium, which React would call as an effect cleanup
-  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth", block: "end" }) }, [turns])
+  // on a new turn or a new answer only: a correction on an older card must not jump to the bottom
+  const settled = turns.filter((x) => x.result || x.error).length
+  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth", block: "end" }) }, [turns.length, settled])
   useEffect(() => {
     if (!model) return
     setQuestions(model.kind === "custom" && trained.length ? trained : [])
@@ -256,6 +304,41 @@ export function ChatPage({ modelId }: { modelId?: string }) {
       setTurns((ts) => ts.map((x) => (x.id === turn.id ? { ...x, result } : x)))
     } catch (e) {
       setTurns((ts) => ts.map((x) => (x.id === turn.id ? { ...x, error: msg(e) } : x)))
+    }
+  }
+
+  const setFix = (id: string, i: number, fix?: Fix) =>
+    setTurns((ts) => ts.map((x) => {
+      if (x.id !== id) return x
+      const { [i]: _, ...rest } = x.fixes ?? {}
+      return { ...x, fixes: fix ? { ...rest, [i]: fix } : rest }
+    }))
+
+  async function saveFix(turn: Turn, i: number, answer: string) {
+    const q = turn.questions[i], r = turn.result!.results[i]
+    try {
+      const { count, n } = await corrections.add(turn.model, {
+        case: turn.case, question: q.question, type: q.type, labels: optionsOf(q, r), answer, model_answer: r.argmax, p: r.probs[r.argmax],
+      })
+      setFix(turn.id, i, { answer, n })
+      refresh()
+      toast.success(count === 1 ? t("chat.correctedOne", { name: turn.modelName }) : t("chat.corrected", { n: count, name: turn.modelName }),
+        { action: { label: t("chat.undo"), onClick: () => undoFix(turn, i, n) } })
+    } catch (e) {
+      toast.error(msg(e))
+    }
+  }
+
+  // ponytail: undo deletes by line index; a correction removed elsewhere in between shifts it. Delete by (case, question) if that bites.
+  async function undoFix(turn: Turn, i: number, n = turn.fixes?.[i]?.n) {
+    if (n === undefined) return
+    try {
+      await corrections.remove(turn.model, n)
+      setFix(turn.id, i)
+      refresh()
+      toast(t("chat.undone"))
+    } catch (e) {
+      toast.error(msg(e))
     }
   }
 
@@ -359,7 +442,9 @@ export function ChatPage({ modelId }: { modelId?: string }) {
           {/* conversation: one column; the composer floats at its foot with a fade, same width (Conductor / ChatGPT) */}
           <div className="flex-1 overflow-y-auto">
             <div className="mx-auto grid max-w-3xl gap-8 px-4 pt-8 pb-6 md:px-6">
-              {shown.map((turn) => <TurnView key={turn.id} turn={turn} />)}
+              {shown.map((turn) => (
+                <TurnView key={turn.id} turn={turn} onFix={custom ? (i, a) => saveFix(turn, i, a) : undefined} onUndo={(i) => undoFix(turn, i)} />
+              ))}
               <div ref={end} />
             </div>
           </div>

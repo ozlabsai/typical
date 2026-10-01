@@ -6,12 +6,12 @@ import { library, type Library, type LibraryModel } from "@/lib/api"
 export interface ModelRef { id: string; name: string; run: string; sample: boolean; resultsKey: string }
 export const refOf = (m: LibraryModel): ModelRef => ({ id: m.id, name: m.name, run: m.run ?? `co_${m.id}`, sample: Boolean(m.sample), resultsKey: m.sample ? "northwind" : m.id })
 
-const Ctx = createContext<{ lib: Library | null; refresh: () => void; find: (id?: string) => LibraryModel | undefined }>(null!)
+const Ctx = createContext<{ lib: Library | null; refresh: () => Promise<void>; find: (id?: string) => LibraryModel | undefined }>(null!)
 
 export function LibraryProvider({ children }: { children: React.ReactNode }) {
   const [lib, setLib] = useState<Library | null>(null)
-  const refresh = useCallback(() => void library.list().then(setLib).catch(() => {}), [])
-  useEffect(() => { refresh() }, [refresh])
+  const refresh = useCallback(() => library.list().then(setLib).catch(() => {}), [])
+  useEffect(() => { void refresh() }, [refresh])
   // poll while anything is training, so the sidebar dots and progress stay live
   const busy = lib?.custom.some((m) => m.status === "training" || m.status === "queued")
   useEffect(() => {

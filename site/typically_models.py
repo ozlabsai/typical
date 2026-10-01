@@ -65,10 +65,15 @@ def _metrics(run: str):
     return None
 
 
-def _entry(mid: str, name: str, base: str, steps, created_at, status: dict, decisions: list, sample: bool = False) -> dict:
-    run = D.run_of(mid)
+def corrections_file(mid: str):   # chat's "Wrong?" store (typically_corrections.py)
+    return S.TYPICALLY / "corrections" / f"{mid}.jsonl"
+
+
+def _entry(mid: str, name: str, base: str, steps, created_at, status: dict, decisions: list, sample: bool = False, job: dict | None = None) -> dict:
+    run, job, cf = D.run_of(mid), job or {}, corrections_file(mid)
     hf = S.TYPICALLY / "results" / run / "hf_repo.txt"
     return {"id": mid, "name": name, "kind": "custom", "base": base, "steps": steps, "created_at": created_at, "run": run, "sample": sample,
+            "version": job.get("version", 1), "parent": job.get("parent"), "corrections": len(cf.read_text().splitlines()) if cf.exists() else 0,
             **status, "decisions": decisions, "metrics": _metrics(run),
             "has_key": any(k["model_id"] == mid for k in D._read_keys().values()),
             "hf_repo": hf.read_text().strip() if hf.exists() else None}
@@ -89,7 +94,7 @@ def _job_entry(d) -> dict | None:
     decisions = [{k: x[k] for k in ("column", "question", "type", "labels")} for x in (plan or {}).get("decisions", []) if x.get("include")]
     created = (st or {}).get("started_at") or datetime.fromtimestamp(d.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
     return _entry(d.name, job.get("name") or d.name, job.get("base") or (st or {}).get("base") or "small",
-                  job.get("steps") or (st or {}).get("steps"), created, status, decisions)
+                  job.get("steps") or (st or {}).get("steps"), created, status, decisions, job=job)
 
 
 def _custom() -> list[dict]:
