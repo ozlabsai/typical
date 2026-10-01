@@ -4,8 +4,8 @@
 
 Run: uv run uvicorn --app-dir site server:app --port 8787
 
-Bind to 127.0.0.1 only (the uvicorn default; never --host 0.0.0.0): /api/typically/train rents GPUs and has no auth.
-ponytail: auth + per-user quotas are required before this is ever public.
+Bind to 127.0.0.1 only (the uvicorn default) unless TYPICALLY_AUTH=1: /api/typically/train rents GPUs. With TYPICALLY_AUTH=1
+(site/typically_auth.py: invite sign-in, ownership, quotas) it can be hosted for a small invited audience; see deploy/README.md.
 """
 import csv
 import io
@@ -46,17 +46,22 @@ from typical import Typical
 from typical.core import to_labels
 from typical.native import native_kv_decide
 import typically_analyze
+import typically_auth as auth
 import typically_job
 import typically_llm
 import typically_plan
 from typically_reveal import reveal
 from typically_spike import build_from_plan, build_import, write
 
-TYPICALLY = REPO_ROOT / ".context" / "typically"
+TYPICALLY = typically_job.TYPICALLY   # TYPICALLY_DATA, else .context/typically
 REPOS = {"typical-small": "OzLabs/typical-small", "typical-medium": "OzLabs/typical-medium"}
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:8787", "http://127.0.0.1:8787"], allow_methods=["*"], allow_headers=["*"])
+if auth.enabled():
+    auth._secret()   # fail at start, not at the first sign-in
+else:   # hosted = same-origin only: no CORS at all
+    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:8787", "http://127.0.0.1:8787"], allow_methods=["*"], allow_headers=["*"])
+app.middleware("http")(auth.middleware)
 
 
 @app.on_event("startup")
@@ -173,6 +178,9 @@ class CompareRequest(BaseModel):
 def compare(req: CompareRequest):
     """models may hold the literal "base": the base of the tuned ("local:...") model in the same request. Results stay keyed as asked;
     each says which model ran, and `base` names the one used (null when "base" was not asked for)."""
+    for n in req.models:
+        if n != "base":
+            auth.check(auth.model_of(n))
     base = None
     if "base" in req.models:
         tuned = next((n for n in req.models if n.startswith("local:")), None)
@@ -186,7 +194,7 @@ def compare(req: CompareRequest):
 
 @app.get("/api/typically/models")
 def models():
-    return {"base": ["typical-small"], "tuned": tuned_models()}
+    return {"base": ["typical-small"], "tuned": [n for n in tuned_models() if auth.visible(auth.model_of(n))]}
 
 
 class CsvRequest(BaseModel):
@@ -232,8 +240,9 @@ def _dist(rows: list[dict]) -> dict:
     return {k: dict(v) for k, v in d.items()}
 
 
-_job_lock = threading.Lock()   # ponytail: one rented GPU job at a time, in-process; a second server process would not see it
-_job_slug: str | None = None   # the slug being trained; /build refuses it (the job snapshots the dataset when it starts)
+_jobs_lock = threading.Lock()
+_jobs: dict[str, str | None] = {}   # slug -> owner of every job running in this process; /build refuses these slugs (the job snapshots the
+# dataset when it starts). ponytail: in-process; a second server process would not see them
 
 
 def _slug(name: str) -> str:
@@ -271,8 +280,12 @@ def _train_command(slug: str, steps: int, base: str) -> str:
 @app.post("/api/typically/build")
 def build(req: BuildPlanRequest | BuildRequest):
     slug = _slug(req.name)
-    if slug == _job_slug:   # ponytail: check-then-write race is a few ms wide; a per-slug lock if builds ever run concurrently
+    if slug in _jobs:   # ponytail: check-then-write race is a few ms wide; a per-slug lock if builds ever run concurrently
         raise HTTPException(409, "that model is being taught right now; wait for it to finish before rebuilding its data")
+    if slug and (TYPICALLY / "jobs" / slug).exists() and not auth.visible(slug):
+        raise HTTPException(409, "that name is taken; pick another")
+    if auth.enabled() and isinstance(req, BuildRequest):
+        raise HTTPException(400, "this server takes the app's import (records_token + plan) only")
     return _build_plan(req, slug) if isinstance(req, BuildPlanRequest) else _build_csv(req, slug)
 
 
@@ -293,7 +306,7 @@ def _build_plan(req: BuildPlanRequest, slug: str) -> dict:
     shutil.rmtree(out / "eval", ignore_errors=True)   # a rebuild must not keep the previous build's eval files (e.g. an old language)
     write(out, split)
     for name, body in (("plan", plan), ("enrich", req.enrich.model_dump()), ("settings", req.settings.model_dump()),
-                       ("job", {"name": req.name, "base": req.base, "steps": req.settings.steps, "records_token": req.records_token})):   # /train defaults from job.json; the token links the model to its dataset
+                       ("job", {"name": req.name, "base": req.base, "steps": req.settings.steps, "records_token": req.records_token, **auth.stamp()})):   # /train defaults from job.json; the token links the model to its dataset
         (out / f"{name}.json").write_text(json.dumps(body, indent=1))
     return {"job": slug, "data_dir": f"data_co_{slug}", "splits": stats["rows"], "balance": stats["labels"],
             "command": _train_command(slug, req.settings.steps, req.base), "plan_saved": str(out / "plan.json"), "stats": stats}
@@ -316,16 +329,15 @@ def _build_csv(req: BuildRequest, slug: str) -> dict:
 
 
 def start_job(slug: str, base: str = "small", steps: int = 400) -> dict:
-    """409 if a job is already running, else start `typically_job.run` in a daemon thread and return the queued status."""
-    global _job_slug
-    if not _job_lock.acquire(blocking=False):
-        raise HTTPException(409, "another model is being taught right now; wait for it to finish")
-    _job_slug = slug
+    """409/429 unless auth.admit lets it start (this slug not running, TYPICALLY_MAX_JOBS, the user's quotas), else start
+    `typically_job.run` in a daemon thread and return the queued status."""
+    with _jobs_lock:
+        auth.admit(slug, _jobs)
+        _jobs[slug] = auth.stamp().get("owner")
 
     def end():
-        global _job_slug
-        _job_slug = None
-        _job_lock.release()
+        with _jobs_lock:
+            _jobs.pop(slug, None)
 
     def work():
         try:
@@ -349,7 +361,7 @@ class TrainRequest(BaseModel):
 
 def train_slug(slug: str, base: str | None = None, steps: int | None = None) -> dict:
     """Start training a built dataset (jobs/<slug>/); base/steps default to its job.json. /train and /retrain both go through here."""
-    if not typically_job.SLUG_RE.fullmatch(slug) or not (TYPICALLY / "jobs" / slug / "train.jsonl").exists():
+    if not typically_job.SLUG_RE.fullmatch(slug) or not (TYPICALLY / "jobs" / slug / "train.jsonl").exists() or not auth.visible(slug):
         raise HTTPException(404, "no dataset with that name; import and build it first")
     saved = json.loads(f.read_text()) if (f := TYPICALLY / "jobs" / slug / "job.json").exists() else {}
     return start_job(slug, base or saved.get("base", "small"), steps or saved.get("steps", 400))
@@ -377,7 +389,7 @@ def agreement(slug: str) -> dict:
 
 @app.get("/api/typically/train/{slug}")
 def train_status(slug: str):
-    st = typically_job.read_status(slug) if typically_job.SLUG_RE.fullmatch(slug) else None
+    st = typically_job.read_status(slug) if typically_job.SLUG_RE.fullmatch(slug) and auth.visible(slug) else None
     if st is None:
         raise HTTPException(404, "no such job")
     if st["phase"] in ("training", "evaluating"):
@@ -394,7 +406,7 @@ def _reveal_target(project: str) -> tuple[str, Path, str]:
     """project -> (run, eval file, company): "northwind" is the demo (co_f); anything else is a job slug (co_<slug>)."""
     if project == "northwind":
         return "co_f", REPO_ROOT / "data_co_a/eval/a_oneliner.jsonl", "Northwind Freight"
-    if not typically_job.SLUG_RE.fullmatch(project):
+    if not typically_job.SLUG_RE.fullmatch(project) or not auth.visible(project):
         raise HTTPException(404, "no such project")
     return f"co_{project}", TYPICALLY / "jobs" / project / "eval" / "import_oneliner.jsonl", project.replace("_", " ").title()
 
@@ -443,7 +455,7 @@ def _reveal_work(run: str, rows: list[dict], company: str, cache: Path) -> None:
 @app.get("/api/typically/download/{run}")
 def download(run: str):
     f = TYPICALLY / "results" / run / "best.pt"
-    if not typically_job.SLUG_RE.fullmatch(run) or not f.exists():
+    if not typically_job.SLUG_RE.fullmatch(run) or not f.exists() or not auth.visible(auth.model_of(run)):
         raise HTTPException(404, "no such model")
     return FileResponse(f, filename=f"{run}.pt")
 
@@ -473,5 +485,8 @@ import typically_models  # noqa: E402
 app.include_router(typically_models.router)
 import typically_corrections  # noqa: E402
 app.include_router(typically_corrections.router)
+import typically_share  # noqa: E402
+app.include_router(typically_share.router)
+app.include_router(auth.router)
 
 app.mount("/", StaticFiles(directory=REPO_ROOT / "site", html=True), name="site")

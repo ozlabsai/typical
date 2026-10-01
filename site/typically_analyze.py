@@ -17,10 +17,12 @@ from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import typically_auth as auth
+import typically_job
 import typically_llm as tllm
 import typically_plan as tp
 
-UPLOADS = REPO_ROOT / ".context" / "typically" / "uploads"
+UPLOADS = typically_job.TYPICALLY / "uploads"
 # ponytail: in-memory cache lost on restart, capped at 16 tables; load_upload falls back to the jsonl on disk
 _records: OrderedDict[str, list[dict]] = OrderedDict()
 router = APIRouter()
@@ -54,8 +56,14 @@ def _upload_file(token: str, must_exist: bool = True) -> Path:
     return f
 
 
+def _check_owner(token: str) -> None:
+    if auth.enabled() and not auth.can_see(_meta(token).get("owner")):
+        raise HTTPException(404, "unknown records_token; analyze the data again")
+
+
 def load_upload(token: str) -> list[dict]:
     _upload_file(token, must_exist=False)   # validates the token
+    _check_owner(token)
     if token in _records:
         return _records[token]
     return [json.loads(line) for line in _upload_file(token).read_text().splitlines()]
@@ -97,7 +105,7 @@ def analyze(req: AnalyzeRequest):
         (UPLOADS / f"{token}.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
         sheet = src.get("sheet") or (sheets[0] if sheets else None)
         meta = {"name": name + (f" ({sheet})" if sheets and len(sheets) > 1 else ""), "kind": src["kind"], "rows": len(records),
-                "columns": list(prof["columns"]), "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                "columns": list(prof["columns"]), "created": datetime.now(timezone.utc).isoformat(timespec="seconds"), **auth.stamp()}
         (UPLOADS / f"{token}.meta.json").write_text(json.dumps(meta, ensure_ascii=False))
     pick = sorted(random.Random(0).sample(range(len(records)), min(3, len(records))))
     return {
@@ -126,7 +134,7 @@ def _models_by_token() -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
     for j in (UPLOADS.parent / "jobs").glob("*/job.json"):
         job = json.loads(j.read_text())
-        if t := job.get("records_token"):
+        if (t := job.get("records_token")) and auth.can_see(job.get("owner")):
             out.setdefault(t, []).append({"id": j.parent.name, "name": job.get("name") or j.parent.name})
     return out
 
@@ -135,6 +143,7 @@ def _models_by_token() -> dict[str, list[dict]]:
 def datasets():
     used = _models_by_token()
     up = [{"token": f.stem, **_meta(f.stem), "sample": False, "models": used.get(f.stem, [])} for f in UPLOADS.glob("*.jsonl")]
+    up = [{k: v for k, v in d.items() if k != "owner"} for d in up if auth.can_see(d.get("owner"))]
     # ponytail: re-analyses of the sample are copies of the Northwind row below; they stay on disk, hidden here
     up = sorted((d for d in up if d["kind"] != "sample"), key=lambda d: d["created"], reverse=True)
     rows = tp.load_records({"kind": "sample"})
@@ -146,6 +155,7 @@ def datasets():
 @router.delete("/api/typically/datasets/{token}")
 def delete_dataset(token: str):
     _meta(token)   # 400 / 404
+    _check_owner(token)
     if names := [m["name"] for m in _models_by_token().get(token, [])]:
         raise HTTPException(409, "models were trained from this data: " + ", ".join(names))
     for f in (UPLOADS / f"{token}.jsonl", UPLOADS / f"{token}.meta.json"):

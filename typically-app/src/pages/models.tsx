@@ -3,6 +3,7 @@ import { AlertCircle, Archive, Boxes, Loader2, MessageSquare, MoreHorizontal, Pl
 import { toast } from "sonner"
 
 import { StatusDot } from "@/components/app-sidebar"
+import { ShareButton } from "@/components/share-dialog"
 import { Page, PageHeader, SectionHeader, Stat } from "@/components/layout"
 import { CodeBlock, msg } from "@/components/shared"
 import { TrainingCurve, useTrainStatus } from "@/components/training-curve"
@@ -261,6 +262,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
           </span>
         }
         actions={<>
+          <ShareButton id={id} disabled={!ready || !m.metrics} />
           <Button variant="outline" disabled={!ready} onClick={() => go({ name: "model", id, tab: "deploy" })}><Rocket data-icon="inline-start" /> {t("models.deploy")}</Button>
           <Button disabled={!ready} onClick={() => go({ name: "chat", model: id })}><MessageSquare data-icon="inline-start" /> {t("models.chat")}</Button>
         </>}

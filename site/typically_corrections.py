@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import server as S
+import typically_auth as auth
 import typically_job
 import typically_models as M
 import typically_plan as tp
@@ -35,6 +36,7 @@ class Correction(BaseModel):
 def _check(model_id: str):
     if not typically_job.SLUG_RE.fullmatch(model_id) or not (model_id == "northwind" or (S.TYPICALLY / "jobs" / model_id).is_dir()):
         raise HTTPException(404, "no such model")
+    auth.check(model_id)
 
 
 def read(model_id: str) -> list[dict]:
@@ -107,9 +109,7 @@ def retrain(model_id: str, req: RetrainRequest = RetrainRequest()):
     """A new version <root>_v<N>: the parent's dataset as it was built (train/val/eval files copied, so eval is byte-identical and the
     scores compare) plus every correction as extra train rows. ponytail: copies the built split instead of re-running /build, because
     the job dir does not keep the upload; a v3 inherits v2's corrections through v2's train.jsonl."""
-    _check(model_id)
-    if S._job_lock.locked():
-        raise HTTPException(409, "another model is being taught right now; wait for it to finish")
+    _check(model_id)   # quotas / busy GPUs: S.train_slug -> start_job refuses, and the half-built version is removed below
     corrections = read(model_id)
     if not corrections:
         raise HTTPException(400, "no corrections to learn from yet")
@@ -149,7 +149,7 @@ def retrain(model_id: str, req: RetrainRequest = RetrainRequest()):
                 f.write((json.dumps(r) + "\n") * REPEAT)
         steps = req.steps or meta.get("steps") or 400
         lineage = {"parent": model_id, "version": n, "corrections": len(used), "held_out_skipped": len(corrections) - len(used)}
-        (out / "job.json").write_text(json.dumps({"name": f"{root_name} v{n}", "base": meta.get("base") or "small", "steps": steps, **lineage}, indent=1))
+        (out / "job.json").write_text(json.dumps({"name": f"{root_name} v{n}", "base": meta.get("base") or "small", "steps": steps, **lineage, **auth.stamp()}, indent=1))
         status = S.train_slug(slug, steps=steps)
     except BaseException:
         shutil.rmtree(out, ignore_errors=True)   # nothing half-built is left to show up in the library

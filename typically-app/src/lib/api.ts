@@ -80,12 +80,17 @@ export interface TrainStatus {
   [extra: string]: unknown
 }
 
-async function call<T>(path: string, body?: unknown, method?: "DELETE"): Promise<T> {
-  const res = await fetch(`/api/typically/${path}`, method ? { method } : body === undefined ? undefined : {
+/** A 401 anywhere means the session is gone (expired, signed out elsewhere, invite revoked): the auth gate shows sign-in. */
+export const SIGNED_OUT = "typically:signed-out"
+const checkAuth = (res: Response) => { if (res.status === 401) window.dispatchEvent(new Event(SIGNED_OUT)) }
+
+async function call<T>(path: string, body?: unknown, method?: "DELETE", root = "/api/typically/"): Promise<T> {
+  const res = await fetch(`${root}${path}`, method ? { method } : body === undefined ? undefined : {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
+  checkAuth(res)
   if (!res.ok) {
     const { detail } = await res.json().catch(() => ({ detail: undefined }))
     // FastAPI 422 detail is an array of validation errors
@@ -130,6 +135,7 @@ export const api = {
   datasets: () => call<{ datasets: Dataset[] }>("datasets").then((r) => r.datasets),
   deleteDataset: async (token: string) => {
     const r = await fetch(`/api/typically/datasets/${encodeURIComponent(token)}`, { method: "DELETE" })
+    checkAuth(r)
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `${r.status} ${r.statusText}`)
   },
 }
@@ -169,6 +175,7 @@ export type Computing = { status: "computing"; done: number; total: number }
 /** GET /api/typically/results/{project}: 202 {status:"computing"} while scoring, then 200 Reveal. */
 export async function results(project: string): Promise<Reveal | Computing> {
   const res = await fetch(`/api/typically/results/${encodeURIComponent(project)}`)
+  checkAuth(res)
   if (res.status === 202) return res.json()
   if (!res.ok) {
     const { detail } = await res.json().catch(() => ({ detail: undefined }))
@@ -228,4 +235,30 @@ export const corrections = {
   add: (id: string, c: Correction) => call<{ count: number; n: number }>(corr(id), c),
   remove: (id: string, n: number) => call<{ count: number }>(corr(id, `/${n}`), undefined, "DELETE"),
   retrain: (id: string) => call<{ id: string; name: string; version: number }>(`models/${encodeURIComponent(id)}/retrain`, {}),
+}
+
+// ---- sign-in (site/typically_auth.py) and share cards (site/typically_share.py)
+
+export interface User { id: string; name: string; admin: boolean }
+/** auth=false: the server runs without sign-in (local dev). /me is 401 when sign-in is on and there is no session. */
+export interface Me { auth: boolean; user: User | null }
+
+export const session = {
+  me: async (): Promise<Me | null> => {
+    const res = await fetch("/api/auth/me")
+    if (res.status === 401) return null
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    return res.json()
+  },
+  login: (code: string, name: string) => call<Me>("login", { code, name: name || null }, undefined, "/api/auth/"),
+  logout: () => call<{ ok: boolean }>("logout", {}, undefined, "/api/auth/"),
+}
+
+export interface Share { id: string; url: string; image: string; created_at: string }
+const share = (id: string) => `models/${encodeURIComponent(id)}/share`
+
+export const shares = {
+  get: (id: string) => call<{ share: Share | null }>(share(id)).then((r) => r.share),
+  create: (id: string) => call<{ share: Share }>(share(id), {}).then((r) => r.share),
+  revoke: (id: string) => call<{ revoked: number }>(share(id), undefined, "DELETE"),
 }

@@ -5,9 +5,12 @@ Progress for the UI: .context/typically/jobs/<slug>/status.json; full log: jobs/
 The pod (named typically-job-<slug>-<job_id>, job_id in status.json) is deleted in a `finally` on every path; a single deadline (75 min small,
 150 min medium) caps every subprocess call. `--reconcile` (also run at server start and before every job) deletes orphaned typically-job-* pods.
 `--train-flags <company> <steps> <run>` (run on the pod by scripts/typically_spike_pod.sh) prints the pcdm/train.py flags.
+Needs: runpodctl configured (`runpodctl config --apiKey "$RUNPOD_API_KEY"` also creates the ~/.runpod/ssh key this uses), and HF_TOKEN
+(env, else the `hf auth login` cache). Data dir: TYPICALLY_DATA, else .context/typically.
 """
 import json
 import math
+import os
 import re
 import secrets
 import subprocess
@@ -19,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-TYPICALLY = REPO / ".context" / "typically"
+TYPICALLY = Path(os.environ.get("TYPICALLY_DATA") or REPO / ".context" / "typically")
 KEY = Path.home() / ".runpod" / "ssh" / "RunPod-Key-Go"
 IMAGE = "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
 SSH_OPTS = ["-i", str(KEY), "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20"]
@@ -40,7 +43,8 @@ RELEASED_ARGS = {
 PHASES = ("queued", "starting_gpu", "uploading", "training", "evaluating", "downloading", "done", "failed")
 ACTIVE = PHASES[:6]
 SLUG_RE = re.compile(r"^[a-z0-9_]{1,40}$")
-POD_PREFIX = "typically-job-"
+# a hosted server (deploy/serve.sh) uses "typically-hosted-job-": its reconcile then never sees a local server's pods on the same account
+POD_PREFIX = os.environ.get("TYPICALLY_POD_PREFIX") or "typically-job-"
 _ACTIVE: set[str] = set()   # job_ids running in THIS process; ponytail: reconcile assumes one process owns all typically-job-* pods
 REMOTE = "/workspace/pcdm"
 JOB_SH = """trap 'echo $? > /workspace/job.exit' EXIT   # the poller reads the chain's exit code, not log text
@@ -198,7 +202,7 @@ class Job:
 
     def upload(self):
         # ponytail: HF token goes through a local temp file (0600) -> scp -> /workspace/.env; never argv, never logged
-        token = (Path.home() / ".cache/huggingface/token").read_text().strip()
+        token = os.environ.get("HF_TOKEN") or (Path.home() / ".cache/huggingface/token").read_text().strip()
         env, sh = self.tmp / "env", self.tmp / "job.sh"
         env.write_text(f"HF_TOKEN={token}\n")
         env.chmod(0o600)

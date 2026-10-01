@@ -1,4 +1,4 @@
-import { Boxes, Database, Languages, MessageSquare, Moon, Plus, Search, SlidersHorizontal, Sun } from "lucide-react"
+import { Boxes, Database, Languages, LogOut, MessageSquare, Moon, Plus, Search, SlidersHorizontal, Sun, UserRound } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import {
@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/sidebar"
 import { SHORTCUT } from "@/components/command-palette"
 import type { LibraryModel } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import { useI18n } from "@/lib/i18n"
 import { useLibrary } from "@/lib/library"
 import { href, type Route } from "@/lib/router"
@@ -24,6 +25,7 @@ export function StatusDot({ status, className }: { status: LibraryModel["status"
 export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => void }) {
   const { t, lang, setLang } = useI18n()
   const { lib } = useLibrary()
+  const { user, signOut } = useAuth()
   const { resolvedTheme, setTheme } = useTheme()
   const dark = resolvedTheme === "dark"
   const activeId = route.name === "model" ? route.id : undefined
@@ -121,6 +123,20 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
               {dark ? <Sun /> : <Moon />} <span>{t(dark ? "nav.theme.light" : "nav.theme.dark")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          {user && <>
+            <SidebarMenuItem>
+              <div className="flex h-8 min-w-0 items-center gap-2 px-2 text-sm group-data-[collapsible=icon]:hidden" title={t("auth.signedInAs", { name: user.name })}>
+                <UserRound className="size-4 shrink-0 text-muted-foreground" />
+                <span dir="auto" className="truncate font-medium">{user.name}</span>
+                {user.admin && <span className="shrink-0 rounded-sm border px-1 text-[10px] leading-4 text-muted-foreground">{t("auth.admin")}</span>}
+              </div>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton tooltip={t("auth.signOut")} onClick={() => void signOut()}>
+                <LogOut className="rtl:-scale-x-100" /> <span>{t("auth.signOut")}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </>}
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>

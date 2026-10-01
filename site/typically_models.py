@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import server as S
+import typically_auth as auth
 import typically_deploy as D
 import typically_job
 import typically_llm as tllm
@@ -65,8 +66,9 @@ def _metrics(run: str):
     return None
 
 
-def corrections_file(mid: str):   # chat's "Wrong?" store (typically_corrections.py)
-    return S.TYPICALLY / "corrections" / f"{mid}.jsonl"
+def corrections_file(mid: str):   # chat's "Wrong?" store (typically_corrections.py); a shared model keeps one file per user
+    uid = auth.stamp().get("owner") if mid in auth.SHARED_MODELS else None
+    return S.TYPICALLY / "corrections" / (f"{mid}.{uid}.jsonl" if uid else f"{mid}.jsonl")
 
 
 def _entry(mid: str, name: str, base: str, steps, created_at, status: dict, decisions: list, sample: bool = False, job: dict | None = None) -> dict:
@@ -75,7 +77,7 @@ def _entry(mid: str, name: str, base: str, steps, created_at, status: dict, deci
     return {"id": mid, "name": name, "kind": "custom", "base": base, "steps": steps, "created_at": created_at, "run": run, "sample": sample,
             "version": job.get("version", 1), "parent": job.get("parent"), "corrections": len(cf.read_text().splitlines()) if cf.exists() else 0,
             **status, "decisions": decisions, "metrics": _metrics(run),
-            "has_key": any(k["model_id"] == mid for k in D._read_keys().values()),
+            "has_key": any(k["model_id"] == mid and auth.can_see(k.get("owner")) for k in D._read_keys().values()),
             "hf_repo": hf.read_text().strip() if hf.exists() else None}
 
 
@@ -98,7 +100,8 @@ def _job_entry(d) -> dict | None:
 
 
 def _custom() -> list[dict]:
-    jobs = sorted((p for p in (S.TYPICALLY / "jobs").glob("*") if p.is_dir() and typically_job.SLUG_RE.fullmatch(p.name) and p.name not in D.ALIASES), key=lambda p: p.name)
+    jobs = sorted((p for p in (S.TYPICALLY / "jobs").glob("*") if p.is_dir() and typically_job.SLUG_RE.fullmatch(p.name) and p.name not in D.ALIASES
+                   and auth.visible(p.name)), key=lambda p: p.name)
     entries = sorted(filter(None, map(_job_entry, jobs)), key=lambda e: e["created_at"], reverse=True)
     sample = _entry(NORTHWIND["id"], NORTHWIND["name"], NORTHWIND["base"], NORTHWIND["steps"], None, {"status": "ready"}, NORTHWIND_DECISIONS, sample=True)
     return entries + [sample]   # newest first, the sample last
@@ -117,7 +120,8 @@ def library_entry(model_id: str):
     if model_id == "northwind":
         return next(e for e in _custom() if e["sample"]) | {
             "examples": [NORTHWIND_CASE, *_states(S.REPO_ROOT / "data_co_a" / "eval" / "a_oneliner.jsonl", 2)]}
-    if not typically_job.SLUG_RE.fullmatch(model_id) or not (d := S.TYPICALLY / "jobs" / model_id).is_dir() or (e := _job_entry(d)) is None:
+    if (not typically_job.SLUG_RE.fullmatch(model_id) or not auth.visible(model_id) or not (d := S.TYPICALLY / "jobs" / model_id).is_dir()
+            or (e := _job_entry(d)) is None):
         raise HTTPException(404, "no such model")
     return e | {"examples": _states(d / "eval" / "import_oneliner.jsonl", 3)}
 
@@ -126,7 +130,7 @@ def library_entry(model_id: str):
 def archive(model_id: str):
     if model_id in D.ALIASES or model_id in BASES:
         raise HTTPException(400, "the built-in models cannot be deleted")
-    if not typically_job.SLUG_RE.fullmatch(model_id) or not (d := S.TYPICALLY / "jobs" / model_id).is_dir():
+    if not typically_job.SLUG_RE.fullmatch(model_id) or not auth.visible(model_id) or not (d := S.TYPICALLY / "jobs" / model_id).is_dir():
         raise HTTPException(404, "no such model")
     if (_json(d / "status.json") or {}).get("phase") in typically_job.ACTIVE:
         raise HTTPException(409, "this model is still training")
@@ -158,6 +162,7 @@ def ask(req: AskRequest):
     for q in req.questions:   # before any model load; noul labels are fixed (no/yes) by S._run
         if q.type != "noul" and len(q.labels) < 2:
             raise HTTPException(400, f"'{q.type}' question {q.question!r} needs >=2 labels")
+    auth.check(req.model)
     model = req.model if req.model in BASES else f"local:{D.run_of(req.model)}"
     queries = [S.Query(type=q.type, question=q.question, labels=q.labels) for q in req.questions]
     t0 = time.perf_counter()

@@ -19,6 +19,7 @@ from huggingface_hub import CommitOperationAdd, HfApi, get_token
 from pydantic import BaseModel
 
 import server as S
+import typically_auth as auth
 import typically_job
 import typically_llm
 
@@ -74,9 +75,10 @@ class KeyRequest(BaseModel):
 @router.post("/api/typically/keys")
 def create_key(req: KeyRequest):
     run_of(req.model_id)   # validates the id
+    auth.check(req.model_id)
     key = "tpk_" + secrets.token_urlsafe(24)
     with _keys_lock:
-        keys = _read_keys() | {_hash(key): {"model_id": req.model_id, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}}
+        keys = _read_keys() | {_hash(key): {"model_id": req.model_id, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **auth.stamp()}}
         f = _keys_file()
         f.parent.mkdir(parents=True, exist_ok=True)
         tmp = f.with_suffix(".tmp")
@@ -146,6 +148,7 @@ def _hf_repo_file(run: str):
 @router.get("/api/typically/snippets/{model_id}")
 def snippets(model_id: str, request: Request):
     run = run_of(model_id)
+    auth.check(model_id)
     url = f"{str(request.base_url).rstrip('/')}/v1/models/{model_id}/decide"
     qs = _questions(model_id) or [{"question": "Your question?", "type": "choice", "labels": ["a", "b"]}]
     body = json.dumps({"state": _example_case(model_id), "queries": qs}, indent=2, ensure_ascii=False)
@@ -218,6 +221,7 @@ def _card(base: str, repo: str, model_id: str, step: int, reveal: dict | None) -
 def push(req: PushRequest):
     if not typically_job.SLUG_RE.fullmatch(req.run) or (req.repo is not None and not REPO_RE.fullmatch(req.repo)):
         raise HTTPException(400, "need a valid run and a repo like user/name")
+    auth.check(model_id_of(req.run))
     res = S.TYPICALLY / "results" / req.run
     best = res / "best.pt"
     if not best.exists():
