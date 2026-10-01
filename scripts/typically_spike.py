@@ -481,7 +481,8 @@ def _translate_tasks(states, lang, emit):
             if isinstance(t, str) and t.strip():
                 emit(lang, s, t)
     return [(f"Translate each case into the language with ISO 639-1 code '{lang}'. Keep names, numbers, ids, product codes and line "
-             f'breaks unchanged. Return {{"texts": [...]}} with exactly {len(c)} strings in the same order.\n\n'
+             "breaks unchanged. Translate recurring field labels and category words (plan names, tiers, regions) the same way "
+             f'every time, in every batch, or keep them in the original language. Return {{"texts": [...]}} with exactly {len(c)} strings in the same order.\n\n'
              + json.dumps(c, ensure_ascii=False), 1.5 * sum(map(len, c)), lambda texts, c=c: apply(texts, c)) for c in chunks]
 
 

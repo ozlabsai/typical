@@ -116,7 +116,8 @@ def load_records(source: dict) -> list[dict]:
             ds = load_dataset(source["dataset"], source.get("config") or None, split=source.get("split") or "train",
                               streaming=True, token=os.environ.get("HF_TOKEN") or None)
             # ponytail: datasets are often sorted by label; a 10k-row shuffle buffer keeps the first `limit` rows representative
-            rows = [{k: _cell(v).strip() for k, v in r.items()} for r in islice(ds.shuffle(seed=0, buffer_size=10_000), limit)]
+            # literal "\\n" in dumped text fields (common on the Hub) becomes a real line break
+            rows = [{k: _cell(v).replace("\\n", "\n").strip() for k, v in r.items()} for r in islice(ds.shuffle(seed=0, buffer_size=10_000), limit)]
         except Exception as e:   # datasets raises a zoo of types; the message is what the user needs
             raise ValueError(f"could not load Hugging Face dataset {source.get('dataset')!r}: {str(e)[:300]}")
         if not rows:
@@ -621,7 +622,7 @@ def llm_plan(prof: dict, sample: list[dict], records: list[dict] | None = None, 
     Any API failure, an oversized prompt or two invalid plans fall back to heuristic_plan with a warning."""
     fallback = lambda why: (heuristic_plan(prof, records, lang), "heuristic", [why])
     user = json.dumps({"profile": prof, "sample_rows": sample}, ensure_ascii=False)
-    if (len(SYSTEM) + len(user)) / 4 > MAX_PROMPT_TOKENS:   # chars/4 ~ tokens
+    if (len(SYSTEM) + len(user)) / 2.5 > MAX_PROMPT_TOKENS:   # chars/2.5 ~ tokens: profiles are dense JSON (QA: 45k real vs 24k at chars/4)
         return fallback(msg(lang, "w_big"))
     system = SYSTEM if lang == "en" else SYSTEM + f"\n- Write every question, reason and sentence template in {LANGS[lang]} (natural, neutral phrasing). Do not translate column names, mapping values or labels (labels stay in the data's own words and language), and keep the {{value}} placeholder."
     messages, errs = [{"role": "user", "content": user}], []
