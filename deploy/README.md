@@ -25,7 +25,7 @@ What sign-in on (`TYPICALLY_AUTH=1`, `site/typically_auth.py`) changes:
 | `TYPICALLY_DATA` | data dir (jobs, results, uploads, keys, shares); default `.context/typically`, `/workspace/typically-data` on the pod, `/data` in Docker |
 | `TYPICALLY_PUBLIC_URL` | base URL for share links; default: the request's host |
 | `TYPICALLY_POD_PREFIX` | training pod name prefix; `serve.sh` uses `typically-hosted-job-` so a hosted server and a local one on the same RunPod account never sweep each other's pods |
-| `RUNPOD_API_KEY` | training pods. `serve.sh` runs `runpodctl config --apiKey` once, which also creates the `~/.runpod/ssh/RunPod-Key-Go` key the job runner uses |
+| `RUNPOD_API_KEY` | training pods (runpodctl 2.x reads it from the env). `serve.sh` creates the `~/.runpod/ssh/RunPod-Key-Go` key pair the job runner hands each training pod |
 | `HF_TOKEN` | the training data / base checkpoints on Hugging Face (read by `scripts/typically_job.py`, copied to each training pod as a 0600 file) |
 | `OPENROUTER_API_KEY` | optional: "Read by Claude" plans and question parsing |
 
@@ -62,7 +62,7 @@ job tracking and quotas live in the server process.
 
 ```bash
 cp deploy/hosted.env.example deploy/hosted.env    # fill it in; it is git-ignored
-deploy/runpod.sh up      # builds the app, creates the pod (NVIDIA L4, else RTX A5000, secure cloud), prints the https URL
+deploy/runpod.sh up      # builds the app, creates the pod (L4, else A5000, 3090, A40, A6000; secure cloud), prints the https URL
 deploy/runpod.sh url     # the URL again
 deploy/runpod.sh logs    # the server log
 deploy/runpod.sh down    # copies the data back to .context/typically-hosted-<time>.tgz, then deletes the pod
@@ -91,7 +91,7 @@ job runner when each run ends (and orphans are swept when the server starts).
 
 ## Costs (check current RunPod prices)
 
-- Host pod: an L4 or RTX A5000 on secure cloud, roughly $0.30-0.50 an hour, about $8-12 a day while it is up.
+- Host pod: an L4, RTX A5000, RTX 3090, A40 or RTX A6000 on secure cloud, roughly $0.30-0.50 an hour, about $8-12 a day while it is up.
 - Training: one H100 per run, about $2.50-3 an hour. A small-base run takes roughly 25-45 minutes (about $1-2), a
   medium-base run about twice that. Worst case per day = invited users x `TYPICALLY_DAILY_RUNS` runs, and at most
   `TYPICALLY_MAX_JOBS` H100s at once.

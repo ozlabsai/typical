@@ -9,10 +9,10 @@ export TYPICALLY_DATA="${TYPICALLY_DATA:-/workspace/typically-data}"
 # its training pods get their own name prefix, so this server's orphan sweep never deletes a local dev server's pods (same account)
 export TYPICALLY_POD_PREFIX="${TYPICALLY_POD_PREFIX:-typically-hosted-job-}"
 mkdir -p "$TYPICALLY_DATA"
-# the training runner rents GPUs with runpodctl; `config` stores the key and creates the ~/.runpod/ssh key typically_job.py uses
-if [ -n "${RUNPOD_API_KEY:-}" ] && [ ! -f "$HOME/.runpod/ssh/RunPod-Key-Go" ]; then
-  runpodctl config --apiKey "$RUNPOD_API_KEY" >/dev/null
-fi
+# the training runner rents GPUs with runpodctl (2.x reads RUNPOD_API_KEY from the env) and reaches them with this key pair:
+# typically_job.py hands each pod the public half as PUBLIC_KEY, so it never needs registering on the account
+KEY="$HOME/.runpod/ssh/RunPod-Key-Go"
+[ -f "$KEY" ] || { mkdir -p "$(dirname "$KEY")" && ssh-keygen -q -t ed25519 -N '' -f "$KEY"; }
 [ -d .git ] || git init -q   # typically_job snapshots the repo with `git ls-files -co --exclude-standard`; untracked files are enough
 exec "${PYTHON:-.venv/bin/python}" -m uvicorn --app-dir site server:app --host "${HOST:-0.0.0.0}" --port "${PORT:-8787}" \
   --proxy-headers --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-127.0.0.1}"

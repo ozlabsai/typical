@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=typically-host
 IMAGE=runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404   # same image as the training pods (scripts/typically_job.py)
-GPUS=("NVIDIA L4" "NVIDIA RTX A5000")
+GPUS=("NVIDIA L4" "NVIDIA RTX A5000" "NVIDIA GeForce RTX 3090" "NVIDIA A40" "NVIDIA RTX A6000")   # 24-48 GB, cheapest first; stock comes and goes
 KEY="$HOME/.runpod/ssh/RunPod-Key-Go"
 STATE=deploy/.pod   # the pod id of the running host
 ENV_FILE=deploy/hosted.env
@@ -34,7 +34,7 @@ up() {
   # what the job runner ships, plus the built app; .context/, .venv/, node_modules/, deploy/hosted.env are git-ignored
   git ls-files -co --exclude-standard | grep -v -E '^(figures|paper|blog|docs|vendor)/' | while read -r f; do [ ! -f "$f" ] || echo "$f"; done > "$tar.list"
   find site/app -type f >> "$tar.list"
-  tar czf "$tar" -T "$tar.list"
+  COPYFILE_DISABLE=1 tar --no-xattrs -czf "$tar" -T "$tar.list"   # no macOS xattrs: GNU tar on the pod warns once per file
   echo "repo tarball: $(du -h "$tar" | cut -f1)"
 
   pub=$(cat "$KEY.pub")
@@ -57,11 +57,13 @@ up() {
   scp "${SSH_OPTS[@]}" -P "$port" "$tar" "root@$ip:/workspace/repo.tgz"
   scp "${SSH_OPTS[@]}" -P "$port" "$ENV_FILE" "root@$ip:/workspace/hosted.env"
   rm -rf "$tmp"
+  # braces: only start.sh goes to the background (a bare `&` would background the whole && list, holding ssh open)
   on_pod "chmod 600 /workspace/hosted.env && tar xzf /workspace/repo.tgz -C /workspace/typically && \
-          setsid nohup bash /workspace/typically/deploy/start.sh > /workspace/serve.log 2>&1 < /dev/null &"
+          { setsid nohup bash /workspace/typically/deploy/start.sh > /workspace/serve.log 2>&1 < /dev/null & }"
   echo "starting (installing the env takes a few minutes)..."
   for _ in $(seq 90); do
-    if u=$(on_pod "cat /workspace/public_url 2>/dev/null") && [ -n "$u" ]; then
+    # the tunnel opens before the server: wait for the server itself, through the tunnel
+    if u=$(on_pod "cat /workspace/public_url 2>/dev/null") && [ -n "$u" ] && curl -fsS -m 10 -o /dev/null "$u/api/health" 2>/dev/null; then
       echo "public URL: $u/app/   (share links: $u/s/...)"; return
     fi
     sleep 10

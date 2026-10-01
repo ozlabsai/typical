@@ -12,7 +12,8 @@ uv sync --frozen
 if [[ "$(nvidia-smi)" == *"CUDA Version: 12.8"* ]]; then
   uv pip install --python .venv/bin/python "torch==2.11.0" --index-url https://download.pytorch.org/whl/cu128
 fi
-command -v runpodctl >/dev/null || { curl -fsSL -o /usr/local/bin/runpodctl https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-linux-amd64 && chmod +x /usr/local/bin/runpodctl; }
+# always: the image ships runpodctl 1.x in /usr/bin, which lacks `pod create`; /usr/local/bin comes first on PATH
+curl -fsSL -o /usr/local/bin/runpodctl https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-linux-amd64 && chmod +x /usr/local/bin/runpodctl
 command -v cloudflared >/dev/null || { curl -fsSL -o /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x /usr/local/bin/cloudflared; }
 
 # quick tunnel: a new random https://*.trycloudflare.com URL per start (a named tunnel gives a stable one: deploy/README.md)
