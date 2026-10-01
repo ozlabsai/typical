@@ -153,18 +153,21 @@ def test_reconcile_deletes_stale_and_unknown_but_not_other_pods(env, monkeypatch
     old = (datetime.now(timezone.utc) - timedelta(minutes=100)).isoformat(timespec="seconds")
     put_status("stale", phase="training", job_id="aaaa1111", pod_id="p_stale", updated_at=old)
     put_status("live", phase="training", job_id="bbbb2222", pod_id="p_live", updated_at=tj._now())
-    put_status("orphan", phase="training", job_id="cccc3333", pod_id="p_orphan", updated_at=tj._now())   # active phase, another process
+    put_status("other", phase="training", job_id="cccc3333", pod_id="p_other_live", updated_at=tj._now())   # another process, alive: KEEP
+    silent = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(timespec="seconds")
+    put_status("orphan", phase="training", job_id="ffff6666", pod_id="p_orphan", updated_at=silent)   # another process, no heartbeat
     put_status("finished", phase="done", job_id="eeee5555", pod_id="p_done", updated_at=tj._now())
     tj._ACTIVE.update({"aaaa1111", "bbbb2222", "eeee5555"})
     pod = lambda i, n: {"id": i, "name": n}
     cli = use(monkeypatch, FakeCli(pods=[pod("p_stale", "typically-job-stale-aaaa1111"), pod("p_live", "typically-job-live-bbbb2222"),
-                                         pod("p_orphan", "typically-job-orphan-cccc3333"), pod("p_done", "typically-job-finished-eeee5555"),
+                                         pod("p_other_live", "typically-job-other-cccc3333"), pod("p_orphan", "typically-job-orphan-ffff6666"),
+                                         pod("p_done", "typically-job-finished-eeee5555"),
                                          pod("p_ghost", "typically-job-ghost-dddd4444"), pod("p_other", "someone-elses-pod"),
                                          pod("p_prefix", "typically-spike-1")]))
     logs = []
     assert set(tj.reconcile(logs.append)) == {"p_stale", "p_orphan", "p_done", "p_ghost"}
     assert cli.deleted_ids() == {"p_stale", "p_orphan", "p_done", "p_ghost"} and len(logs) == 4
-    assert {p["id"] for p in cli.pods} == {"p_live", "p_other", "p_prefix"}
+    assert {p["id"] for p in cli.pods} == {"p_live", "p_other_live", "p_other", "p_prefix"}   # a second server must not kill a live job
 
 
 def test_run_reconciles_before_creating_a_pod(env, monkeypatch):

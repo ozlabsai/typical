@@ -24,6 +24,7 @@ IMAGE = "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
 SSH_OPTS = ["-i", str(KEY), "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20"]
 NOT_SHIPPED = ("site/", "figures/", "paper/", "blog/", "docs/", "vendor/")   # ponytail: nothing the training chain reads
 POLL_S, READY_S, DEADLINE_S, STALE_S = 60, 300, 75 * 60, 90 * 60   # DEADLINE_S / STALE_S are the small base's; x BASES[base]["scale"]
+HEARTBEAT = timedelta(minutes=15)   # an active job not owned by this process is orphaned only after this long without a status write
 STEPS = (200, 400, 800)   # Quick / Balanced / Thorough
 # scale: deadline + stale multiplier. mem: the memory profile of each release's own recipe (medium = 4B: grad-checkpointing, smaller micro-batch).
 BASES = {"small": {"scale": 1, "mem": ["--grad_accum", "8"]}, "medium": {"scale": 2, "mem": ["--grad_ckpt", "--grad_accum", "16"]}}
@@ -267,11 +268,16 @@ def reconcile(log=print) -> list[str]:
         if not name.startswith(POD_PREFIX):
             continue
         st = known.get(pod["id"]) or known.get(name.rsplit("-", 1)[-1])
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(st["updated_at"]) if st and st.get("updated_at") else None
         if not st:
             why = "no status file"
-        elif st.get("phase") not in ACTIVE or st.get("job_id") not in _ACTIVE:
-            why = f"not running here (phase {st.get('phase')})"
-        elif datetime.now(timezone.utc) - datetime.fromisoformat(st["updated_at"]) > timedelta(seconds=STALE_S * BASES.get(st.get("base"), BASES["small"])["scale"]):
+        elif st.get("phase") not in ACTIVE:
+            why = f"job is {st.get('phase')}"
+        elif st.get("job_id") not in _ACTIVE and age > HEARTBEAT:
+            # another process may own a live job (a second server on the same .context once deleted one): only a
+            # silent heartbeat (the poller rewrites status.json every POLL_S) marks it orphaned
+            why = f"no heartbeat for {int(age.total_seconds() // 60)} min"
+        elif age > timedelta(seconds=STALE_S * BASES.get(st.get("base"), BASES["small"])["scale"]):
             why = "status older than its deadline + 15 min"
         else:
             continue
