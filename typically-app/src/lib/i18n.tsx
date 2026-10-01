@@ -145,6 +145,14 @@ const en = {
   "chat.caseLabel": "Case", "chat.words": "{n} words", "chat.editCase": "Edit case", "chat.removeCase": "Remove case",
   "chat.compareShort": "Compare", "chat.addQuestion": "Add a question and press Enter", "chat.collapse": "Show less", "chat.expand": "Show more",
   "chat.save": "Done",
+  // corrections loop
+  "chat.wrong": "Wrong?", "chat.wrongTitle": "What is the right answer?", "chat.wrongHint": "Saved for the next version of this model.",
+  "chat.modelSaid": "its answer", "chat.correct": "Correct: {answer}", "chat.undo": "Undo", "chat.undone": "Correction removed",
+  "chat.corrected": "Saved. {n} corrections for {name}", "chat.correctedOne": "Saved. 1 correction for {name}",
+  "corr.title": "{n} corrections from chat", "corr.titleOne": "1 correction from chat",
+  "corr.lede": "Answers you marked wrong. Retraining adds each one to the original examples; the test cases stay the same, so the scores compare.",
+  "corr.case": "Case", "corr.question": "Question", "corr.change": "It said → you said", "corr.remove": "Remove correction",
+  "corr.retrain": "Retrain as v{n}", "corr.started": "Training {name}", "models.versionOf": "v{n} of {name}",
 }
 
 type Key = keyof typeof en
@@ -280,6 +288,13 @@ const he: Record<Key, string> = {
   "chat.caseLabel": "מקרה", "chat.words": "{n} מילים", "chat.editCase": "עריכת המקרה", "chat.removeCase": "הסרת המקרה",
   "chat.compareShort": "השוואה", "chat.addQuestion": "הוסיפו שאלה ולחצו Enter", "chat.collapse": "פחות", "chat.expand": "עוד",
   "chat.save": "סיום",
+  "chat.wrong": "טעות?", "chat.wrongTitle": "מה התשובה הנכונה?", "chat.wrongHint": "נשמר לגרסה הבאה של המודל.",
+  "chat.modelSaid": "התשובה שלו", "chat.correct": "נכון: {answer}", "chat.undo": "ביטול", "chat.undone": "התיקון הוסר",
+  "chat.corrected": "נשמר. {n} תיקונים עבור {name}", "chat.correctedOne": "נשמר. תיקון אחד עבור {name}",
+  "corr.title": "{n} תיקונים מהצ׳אט", "corr.titleOne": "תיקון אחד מהצ׳אט",
+  "corr.lede": "תשובות שסימנתם כשגויות. אימון מחדש מוסיף כל אחת מהן לדוגמאות המקוריות; מקרי הבדיקה נשארים זהים, כך שאפשר להשוות את הציונים.",
+  "corr.case": "מקרה", "corr.question": "שאלה", "corr.change": "הוא אמר ← אתם אמרתם", "corr.remove": "הסרת התיקון",
+  "corr.retrain": "אימון מחדש כ־v{n}", "corr.started": "מאמן את {name}", "models.versionOf": "v{n} של {name}",
 }
 
 const DICTS: Record<Lang, Record<Key, string>> = { en, he }

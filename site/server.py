@@ -350,13 +350,17 @@ class TrainRequest(BaseModel):
     steps: Literal[200, 400, 800] | None = None   # Quick / Balanced / Thorough; None: as base
 
 
-@app.post("/api/typically/train")
-def train(req: TrainRequest):
-    slug = _slug(req.name)
+def train_slug(slug: str, base: str | None = None, steps: int | None = None) -> dict:
+    """Start training a built dataset (jobs/<slug>/); base/steps default to its job.json. /train and /retrain both go through here."""
     if not typically_job.SLUG_RE.fullmatch(slug) or not (TYPICALLY / "jobs" / slug / "train.jsonl").exists():
         raise HTTPException(404, "no dataset with that name; import and build it first")
     saved = json.loads(f.read_text()) if (f := TYPICALLY / "jobs" / slug / "job.json").exists() else {}
-    return start_job(slug, req.base or saved.get("base", "small"), req.steps or saved.get("steps", 400))
+    return start_job(slug, base or saved.get("base", "small"), steps or saved.get("steps", 400))
+
+
+@app.post("/api/typically/train")
+def train(req: TrainRequest):
+    return train_slug(_slug(req.name), req.base, req.steps)
 
 
 def _held_out(path: Path) -> tuple[float, int, dict]:
@@ -468,5 +472,7 @@ import typically_analyze  # noqa: E402
 app.include_router(typically_analyze.router)
 import typically_models  # noqa: E402
 app.include_router(typically_models.router)
+import typically_corrections  # noqa: E402
+app.include_router(typically_corrections.router)
 
 app.mount("/", StaticFiles(directory=REPO_ROOT / "site", html=True), name="site")

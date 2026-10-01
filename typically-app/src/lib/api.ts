@@ -75,8 +75,8 @@ export interface TrainStatus {
   [extra: string]: unknown
 }
 
-async function call<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api/typically/${path}`, body === undefined ? undefined : {
+async function call<T>(path: string, body?: unknown, method?: "DELETE"): Promise<T> {
+  const res = await fetch(`/api/typically/${path}`, method ? { method } : body === undefined ? undefined : {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -178,6 +178,9 @@ export interface LibraryModel {
   has_key?: boolean
   hf_repo?: string | null
   examples?: string[]
+  version?: number // 1 = trained from the data; 2+ = retrained with chat corrections ("<root>_v<N>")
+  parent?: string | null
+  corrections?: number
 }
 export interface Library { base: LibraryModel[]; custom: LibraryModel[] }
 export interface AskQuestion { question: string; type: DecisionType; labels?: string[] }
@@ -186,10 +189,20 @@ export interface AskResult { model: string; results: Result[]; base?: { model: s
 export const library = {
   list: () => call<Library>("models/library"),
   get: (id: string) => call<LibraryModel>(`models/library/${encodeURIComponent(id)}`),
-  archive: (id: string) =>
-    fetch(`/api/typically/models/library/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) => {
-      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
-    }),
+  archive: (id: string) => call<{ archived: string }>(`models/library/${encodeURIComponent(id)}`, undefined, "DELETE"),
   ask: (req: { model: string; case: string; questions: AskQuestion[]; compare_with_base?: boolean }) => call<AskResult>("ask", req),
   parseQuestion: (text: string, lang: string) => call<AskQuestion & { source: string }>("parse_question", { text, lang }),
+}
+
+// ---- corrections loop (site/typically_corrections.py)
+
+export interface Correction { case: string; question: string; type: DecisionType; labels: string[]; answer: string; model_answer?: string; p?: number }
+export interface CorrectionItem extends Correction { n: number; at: string }
+const corr = (id: string, rest = "") => `models/${encodeURIComponent(id)}/corrections${rest}`
+
+export const corrections = {
+  list: (id: string) => call<{ count: number; items: CorrectionItem[] }>(corr(id)),
+  add: (id: string, c: Correction) => call<{ count: number; n: number }>(corr(id), c),
+  remove: (id: string, n: number) => call<{ count: number }>(corr(id, `/${n}`), undefined, "DELETE"),
+  retrain: (id: string) => call<{ id: string; name: string; version: number }>(`models/${encodeURIComponent(id)}/retrain`, {}),
 }

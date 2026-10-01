@@ -81,7 +81,9 @@ export function AppSidebar({ route }: { route: Route }) {
                   <SidebarMenuButton asChild isActive={activeId === m.id}>
                     <a href={href({ name: "model", id: m.id })}>
                       <StatusDot status={m.status} />
-                      <span dir="auto" className="truncate">{m.name}</span>
+                      {/* a version's name ends in " vN": the badge carries it, so the list reads "Northwind triage [v2]" */}
+                      <span dir="auto" className="truncate">{(m.version ?? 1) > 1 ? m.name.replace(new RegExp(` v${m.version}$`), "") : m.name}</span>
+                      {(m.version ?? 1) > 1 && <span className="shrink-0 rounded-sm border px-1 font-mono text-[10px] leading-4 text-muted-foreground">v{m.version}</span>}
                     </a>
                   </SidebarMenuButton>
                   {m.status === "training" && typeof m.progress === "number"
