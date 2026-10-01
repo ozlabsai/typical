@@ -115,10 +115,37 @@ def test_success_phases_download_and_delete(env, monkeypatch, tmp_path):
     assert re.fullmatch(rf"typically-job-{SLUG}-[0-9a-f]{{8}}", created[created.index("--name") + 1])
     assert created[created.index("--name") + 1].endswith(st["job_id"])
     res = tmp_path / "typ/results/co_acme"
-    assert {p.name for p in res.iterdir()} == {"best.pt", "eval_co.json", "base_eval_co.json"}
+    assert {p.name for p in res.iterdir()} == {"best.pt", "eval_co.json", "base_eval_co.json", "reveal.json"}
     assert "data_co_acme/train.jsonl" in cli.tar_names and "data_co_acme/eval/import_oneliner.jsonl" in cli.tar_names
     assert "README.md" in cli.tar_names and not any(n.startswith("site/") for n in cli.tar_names)
     assert not any(TOKEN in " ".join(a) for a in cli.calls) and not any(TOKEN in m for m in logs)
+
+
+def test_pod_reveal_is_pulled_fresh_and_served_without_loading_a_model(env, monkeypatch):
+    import torch
+
+    class Cli(FakeCli):   # the pod's real files: a small-base best.pt and the reveal it scored
+        def __call__(self, argv, timeout, out=None):
+            r = super().__call__(argv, timeout, out)
+            if argv[0] == "scp" and argv[-1].endswith("best.pt"):
+                torch.save({"args": {"backbone": tj.RELEASED_ARGS["small"]["backbone"]}}, argv[-1])
+            elif argv[0] == "scp" and argv[-1].endswith("reveal.json"):
+                Path(argv[-1]).write_text(json.dumps({"base": "typical-small", "n_cases": 3}))
+            return r
+    use(monkeypatch, Cli(POLLS))
+    tj.run(SLUG, lambda m: None)
+    monkeypatch.setattr(server, "get_model", lambda n: pytest.fail("the pod's reveal must be a cache hit"))
+    r = TestClient(server.app).get(f"/api/typically/results/{SLUG}")
+    assert r.status_code == 200 and r.json()["n_cases"] == 3
+
+
+def test_a_missing_pod_reveal_does_not_fail_the_job_or_keep_a_stale_one(env, monkeypatch, tmp_path):
+    stale = tmp_path / "typ/results/co_acme/reveal.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("{}")
+    use(monkeypatch, FakeCli(POLLS, fail_on=lambda a: a[0] == "scp" and a[-1].endswith("reveal.json")))
+    tj.run(SLUG, lambda m: None)
+    assert tj.read_status(SLUG)["phase"] == "done" and (stale.parent / "best.pt").exists() and not stale.exists()
 
 
 def test_names_are_unique_and_prefix_pods_are_never_touched(env, monkeypatch):

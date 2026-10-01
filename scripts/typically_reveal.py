@@ -1,6 +1,8 @@
-"""Base typical-small vs a tuned model on held-out cases. `reveal(rows, run_models)` is the scoring core, shared by this
-CLI (-> site/data/typically_northwind.json, needs the API server on --url) and site/server.py /api/typically/results.
-Stdlib only.
+"""Base vs a tuned model on held-out cases. `reveal(rows, run_models)` is the scoring core, shared by this CLI
+(-> site/data/typically_northwind.json, needs the API server on --url), site/server.py /api/typically/results, and the GPU pod
+(`--job <slug> <base>`, run by scripts/typically_spike_pod.sh after eval: writes runs/co_<slug>/reveal.json, which
+typically_job pulls back so the server never loads either model for it). `score` is the one forward pass both server and pod use.
+Stdlib only at import; `score` / `--job` import torch + inference/typical.
 """
 import argparse
 import json
@@ -14,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 EVAL = "data_co_a/eval/a_oneliner.jsonl"
 COMPANY = "Northwind Freight"
+sys.path.insert(0, str(ROOT / "inference"))
 TOP = lambda v: {"answer": v["argmax"], "p": round(v["probs"][v["argmax"]], 2)}
 
 
@@ -52,6 +55,51 @@ def reveal(rows, run_models, company="", tuned=""):
             "measured": f"{len(cases)} {company or 'held-out'} cases neither model saw while learning"}
 
 
+def company(slug: str) -> str:
+    return slug.replace("_", " ").title()
+
+
+def queries(rows) -> list[tuple]:
+    """Eval rows -> (type, question, labels) queries, as /compare's decisions."""
+    return [(r["meta"]["qtype"], r["query"], r["candidates"]) for r in rows]
+
+
+def score(m, state: str, qs: list[tuple]) -> list[dict]:
+    """One model (a typical.Typical, already activate()d), one state, all (type, question, labels) queries in a single KV encode
+    -> [{"probs", "p_null", "argmax"(, "expected")}]. ValueError on a query with < 2 labels. The caller serializes the device."""
+    from typical.core import to_labels
+    from typical.native import native_kv_decide
+    qs = [(typ, q, ["no", "yes"] if typ == "noul" else labels) for typ, q, labels in qs]
+    for typ, question, labels in qs:
+        if len(labels) < 2:
+            raise ValueError(f"'{typ}' query {question!r} needs >=2 labels")
+    # the device->host copy in to_labels must stay inside the caller's lock too, or it races the next forward
+    raws = native_kv_decide(m.head, m.model, state, [(q, l) for _, q, l in qs], max_state=m.max_state, max_suffix=2048)
+    results = []
+    for (typ, _, labels), raw in zip(qs, raws):
+        probs, p_null = to_labels(raw, labels)
+        entry = {"probs": probs, "p_null": p_null, "argmax": max(probs, key=probs.get)}
+        if typ == "score":
+            entry["expected"] = sum(i * probs[lv] for i, lv in enumerate(labels))
+        results.append(entry)
+    return results
+
+
+def job(slug: str, base: str) -> None:
+    """On the pod (cwd = the repo, after a job's training + eval): runs/base vs runs/co_<slug> on its held-out cases -> reveal.json,
+    the same dict site/server.py caches."""
+    from typical import Typical
+    backbones = {}   # one shared backbone, LoRA swapped by activate(), as the server's get_model
+    models = [Typical.from_pretrained(f"runs/{r}/best.pt", backbones=backbones) for r in ("base", f"co_{slug}")]
+
+    def run_models(state, group):
+        return [m.activate() or score(m, state, queries(group)) for m in models]
+    rows = [json.loads(line) for line in open(f"data_co_{slug}/eval/import_oneliner.jsonl")]
+    res = {**reveal(rows, run_models, company(slug), f"local:co_{slug}"), "base": f"typical-{base}"}
+    Path(f"runs/co_{slug}/reveal.json").write_text(json.dumps(res))
+    print(f"reveal: {res['n_cases']} cases, standard {res['score']['standard']:.3f}  yours {res['score']['yours']:.3f}")
+
+
 def compare(url, state, rows, models):
     body = {"state": state, "models": models,
             "decisions": [{"type": r["meta"]["qtype"], "question": r["query"], "labels": r["candidates"]} for r in rows]}
@@ -61,6 +109,8 @@ def compare(url, state, rows, models):
 
 
 def main():
+    if sys.argv[1:2] == ["--job"]:
+        return job(*sys.argv[2:4])
     ap = argparse.ArgumentParser()
     ap.add_argument("--tuned", default="local:co_f")
     ap.add_argument("--url", default="http://localhost:8787")

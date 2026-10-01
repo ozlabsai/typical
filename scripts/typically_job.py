@@ -314,9 +314,18 @@ class Job:
     def download(self):
         dest = TYPICALLY / "results" / f"co_{self.slug}"
         dest.mkdir(parents=True, exist_ok=True)
-        for remote, name in ((f"runs/co_{self.slug}/eval_co.json", "eval_co.json"), ("runs/base/eval_co.json", "base_eval_co.json"),
-                             (f"runs/co_{self.slug}/best.pt", "best.pt")):   # best.pt last: a half-done run is never offered as a model
-            self.call(["scp", *SSH_OPTS, "-P", self.host[1], f"root@{self.host[0]}:{REMOTE}/{remote}", str(dest / name)], 600)
+        get = lambda remote, name: self.call(["scp", *SSH_OPTS, "-P", self.host[1], f"root@{self.host[0]}:{REMOTE}/{remote}", str(dest / name)], 600)
+        get(f"runs/co_{self.slug}/eval_co.json", "eval_co.json")
+        get("runs/base/eval_co.json", "base_eval_co.json")
+        reveal = dest / "reveal.json"   # scored on the pod (typically_reveal --job); optional: the server scores locally without it
+        reveal.unlink(missing_ok=True)   # a retrain's stale one must not be touched fresh below
+        try:
+            get(f"runs/co_{self.slug}/reveal.json", "reveal.json")
+        except RuntimeError as e:
+            self.log(f"no reveal.json from the pod ({e}); the server will score it locally")
+        get(f"runs/co_{self.slug}/best.pt", "best.pt")   # best.pt last: a half-done run is never offered as a model
+        if reveal.exists():
+            os.utime(reveal)   # the server's cache counts only if reveal.json is no older than best.pt
         self.log(f"downloaded to {dest}")
 
 

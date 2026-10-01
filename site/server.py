@@ -43,14 +43,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from typical import Typical
-from typical.core import to_labels
 from typical.native import native_kv_decide
 import typically_analyze
 import typically_auth as auth
 import typically_job
 import typically_llm
 import typically_plan
-from typically_reveal import reveal
+from typically_reveal import company, queries, reveal, score
 from typically_spike import build_from_plan, build_import, write
 
 TYPICALLY = typically_job.TYPICALLY   # TYPICALLY_DATA, else .context/typically
@@ -140,26 +139,13 @@ class DecideRequest(BaseModel):
 
 
 def _run(m: Typical, state: str, queries: list[Query]) -> dict:
-    """One model, one state, all queries in a single KV encode. Caller must hold _lock."""
-    qs = [(q.type, q.question, ["no", "yes"] if q.type == "noul" else q.labels) for q in queries]
-    for typ, question, labels in qs:
-        if len(labels) < 2:
-            raise HTTPException(400, f"'{typ}' query {question!r} needs >=2 labels")
-
+    """One model, one state, all queries in a single KV encode (typically_reveal.score, which the GPU pod's reveal runs too). Caller must hold _lock."""
     t0 = time.perf_counter()
-    # the device->host copy in to_labels must stay inside the lock too, or it races the next forward
-    raws = native_kv_decide(m.head, m.model, state, [(q, l) for _, q, l in qs], max_state=m.max_state, max_suffix=2048)
-    labelled = [to_labels(raw, labels) for (_, _, labels), raw in zip(qs, raws)]
-    ms = (time.perf_counter() - t0) * 1000
-
-    results = []
-    for (typ, _, labels), (probs, p_null) in zip(qs, labelled):
-        argmax = max(probs, key=probs.get)
-        entry = {"probs": probs, "p_null": p_null, "argmax": argmax}
-        if typ == "score":
-            entry["expected"] = sum(i * probs[lv] for i, lv in enumerate(labels))
-        results.append(entry)
-    return {"results": results, "ms": ms, "device": m.device}
+    try:
+        results = score(m, state, [(q.type, q.question, q.labels) for q in queries])
+    except ValueError as e:   # a query with < 2 labels
+        raise HTTPException(400, str(e))
+    return {"results": results, "ms": (time.perf_counter() - t0) * 1000, "device": m.device}
 
 
 @app.post("/api/decide")
@@ -411,7 +397,7 @@ def _reveal_target(project: str) -> tuple[str, Path, str]:
         return "co_f", REPO_ROOT / "data_co_a/eval/a_oneliner.jsonl", "Northwind Freight"
     if not typically_job.SLUG_RE.fullmatch(project) or not auth.visible(project):
         raise HTTPException(404, "no such project")
-    return f"co_{project}", TYPICALLY / "jobs" / project / "eval" / "import_oneliner.jsonl", project.replace("_", " ").title()
+    return f"co_{project}", TYPICALLY / "jobs" / project / "eval" / "import_oneliner.jsonl", company(project)
 
 
 @app.get("/api/typically/results/{project}")
@@ -438,10 +424,9 @@ def results(project: str):
 def _reveal_work(run: str, rows: list[dict], company: str, cache: Path) -> None:
     job, tuned = _reveals[run], f"local:{run}"
 
-    def run_models(state, group):   # one held-out case, the base it started from then tuned, through the same _run as /compare
-        qs = [Query(type=r["meta"]["qtype"], question=r["query"], labels=r["candidates"]) for r in group]
+    def run_models(state, group):   # one held-out case, the base it started from then tuned, through the same score as /compare
         with _lock:
-            out = [_run(get_model(n), state, qs)["results"] for n in (base, tuned)]
+            out = [score(get_model(n), state, queries(group)) for n in (base, tuned)]
         job["done"] += 1
         return out
     try:

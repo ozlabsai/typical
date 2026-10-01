@@ -52,6 +52,8 @@ if [ "${1:-2}" = job ]; then   # $2 = slug; the UI's "Teach it" (eval + train on
   JOB=1
   evals runs/base "data_co_$2/eval/*.jsonl"
   train "$2" "$STEPS" "co_$2"
+  # the results page's base-vs-yours scores, while both models are on this GPU (else the server downloads + scores them itself)
+  uv run --no-sync python scripts/typically_reveal.py --job "$2" "$BASE" || echo "WARN: reveal failed; the server will score it"
   exit 0   # success is the exit code: job.sh's EXIT trap writes /workspace/job.exit for the poller (no log-string protocol)
 elif [ "${1:-2}" = e ]; then   # spike 2 arm e (eval tickets == data_co_a's, so base numbers carry over)
   train e 400 co_e
