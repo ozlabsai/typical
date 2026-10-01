@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { AlertCircle, ArrowRight, Check, Copy, Download, X } from "lucide-react"
 import { toast } from "sonner"
 
+import { SectionHeader, Stat } from "@/components/layout"
 import { Meter, msg, PageHead } from "@/components/shared"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -73,14 +74,10 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
 
   return (
     <>
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{t("ev.results")}</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            {t("ev.lede", { who: model.sample ? "Northwind" : t("ev.you"), n: data.n_cases, a: data.n_answers })}
-          </p>
-        </div>
-        <div className="flex gap-2">
+      <SectionHeader
+        title={t("ev.results")}
+        description={t("ev.lede", { who: model.sample ? "Northwind" : t("ev.you"), n: data.n_cases, a: data.n_answers })}
+        actions={<>
           <Button variant="outline" onClick={() => navigator.clipboard.writeText(summary).then(() => toast.success(t("ev.summaryCopied")))}>
             <Copy data-icon="inline-start" /> {t("ev.copySummary")}
           </Button>
@@ -88,25 +85,16 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
             <a href={downloadUrl(model.run)} download><Download data-icon="inline-start" /> {t("ev.download")}</a>
           </Button>
           {next && <Button onClick={next}>{t("ev.deploy")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></Button>}
-        </div>
-      </div>
+        </>}
+      />
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <Card size="sm">
-          <CardHeader><CardDescription>{t("ev.standard")}</CardDescription><p className="font-mono text-3xl font-medium tabular text-standard">{pct(data.score.standard)}</p></CardHeader>
-          <CardContent className="text-sm text-muted-foreground">{t("ev.agrees", { who })}</CardContent>
-        </Card>
-        <Card size="sm" className="ring-1 ring-primary/30">
-          <CardHeader><CardDescription>{t(model.sample ? "ev.northwindTitle" : "ev.yoursTitle")}</CardDescription><p className="font-mono text-3xl font-medium tabular text-yours">{pct(data.score.yours)}</p></CardHeader>
-          <CardContent className="text-sm text-muted-foreground">{t("ev.agrees", { who })}</CardContent>
-        </Card>
-        <Card size="sm">
-          <CardHeader><CardDescription>{t("ev.difference")}</CardDescription><p className="font-mono text-3xl font-medium tabular">{gain >= 0 ? "+" : ""}{gain} {t("ev.pts")}</p></CardHeader>
-          <CardContent className="text-sm text-muted-foreground tabular">{t("ev.fixed", { a: data.fixed, b: data.broken })}</CardContent>
-        </Card>
+        <Stat label={t("ev.standard")} value={pct(data.score.standard)} tone="standard" note={t("ev.agrees", { who })} />
+        <Stat label={t(model.sample ? "ev.northwindTitle" : "ev.yoursTitle")} value={pct(data.score.yours)} tone="yours" note={t("ev.agrees", { who })} highlight />
+        <Stat label={t("ev.difference")} value={`${gain >= 0 ? "+" : ""}${gain} ${t("ev.pts")}`} note={t("ev.fixed", { a: data.fixed, b: data.broken })} />
       </div>
 
-      <Card className="mt-4">
+      <Card>
         <CardHeader>
           <CardTitle>{t("ev.byDecision")}</CardTitle>
           {data.abstained.standard > 0 && (
@@ -144,7 +132,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
         </CardContent>
       </Card>
 
-      <Card className="mt-4">
+      <Card>
         <CardHeader>
           <CardTitle>{t("ev.disagree")}</CardTitle>
           <CardDescription>{t("ev.disagreeLede", { who: model.sample ? "Northwind" : t("ev.you") })}</CardDescription>

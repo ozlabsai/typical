@@ -1,6 +1,7 @@
 import { ThemeProvider } from "next-themes"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { HeaderSlotProvider } from "@/components/layout"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
@@ -24,30 +25,38 @@ function Shell() {
     : [{ label: t("app.models"), to: href({ name: "models" }) }, { label: find(route.id)?.name ?? route.id }]
 
   return (
-    <SidebarProvider>
-      <AppSidebar route={route} />
-      <SidebarInset>
-        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
-          <SidebarTrigger className="-ms-1" />
-          <Separator orientation="vertical" className="me-1 data-[orientation=vertical]:h-4" />
-          <Breadcrumb>
-            <BreadcrumbList>
-              {crumbs.map((c, i) => (
-                <span key={i} className="contents">
-                  {i > 0 && <BreadcrumbSeparator className="rtl:rotate-180" />}
-                  <BreadcrumbItem>{c.to ? <BreadcrumbLink href={c.to}>{c.label}</BreadcrumbLink> : <BreadcrumbPage dir="auto">{c.label}</BreadcrumbPage>}</BreadcrumbItem>
-                </span>
-              ))}
-            </BreadcrumbList>
-          </Breadcrumb>
-        </header>
-        {route.name === "chat" && <ChatPage modelId={route.model} />}
-        {route.name === "models" && <ModelsPage />}
-        {route.name === "model" && <ModelPage id={route.id} tab={route.tab} />}
-        {route.name === "new" && <CustomizePage />}
-      </SidebarInset>
-      <Toaster position={lang === "he" ? "bottom-left" : "bottom-right"} />
-    </SidebarProvider>
+    <HeaderSlotProvider>
+      {(setSlot) => (
+        <SidebarProvider className="h-svh overflow-hidden">
+          <AppSidebar route={route} />
+          {/* the window never scrolls; one scroll container with a reserved gutter, so width never jumps between routes */}
+          <SidebarInset className="h-svh min-w-0 overflow-hidden">
+            <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">
+              <SidebarTrigger className="-ms-1" />
+              <Separator orientation="vertical" className="me-1 data-[orientation=vertical]:h-4" />
+              <Breadcrumb className="min-w-0">
+                <BreadcrumbList className="flex-nowrap">
+                  {crumbs.map((c, i) => (
+                    <span key={i} className="contents">
+                      {i > 0 && <BreadcrumbSeparator className="rtl:rotate-180" />}
+                      <BreadcrumbItem className="min-w-0">{c.to ? <BreadcrumbLink href={c.to}>{c.label}</BreadcrumbLink> : <BreadcrumbPage dir="auto" className="truncate">{c.label}</BreadcrumbPage>}</BreadcrumbItem>
+                    </span>
+                  ))}
+                </BreadcrumbList>
+              </Breadcrumb>
+              <div ref={setSlot} className="ms-auto flex min-w-0 items-center gap-2" />
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+              {route.name === "chat" && <ChatPage modelId={route.model} />}
+              {route.name === "models" && <ModelsPage />}
+              {route.name === "model" && <ModelPage id={route.id} tab={route.tab} />}
+              {route.name === "new" && <CustomizePage />}
+            </div>
+          </SidebarInset>
+          <Toaster position={lang === "he" ? "bottom-left" : "bottom-right"} />
+        </SidebarProvider>
+      )}
+    </HeaderSlotProvider>
   )
 }
 

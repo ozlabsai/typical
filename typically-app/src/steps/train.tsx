@@ -185,7 +185,7 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
         </Card>
       </div>
       {(error || status?.phase === "failed") && (
-        <Alert variant="destructive" className="mt-4">
+        <Alert variant="destructive" >
           <AlertCircle />
           <AlertTitle>{t("tr.failed")}</AlertTitle>
           <AlertDescription>{error ?? status?.message} {t("tr.failedBody")}</AlertDescription>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { Check } from "lucide-react"
 
+import { Page, PageHeader } from "@/components/layout"
 import { useI18n } from "@/lib/i18n"
 import { useLibrary } from "@/lib/library"
 import type { Project } from "@/lib/project"
@@ -29,12 +30,8 @@ export function CustomizePage() {
   useEffect(() => { if (project?.slug) refresh() }, [project?.slug, project?.run, refresh])
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 md:px-6">
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{t("new.title")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t("new.lede")}</p>
-        </div>
+    <Page>
+      <PageHeader title={t("new.title")} description={t("new.lede")} actions={
         <ol className="flex items-center gap-1" aria-label="Progress">
           {STEPS.map((s, i) => {
             const done = i < at
@@ -54,13 +51,13 @@ export function CustomizePage() {
             )
           })}
         </ol>
-      </div>
+      } />
       {step === "Create" && <CreateStep project={project} setProject={setProject} next={() => setStep("Understand")} />}
       {step === "Understand" && project && <UnderstandStep project={project} update={update} back={() => setStep("Create")} next={() => setStep("Enrich")} />}
       {step === "Enrich" && project && <EnrichStep project={project} update={update} back={() => setStep("Understand")} next={() => setStep("Train")} />}
       {step === "Train" && project && (
         <TrainStep project={project} update={update} back={() => setStep("Enrich")} next={() => go({ name: "model", id: project.sample ? "northwind" : project.slug! })} />
       )}
-    </div>
+    </Page>
   )
 }

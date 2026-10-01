@@ -93,7 +93,7 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
         {t("und.lede")}
       </PageHead>
 
-      <Card className="mb-4">
+      <Card >
         <CardHeader>
           <CardTitle>{t("und.caseIs")}</CardTitle>
           <CardDescription>
@@ -112,23 +112,25 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
       </Card>
 
       {review.length > 0 && (
-        <Alert className="mb-4">
+        <Alert >
           <AlertTriangle />
           <AlertTitle>{t("und.review")}</AlertTitle>
           <AlertDescription><ul className="list-disc ps-4">{review.map((r) => <li key={r}>{r}</li>)}</ul></AlertDescription>
         </Alert>
       )}
 
-      <div className="mb-2 flex items-center justify-between">
+      <div className="grid gap-3">
+      <div className="flex items-center justify-between">
         <h2 className="flex items-center gap-2 text-sm font-medium"><ListChecks className="size-4" /> {t("und.decisions")}</h2>
         <span className="text-sm text-muted-foreground tabular">{t("und.selected", { a: chosen, b: plan.decisions.length })}</span>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         {plan.decisions.map((d, i) => <DecisionCard key={d.column} p={project} d={d} set={(patch) => setDecision(i, patch)} />)}
       </div>
+      </div>
 
       {plan.issues.length > 0 && (
-        <Card className="mt-4" size="sm">
+        <Card  size="sm">
           <CardHeader><CardTitle>{t("und.health")}</CardTitle></CardHeader>
           <CardContent>
             <ul className="grid gap-1.5 text-sm">
@@ -141,7 +143,7 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
       )}
 
       {plan.excluded.length > 0 && (
-        <Collapsible className="mt-4">
+        <Collapsible >
           <CollapsibleTrigger asChild>
             <Button variant="ghost" size="sm" className="-ms-2">{t("und.ignored", { n: plan.excluded.length })} <ChevronDown data-icon="inline-end" /></Button>
           </CollapsibleTrigger>
@@ -153,7 +155,7 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
         </Collapsible>
       )}
 
-      <Card className="mt-6" size="sm">
+      <Card  size="sm">
         <CardFooter className="justify-between">
           <Button variant="ghost" onClick={back}>{t("common.back")}</Button>
           <Button onClick={next} disabled={!chosen || usable < 100}>{usable < 100 ? t("und.need100") : <>{t("common.continue")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></>}</Button>

@@ -2,6 +2,7 @@ import { useState } from "react"
 import { Check, Copy } from "lucide-react"
 import { toast } from "sonner"
 
+import { SectionHeader } from "@/components/layout"
 import { Button } from "@/components/ui/button"
 import { useI18n } from "@/lib/i18n"
 import { pct } from "@/lib/project"
@@ -9,16 +10,9 @@ import { cn } from "@/lib/utils"
 
 export const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
+/** Step / panel heading inside a page (the page itself owns the h1). Spacing comes from the parent grid. */
 export function PageHead({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
-  return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{children}</p>
-      </div>
-      {action}
-    </div>
-  )
+  return <SectionHeader title={title} description={children} actions={action} />
 }
 
 export function Meter({ value, tone }: { value: number; tone: "standard" | "yours" }) {

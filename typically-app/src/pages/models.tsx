@@ -2,6 +2,7 @@ import { AlertCircle, Archive, Boxes, MessageSquare, MoreHorizontal, Plus, Rocke
 import { toast } from "sonner"
 
 import { StatusDot } from "@/components/app-sidebar"
+import { Page, PageHeader, SectionHeader, Stat } from "@/components/layout"
 import { CodeBlock, msg } from "@/components/shared"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -28,7 +29,7 @@ function Agreement({ m }: { m: LibraryModel }) {
   return (
     <span className="inline-flex items-center gap-2 font-mono text-sm tabular">
       <span className="text-standard">{pct(m.metrics.standard)}</span>
-      <span aria-hidden className="text-muted-foreground">→</span>
+      <span aria-hidden className="inline-block text-muted-foreground rtl:rotate-180">→</span>
       <span className="font-medium text-yours">{pct(m.metrics.yours)}</span>
     </span>
   )
@@ -59,14 +60,9 @@ export function ModelsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 md:px-6">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{t("models.title")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t("models.lede")}</p>
-        </div>
-        <Button asChild><a href={href({ name: "new" })}><Plus data-icon="inline-start" /> {t("app.new")}</a></Button>
-      </div>
+    <Page>
+      <PageHeader title={t("models.title")} description={t("models.lede")}
+        actions={<Button asChild><a href={href({ name: "new" })}><Plus data-icon="inline-start" /> {t("app.new")}</a></Button>} />
 
       <Card>
         <CardHeader><CardTitle>{t("models.custom")}</CardTitle></CardHeader>
@@ -127,8 +123,8 @@ export function ModelsPage() {
         </CardContent>
       </Card>
 
-      <h2 className="mt-8 mb-3 text-sm font-medium text-muted-foreground">{t("models.baseTitle")}</h2>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <SectionHeader title={t("models.baseTitle")} />
+      <div className="-mt-2 grid gap-4 sm:grid-cols-2">
         {(lib?.base ?? []).map((m) => (
           <Card key={m.id} size="sm">
             <CardHeader>
@@ -141,7 +137,7 @@ export function ModelsPage() {
           </Card>
         ))}
       </div>
-    </div>
+    </Page>
   )
 }
 
@@ -149,41 +145,42 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
   const { t, lang } = useI18n()
   const { lib, find } = useLibrary()
   const m = find(id)
-  if (!lib) return <div className="mx-auto max-w-6xl px-6 py-8"><Skeleton className="h-40" /></div>
-  if (!m) return <div className="mx-auto max-w-6xl px-6 py-8"><Alert variant="destructive"><AlertCircle /><AlertTitle>404</AlertTitle><AlertDescription>{id}</AlertDescription></Alert></div>
+  if (!lib) return <Page><Skeleton className="h-40" /></Page>
+  if (!m) return <Page><Alert variant="destructive"><AlertCircle /><AlertTitle>404</AlertTitle><AlertDescription>{id}</AlertDescription></Alert></Page>
   const ready = m.status === "ready"
   const ref = refOf(m)
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 md:px-6">
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div className="grid gap-1.5">
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight"><span dir="auto">{m.name}</span>{m.sample && <Badge variant="secondary">{t("app.sample")}</Badge>}</h1>
-          <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+    <Page>
+      <PageHeader
+        title={<span dir="auto">{m.name}</span>}
+        badge={m.sample ? <Badge variant="secondary">{t("app.sample")}</Badge> : undefined}
+        description={
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <StatusLabel m={m} />
             <span aria-hidden>·</span><span className="font-mono text-xs">{BASES[m.base].label}</span>
             {m.steps && <><span aria-hidden>·</span><span>{t("models.steps", { n: m.steps })}</span></>}
             {m.created_at && <><span aria-hidden>·</span><span>{when(m.created_at, lang)}</span></>}
-          </div>
-        </div>
-        <div className="flex gap-2">
+          </span>
+        }
+        actions={<>
           <Button variant="outline" disabled={!ready} onClick={() => go({ name: "model", id, tab: "deploy" })}><Rocket data-icon="inline-start" /> {t("models.deploy")}</Button>
           <Button disabled={!ready} onClick={() => go({ name: "chat", model: id })}><MessageSquare data-icon="inline-start" /> {t("models.chat")}</Button>
-        </div>
-      </div>
+        </>}
+      />
 
       {m.status === "training" && (
-        <Card className="mb-4">
+        <Card>
           <CardHeader><CardTitle>{t("models.training")}</CardTitle><CardDescription>{m.message ?? t("models.notReady")}</CardDescription></CardHeader>
           <CardContent><Progress value={(m.progress ?? 0) * 100} className="h-1.5" /></CardContent>
         </Card>
       )}
       {m.status === "failed" && (
-        <Alert variant="destructive" className="mb-4"><AlertCircle /><AlertTitle>{t("models.failed")}</AlertTitle><AlertDescription>{m.message}</AlertDescription></Alert>
+        <Alert variant="destructive"><AlertCircle /><AlertTitle>{t("models.failed")}</AlertTitle><AlertDescription>{m.message}</AlertDescription></Alert>
       )}
 
       <Tabs value={ready ? tab ?? "overview" : "overview"} onValueChange={(v) => go({ name: "model", id, tab: v === "overview" ? undefined : v })}>
-        <TabsList className="mb-4">
+        <TabsList className="mb-2">
           <TabsTrigger value="overview">{t("models.overview")}</TabsTrigger>
           <TabsTrigger value="results" disabled={!ready}>{t("models.results")}</TabsTrigger>
           <TabsTrigger value="deploy" disabled={!ready}>{t("models.deploy")}</TabsTrigger>
@@ -191,9 +188,9 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
         <TabsContent value="overview" className="grid gap-4">
           {m.metrics && (
             <div className="grid gap-4 sm:grid-cols-3">
-              <Card size="sm"><CardHeader><CardDescription>{t("ev.standard")}</CardDescription><p className="font-mono text-3xl font-medium tabular text-standard">{pct(m.metrics.standard)}</p></CardHeader></Card>
-              <Card size="sm" className="ring-1 ring-primary/30"><CardHeader><CardDescription dir="auto">{m.name}</CardDescription><p className="font-mono text-3xl font-medium tabular text-yours">{pct(m.metrics.yours)}</p></CardHeader></Card>
-              <Card size="sm"><CardHeader><CardDescription>{t("ev.difference")}</CardDescription><p className="font-mono text-3xl font-medium tabular">+{Math.round((m.metrics.yours - m.metrics.standard) * 100)} {t("ev.pts")}</p></CardHeader></Card>
+              <Stat label={t("ev.standard")} value={pct(m.metrics.standard)} tone="standard" />
+              <Stat label={m.name} value={pct(m.metrics.yours)} tone="yours" highlight />
+              <Stat label={t("ev.difference")} value={`+${Math.round((m.metrics.yours - m.metrics.standard) * 100)} ${t("ev.pts")}`} />
             </div>
           )}
           <Card>
@@ -223,9 +220,9 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
             </Card>
           )}
         </TabsContent>
-        <TabsContent value="results">{ready && <Results model={ref} next={() => go({ name: "model", id, tab: "deploy" })} />}</TabsContent>
-        <TabsContent value="deploy">{ready && <DeployPanel model={ref} />}</TabsContent>
+        <TabsContent value="results" className="grid gap-6">{ready && <Results model={ref} />}</TabsContent>
+        <TabsContent value="deploy" className="grid gap-6">{ready && <DeployPanel model={ref} />}</TabsContent>
       </Tabs>
-    </div>
+    </Page>
   )
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { ArrowUp, ChevronDown, ListChecks, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react"
 
 import { StatusDot } from "@/components/app-sidebar"
+import { HeaderActions } from "@/components/layout"
 import { msg } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -43,7 +44,7 @@ function Answer({ q, r, tone, label }: { q: AskQuestion; r: Result; tone: "stand
     <div className="grid gap-2">
       {label && <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={cn("size-1.5 rounded-full", tone === "standard" ? "bg-standard" : "bg-yours")} />{label}</span>}
       <div className="flex items-baseline gap-2">
-        <span className="text-lg font-semibold tracking-tight">{say(t, q.type, r.argmax)}</span>
+        <span className="text-base font-semibold">{say(t, q.type, r.argmax)}</span>
         <span className="font-mono text-sm text-muted-foreground tabular">{pct(r.probs[r.argmax])}</span>
         {unsure && <Badge variant="outline" className="font-normal">{t("chat.notSure")}</Badge>}
       </div>
@@ -70,7 +71,7 @@ function TurnView({ turn }: { turn: Turn }) {
   return (
     <div className="grid gap-4">
       {/* the user's case + questions */}
-      <div className="ms-auto grid max-w-[85%] gap-2 rounded-2xl rounded-se-sm bg-muted px-4 py-3">
+      <div className="ms-auto grid max-w-[85%] gap-2 rounded-xl rounded-se-sm bg-muted px-4 py-3">
         <p dir="auto" className={cn("whitespace-pre-wrap text-sm", long && !open && "line-clamp-4")}>{turn.case}</p>
         {long && <button type="button" onClick={() => setOpen(!open)} className="justify-self-start text-xs text-muted-foreground hover:text-foreground">{open ? "−" : "…"}</button>}
         <div className="flex flex-wrap gap-1.5">
@@ -208,14 +209,23 @@ export function ChatPage({ modelId }: { modelId?: string }) {
   const shown = turns.filter((x) => x.model === model?.id)
 
   return (
-    <div className="flex h-[calc(100svh-3.5rem)] flex-col">
-      {/* toolbar */}
-      <div className="flex flex-wrap items-center gap-3 border-b px-4 py-2.5 md:px-6">
+    <div className="flex h-full flex-col">
+      <HeaderActions>
+        {custom && (
+          <Label className="hidden items-center gap-2 text-sm font-normal whitespace-nowrap md:flex">
+            <Switch checked={compare} onCheckedChange={setCompare} /> {t("chat.compare")}
+          </Label>
+        )}
+        {shown.length > 0 && (
+          <Button variant="ghost" size="icon-sm" onClick={() => setTurns((ts) => ts.filter((x) => x.model !== model?.id))} aria-label={t("chat.clear")} title={t("chat.clear")}>
+            <Trash2 />
+          </Button>
+        )}
         <Select value={model?.id ?? ""} onValueChange={(id) => go({ name: "chat", model: id })}>
-          <SelectTrigger className="w-full max-w-64" aria-label={t("chat.model")}>
+          <SelectTrigger size="sm" className="w-44 sm:w-56" aria-label={t("chat.model")}>
             <SelectValue placeholder={t("chat.model")} />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent align="end">
             {(lib?.custom ?? []).filter((m) => m.status === "ready").length > 0 && (
               <SelectGroup>
                 <SelectLabel>{t("app.yourModels")}</SelectLabel>
@@ -230,26 +240,13 @@ export function ChatPage({ modelId }: { modelId?: string }) {
             </SelectGroup>
           </SelectContent>
         </Select>
-        {custom && (
-          <Label className="flex items-center gap-2 text-sm font-normal">
-            <Switch checked={compare} onCheckedChange={setCompare} /> {t("chat.compare")}
-          </Label>
-        )}
-        <div className="ms-auto">
-          {shown.length > 0 && (
-            <Button variant="ghost" size="sm" onClick={() => setTurns((ts) => ts.filter((x) => x.model !== model?.id))}>
-              <Trash2 data-icon="inline-start" /> {t("chat.clear")}
-            </Button>
-          )}
-        </div>
-      </div>
-
+      </HeaderActions>
       {/* transcript */}
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto grid max-w-3xl gap-8 px-4 py-8 md:px-6">
+        <div className="mx-auto grid max-w-3xl gap-6 px-4 py-8 md:px-6">
           {!shown.length && model && (
             <div className="grid gap-6 pt-6 text-center">
-              <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary/10"><Sparkles className="size-5 text-primary" /></div>
+              <div className="mx-auto grid size-10 place-items-center rounded-xl bg-primary/10"><Sparkles className="size-5 text-primary" /></div>
               <div>
                 <h1 className="text-xl font-semibold tracking-tight" dir="auto">{t("chat.emptyTitle", { name: model.name })}</h1>
                 <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">{t("chat.emptyBody")}</p>
@@ -274,7 +271,7 @@ export function ChatPage({ modelId }: { modelId?: string }) {
 
       {/* composer */}
       <div className="border-t bg-background px-4 pt-3 pb-4 md:px-6">
-        <div className="mx-auto grid max-w-3xl min-w-0 gap-2 rounded-2xl border bg-card p-2 shadow-xs focus-within:ring-3 focus-within:ring-ring/30">
+        <div className="mx-auto grid max-w-3xl min-w-0 gap-2 rounded-xl border bg-card p-2 shadow-xs focus-within:ring-3 focus-within:ring-ring/30">
           <Textarea
             dir="auto" value={text} rows={3} placeholder={t("chat.casePlaceholder")}
             onChange={(e) => setText(e.target.value)}

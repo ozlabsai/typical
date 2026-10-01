@@ -37,7 +37,7 @@ const en = {
   "und.title": "Here's what we understood",
   "und.lede": "Check how each case is described and what you decided. Edit anything that's off; nothing is sent for training until the Train step.",
   "und.byClaude": "Read by Claude", "und.byRules": "Read by built-in rules",
-  "und.caseIs": "Each case is", "und.factsFrom": "facts from", "und.then": ", then ", "und.textIn": "the text in",
+  "und.caseIs": "Each case is", "und.factsFrom": "facts from ", "und.then": ", then ", "und.textIn": "the text in ",
   "und.noText": "No text column found", "und.rows": "{n} rows",
   "und.review": "Needs your eye", "und.decisions": "Decisions", "und.selected": "{a} of {b} selected",
   "und.check": "Check", "und.merged": "Merged", "und.health": "Data health", "und.ignored": "Ignored columns ({n})",

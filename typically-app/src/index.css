@@ -135,4 +135,5 @@
   html {
     @apply font-sans;
     }
+  html, body { height: 100%; overflow: hidden; } /* the shell owns scrolling (App.tsx) */
 }
