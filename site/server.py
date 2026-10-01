@@ -56,7 +56,7 @@ from typically_spike import build_from_plan, build_import, write
 TYPICALLY = typically_job.TYPICALLY   # TYPICALLY_DATA, else .context/typically
 REPOS = {"typical-small": "OzLabs/typical-small", "typical-medium": "OzLabs/typical-medium"}
 
-app = FastAPI()
+app = FastAPI(**({"docs_url": None, "redoc_url": None, "openapi_url": None} if auth.enabled() else {}))   # hosted: no open API map
 if auth.enabled():
     auth._secret()   # fail at start, not at the first sign-in
 else:   # hosted = same-origin only: no CORS at all
@@ -164,6 +164,7 @@ def _run(m: Typical, state: str, queries: list[Query]) -> dict:
 
 @app.post("/api/decide")
 def decide(req: DecideRequest):
+    auth.check(auth.model_of(req.model))
     with _lock:
         return {**_run(get_model(req.model), req.state, req.queries), "model": req.model}
 
@@ -212,7 +213,7 @@ class BuildRequest(CsvRequest):
     steps: Literal[200, 400, 800] = 400
     text_col: str
     decisions: list[Decision]
-    name: str
+    name: str = Field(max_length=80)
 
 
 def read_csv(csv_text: str) -> tuple[list[str], list[dict]]:
@@ -266,7 +267,7 @@ class Settings(BaseModel):
 class BuildPlanRequest(BaseModel):   # /build v2: a confirmed DatasetPlan over a table kept server-side (/analyze's records_token)
     records_token: str
     plan: dict
-    name: str
+    name: str = Field(max_length=80)
     base: Literal["small", "medium"] = "small"
     enrich: Enrich = Enrich()
     settings: Settings = Settings()
@@ -280,6 +281,8 @@ def _train_command(slug: str, steps: int, base: str) -> str:
 @app.post("/api/typically/build")
 def build(req: BuildPlanRequest | BuildRequest):
     slug = _slug(req.name)
+    if slug in auth.SHARED_MODELS or f"co_{slug}" in typically_deploy.ALIASES.values():   # "Northwind" / "f" would write over the shared sample
+        raise HTTPException(409, "that name is reserved; pick another")
     if slug in _jobs:   # ponytail: check-then-write race is a few ms wide; a per-slug lock if builds ever run concurrently
         raise HTTPException(409, "that model is being taught right now; wait for it to finish before rebuilding its data")
     if slug and (TYPICALLY / "jobs" / slug).exists() and not auth.visible(slug):
@@ -462,7 +465,7 @@ def download(run: str):
 
 @app.get("/api/health")
 def health():
-    return {"models": {n: m.device for n, (_, m) in _cache.items()}}
+    return {"ok": True, "loaded": len(_cache)}   # no model ids: it is open without sign-in
 
 
 @app.get("/app")

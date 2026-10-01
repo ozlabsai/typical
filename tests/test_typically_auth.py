@@ -226,3 +226,28 @@ def test_share_card(env):
     assert b.delete("/api/typically/models/alice_m/share").status_code == 404
     assert a.delete("/api/typically/models/alice_m/share").json() == {"revoked": 1}
     assert anon.get(f"/s/{s['id']}").status_code == 404 and anon.get(f"/s/{s['id']}/og.png").status_code == 404
+
+
+def test_review_fixes(env, monkeypatch):
+    """decide checks ownership, health lists no ids, reserved and over-long names are refused, hf never reads a server dir, push never overwrites."""
+    import typically_deploy as D
+    import typically_plan as tp
+    bob = client(BOB)
+    assert bob.post("/api/decide", json={"model": "local:co_alice_m", "state": "x", "queries": []}).status_code == 404
+    assert "models" not in client().get("/api/health").json()
+    for name in ("Northwind", "f"):
+        assert bob.post("/api/typically/build", json={"records_token": "0" * 32, "plan": {}, "name": name}).status_code == 409, name
+    assert bob.post("/api/typically/build", json={"records_token": "0" * 32, "plan": {}, "name": "x" * 81}).status_code == 422
+    with pytest.raises(ValueError, match="not a Hugging Face dataset id"):
+        tp.load_records({"kind": "hf", "dataset": str(env)})
+
+    class Hub:   # the repo exists and this model never pushed to it
+        def __init__(self, token=None): pass
+        def model_info(self, repo): return type("I", (), {"sha": "s"})()
+        def repo_exists(self, repo): return True
+        def create_repo(self, *a, **k): raise AssertionError("must not touch an existing repo")
+    monkeypatch.setattr(D, "HfApi", Hub)
+    monkeypatch.setattr(D, "_hf_token", lambda: "tok")
+    monkeypatch.setattr(D.torch, "load", lambda *a, **k: {"args": {"backbone": tj.RELEASED_ARGS["small"]["backbone"]}, "step": 1})
+    r = client(ALICE).post("/api/typically/push", json={"run": "co_alice_m", "repo": "OzLabs/typical-small"})
+    assert r.status_code == 409 and "already exists" in r.json()["detail"]

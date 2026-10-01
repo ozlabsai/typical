@@ -112,9 +112,13 @@ def load_records(source: dict) -> list[dict]:
     if kind == "hf":
         from datasets import load_dataset   # heavy import, only when needed
         limit = min(int(source.get("limit") or 5000), MAX_ROWS)
-        try:   # public datasets only, unless the server has an HF_TOKEN
-            ds = load_dataset(source["dataset"], source.get("config") or None, split=source.get("split") or "train",
-                              streaming=True, token=os.environ.get("HF_TOKEN") or None)
+        name = str(source.get("dataset") or "")
+        if not re.fullmatch(r"[\w.-]+(/[\w.-]+)?", name) or Path(name).exists():   # a Hub id, never a directory on this server
+            raise ValueError(f"{name!r} is not a Hugging Face dataset id like owner/name")
+        hosted = os.environ.get("TYPICALLY_AUTH") == "1"   # invited users must not read the operator's private datasets
+        try:   # public datasets only, unless a local server has an HF_TOKEN
+            ds = load_dataset(name, source.get("config") or None, split=source.get("split") or "train",
+                              streaming=True, token=False if hosted else os.environ.get("HF_TOKEN") or None)   # False: not even a cached login
             # ponytail: datasets are often sorted by label; a 10k-row shuffle buffer keeps the first `limit` rows representative
             # literal "\\n" in dumped text fields (common on the Hub) becomes a real line break
             rows = [{k: _cell(v).replace("\\n", "\n").strip() for k, v in r.items()} for r in islice(ds.shuffle(seed=0, buffer_size=10_000), limit)]

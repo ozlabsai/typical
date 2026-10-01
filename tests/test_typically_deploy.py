@@ -133,6 +133,7 @@ def test_snippets_use_the_saved_plan_and_escape_shell_quotes(env, tmp_path):
 def hub(monkeypatch):
     api = MagicMock()
     api.model_info.return_value = SimpleNamespace(sha="basesha123")
+    api.repo_exists.return_value = False
     api.whoami.return_value = {"name": "me", "orgs": [{"name": "OzLabs"}]}
     monkeypatch.setenv("HF_TOKEN", TOKEN)
     td._namespaces.clear()
@@ -296,6 +297,7 @@ def test_failed_upload_deletes_only_a_repo_this_push_created_and_left_empty(env,
     trained(tmp_path, "co_f")
     api.create_commit.side_effect = RuntimeError("upload broke")
     api.list_repo_files.return_value = [".gitattributes"]
+    (tmp_path / "results" / "co_f" / "hf_repo.txt").write_text("me/northwind-triage")   # existed: this model's own earlier push
     for existed, files, deleted in ((False, [".gitattributes"], True), (True, [".gitattributes"], False), (False, ["best.pt"], False)):
         api.repo_exists.return_value, api.list_repo_files.return_value = existed, files
         api.delete_repo.reset_mock()
@@ -309,6 +311,13 @@ def test_failed_upload_deletes_only_a_repo_this_push_created_and_left_empty(env,
 
 class StorageFull(Exception):
     response = SimpleNamespace(status_code=403)
+
+
+def test_push_never_overwrites_a_repo_this_model_did_not_push(env, tmp_path, hub):
+    _, api = hub
+    trained(tmp_path, "co_f")
+    api.repo_exists.return_value = True
+    assert push(env, repo="OzLabs/typical-small").status_code == 409 and not api.create_repo.called
 
 
 def test_org_storage_full_is_507_and_offers_the_users_namespace(env, tmp_path, hub):

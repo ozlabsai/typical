@@ -251,11 +251,14 @@ def push(req: PushRequest):
     repo = req.repo or (f"{ns}/{_repo_name(model_id_of(req.run))}" if (ns := _namespace(api, token)) else None)
     if not repo:
         raise HTTPException(502, "could not work out the Hugging Face namespace; is the server token valid?")
+    prev = f.read_text().strip() if (f := _hf_repo_file(req.run)).exists() else None
     created = False
     try:
         manifest = {"base_repo": f"OzLabs/typical-{base}", "base_sha": api.model_info(f"OzLabs/typical-{base}").sha, "run": req.run,
                     "step": ckpt["step"], "best_pt_sha256": hashlib.sha256(best.read_bytes()).hexdigest()}
         existed = api.repo_exists(repo)
+        if existed and repo != prev:   # only ever overwrite this model's own earlier push (a model named "Typical Small" must not replace the release)
+            raise FileExistsError(repo)
         api.create_repo(repo, private=req.private, exist_ok=True)
         created = not existed
         api.create_commit(repo, commit_message=f"Typical fine-tune {req.run}", operations=[
@@ -263,6 +266,8 @@ def push(req: PushRequest):
             CommitOperationAdd("README.md", _card(base, repo, model_id_of(req.run), ckpt["step"], reveal).encode()),
             CommitOperationAdd("MANIFEST.json", json.dumps(manifest, indent=2).encode())])
     except Exception as e:   # hub errors can echo request headers: never hand the token back
+        if isinstance(e, FileExistsError):
+            raise HTTPException(409, f"{repo} already exists on Hugging Face; pick another repo name")
         if created:   # this call made the repo and the upload failed: do not leave an empty repo behind
             try:
                 if set(api.list_repo_files(repo)) <= {".gitattributes"}:
