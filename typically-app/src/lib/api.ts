@@ -155,3 +155,41 @@ export async function results(project: string): Promise<Reveal | Computing> {
 }
 
 export const downloadUrl = (run: string) => `/api/typically/download/${encodeURIComponent(run)}`
+
+// ---- models library + chat (site/typically_models.py)
+
+export interface LibraryDecision { column: string; question: string; type: DecisionType; labels: string[] }
+export interface LibraryModel {
+  id: string
+  name: string
+  kind: "base" | "custom"
+  base: "small" | "medium"
+  params?: string
+  status: "ready" | "training" | "failed" | "queued"
+  progress?: number
+  message?: string
+  description?: string
+  sample?: boolean
+  run?: string
+  steps?: number
+  created_at?: string
+  decisions?: LibraryDecision[]
+  metrics?: { standard: number; yours: number; n_cases: number } | null
+  has_key?: boolean
+  hf_repo?: string | null
+  examples?: string[]
+}
+export interface Library { base: LibraryModel[]; custom: LibraryModel[] }
+export interface AskQuestion { question: string; type: DecisionType; labels?: string[] }
+export interface AskResult { model: string; results: Result[]; base?: { model: string; results: Result[] }; ms: number }
+
+export const library = {
+  list: () => call<Library>("models/library"),
+  get: (id: string) => call<LibraryModel>(`models/library/${encodeURIComponent(id)}`),
+  archive: (id: string) =>
+    fetch(`/api/typically/models/library/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) => {
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+    }),
+  ask: (req: { model: string; case: string; questions: AskQuestion[]; compare_with_base?: boolean }) => call<AskResult>("ask", req),
+  parseQuestion: (text: string, lang: string) => call<AskQuestion & { source: string }>("parse_question", { text, lang }),
+}

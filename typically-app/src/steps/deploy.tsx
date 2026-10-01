@@ -14,13 +14,14 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, downloadUrl, type Snippets } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
-import { modelId, slugify, type Project } from "@/lib/project"
+import type { ModelRef } from "@/lib/library"
+import { slugify } from "@/lib/project"
 
 const TABS: (keyof Snippets)[] = ["curl", "python", "javascript", "sdk"]
 
-export function DeployStep({ project }: { project: Project }) {
+export function DeployPanel({ model }: { model: ModelRef }) {
   const { t } = useI18n()
-  const id = modelId(project)
+  const id = model.id
   const url = `${window.location.origin}/v1/models/${id}/decide`
   const [key, setKey] = useState<string | null>(null)
   const [snips, setSnips] = useState<Snippets | null>(null)
@@ -35,9 +36,9 @@ export function DeployStep({ project }: { project: Project }) {
     api.snippets(id).then(setSnips).catch((e) => setSnipError(msg(e)))
     api.capabilities().then((c) => {
       setNs(c.hf_namespace)
-      if (c.hf_namespace) setHf((h) => (h.repo ? h : { ...h, repo: `${c.hf_namespace}/${slugify(project.name).replace(/_/g, "-")}` }))
+      if (c.hf_namespace) setHf((h) => (h.repo ? h : { ...h, repo: `${c.hf_namespace}/${slugify(model.name).replace(/_/g, "-")}` }))
     }).catch(() => setNs(null))
-  }, [id, project.name])
+  }, [id, model.name])
 
   async function createKey() {
     setBusy("key")
@@ -54,7 +55,7 @@ export function DeployStep({ project }: { project: Project }) {
     setBusy("push")
     setPushError(null)
     try {
-      const r = await api.push({ run: project.run!, repo: hf.repo.trim() || undefined, private: hf.private })
+      const r = await api.push({ run: model.run, repo: hf.repo.trim() || undefined, private: hf.private })
       setPushed(r.url)
       toast.success(t("dep.pushed"))
     } catch (e) {
@@ -66,8 +67,8 @@ export function DeployStep({ project }: { project: Project }) {
 
   return (
     <>
-      <PageHead title={t("dep.title")} action={<Button variant="outline" asChild><a href={downloadUrl(project.run!)} download><Download data-icon="inline-start" /> {t("dep.weights")}</a></Button>}>
-        {t("dep.lede", { name: project.name })}
+      <PageHead title={t("dep.title")} action={<Button variant="outline" asChild><a href={downloadUrl(model.run)} download><Download data-icon="inline-start" /> {t("dep.weights")}</a></Button>}>
+        {t("dep.lede", { name: model.name })}
       </PageHead>
 
       <div className="grid gap-4">

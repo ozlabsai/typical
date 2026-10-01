@@ -116,6 +116,32 @@ const en = {
   "dep.hf": "Hugging Face", "dep.hfBody": "Keep a copy on Hugging Face. We push it to {ns} for you.",
   "dep.repo": "Repository", "dep.private": "Private repository", "dep.push": "Push to Hugging Face", "dep.pushed": "Pushed to Hugging Face",
   "dep.snippet.curl": "cURL", "dep.snippet.python": "Python", "dep.snippet.javascript": "JavaScript", "dep.snippet.sdk": "Python SDK",
+  // app shell
+  "app.chat": "Chat", "app.customize": "Customize", "app.models": "Models", "app.new": "New model", "app.yourModels": "Your models",
+  "app.noModels": "No models yet", "app.settings": "Settings", "app.base": "Base models", "app.sample": "Sample",
+  "status.ready": "Ready", "status.training": "Training", "status.failed": "Failed", "status.queued": "Queued",
+  // chat
+  "chat.title": "Chat", "chat.model": "Model", "chat.compare": "Compare with standard",
+  "chat.emptyTitle": "Ask {name} about a case",
+  "chat.emptyBody": "Paste a case, ask one or more questions, and get every answer with how sure it is. Nothing is generated: it reads the case once and scores each option.",
+  "chat.try": "Try an example", "chat.casePlaceholder": "Paste a case: a ticket, an email, a report…",
+  "chat.questionPlaceholder": "Add a question, e.g. \"Should we refund this?\" or \"Which team: billing, claims or sales?\"",
+  "chat.add": "Add", "chat.trained": "Use its trained questions", "chat.send": "Ask", "chat.sendHint": "⌘ Enter",
+  "chat.noQuestions": "Add at least one question", "chat.options": "Options", "chat.optionsHint": "comma separated",
+  "chat.remove": "Remove question", "chat.clear": "Clear chat", "chat.thinking": "Reading the case…",
+  "chat.notSure": "Not sure", "chat.noneFit": "none of these fit", "chat.case": "Case", "chat.ms": "{n} ms",
+  "chat.edit": "Edit question", "chat.type": "Answer type",
+  // models
+  "models.title": "Models", "models.lede": "The standard decision models and the ones you trained.",
+  "models.custom": "Your models", "models.baseTitle": "Standard models", "models.name": "Name", "models.from": "Starts from",
+  "models.status": "Status", "models.agreement": "Agreement with your decisions", "models.created": "Created",
+  "models.chat": "Chat", "models.open": "Open", "models.archive": "Archive", "models.empty": "You haven't trained a model yet.",
+  "models.train": "Train your first model", "models.decisions": "What it decides", "models.overview": "Overview",
+  "models.results": "Results", "models.deploy": "Deploy", "models.training": "Training", "models.archived": "Archived",
+  "models.notReady": "This model is still training.", "models.failed": "Training failed.",
+  "models.steps": "{n} steps", "models.questions": "{n} questions",
+  // new model
+  "new.title": "New model", "new.lede": "Teach a decision model your way of deciding, from decisions you already made.",
 }
 
 type Key = keyof typeof en
@@ -226,6 +252,28 @@ const he: Record<Key, string> = {
   "dep.hf": "Hugging Face", "dep.hfBody": "שמרו עותק ב־Hugging Face. אנחנו מעלים אותו בשבילכם ל־{ns}.",
   "dep.repo": "מאגר", "dep.private": "מאגר פרטי", "dep.push": "העלאה ל־Hugging Face", "dep.pushed": "הועלה ל־Hugging Face",
   "dep.snippet.curl": "cURL", "dep.snippet.python": "Python", "dep.snippet.javascript": "JavaScript", "dep.snippet.sdk": "Python SDK",
+  "app.chat": "צ׳אט", "app.customize": "התאמה אישית", "app.models": "מודלים", "app.new": "מודל חדש", "app.yourModels": "המודלים שלכם",
+  "app.noModels": "עדיין אין מודלים", "app.settings": "הגדרות", "app.base": "מודלי בסיס", "app.sample": "דוגמה",
+  "status.ready": "מוכן", "status.training": "מתאמן", "status.failed": "נכשל", "status.queued": "בתור",
+  "chat.title": "צ׳אט", "chat.model": "מודל", "chat.compare": "השוואה למודל הרגיל",
+  "chat.emptyTitle": "שאלו את {name} על מקרה",
+  "chat.emptyBody": "הדביקו מקרה, שאלו שאלה אחת או יותר, וקבלו כל תשובה עם רמת הביטחון שלה. שום דבר לא נוצר: הוא קורא את המקרה פעם אחת ומדרג כל אפשרות.",
+  "chat.try": "נסו דוגמה", "chat.casePlaceholder": "הדביקו מקרה: פנייה, מייל, דוח…",
+  "chat.questionPlaceholder": "הוסיפו שאלה, למשל \"האם להחזיר כסף?\" או \"איזה צוות: חיוב, תביעות או מכירות?\"",
+  "chat.add": "הוספה", "chat.trained": "השאלות שהוא אומן עליהן", "chat.send": "לשאול", "chat.sendHint": "⌘ Enter",
+  "chat.noQuestions": "הוסיפו לפחות שאלה אחת", "chat.options": "אפשרויות", "chat.optionsHint": "מופרדות בפסיקים",
+  "chat.remove": "הסרת שאלה", "chat.clear": "ניקוי השיחה", "chat.thinking": "קורא את המקרה…",
+  "chat.notSure": "לא בטוח", "chat.noneFit": "אף אחת לא מתאימה", "chat.case": "מקרה", "chat.ms": "{n} מ״ש",
+  "chat.edit": "עריכת שאלה", "chat.type": "סוג תשובה",
+  "models.title": "מודלים", "models.lede": "מודלי ההחלטה הרגילים, ואלה שאימנתם.",
+  "models.custom": "המודלים שלכם", "models.baseTitle": "מודלים רגילים", "models.name": "שם", "models.from": "מתחיל מ",
+  "models.status": "מצב", "models.agreement": "התאמה להחלטות שלכם", "models.created": "נוצר",
+  "models.chat": "צ׳אט", "models.open": "פתיחה", "models.archive": "העברה לארכיון", "models.empty": "עדיין לא אימנתם מודל.",
+  "models.train": "לאמן את המודל הראשון", "models.decisions": "מה הוא מחליט", "models.overview": "סקירה",
+  "models.results": "תוצאות", "models.deploy": "הפצה", "models.training": "אימון", "models.archived": "הועבר לארכיון",
+  "models.notReady": "המודל עדיין מתאמן.", "models.failed": "האימון נכשל.",
+  "models.steps": "{n} צעדים", "models.questions": "{n} שאלות",
+  "new.title": "מודל חדש", "new.lede": "למדו מודל החלטות לקבל החלטות כמוכם, מהחלטות שכבר קיבלתם.",
 }
 
 const DICTS: Record<Lang, Record<Key, string>> = { en, he }

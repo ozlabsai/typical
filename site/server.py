@@ -466,5 +466,7 @@ import typically_deploy  # noqa: E402  (reads server._run / get_model / _lock at
 app.include_router(typically_deploy.router)
 import typically_analyze  # noqa: E402
 app.include_router(typically_analyze.router)
+import typically_models  # noqa: E402
+app.include_router(typically_models.router)
 
 app.mount("/", StaticFiles(directory=REPO_ROOT / "site", html=True), name="site")
