@@ -15,8 +15,10 @@ if [[ "$(nvidia-smi)" == *"CUDA Version: 12.8"* ]]; then   # docs/plan/PROJECT.m
   uv pip install --python /workspace/venv/bin/python "torch==2.11.0" --index-url https://download.pytorch.org/whl/cu128
 fi
 if [ "$BASE" = medium ]; then   # Qwen3.5 hybrid: without these two the Gated-DeltaNet layers fall back to a slow reference path (still correct)
-  uv pip install --python /workspace/venv/bin/python --no-build-isolation flash-linear-attention causal-conv1d || echo "WARN: fla/causal-conv1d install failed"
-  uv run --no-sync python -c "import fla, causal_conv1d" || echo "WARN: fla/causal-conv1d missing; continuing on the slower reference path"
+  # separate calls: causal-conv1d has no wheel for torch 2.14+cu130 and its source build needs nvcc 13 (image has 12.8); fla is pure Triton
+  uv pip install --python /workspace/venv/bin/python flash-linear-attention || echo "WARN: fla install failed"
+  uv pip install --python /workspace/venv/bin/python --no-build-isolation causal-conv1d || echo "WARN: causal-conv1d build failed; the conv stays on the reference path"
+  uv run --no-sync python -c "import fla" || echo "WARN: fla missing; continuing on the slower reference path"
 fi
 for d in v5 wf wh u; do   # one call per dir: --include takes ONE pattern, extra ones become filenames (and disable it)
   uv run --no-sync hf download guychuk/pcdm-data --repo-type dataset --include "$d/*" --local-dir data
