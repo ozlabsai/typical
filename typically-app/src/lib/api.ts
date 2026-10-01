@@ -64,6 +64,9 @@ export interface Agreement {
   decisions: Record<string, { base: number; yours: number; n: number }>
 }
 
+/** Training curves aligned on `step` (null where that step logged no value); step_time = recent seconds per step. */
+export interface Series { step: number[]; loss: (number | null)[]; val: (number | null)[]; best_on: (number | null)[]; step_time: number | null }
+
 export interface TrainStatus {
   phase: Phase
   started_at: string
@@ -71,7 +74,9 @@ export interface TrainStatus {
   message: string
   pod_id: string | null
   job_id?: string
+  steps?: number
   agreement?: Agreement // present when phase === "done"
+  series?: Series // present while training / evaluating: parsed from the pod log
   [extra: string]: unknown
 }
 
@@ -91,6 +96,8 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
 
 export type Source =
   | { kind: "csv"; text: string; name?: string }
+  | { kind: "xlsx"; data_base64: string; name?: string; sheet?: string }
+  | { kind: "upload"; token: string }
   | { kind: "hf"; dataset: string; config?: string; split?: string; limit?: number }
   | { kind: "sheets"; url: string }
   | { kind: "sample" }
@@ -120,6 +127,22 @@ export const api = {
   createKey: (model_id: string) => call<{ key: string; prefix: string }>("keys", { model_id }),
   snippets: (model_id: string) => call<Snippets>(`snippets/${encodeURIComponent(model_id)}`),
   push: (req: { run: string; repo?: string; private: boolean }) => call<{ url: string; files: string[] }>("push", req),
+  datasets: () => call<{ datasets: Dataset[] }>("datasets").then((r) => r.datasets),
+  deleteDataset: async (token: string) => {
+    const r = await fetch(`/api/typically/datasets/${encodeURIComponent(token)}`, { method: "DELETE" })
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `${r.status} ${r.statusText}`)
+  },
+}
+
+export interface Dataset {
+  token: string // "sample" for the Northwind sample
+  name: string
+  kind: string | null
+  rows: number
+  columns: string[]
+  created: string | null
+  sample: boolean
+  models: { id: string; name: string }[] // trained from it
 }
 
 export interface Call {

@@ -1,7 +1,7 @@
 """typically: read a table, profile it, and plan how to teach a model from it (the DatasetPlan of
 .context/typically/FLOW.md).
 
-    records = load_records({"kind": "sample"})            # csv | hf | sheets | sample -> [dict[str, str]]
+    records = load_records({"kind": "sample"})            # csv | xlsx | hf | sheets | sample -> [dict[str, str]]
     prof = profile(records)                               # facts about the data, no opinions
     plan, source, warnings = llm_plan(prof, sample_rows(prof, records), key, records)   # or heuristic_plan(prof, records)
     render_case(record, plan), answers(record, plan)      # what the model will see / be taught
@@ -9,7 +9,9 @@
 Every plan, LLM or heuristic, goes through validate_plan: mapping keys must be values that are really in the data.
 Self-check: uv run python scripts/typically_plan.py
 """
+import base64
 import csv
+import datetime as dt
 import io
 import json
 import os
@@ -54,12 +56,46 @@ def _cell(v) -> str:
     return "" if v is None else v if isinstance(v, str) else json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
 
 
+def _xcell(v) -> str:
+    if isinstance(v, dt.datetime) and v.time() == dt.time():
+        v = v.date()   # Excel stores dates as midnight datetimes
+    if isinstance(v, (dt.date, dt.time)):
+        return v.isoformat()
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return _cell(v).strip()
+
+
+def read_xlsx(data_base64: str, sheet: str | None = None) -> tuple[list[str], list[dict]]:
+    """(sheet names, records of `sheet` or the first sheet). Header = the first non-empty row; columns without a header are dropped."""
+    import openpyxl
+    from openpyxl.utils.exceptions import InvalidFileException
+    from zipfile import BadZipFile
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(base64.b64decode(data_base64 or "", validate=True)), read_only=True, data_only=True)
+    except (InvalidFileException, BadZipFile, KeyError, ValueError):
+        raise ValueError("could not read that Excel file; save it as .xlsx (or CSV) and try again")
+    try:
+        if sheet and sheet not in wb.sheetnames:
+            raise ValueError(f"the workbook has no sheet {sheet!r}")
+        rows = (r for r in wb[sheet or wb.sheetnames[0]].iter_rows(values_only=True) if any(c not in (None, "") for c in r))
+        header = [_xcell(c) for c in next(rows, ())]
+        records = [{h: _xcell(v) for h, v in zip(header, r) if h} for r in islice(rows, MAX_ROWS)]
+    finally:
+        wb.close()
+    if not records:
+        raise ValueError("the sheet has no rows")
+    return wb.sheetnames, records
+
+
 def load_records(source: dict) -> list[dict]:
-    """source: {kind: csv, text} | {kind: hf, dataset, config?, split?, limit?} | {kind: sheets, url} | {kind: sample}.
+    """source: {kind: csv, text} | {kind: xlsx, data_base64, sheet?} | {kind: hf, dataset, config?, split?, limit?} | {kind: sheets, url} | {kind: sample}.
     All values become stripped strings, at most 20k rows; ValueError carries a message fit for the user."""
     kind = source.get("kind")
     if kind == "csv":
         return _parse_csv(source.get("text") or "")
+    if kind == "xlsx":
+        return read_xlsx(source.get("data_base64") or "", source.get("sheet"))[1]
     if kind == "sample":
         return _parse_csv(SAMPLE_CSV.read_text())
     if kind == "sheets":
@@ -91,7 +127,9 @@ def name_hint(source: dict) -> str:
     kind = source.get("kind")
     if kind == "hf":
         return source["dataset"].split("/")[-1]
-    return {"csv": source.get("name") or "upload", "sheets": "sheet", "sample": "Northwind"}.get(kind, "data")
+    if kind in ("csv", "xlsx"):
+        return source.get("name") or "upload"
+    return {"sheets": "sheet", "sample": "Northwind"}.get(kind, "data")
 
 
 # ---------------------------------------------------------------- profiling

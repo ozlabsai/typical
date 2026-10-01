@@ -34,6 +34,8 @@ export interface Analysis {
   preview_cases: { case: string; answers: Record<string, string> }[]
   records_token: string
   warnings?: string[]
+  sheets?: string[] // xlsx: every sheet in the workbook; `sheet` is the one read
+  sheet?: string
 }
 
 export type Base = "small" | "medium"

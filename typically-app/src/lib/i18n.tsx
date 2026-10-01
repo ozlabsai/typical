@@ -25,9 +25,9 @@ const en = {
   "create.data": "Past decisions",
   "create.dataHint": "A table with one row per case: something that describes the case, and what you decided about it.",
   "tab.upload": "Upload", "tab.hf": "Hugging Face", "tab.sheets": "Google Sheets", "tab.sample": "Sample",
-  "upload.drop": "Drop a CSV here, or click to choose", "upload.replace": "Click to replace",
+  "upload.drop": "Drop a CSV or Excel file here, or click to choose", "upload.replace": "Click to replace",
   "upload.private": "Stays on this machine until you start training",
-  "upload.csvOnly": "CSV only for now. In Excel or Sheets: File, then Download, then CSV.",
+  "upload.fileTypes": "CSV or Excel (.xlsx) only. For an older .xls: open it in Excel and save as .xlsx.",
   "hf.dataset": "Dataset", "hf.split": "Split", "hf.hint": "Public datasets. We read up to 5,000 rows.",
   "sheets.link": "Share link", "sheets.hint": "Set sharing to \"Anyone with the link can view\". We read the first tab.",
   "sample.title": "Northwind Freight support tickets",
@@ -145,6 +145,26 @@ const en = {
   "chat.caseLabel": "Case", "chat.words": "{n} words", "chat.editCase": "Edit case", "chat.removeCase": "Remove case",
   "chat.compareShort": "Compare", "chat.addQuestion": "Add a question and press Enter", "chat.collapse": "Show less", "chat.expand": "Show more",
   "chat.save": "Done",
+  // command palette
+  "app.data": "Data", "app.search": "Search",
+  "cmd.title": "Command palette", "cmd.description": "Search for a page, a model or an action",
+  "cmd.placeholder": "Search pages, models and actions…", "cmd.empty": "Nothing found.",
+  "cmd.go": "Go to", "cmd.actions": "Actions", "cmd.open": "Open {name}", "cmd.chatWith": "Chat with {name}",
+  // data
+  "data.title": "Data", "data.lede": "The tables you uploaded and the models trained from each. Start a new model from any of them without uploading again.",
+  "data.name": "Name", "data.rows": "Rows", "data.created": "Uploaded", "data.models": "Trained from it",
+  "data.cols": "{n} columns", "data.new": "New model from this", "data.delete": "Delete", "data.deleted": "Deleted",
+  "data.inUse": "A model was trained from this data", "data.confirm": "Delete {name}? This cannot be undone.",
+  "data.empty": "Nothing uploaded yet.", "data.upload": "Upload data",
+  // create: excel + existing data
+  "create.sheet": "Sheet", "create.sheetHint": "This workbook has {n} sheets. We read \"{sheet}\"; pick another if your cases are there.",
+  "create.fromData": "Already uploaded", "create.fromDataBody": "{rows} rows, {cols} columns. Nothing to upload again.",
+  "create.otherData": "Use other data",
+  // training chart
+  "chart.title": "Training curve", "chart.loss": "Training loss", "chart.val": "Validation loss", "chart.step": "Step",
+  "chart.stepOf": "Step {step} of {total}", "chart.eta": "about {n} min left", "chart.etaSoon": "under a minute left",
+  "chart.best": "best so far at step {step}", "chart.waiting": "The first measurements arrive after 50 steps.",
+  "chart.desc": "Lower is better. At step {step}: training loss {loss}, validation loss {val}.",
 }
 
 type Key = keyof typeof en
@@ -169,9 +189,9 @@ const he: Record<Key, string> = {
   "create.data": "החלטות קודמות",
   "create.dataHint": "טבלה עם שורה לכל מקרה: משהו שמתאר את המקרה, ומה החלטתם לגביו.",
   "tab.upload": "העלאה", "tab.hf": "Hugging Face", "tab.sheets": "Google Sheets", "tab.sample": "דוגמה",
-  "upload.drop": "גררו לכאן קובץ CSV, או לחצו לבחירה", "upload.replace": "לחצו להחלפה",
+  "upload.drop": "גררו לכאן קובץ CSV או Excel, או לחצו לבחירה", "upload.replace": "לחצו להחלפה",
   "upload.private": "נשאר במחשב הזה עד שמתחילים לאמן",
-  "upload.csvOnly": "בינתיים רק CSV. ב־Excel או ב־Sheets: קובץ, הורדה, CSV.",
+  "upload.fileTypes": "רק CSV או Excel (קובצי xlsx). קובץ xls ישן: פתחו ב־Excel ושמרו כ־xlsx.",
   "hf.dataset": "מאגר נתונים", "hf.split": "חלוקה", "hf.hint": "מאגרים ציבוריים. אנחנו קוראים עד 5,000 שורות.",
   "sheets.link": "קישור שיתוף", "sheets.hint": "הגדירו שיתוף ל\"כל מי שיש לו את הקישור יכול לצפות\". אנחנו קוראים את הלשונית הראשונה.",
   "sample.title": "פניות תמיכה של Northwind Freight",
@@ -280,6 +300,22 @@ const he: Record<Key, string> = {
   "chat.caseLabel": "מקרה", "chat.words": "{n} מילים", "chat.editCase": "עריכת המקרה", "chat.removeCase": "הסרת המקרה",
   "chat.compareShort": "השוואה", "chat.addQuestion": "הוסיפו שאלה ולחצו Enter", "chat.collapse": "פחות", "chat.expand": "עוד",
   "chat.save": "סיום",
+  "app.data": "נתונים", "app.search": "חיפוש",
+  "cmd.title": "לוח פקודות", "cmd.description": "חיפוש עמוד, מודל או פעולה",
+  "cmd.placeholder": "חיפוש עמודים, מודלים ופעולות…", "cmd.empty": "לא נמצא דבר.",
+  "cmd.go": "מעבר אל", "cmd.actions": "פעולות", "cmd.open": "פתיחת {name}", "cmd.chatWith": "צ׳אט עם {name}",
+  "data.title": "נתונים", "data.lede": "הטבלאות שהעליתם והמודלים שאומנו מכל אחת. אפשר להתחיל מודל חדש מכל אחת מהן בלי להעלות שוב.",
+  "data.name": "שם", "data.rows": "שורות", "data.created": "הועלה", "data.models": "אומנו ממנה",
+  "data.cols": "{n} עמודות", "data.new": "מודל חדש מהנתונים", "data.delete": "מחיקה", "data.deleted": "נמחק",
+  "data.inUse": "מודל אומן מהנתונים האלה", "data.confirm": "למחוק את {name}? אי אפשר לבטל.",
+  "data.empty": "עדיין לא הועלה דבר.", "data.upload": "העלאת נתונים",
+  "create.sheet": "גיליון", "create.sheetHint": "בחוברת יש {n} גיליונות. קראנו את \"{sheet}\"; בחרו גיליון אחר אם המקרים שם.",
+  "create.fromData": "כבר הועלה", "create.fromDataBody": "{rows} שורות, {cols} עמודות. אין צורך להעלות שוב.",
+  "create.otherData": "נתונים אחרים",
+  "chart.title": "עקומת האימון", "chart.loss": "הפסד באימון", "chart.val": "הפסד באימות", "chart.step": "צעד",
+  "chart.stepOf": "צעד {step} מתוך {total}", "chart.eta": "עוד כ־{n} דק׳", "chart.etaSoon": "פחות מדקה",
+  "chart.best": "הטוב ביותר עד כה בצעד {step}", "chart.waiting": "המדידות הראשונות מגיעות אחרי 50 צעדים.",
+  "chart.desc": "נמוך יותר עדיף. בצעד {step}: הפסד באימון {loss}, הפסד באימות {val}.",
 }
 
 const DICTS: Record<Lang, Record<Key, string>> = { en, he }

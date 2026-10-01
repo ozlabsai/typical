@@ -1,10 +1,11 @@
-import { Boxes, Languages, MessageSquare, Moon, Plus, SlidersHorizontal, Sun } from "lucide-react"
+import { Boxes, Database, Languages, MessageSquare, Moon, Plus, Search, SlidersHorizontal, Sun } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupAction, SidebarGroupContent, SidebarGroupLabel,
   SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarMenuSkeleton,
 } from "@/components/ui/sidebar"
+import { SHORTCUT } from "@/components/command-palette"
 import type { LibraryModel } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { useLibrary } from "@/lib/library"
@@ -20,7 +21,7 @@ export function StatusDot({ status, className }: { status: LibraryModel["status"
   )
 }
 
-export function AppSidebar({ route }: { route: Route }) {
+export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => void }) {
   const { t, lang, setLang } = useI18n()
   const { lib } = useLibrary()
   const { resolvedTheme, setTheme } = useTheme()
@@ -44,6 +45,12 @@ export function AppSidebar({ route }: { route: Route }) {
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={onSearch} tooltip={`${t("app.search")} (${SHORTCUT})`} className="text-muted-foreground">
+              <Search /> <span>{t("app.search")}</span>
+              <kbd dir="ltr" className="ms-auto rounded border bg-muted px-1.5 font-mono text-[10px] leading-4 group-data-[collapsible=icon]:hidden">{SHORTCUT}</kbd>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
 
@@ -64,6 +71,11 @@ export function AppSidebar({ route }: { route: Route }) {
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={route.name === "models"} tooltip={t("app.models")}>
                   <a href={href({ name: "models" })}><Boxes /> <span>{t("app.models")}</span></a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={route.name === "data"} tooltip={t("app.data")}>
+                  <a href={href({ name: "data" })}><Database /> <span>{t("app.data")}</span></a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
