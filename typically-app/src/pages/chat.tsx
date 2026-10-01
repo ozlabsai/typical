@@ -174,7 +174,7 @@ function ModelPicker({ model }: { model?: LibraryModel }) {
   const mine = (lib?.custom ?? []).filter((m) => m.status === "ready")
   return (
     <Select value={model?.id ?? ""} onValueChange={(id) => go({ name: "chat", model: id })}>
-      <SelectTrigger size="sm" className="h-8 max-w-52 border-0 bg-transparent shadow-none hover:bg-muted dark:bg-transparent" aria-label={t("chat.model")}>
+      <SelectTrigger size="sm" className="h-8 max-w-52 border-0 bg-transparent ps-1 shadow-none hover:bg-muted dark:bg-transparent" aria-label={t("chat.model")}>
         <SelectValue placeholder={t("chat.model")} />
       </SelectTrigger>
       <SelectContent align="start">
@@ -260,10 +260,11 @@ export function ChatPage({ modelId }: { modelId?: string }) {
   }
 
   const composer = (
-    <div className="grid min-w-0 gap-2 rounded-xl border bg-card p-2 shadow-sm transition-shadow focus-within:shadow-md focus-within:ring-3 focus-within:ring-ring/20">
+    <div className="grid min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow focus-within:shadow-md focus-within:ring-3 focus-within:ring-ring/20">
+      {/* one inset for everything: 16px, the same as the answer cards (p-4); the controls divider runs full width */}
       {/* the case: a card once pasted, a textarea while typing */}
       {caseCard ? (
-        <CaseCard text={caseText} onEdit={() => { setCaseCard(false); setTimeout(() => caseInput.current?.focus()) }} onRemove={() => setCase("")} />
+        <div className="px-4 pt-4"><CaseCard text={caseText} onEdit={() => { setCaseCard(false); setTimeout(() => caseInput.current?.focus()) }} onRemove={() => setCase("")} /></div>
       ) : (
         <Textarea
           ref={caseInput} dir="auto" value={caseText} rows={2} placeholder={t("chat.casePlaceholder")}
@@ -274,12 +275,12 @@ export function ChatPage({ modelId }: { modelId?: string }) {
           }}
           onBlur={() => { if (caseText) setCase(caseText) }}
           onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send() } }}
-          className="max-h-48 min-h-0 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
+          className="max-h-48 min-h-0 resize-none rounded-none border-0 bg-transparent px-4 pt-4 pb-1 shadow-none focus-visible:ring-0 dark:bg-transparent"
         />
       )}
 
       {/* the questions: chips plus a tag-style input on one line */}
-      <div className="flex flex-wrap items-center gap-1 px-1">
+      <div className="flex flex-wrap items-center gap-1 px-4 pt-2 pb-4">
         {questions.map((q, i) => (
           <QuestionChip key={i} q={q}
             onChange={(nq) => setQuestions((qs) => qs.map((x, j) => (j === i ? nq : x)))}
@@ -293,14 +294,14 @@ export function ChatPage({ modelId }: { modelId?: string }) {
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send() }
               if (e.key === "Backspace" && !draft && questions.length) setQuestions((qs) => qs.slice(0, -1))
             }}
-            className="h-6 w-full min-w-0 bg-transparent px-1.5 text-xs outline-none placeholder:text-muted-foreground"
+            className={cn("h-6 w-full min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground", questions.length ? "px-1.5" : "px-0")}
           />
           {parsing && <Loader2 className="absolute end-1 size-3.5 animate-spin text-muted-foreground" />}
         </span>
       </div>
 
       {/* controls row */}
-      <div className="flex items-center gap-1 border-t pt-2">
+      <div className="flex items-center gap-1 border-t ps-3 pe-4 py-2">
         <ModelPicker model={model} />
         {custom && (
           <Label className="flex h-8 items-center gap-2 rounded-md px-2 text-sm font-normal text-muted-foreground hover:bg-muted">
