@@ -142,6 +142,9 @@ const en = {
   "models.steps": "{n} steps", "models.questions": "{n} questions",
   // new model
   "new.title": "New model", "new.lede": "Teach a decision model your way of deciding, from decisions you already made.",
+  "chat.caseLabel": "Case", "chat.words": "{n} words", "chat.editCase": "Edit case", "chat.removeCase": "Remove case",
+  "chat.compareShort": "Compare", "chat.addQuestion": "Add a question and press Enter", "chat.collapse": "Show less", "chat.expand": "Show more",
+  "chat.save": "Done",
 }
 
 type Key = keyof typeof en
@@ -274,6 +277,9 @@ const he: Record<Key, string> = {
   "models.notReady": "המודל עדיין מתאמן.", "models.failed": "האימון נכשל.",
   "models.steps": "{n} צעדים", "models.questions": "{n} שאלות",
   "new.title": "מודל חדש", "new.lede": "למדו מודל החלטות לקבל החלטות כמוכם, מהחלטות שכבר קיבלתם.",
+  "chat.caseLabel": "מקרה", "chat.words": "{n} מילים", "chat.editCase": "עריכת המקרה", "chat.removeCase": "הסרת המקרה",
+  "chat.compareShort": "השוואה", "chat.addQuestion": "הוסיפו שאלה ולחצו Enter", "chat.collapse": "פחות", "chat.expand": "עוד",
+  "chat.save": "סיום",
 }
 
 const DICTS: Record<Lang, Record<Key, string>> = { en, he }

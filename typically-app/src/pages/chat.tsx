@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, ChevronDown, ListChecks, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react"
+import { ArrowUp, FileText, ListChecks, Loader2, Pencil, Sparkles, Trash2, X } from "lucide-react"
 
 import { StatusDot } from "@/components/app-sidebar"
 import { HeaderActions } from "@/components/layout"
@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
@@ -33,20 +34,48 @@ const STORE = "typically.chat"
 const load = (): Turn[] => {
   try { return JSON.parse(localStorage.getItem(STORE) ?? "[]") } catch { return [] }
 }
+const COLLAPSE_AT = 160 // a paste this long (or multi-line) becomes a Case card, like Claude's pasted-text chips
+const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length
 
-/* ------------------------------------------------------------------ answer rendering */
+/* ------------------------------------------------------------------ case card (composer + transcript) */
+
+function CaseCard({ text, onEdit, onRemove, className }: { text: string; onEdit?: () => void; onRemove?: () => void; className?: string }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const body = text.trim()
+  return (
+    <div className={cn("grid gap-1.5 rounded-lg border bg-muted/40 p-3", className)}>
+      <div className="flex items-center gap-2">
+        <FileText className="size-4 shrink-0 text-muted-foreground" />
+        <span className="text-xs font-medium">{t("chat.caseLabel")}</span>
+        <span className="text-xs text-muted-foreground tabular">{t("chat.words", { n: words(body) })}</span>
+        <span className="ms-auto flex items-center gap-0.5">
+          {onEdit && <Button variant="ghost" size="icon-xs" onClick={onEdit} aria-label={t("chat.editCase")}><Pencil /></Button>}
+          {onRemove && <Button variant="ghost" size="icon-xs" onClick={onRemove} aria-label={t("chat.removeCase")}><X /></Button>}
+        </span>
+      </div>
+      <p dir="auto" className={cn("text-sm whitespace-pre-wrap text-muted-foreground", !open && "line-clamp-2")}>{body}</p>
+      {body.length > COLLAPSE_AT && (
+        <button type="button" onClick={() => setOpen(!open)} className="justify-self-start text-xs text-muted-foreground hover:text-foreground">
+          {t(open ? "chat.collapse" : "chat.expand")}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ answers */
 
 function Answer({ q, r, tone, label }: { q: AskQuestion; r: Result; tone: "standard" | "yours"; label?: string }) {
   const { t } = useI18n()
   const ranked = Object.entries(r.probs).sort((a, b) => b[1] - a[1])
-  const unsure = r.p_null >= 0.5
   return (
     <div className="grid gap-2">
-      {label && <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={cn("size-1.5 rounded-full", tone === "standard" ? "bg-standard" : "bg-yours")} />{label}</span>}
+      {label && <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={cn("size-1.5 rounded-full", tone === "standard" ? "bg-standard" : "bg-yours")} /><span dir="auto">{label}</span></span>}
       <div className="flex items-baseline gap-2">
-        <span className="text-base font-semibold">{say(t, q.type, r.argmax)}</span>
+        <span dir="auto" className="text-base font-semibold">{say(t, q.type, r.argmax)}</span>
         <span className="font-mono text-sm text-muted-foreground tabular">{pct(r.probs[r.argmax])}</span>
-        {unsure && <Badge variant="outline" className="font-normal">{t("chat.notSure")}</Badge>}
+        {r.p_null >= 0.5 && <Badge variant="outline" className="font-normal">{t("chat.notSure")}</Badge>}
       </div>
       <div className="grid gap-1">
         {ranked.slice(0, 6).map(([l, p]) => (
@@ -55,7 +84,7 @@ function Answer({ q, r, tone, label }: { q: AskQuestion; r: Result; tone: "stand
             <div className="h-1 overflow-hidden rounded-full bg-muted">
               <div className={cn("h-full rounded-full transition-[width] duration-200", l === r.argmax ? (tone === "standard" ? "bg-standard" : "bg-yours") : "bg-muted-foreground/30")} style={{ width: `${p * 100}%` }} />
             </div>
-            <span className="text-end font-mono tabular text-muted-foreground">{pct(p)}</span>
+            <span className="text-end font-mono text-muted-foreground tabular">{pct(p)}</span>
           </div>
         ))}
         {r.p_null >= 0.15 && <p className="text-xs text-muted-foreground">{t("chat.noneFit")}: {pct(r.p_null)}</p>}
@@ -66,23 +95,18 @@ function Answer({ q, r, tone, label }: { q: AskQuestion; r: Result; tone: "stand
 
 function TurnView({ turn }: { turn: Turn }) {
   const { t } = useI18n()
-  const [open, setOpen] = useState(false)
-  const long = turn.case.length > 280
   return (
     <div className="grid gap-4">
-      {/* the user's case + questions */}
-      <div className="ms-auto grid max-w-[85%] gap-2 rounded-xl rounded-se-sm bg-muted px-4 py-3">
-        <p dir="auto" className={cn("whitespace-pre-wrap text-sm", long && !open && "line-clamp-4")}>{turn.case}</p>
-        {long && <button type="button" onClick={() => setOpen(!open)} className="justify-self-start text-xs text-muted-foreground hover:text-foreground">{open ? "−" : "…"}</button>}
-        <div className="flex flex-wrap gap-1.5">
-          {turn.questions.map((q, i) => <Badge key={i} variant="outline" className="bg-background font-normal" dir="auto">{q.question}</Badge>)}
+      <div className="ms-auto grid w-full max-w-[85%] gap-2">
+        <CaseCard text={turn.case} />
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {turn.questions.map((q, i) => <Badge key={i} variant="secondary" className="font-normal" dir="auto">{q.question}</Badge>)}
         </div>
       </div>
-      {/* the model's answers */}
       <div className="grid gap-3">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="grid size-5 place-items-center rounded-full bg-primary/10"><span className="size-1.5 rounded-full bg-primary" /></span>
-          <span className="font-medium text-foreground">{turn.modelName}</span>
+          <span dir="auto" className="font-medium text-foreground">{turn.modelName}</span>
           {turn.result && <span className="font-mono tabular">{t("chat.ms", { n: Math.round(turn.result.ms) })}</span>}
         </div>
         {turn.error ? (
@@ -90,27 +114,23 @@ function TurnView({ turn }: { turn: Turn }) {
         ) : !turn.result ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> {t("chat.thinking")}</p>
         ) : (
-          <div className="grid gap-3">
-            {turn.questions.map((q, i) => {
-              const mine = turn.result!.results[i], base = turn.result!.base?.results[i]
-              return (
-                <div key={i} className="rounded-xl border bg-card p-4">
-                  <div className="mb-3 flex items-start justify-between gap-3">
-                    <p dir="auto" className="text-sm font-medium">{q.question}</p>
-                    {base && base.argmax !== mine.argmax && <Badge variant="secondary">{t("pg.disagree")}</Badge>}
-                  </div>
-                  {base ? (
-                    <div className="grid gap-5 sm:grid-cols-2">
-                      <Answer q={q} r={base} tone="standard" label={t("ev.standardCol")} />
-                      <Answer q={q} r={mine} tone="yours" label={turn.modelName} />
-                    </div>
-                  ) : (
-                    <Answer q={q} r={mine} tone="yours" />
-                  )}
+          turn.questions.map((q, i) => {
+            const mine = turn.result!.results[i], base = turn.result!.base?.results[i]
+            return (
+              <div key={i} className="grid gap-3 rounded-xl border bg-card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <p dir="auto" className="text-sm font-medium">{q.question}</p>
+                  {base && base.argmax !== mine.argmax && <Badge variant="secondary">{t("pg.disagree")}</Badge>}
                 </div>
-              )
-            })}
-          </div>
+                {base ? (
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <Answer q={q} r={base} tone="standard" label={t("ev.standardCol")} />
+                    <Answer q={q} r={mine} tone="yours" label={turn.modelName} />
+                  </div>
+                ) : <Answer q={q} r={mine} tone="yours" />}
+              </div>
+            )
+          })
         )}
       </div>
     </div>
@@ -121,33 +141,55 @@ function TurnView({ turn }: { turn: Turn }) {
 
 function QuestionChip({ q, onChange, onRemove }: { q: AskQuestion; onChange: (q: AskQuestion) => void; onRemove: () => void }) {
   const { t } = useI18n()
-  const [edit, setEdit] = useState(false)
   return (
-    <div className={cn("max-w-full min-w-0 rounded-lg border bg-background text-sm", edit && "w-full")}>
-      <div className="flex items-center gap-1 ps-2.5">
-        <button type="button" onClick={() => setEdit(!edit)} className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-start" aria-label={t("chat.edit")}>
-          <span dir="auto" className="truncate">{q.question}</span>
-          <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">· {t(`type.${q.type}`)}</span>
-          <ChevronDown className={cn("size-3 shrink-0 text-muted-foreground transition-transform", edit && "rotate-180")} />
-        </button>
-        <Button variant="ghost" size="icon-xs" onClick={onRemove} aria-label={t("chat.remove")}><X /></Button>
-      </div>
-      {edit && (
-        <div className="grid gap-2 border-t p-2.5 sm:grid-cols-[1fr_140px]">
-          <Input dir="auto" value={q.question} onChange={(e) => onChange({ ...q, question: e.target.value })} aria-label={t("chat.edit")} />
-          <Select value={q.type} onValueChange={(v) => onChange({ ...q, type: v as AskQuestion["type"], labels: v === "noul" ? ["no", "yes"] : v === "score" && q.type !== "score" ? ["1", "2", "3", "4", "5"] : q.labels })}>
-            <SelectTrigger className="w-full" aria-label={t("chat.type")}><SelectValue /></SelectTrigger>
-            <SelectContent>{TYPES.map((ty) => <SelectItem key={ty} value={ty}>{t(`type.${ty}`)}</SelectItem>)}</SelectContent>
-          </Select>
+    <span className="inline-flex max-w-full min-w-0 items-center rounded-full border bg-background text-xs">
+      <Popover>
+        <PopoverTrigger asChild>
+          <button type="button" className="flex min-w-0 items-center rounded-s-full py-1 ps-2.5 pe-1 text-start hover:bg-muted/60" aria-label={t("chat.edit")} title={t(`type.${q.type}`)}>
+            <span dir="auto" className="truncate">{q.question}</span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="grid w-80 gap-3">
+          <div className="grid gap-1.5"><Label className="text-xs">{t("chat.edit")}</Label>
+            <Input dir="auto" value={q.question} onChange={(e) => onChange({ ...q, question: e.target.value })} /></div>
+          <div className="grid gap-1.5"><Label className="text-xs">{t("chat.type")}</Label>
+            <Select value={q.type} onValueChange={(v) => onChange({ ...q, type: v as AskQuestion["type"], labels: v === "noul" ? ["no", "yes"] : v === "score" && q.type !== "score" ? ["1", "2", "3", "4", "5"] : q.labels })}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>{TYPES.map((ty) => <SelectItem key={ty} value={ty}>{t(`type.${ty}`)}</SelectItem>)}</SelectContent>
+            </Select></div>
           {q.type !== "noul" && (
-            <div className="grid gap-1 sm:col-span-2">
-              <Label className="text-xs text-muted-foreground">{t("chat.options")} <span className="font-normal">({t("chat.optionsHint")})</span></Label>
-              <Input dir="auto" defaultValue={(q.labels ?? []).join(", ")} onBlur={(e) => onChange({ ...q, labels: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
-            </div>
+            <div className="grid gap-1.5"><Label className="text-xs">{t("chat.options")} <span className="font-normal text-muted-foreground">({t("chat.optionsHint")})</span></Label>
+              <Input dir="auto" defaultValue={(q.labels ?? []).join(", ")} onBlur={(e) => onChange({ ...q, labels: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} /></div>
           )}
-        </div>
-      )}
-    </div>
+        </PopoverContent>
+      </Popover>
+      <button type="button" onClick={onRemove} aria-label={t("chat.remove")} className="me-0.5 grid size-5 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X className="size-3" /></button>
+    </span>
+  )
+}
+
+function ModelPicker({ model }: { model?: LibraryModel }) {
+  const { t } = useI18n()
+  const { lib } = useLibrary()
+  const mine = (lib?.custom ?? []).filter((m) => m.status === "ready")
+  return (
+    <Select value={model?.id ?? ""} onValueChange={(id) => go({ name: "chat", model: id })}>
+      <SelectTrigger size="sm" className="h-8 max-w-52 border-0 bg-transparent shadow-none hover:bg-muted dark:bg-transparent" aria-label={t("chat.model")}>
+        <SelectValue placeholder={t("chat.model")} />
+      </SelectTrigger>
+      <SelectContent align="start">
+        {mine.length > 0 && (
+          <SelectGroup>
+            <SelectLabel>{t("app.yourModels")}</SelectLabel>
+            {mine.map((m) => <SelectItem key={m.id} value={m.id}><StatusDot status={m.status} /> <span dir="auto">{m.name}</span></SelectItem>)}
+          </SelectGroup>
+        )}
+        <SelectGroup>
+          <SelectLabel>{t("app.base")}</SelectLabel>
+          {(lib?.base ?? []).map((m) => <SelectItem key={m.id} value={m.id}>{m.name} <span className="text-muted-foreground">{m.params}</span></SelectItem>)}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
   )
 }
 
@@ -157,25 +199,36 @@ export function ChatPage({ modelId }: { modelId?: string }) {
   const { t, lang } = useI18n()
   const { lib, find } = useLibrary()
   const [turns, setTurns] = useState<Turn[]>(load)
-  const [text, setText] = useState("")
+  const [caseText, setCaseText] = useState("")
+  const [caseCard, setCaseCard] = useState(false) // collapsed into a Case card
   const [questions, setQuestions] = useState<AskQuestion[]>([])
   const [draft, setDraft] = useState("")
   const [parsing, setParsing] = useState(false)
   const [compare, setCompare] = useState(true)
   const [examples, setExamples] = useState<string[]>([])
   const end = useRef<HTMLDivElement>(null)
+  const caseInput = useRef<HTMLTextAreaElement>(null)
 
   const ready = useMemo(() => [...(lib?.custom ?? []).filter((m) => m.status === "ready"), ...(lib?.base ?? [])], [lib])
   const model: LibraryModel | undefined = find(modelId) ?? ready[0]
   const custom = model?.kind === "custom"
+  const trained = (model?.decisions ?? []).map(({ question, type, labels }) => ({ question, type, labels }))
+  const shown = turns.filter((x) => x.model === model?.id)
+  const canSend = Boolean(model && caseText.trim() && questions.length)
 
   useEffect(() => { localStorage.setItem(STORE, JSON.stringify(turns.slice(-50))) }, [turns])
-  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth", block: "end" }) }, [turns])  // braces: scrollIntoView returns a Promise in newer Chromium, which React would call as cleanup
+  // braces: scrollIntoView returns a Promise in newer Chromium, which React would call as an effect cleanup
+  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth", block: "end" }) }, [turns])
   useEffect(() => {
     if (!model) return
-    if (custom && model.decisions?.length && !questions.length) setQuestions(model.decisions.map(({ question, type, labels }) => ({ question, type, labels })))
+    setQuestions(model.kind === "custom" && trained.length ? trained : [])
     library.get(model.id).then((m) => setExamples(m.examples ?? [])).catch(() => setExamples([]))
   }, [model?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setCase = (text: string) => {
+    setCaseText(text)
+    setCaseCard(text.length > COLLAPSE_AT || text.trim().includes("\n"))
+  }
 
   async function addQuestion() {
     const q = draft.trim()
@@ -184,20 +237,20 @@ export function ChatPage({ modelId }: { modelId?: string }) {
     try {
       const p = await library.parseQuestion(q, lang)
       setQuestions((qs) => [...qs, { question: p.question || q, type: p.type, labels: p.labels }])
-      setDraft("")
     } catch {
       setQuestions((qs) => [...qs, { question: q, type: "noul", labels: ["no", "yes"] }])
-      setDraft("")
     } finally {
+      setDraft("")
       setParsing(false)
     }
   }
 
   async function send() {
-    if (!model || !text.trim() || !questions.length) return
-    const turn: Turn = { id: crypto.randomUUID(), model: model.id, modelName: model.name, case: text.trim(), questions, compare: custom && compare }
+    if (!canSend || !model) return
+    const turn: Turn = { id: crypto.randomUUID(), model: model.id, modelName: model.name, case: caseText.trim(), questions, compare: custom && compare }
     setTurns((ts) => [...ts, turn])
-    setText("")
+    setCaseText("")
+    setCaseCard(false)
     try {
       const result = await library.ask({ model: model.id, case: turn.case, questions, compare_with_base: turn.compare })
       setTurns((ts) => ts.map((x) => (x.id === turn.id ? { ...x, result } : x)))
@@ -206,106 +259,115 @@ export function ChatPage({ modelId }: { modelId?: string }) {
     }
   }
 
-  const shown = turns.filter((x) => x.model === model?.id)
+  const composer = (
+    <div className="grid min-w-0 gap-2 rounded-xl border bg-card p-2 shadow-sm transition-shadow focus-within:shadow-md focus-within:ring-3 focus-within:ring-ring/20">
+      {/* the case: a card once pasted, a textarea while typing */}
+      {caseCard ? (
+        <CaseCard text={caseText} onEdit={() => { setCaseCard(false); setTimeout(() => caseInput.current?.focus()) }} onRemove={() => setCase("")} />
+      ) : (
+        <Textarea
+          ref={caseInput} dir="auto" value={caseText} rows={2} placeholder={t("chat.casePlaceholder")}
+          onChange={(e) => setCaseText(e.target.value)}
+          onPaste={(e) => {
+            const pasted = e.clipboardData.getData("text")
+            if (!caseText && (pasted.length > COLLAPSE_AT || pasted.includes("\n"))) { e.preventDefault(); setCase(pasted) }
+          }}
+          onBlur={() => { if (caseText) setCase(caseText) }}
+          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send() } }}
+          className="max-h-48 min-h-0 resize-none border-0 bg-transparent px-2 shadow-none focus-visible:ring-0 dark:bg-transparent"
+        />
+      )}
 
-  return (
-    <div className="flex h-full flex-col">
-      <HeaderActions>
+      {/* the questions: chips plus a tag-style input on one line */}
+      <div className="flex flex-wrap items-center gap-1 px-1">
+        {questions.map((q, i) => (
+          <QuestionChip key={i} q={q}
+            onChange={(nq) => setQuestions((qs) => qs.map((x, j) => (j === i ? nq : x)))}
+            onRemove={() => setQuestions((qs) => qs.filter((_, j) => j !== i))} />
+        ))}
+        <span className="relative flex min-w-40 flex-1 items-center">
+          <input
+            value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={t("chat.addQuestion")} aria-label={t("chat.addQuestion")}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); addQuestion() }
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send() }
+              if (e.key === "Backspace" && !draft && questions.length) setQuestions((qs) => qs.slice(0, -1))
+            }}
+            className="h-6 w-full min-w-0 bg-transparent px-1.5 text-xs outline-none placeholder:text-muted-foreground"
+          />
+          {parsing && <Loader2 className="absolute end-1 size-3.5 animate-spin text-muted-foreground" />}
+        </span>
+      </div>
+
+      {/* controls row */}
+      <div className="flex items-center gap-1 border-t pt-2">
+        <ModelPicker model={model} />
         {custom && (
-          <Label className="hidden items-center gap-2 text-sm font-normal whitespace-nowrap md:flex">
-            <Switch checked={compare} onCheckedChange={setCompare} /> {t("chat.compare")}
+          <Label className="flex h-8 items-center gap-2 rounded-md px-2 text-sm font-normal text-muted-foreground hover:bg-muted">
+            <Switch size="sm" checked={compare} onCheckedChange={setCompare} /> {t("chat.compareShort")}
           </Label>
         )}
-        {shown.length > 0 && (
+        {custom && trained.length > 0 && JSON.stringify(questions) !== JSON.stringify(trained) && (
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setQuestions(trained)} title={t("chat.trained")}>
+            <ListChecks data-icon="inline-start" /> <span className="hidden md:inline">{t("chat.trained")}</span>
+          </Button>
+        )}
+        <Button size="icon-sm" className="ms-auto rounded-full" onClick={send} disabled={!canSend}
+          aria-label={`${t("chat.send")} (${t("chat.sendHint")})`} title={!questions.length ? t("chat.noQuestions") : t("chat.sendHint")}>
+          <ArrowUp />
+        </Button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="relative flex h-full flex-col">
+      {shown.length > 0 && (
+        <HeaderActions>
           <Button variant="ghost" size="icon-sm" onClick={() => setTurns((ts) => ts.filter((x) => x.model !== model?.id))} aria-label={t("chat.clear")} title={t("chat.clear")}>
             <Trash2 />
           </Button>
-        )}
-        <Select value={model?.id ?? ""} onValueChange={(id) => go({ name: "chat", model: id })}>
-          <SelectTrigger size="sm" className="w-44 sm:w-56" aria-label={t("chat.model")}>
-            <SelectValue placeholder={t("chat.model")} />
-          </SelectTrigger>
-          <SelectContent align="end">
-            {(lib?.custom ?? []).filter((m) => m.status === "ready").length > 0 && (
-              <SelectGroup>
-                <SelectLabel>{t("app.yourModels")}</SelectLabel>
-                {lib!.custom.filter((m) => m.status === "ready").map((m) => (
-                  <SelectItem key={m.id} value={m.id}><StatusDot status={m.status} /> <span dir="auto">{m.name}</span></SelectItem>
-                ))}
-              </SelectGroup>
-            )}
-            <SelectGroup>
-              <SelectLabel>{t("app.base")}</SelectLabel>
-              {(lib?.base ?? []).map((m) => <SelectItem key={m.id} value={m.id}>{m.name} <span className="text-muted-foreground">{m.params}</span></SelectItem>)}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </HeaderActions>
-      {/* transcript */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto grid max-w-3xl gap-6 px-4 py-8 md:px-6">
-          {!shown.length && model && (
-            <div className="grid gap-6 pt-6 text-center">
-              <div className="mx-auto grid size-10 place-items-center rounded-xl bg-primary/10"><Sparkles className="size-5 text-primary" /></div>
-              <div>
-                <h1 className="text-xl font-semibold tracking-tight" dir="auto">{t("chat.emptyTitle", { name: model.name })}</h1>
-                <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">{t("chat.emptyBody")}</p>
-              </div>
-              {examples.length > 0 && (
-                <div className="grid gap-2 text-start sm:grid-cols-3">
-                  {examples.slice(0, 3).map((ex, i) => (
-                    <button key={i} type="button" onClick={() => setText(ex)}
-                      className="rounded-xl border bg-card p-3 text-start text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
-                      <span className="mb-1 block font-medium text-foreground">{t("chat.try")}</span>
-                      <span dir="auto" className="line-clamp-4">{ex.split("\n\n").at(-1)}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {shown.map((turn) => <TurnView key={turn.id} turn={turn} />)}
-          <div ref={end} />
-        </div>
-      </div>
+        </HeaderActions>
+      )}
 
-      {/* composer */}
-      <div className="border-t bg-background px-4 pt-3 pb-4 md:px-6">
-        <div className="mx-auto grid max-w-3xl min-w-0 gap-2 rounded-xl border bg-card p-2 shadow-xs focus-within:ring-3 focus-within:ring-ring/30">
-          <Textarea
-            dir="auto" value={text} rows={3} placeholder={t("chat.casePlaceholder")}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === "Enter" && (e.preventDefault(), send())}
-            className="max-h-60 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent"
-          />
-          <div className="flex flex-wrap items-start gap-1.5 px-1">
-            {questions.map((q, i) => (
-              <QuestionChip key={i} q={q}
-                onChange={(nq) => setQuestions((qs) => qs.map((x, j) => (j === i ? nq : x)))}
-                onRemove={() => setQuestions((qs) => qs.filter((_, j) => j !== i))} />
-            ))}
-          </div>
-          <div className="flex min-w-0 items-center gap-2 px-1">
-            <div className="relative min-w-0 flex-1">
-              <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={t("chat.questionPlaceholder")}
-                onKeyDown={(e) => e.key === "Enter" && !e.metaKey && !e.ctrlKey && (e.preventDefault(), addQuestion())}
-                className="h-8 border-0 bg-muted/50 pe-16 shadow-none" />
-              <Button variant="ghost" size="xs" onClick={addQuestion} disabled={!draft.trim() || parsing} className="absolute end-1 top-1">
-                {parsing ? <Loader2 className="animate-spin" /> : <Plus />} {t("chat.add")}
-              </Button>
+      {!shown.length ? (
+        /* empty: everything centred, composer in the middle (ChatGPT / Gemini / Perplexity) */
+        <div className="flex flex-1 items-center overflow-y-auto">
+          <div className="mx-auto grid w-full max-w-3xl gap-6 px-4 py-10 md:px-6">
+            <div className="grid justify-items-center gap-3 text-center">
+              <div className="grid size-10 place-items-center rounded-xl bg-primary/10"><Sparkles className="size-5 text-primary" /></div>
+              <h1 dir="auto" className="text-xl font-semibold tracking-tight">{model ? t("chat.emptyTitle", { name: model.name }) : t("chat.title")}</h1>
+              <p className="max-w-lg text-sm text-muted-foreground">{t("chat.emptyBody")}</p>
             </div>
-            {custom && model?.decisions?.length ? (
-              <Button variant="ghost" size="sm" onClick={() => setQuestions(model.decisions!.map(({ question, type, labels }) => ({ question, type, labels })))}>
-                <ListChecks data-icon="inline-start" /> <span className="hidden sm:inline">{t("chat.trained")}</span>
-              </Button>
-            ) : null}
-            <Button size="icon" className="rounded-full" onClick={send} disabled={!text.trim() || !questions.length || !model}
-              aria-label={`${t("chat.send")} (${t("chat.sendHint")})`} title={!questions.length ? t("chat.noQuestions") : t("chat.sendHint")}>
-              <ArrowUp />
-            </Button>
+            {composer}
+            {examples.length > 0 && (
+              <div className="grid gap-2 sm:grid-cols-3">
+                {examples.slice(0, 3).map((ex, i) => (
+                  <button key={i} type="button" onClick={() => setCase(ex)}
+                    className="grid content-start gap-1 rounded-xl border bg-card p-3 text-start text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
+                    <span className="font-medium text-foreground">{t("chat.try")}</span>
+                    <span dir="auto" className="line-clamp-3">{ex.split("\n\n").at(-1)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      ) : (
+        <>
+          {/* conversation: one column; the composer floats at its foot with a fade, same width (Conductor / ChatGPT) */}
+          <div className="flex-1 overflow-y-auto">
+            <div className="mx-auto grid max-w-3xl gap-8 px-4 pt-8 pb-6 md:px-6">
+              {shown.map((turn) => <TurnView key={turn.id} turn={turn} />)}
+              <div ref={end} />
+            </div>
+          </div>
+          <div className="relative shrink-0">
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 -top-8 h-8 bg-gradient-to-t from-background to-transparent" />
+            <div className="mx-auto max-w-3xl px-4 pb-4 md:px-6">{composer}</div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
