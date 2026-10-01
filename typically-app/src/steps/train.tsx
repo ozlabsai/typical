@@ -18,7 +18,7 @@ import { BASES, included, PRESETS, type Preset, type Project } from "@/lib/proje
 import { cn } from "@/lib/utils"
 
 const PHASES = ["starting_gpu", "uploading", "training", "evaluating", "downloading"] as const
-const CODES = ["queued", "gpu_starting", "uploading", "baseline", "training", "evaluating", "downloading", "done"] as const
+const CODES = ["queued", "gpu_starting", "uploading", "baseline", "training", "evaluating", "downloading", "done", "failed_provider"] as const
 const ORDER = ["queued", "starting_gpu", "uploading", "training", "evaluating", "downloading", "done"]
 
 function useElapsed(since?: string) {

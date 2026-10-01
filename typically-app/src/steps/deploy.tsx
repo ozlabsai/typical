@@ -31,6 +31,7 @@ export function DeployPanel({ model }: { model: ModelRef }) {
   const [hf, setHf] = useState({ repo: "", private: true })
   const [pushed, setPushed] = useState<string | null>(null)
   const [pushError, setPushError] = useState<string | null>(null)
+  const [instead, setInstead] = useState<string | null>(null) // the org's storage is full: the token owner's own repo
 
   useEffect(() => {
     api.snippets(id).then(setSnips).catch((e) => setSnipError(msg(e)))
@@ -51,15 +52,17 @@ export function DeployPanel({ model }: { model: ModelRef }) {
     }
   }
 
-  async function push() {
+  async function push(repo = hf.repo.trim()) {
     setBusy("push")
     setPushError(null)
+    setInstead(null)
     try {
-      const r = await api.push({ run: model.run, repo: hf.repo.trim() || undefined, private: hf.private })
+      const r = await api.push({ run: model.run, repo: repo || undefined, private: hf.private })
       setPushed(r.url)
       toast.success(t("dep.pushed"))
     } catch (e) {
       setPushError(msg(e))
+      setInstead((e as { detail?: { repo?: string | null } }).detail?.repo ?? null)
     } finally {
       setBusy(null)
     }
@@ -126,10 +129,17 @@ export function DeployPanel({ model }: { model: ModelRef }) {
               <Switch checked={hf.private} onCheckedChange={(v) => setHf({ ...hf, private: v })} /> {t("dep.private")}
             </Label>
             {pushError && <p role="alert" className="flex items-center gap-2 text-sm text-destructive sm:col-span-2"><AlertCircle className="size-4" /> {pushError}</p>}
+            {instead && (
+              <div className="sm:col-span-2">
+                <Button variant="outline" disabled={busy === "push"} onClick={() => { setHf({ ...hf, repo: instead }); push(instead) }}>
+                  <UploadCloud data-icon="inline-start" /> {t("dep.pushInstead", { ns: instead.split("/")[0] })}
+                </Button>
+              </div>
+            )}
           </CardContent>
           <CardFooter className="justify-between">
             {pushed ? <a href={pushed} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline">{pushed.replace("https://", "")} <ExternalLink className="size-3.5" /></a> : <span />}
-            <Button onClick={push} disabled={!ns || !hf.repo.includes("/") || busy === "push"}>
+            <Button onClick={() => push()} disabled={!ns || !hf.repo.includes("/") || busy === "push"}>
               {busy === "push" ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <UploadCloud data-icon="inline-start" />} {t("dep.push")}
             </Button>
           </CardFooter>

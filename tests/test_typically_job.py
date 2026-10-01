@@ -383,3 +383,123 @@ def test_status_code_field(env):
     assert tj.write_status(SLUG, "training", "x", "baseline")["code"] == "baseline"
     assert tj.write_status(SLUG, "done", "x")["code"] == "done"
     assert tj.read_status(SLUG)["code"] == "done"
+
+
+# -- a flaky / down RunPod API
+@pytest.fixture
+def clock(monkeypatch):
+    """Fake monotonic time: sleep advances it; a failing API call advances it by its timeout."""
+    t = [1000.0]
+    monkeypatch.setattr(tj.time, "monotonic", lambda: t[0])
+    monkeypatch.setattr(tj.time, "sleep", lambda s: t.__setitem__(0, t[0] + s))
+    return t
+
+
+def failing(clock, sub, times=10**9, cost=60):
+    """fail_on for FakeCli: `runpodctl pod <sub>` times out (costing `cost` s) the first `times` calls."""
+    n = [0]
+    def fail(argv):
+        if argv[0] == "runpodctl" and argv[2] == sub and n[0] < times:
+            n[0] += 1
+            clock[0] += cost
+            return True
+    return fail
+
+
+def gets(cli):
+    return [a for a in cli.calls if a[:3] == ["runpodctl", "pod", "get"]]
+
+
+def test_provider_down_while_booting_is_failed_provider_and_deletes(env, monkeypatch, clock):
+    cli = use(monkeypatch, FakeCli(POLLS, fail_on=failing(clock, "get")))
+    tj.run(SLUG, lambda m: None)
+    st = tj.read_status(SLUG)
+    assert (st["phase"], st["code"], st["message"]) == ("failed", "failed_provider", tj.PROVIDER_DOWN)
+    assert len(gets(cli)) == len(tj.RETRY_S) + 1 and cli.deleted_ids() == {"pod1"} and cli.pods == []
+
+
+def test_api_failures_while_booting_are_not_boot_time(env, monkeypatch, clock):
+    # two failed gets cost 2 x 200 s + backoff: past READY_S of wall clock, but not of boot time
+    class Cli(FakeCli):   # the first answered get has no ssh yet, so the wait loop goes round again
+        def __call__(self, argv, timeout, out=None):
+            if argv[:3] == ["runpodctl", "pod", "get"] and len(gets(self)) == 2:
+                self.calls.append(argv)
+                return json.dumps({})
+            return super().__call__(argv, timeout, out)
+    cli = use(monkeypatch, Cli(POLLS, fail_on=failing(clock, "get", times=2, cost=200)))
+    tj.run(SLUG, lambda m: None)
+    assert tj.read_status(SLUG)["phase"] == "done" and len(gets(cli)) == 4 and cli.pods == []
+
+
+def test_a_flaky_api_is_capped_by_the_total_readiness_wait(env, monkeypatch, clock):
+    class Cli(FakeCli):   # every get succeeds after 3 failures, but the pod never shows ssh
+        def __call__(self, argv, timeout, out=None):
+            if argv[:3] == ["runpodctl", "pod", "get"]:
+                self.calls.append(argv)
+                if len(gets(self)) % 4:
+                    clock[0] += 60
+                    raise RuntimeError("timed out")
+                return json.dumps({})
+            return super().__call__(argv, timeout, out)
+    cli = use(monkeypatch, Cli(POLLS))
+    tj.run(SLUG, lambda m: None)
+    assert tj.read_status(SLUG)["code"] == "failed_provider" and cli.pods == []
+    assert len(gets(cli)) < 40   # gave up on the WAIT_CAP_S, long before READY_S of boot time had passed
+
+
+def test_create_that_errored_but_went_through_is_adopted_not_repeated(env, monkeypatch, clock):
+    class Cli(FakeCli):
+        def __call__(self, argv, timeout, out=None):
+            r = super().__call__(argv, timeout, out)
+            if argv[:3] == ["runpodctl", "pod", "create"] and len(self.calls) and sum(a[:3] == argv[:3] for a in self.calls) == 1:
+                raise RuntimeError("runpodctl pod timed out after 180s")   # RunPod made the pod, the reply was lost
+            return r
+    cli = use(monkeypatch, Cli(POLLS))
+    tj.run(SLUG, lambda m: None)
+    assert sum(a[:3] == ["runpodctl", "pod", "create"] for a in cli.calls) == 1
+    assert tj.read_status(SLUG)["phase"] == "done" and cli.deleted_ids() == {"pod1"} and cli.pods == []
+
+
+def test_no_gpu_is_not_retried_and_not_a_provider_failure(env, monkeypatch, clock):
+    class Cli(FakeCli):
+        def __call__(self, argv, timeout, out=None):
+            if argv[:3] == ["runpodctl", "pod", "create"]:
+                self.calls.append(argv)
+                raise RuntimeError('runpodctl pod failed (1): {"error":"There are no instances currently available"}')
+            return super().__call__(argv, timeout, out)
+    cli = use(monkeypatch, Cli())
+    tj.run(SLUG, lambda m: None)
+    st = tj.read_status(SLUG)
+    assert st["code"] == "failed_infra" and "no GPU" in st["message"]
+    assert sum(a[:3] == ["runpodctl", "pod", "create"] for a in cli.calls) == 1
+
+
+def test_provider_down_at_create_is_failed_provider(env, monkeypatch, clock):
+    cli = use(monkeypatch, FakeCli(fail_on=failing(clock, "create")))
+    tj.run(SLUG, lambda m: None)
+    assert tj.read_status(SLUG)["code"] == "failed_provider"
+    assert sum(a[:3] == ["runpodctl", "pod", "create"] for a in cli.calls) == len(tj.RETRY_S) + 1
+
+
+def test_delete_retries_until_confirmed(env, monkeypatch, clock):
+    flaky = failing(clock, "delete", times=2)
+    cli = use(monkeypatch, FakeCli(POLLS, fail_on=flaky))
+    tj.run(SLUG, lambda m: None)
+    assert tj.read_status(SLUG)["phase"] == "done" and len(cli.deleted()) == 3 and cli.pods == []
+
+
+def test_unconfirmed_delete_does_not_claim_nothing_is_billing(env, monkeypatch, clock):
+    fail_get, fail_delete = failing(clock, "get"), failing(clock, "delete")
+    cli = use(monkeypatch, FakeCli(POLLS, fail_on=lambda a: fail_get(a) or fail_delete(a)))
+    logs = []
+    tj.run(SLUG, logs.append)
+    st = tj.read_status(SLUG)
+    assert st["phase"] == "failed" and st["code"] == "failed" and "billing" not in st["message"] and "could not confirm" in st["message"]
+    assert cli.pods and any("WARNING" in m for m in logs)
+
+
+def test_runpodctl_error_json_is_kept_from_under_the_usage_text(monkeypatch):
+    out = 'Usage:\n  runpodctl pod get <pod-id>\n' + 'x\n' * 300 + '{"error":"request failed: context deadline exceeded"}\n'
+    monkeypatch.setattr(tj.subprocess, "run", lambda *a, **k: tj.subprocess.CompletedProcess(a, 1, "", out))
+    with pytest.raises(RuntimeError, match="context deadline exceeded"):
+        tj._run(["runpodctl", "pod", "get", "x"], 5)

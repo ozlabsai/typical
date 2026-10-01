@@ -88,6 +88,7 @@ async function call<T>(path: string, body?: unknown, method?: "DELETE"): Promise
   })
   if (!res.ok) {
     const { detail } = await res.json().catch(() => ({ detail: undefined }))
+    if (typeof detail?.message === "string") throw Object.assign(new Error(detail.message), { detail }) // a structured error: callers read e.detail
     // FastAPI 422 detail is an array of validation errors
     throw new Error(typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `${res.status} ${res.statusText}`)
   }

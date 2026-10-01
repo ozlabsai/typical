@@ -86,6 +86,7 @@ const en = {
   "code.baseline": "Setting up and measuring the starting model.", "code.training": "Learning from your examples.",
   "code.evaluating": "Training finished. Scoring your model on held-out examples.", "code.downloading": "Bringing your model back.",
   "code.done": "Your model is ready.",
+  "code.failed_provider": "The GPU provider isn't responding; nothing is running or billing.",
   // evaluate
   "ev.results": "Results", "ev.playground": "Playground",
   "ev.lede": "How often each model gives the answer {who} actually gave, on {n} cases neither saw while learning ({a} answers).",
@@ -114,7 +115,7 @@ const en = {
   "dep.key": "Your API key", "dep.keyOnce": "Copy it now. We only store a fingerprint, so we can't show it again.",
   "dep.createKey": "Create API key", "dep.use": "Use it", "dep.useHint": "Set {env} in your environment, then:",
   "dep.hf": "Hugging Face", "dep.hfBody": "Keep a copy on Hugging Face. We push it to {ns} for you.",
-  "dep.repo": "Repository", "dep.private": "Private repository", "dep.push": "Push to Hugging Face", "dep.pushed": "Pushed to Hugging Face",
+  "dep.repo": "Repository", "dep.private": "Private repository", "dep.push": "Push to Hugging Face", "dep.pushed": "Pushed to Hugging Face", "dep.pushInstead": "Push to {ns} instead",
   "dep.snippet.curl": "cURL", "dep.snippet.python": "Python", "dep.snippet.javascript": "JavaScript", "dep.snippet.sdk": "Python SDK",
   // app shell
   "app.chat": "Chat", "app.customize": "Customize", "app.models": "Models", "app.new": "New model", "app.yourModels": "Your models",
@@ -255,6 +256,7 @@ const he: Record<Key, string> = {
   "code.baseline": "מכינים ומודדים את מודל הבסיס.", "code.training": "לומד מהדוגמאות שלכם.",
   "code.evaluating": "האימון הסתיים. בודקים את המודל על מקרים שנשמרו בצד.", "code.downloading": "מחזירים את המודל.",
   "code.done": "המודל שלכם מוכן.",
+  "code.failed_provider": "ספק ה־GPU לא מגיב; שום דבר לא רץ ולא מחויב.",
   "ev.results": "תוצאות", "ev.playground": "מגרש משחקים",
   "ev.lede": "באיזו תדירות כל מודל נותן את התשובה ש{who} נתתם בפועל, על {n} מקרים ששניהם לא ראו בלמידה ({a} תשובות).",
   "ev.you": "אתם", "ev.scoring": "בודקים את שני המודלים על המקרים שנשמרו בצד.", "ev.scored": "נבדקו {a} מתוך {b} מקרים", "ev.starting": "מתחילים…",
@@ -281,7 +283,7 @@ const he: Record<Key, string> = {
   "dep.key": "מפתח ה־API שלכם", "dep.keyOnce": "העתיקו אותו עכשיו. אנחנו שומרים רק טביעת אצבע, ולכן לא נוכל להציג אותו שוב.",
   "dep.createKey": "יצירת מפתח API", "dep.use": "שימוש", "dep.useHint": "הגדירו את {env} בסביבה שלכם, ואז:",
   "dep.hf": "Hugging Face", "dep.hfBody": "שמרו עותק ב־Hugging Face. אנחנו מעלים אותו בשבילכם ל־{ns}.",
-  "dep.repo": "מאגר", "dep.private": "מאגר פרטי", "dep.push": "העלאה ל־Hugging Face", "dep.pushed": "הועלה ל־Hugging Face",
+  "dep.repo": "מאגר", "dep.private": "מאגר פרטי", "dep.push": "העלאה ל־Hugging Face", "dep.pushed": "הועלה ל־Hugging Face", "dep.pushInstead": "העלאה ל־{ns} במקום",
   "dep.snippet.curl": "cURL", "dep.snippet.python": "Python", "dep.snippet.javascript": "JavaScript", "dep.snippet.sdk": "Python SDK",
   "app.chat": "צ׳אט", "app.customize": "התאמה אישית", "app.models": "מודלים", "app.new": "מודל חדש", "app.yourModels": "המודלים שלכם",
   "app.noModels": "עדיין אין מודלים", "app.settings": "הגדרות", "app.base": "מודלי בסיס", "app.sample": "דוגמה",

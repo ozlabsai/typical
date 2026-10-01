@@ -277,3 +277,49 @@ def test_capabilities(env, hub, monkeypatch):
     monkeypatch.delenv("HF_TOKEN")
     monkeypatch.setattr(td, "get_token", lambda: None)
     assert env.get("/api/typically/capabilities").json()["hf_namespace"] is None
+
+
+def test_push_default_repo_is_the_display_name_slug(env, tmp_path, hub):
+    _, api = hub
+    trained(tmp_path, "co_f")
+    trained(tmp_path, "co_acme")
+    (tmp_path / "jobs" / "acme").mkdir(parents=True)
+    (tmp_path / "jobs" / "acme" / "job.json").write_text(json.dumps({"name": "Acme  Support Triage!"}))
+    assert env.post("/api/typically/push", json={"run": "co_f"}).json()["url"].endswith("/OzLabs/northwind-triage")
+    assert env.post("/api/typically/push", json={"run": "co_acme"}).json()["url"].endswith("/OzLabs/acme-support-triage")
+    (tmp_path / "jobs" / "acme" / "job.json").write_text(json.dumps({"name": "מיון פניות"}))   # no latin letters: the id
+    assert env.post("/api/typically/push", json={"run": "co_acme"}).json()["url"].endswith("/OzLabs/acme")
+
+
+def test_failed_upload_deletes_only_a_repo_this_push_created_and_left_empty(env, tmp_path, hub):
+    _, api = hub
+    trained(tmp_path, "co_f")
+    api.create_commit.side_effect = RuntimeError("upload broke")
+    api.list_repo_files.return_value = [".gitattributes"]
+    for existed, files, deleted in ((False, [".gitattributes"], True), (True, [".gitattributes"], False), (False, ["best.pt"], False)):
+        api.repo_exists.return_value, api.list_repo_files.return_value = existed, files
+        api.delete_repo.reset_mock()
+        assert push(env).status_code == 502
+        assert api.delete_repo.called is deleted
+    api.delete_repo.assert_not_called()
+    api.repo_exists.return_value = False
+    api.create_repo.side_effect = RuntimeError("could not create")   # nothing was created: nothing to delete
+    assert push(env).status_code == 502 and not api.delete_repo.called
+
+
+class StorageFull(Exception):
+    response = SimpleNamespace(status_code=403)
+
+
+def test_org_storage_full_is_507_and_offers_the_users_namespace(env, tmp_path, hub):
+    _, api = hub
+    trained(tmp_path, "co_f")
+    api.repo_exists.return_value = False
+    api.list_repo_files.return_value = [".gitattributes"]
+    api.create_commit.side_effect = StorageFull(f"403 Forbidden: Private repository storage limit reached (Bearer {TOKEN})")
+    r = push(env, repo="OzLabs/northwind-triage")
+    d = r.json()["detail"]
+    assert r.status_code == 507 and d["code"] == "org_storage_full" and d["repo"] == "me/northwind-triage"
+    assert "storage" in d["message"] and "(me)" in d["message"] and TOKEN not in r.text
+    api.delete_repo.assert_called_once_with("OzLabs/northwind-triage")   # the empty org repo it just made is gone
+    assert push(env, repo="me/northwind-triage").status_code == 502   # the user's own space full: nothing better to offer

@@ -195,7 +195,7 @@ def capabilities():
 # -- push to Hugging Face
 class PushRequest(BaseModel):
     run: str
-    repo: str | None = None   # default: <hf_namespace>/<model id with - for _>
+    repo: str | None = None   # default: <hf_namespace>/<the model's display name, slugged with ->
     private: bool = True
 
 
@@ -212,6 +212,17 @@ def _card(base: str, repo: str, model_id: str, step: int, reveal: dict | None) -
             f"# {repo.split('/')[1]}\n\nA Typical decision model fine-tuned from [OzLabs/typical-{base}](https://huggingface.co/OzLabs/typical-{base}) "
             f"(step {step}). It decides:\n\n{decides}\n{results}\n## Usage\n\n```python\n{_sdk(repo, model_id)}\n```\n"
             + ("\nThis model inherits the terms of `Qwen/Qwen3.5-4B-Base`, whose licence has not been verified.\n" if base == "medium" else ""))
+
+
+def _repo_name(model_id: str) -> str:
+    """The model's display name (job.json, as typed in the app) as a repo name: "Northwind triage" -> northwind-triage."""
+    job = S.TYPICALLY / "jobs" / model_id / "job.json"
+    name = (json.loads(job.read_text()).get("name") if job.exists() else None) or ("Northwind triage" if model_id == "northwind" else "")
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:96] or model_id.replace("_", "-")   # a non-latin name: the id
+
+
+def _storage_full(e: Exception) -> bool:
+    return getattr(getattr(e, "response", None), "status_code", None) == 403 and "storage" in str(e).lower()
 
 
 @router.post("/api/typically/push")
@@ -233,18 +244,35 @@ def push(req: PushRequest):
     if not token:
         raise HTTPException(503, "Hugging Face push is not set up on this server")
     api = HfApi(token=token)
-    repo = req.repo or (f"{ns}/{model_id_of(req.run).replace('_', '-')}" if (ns := _namespace(api, token)) else None)
+    repo = req.repo or (f"{ns}/{_repo_name(model_id_of(req.run))}" if (ns := _namespace(api, token)) else None)
     if not repo:
         raise HTTPException(502, "could not work out the Hugging Face namespace; is the server token valid?")
+    created = False
     try:
         manifest = {"base_repo": f"OzLabs/typical-{base}", "base_sha": api.model_info(f"OzLabs/typical-{base}").sha, "run": req.run,
                     "step": ckpt["step"], "best_pt_sha256": hashlib.sha256(best.read_bytes()).hexdigest()}
+        existed = api.repo_exists(repo)
         api.create_repo(repo, private=req.private, exist_ok=True)
+        created = not existed
         api.create_commit(repo, commit_message=f"Typical fine-tune {req.run}", operations=[
             CommitOperationAdd("best.pt", str(best)),
             CommitOperationAdd("README.md", _card(base, repo, model_id_of(req.run), ckpt["step"], reveal).encode()),
             CommitOperationAdd("MANIFEST.json", json.dumps(manifest, indent=2).encode())])
     except Exception as e:   # hub errors can echo request headers: never hand the token back
+        if created:   # this call made the repo and the upload failed: do not leave an empty repo behind
+            try:
+                if set(api.list_repo_files(repo)) <= {".gitattributes"}:
+                    api.delete_repo(repo)
+            except Exception:
+                pass   # ponytail: best effort; the push error below is what the user needs
+        if _storage_full(e) and repo.split("/")[0] == ORG:
+            try:
+                user = api.whoami()["name"]
+            except Exception:
+                user = None
+            raise HTTPException(507, {"code": "org_storage_full", "repo": user and f"{user}/{repo.split('/')[1]}", "message":
+                                      f"The {ORG} organization's private storage on Hugging Face is full."
+                                      + (f" You can push to your own account ({user}) instead." if user else "")})
         raise HTTPException(502, f"Hugging Face said: {type(e).__name__}: {str(e).replace(token, '***')[:300]}")
     _hf_repo_file(req.run).write_text(repo)
     return {"url": f"https://huggingface.co/{repo}", "files": ["best.pt", "README.md", "MANIFEST.json"]}
