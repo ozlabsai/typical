@@ -447,8 +447,9 @@ def _finish(plan: dict, prof: dict, records: list[dict] | None, lang: str = "en"
     dup = prof["duplicates"]
     if dup["rows"]:
         issues.append({"kind": "duplicates", "count": dup["rows"], "detail": msg(lang, "i_dup", n=dup["rows"]), "action": msg(lang, "a_dup")})
-    for d in (d for d in plan["decisions"] if d["include"] and d["column"] in cand):
-        c, s = d["column"], cand[d["column"]]
+    for d in (d for d in plan["decisions"] if d["include"] and (records or d["column"] in cand)):
+        c = d["column"]
+        s = _label_stats(records, plan, d) if records else cand[c]   # labels after the plan's merges, not raw spellings
         if s["conflicts"]["rows"]:
             issues.append({"kind": "conflicts", "column": c, "count": s["conflicts"]["rows"],
                            "detail": msg(lang, "i_conflict", pct=round(100 * s["conflicts"]["best_accuracy"])), "action": msg(lang, "a_conflict")})
@@ -456,10 +457,10 @@ def _finish(plan: dict, prof: dict, records: list[dict] | None, lang: str = "en"
             issues.append({"kind": "rare_labels", "column": c, "count": len(s["rare"]), "detail": msg(lang, "i_rare", vals=", ".join(s["rare"][:5])), "action": msg(lang, "a_rare")})
         if s["empty"]:
             issues.append({"kind": "empty", "column": c, "count": s["empty"], "detail": msg(lang, "i_empty"), "action": msg(lang, "a_empty")})
-        for l in s["leaks"]:
+        for l in cand[c]["leaks"] if c in cand else []:
             if l["column"] in used:
                 issues.append({"kind": "leakage", "column": l["column"], "count": prof["n_rows"], "detail": msg(lang, "i_leak", c=c, pct=round(100 * l["purity"])), "action": msg(lang, "a_leak")})
-        for l in s["text_leaks"]:
+        for l in cand[c]["text_leaks"] if c in cand else []:
             if l["column"] in used:
                 issues.append({"kind": "leakage", "column": l["column"], "count": round(l["share"] * prof["n_rows"]), "detail": msg(lang, "i_textleak", c=c), "action": msg(lang, "a_textleak")})
     for c in used:
@@ -471,6 +472,21 @@ def _finish(plan: dict, prof: dict, records: list[dict] | None, lang: str = "en"
         if long:
             issues.append({"kind": "long_cases", "count": long, "detail": msg(lang, "i_long", n=long, t=plan["case"]["max_tokens"]), "action": msg(lang, "a_long")})
     return {**plan, "issues": issues, "languages": prof["languages"]}
+
+
+def _label_stats(records: list[dict], plan: dict, d: dict) -> dict:
+    """rare / empty / conflicts of a decision as the model will be taught it: through the plan's mapping (so "y" and "yes" are one
+    answer, a value mapped to null is no answer) and over the rendered case (two rows conflict when the model sees the same case)."""
+    groups: dict = defaultdict(Counter)
+    for r in records:
+        if case := norm(render_case(r, plan)):   # an empty case is never trained on
+            groups[case][answers(r, {"decisions": [d]})[d["column"]]] += 1
+    empty = sum(g.pop(None, 0) for g in groups.values())
+    counts = sum(groups.values(), Counter())
+    m = sum(counts.values()) or 1
+    return {"rare": [l for l, k in counts.items() if k < max(10, 0.01 * m)], "empty": empty,
+            "conflicts": {"rows": sum(sum(g.values()) for g in groups.values() if len(g) > 1),
+                          "best_accuracy": round(sum(max(g.values(), default=0) for g in groups.values()) / m, 4)}}
 
 
 def validate_plan(plan: dict, prof: dict, lang: str = "en") -> list[str]:
@@ -556,8 +572,8 @@ Return the plan as JSON matching the schema. Rules:
 - Every column gets exactly one role: a case part (role "fact" = short context with a sentence template containing {value}, e.g. "The customer is on the {value} plan."; role "body" = the free text of the case, no sentence), a decision, or excluded (with why: id, timestamp, pii, leakage, after_decision, near_unique, constant, other).
 - Decide whether each column is KNOWN AT DECISION TIME. A column written or filled in after the decision (resolution, agent reply, outcome, close reason) must be excluded as after_decision. A column that gives a decision away by itself (see the leakage numbers) must be excluded as leakage.
 - Decisions are the columns the business wants predicted. Question: plain business English, e.g. "Should we escalate this ticket?", "Which team should handle it?", "How urgent is it?". type: "noul" for yes/no (labels exactly ["no","yes"]), "score" when the answers have an order (labels ordered from LEAST to MOST, so for P1..P4 where P1 is most severe the last label is P1), otherwise "choice".
-- mapping lists observed normalised values (copy the "value" strings from the profile EXACTLY; never invent or retype one) with the label each one means. Merge synonyms and typos ("yes", "y", "true" -> "yes"; "biling" -> "billing") ONLY between values that are really observed. Map values that mean "no answer / unknown" to null. Every observed value with at least 1% of the rows must appear.
-- Labels for choice/score are short, clean, in the words of the data.
+- mapping lists observed normalised values (copy the "value" strings from the profile EXACTLY; never invent or retype one) with the label each one means. Merge synonyms and typos ("yes", "y", "true" -> "yes"; "biling" -> "billing") ONLY between values that are really observed. Map values that mean "no answer / unknown" to null. EVERY observed value of an included decision must appear, rare ones too: map a long tail you do not want to a label or to null explicitly, never leave it out.
+- Labels for choice/score are short, clean, in the words of the data: the readable original spelling from "raws" ("Sales and Pre-Sales", not "sales and pre sales"; "very_low" becomes "very low").
 - Set needs_review true and lower confidence when you are unsure; give one plain-English reason per decision ("we think X because Y").
 - Never put a column in two roles. Do not leave a column out."""
 
@@ -587,6 +603,19 @@ def _from_llm(raw: dict) -> dict:
     }
 
 
+def _coverage_errors(plan: dict, prof: dict, max_share: float = 0.02) -> list[str]:
+    """An included decision whose mapping leaves out observed values covering > 2% of its rows: those rows would silently drop.
+    LLM path only (a user's confirmed plan may drop values on purpose)."""
+    errs = []
+    for d in (d for d in plan["decisions"] if d["include"] and d["column"] in prof["columns"]):
+        p = prof["columns"][d["column"]]
+        left = [v for v in p["values"] if v["value"] not in d["mapping"]]
+        if p["values_complete"] and sum(v["count"] for v in left) > max_share * p["non_empty"]:
+            errs.append(f"decision {d['column']!r} leaves {len(left)} observed values ({sum(v['count'] for v in left)} rows) out of "
+                        f"its mapping: {[v['value'] for v in left][:30]}; map each one to a label or to null")
+    return errs
+
+
 def llm_plan(prof: dict, sample: list[dict], records: list[dict] | None = None, client=None, lang: str = "en"):
     """One structured-output call (plus one retry with the validation errors) -> (plan, "llm"|"heuristic", warnings).
     Any API failure, an oversized prompt or two invalid plans fall back to heuristic_plan with a warning."""
@@ -594,7 +623,7 @@ def llm_plan(prof: dict, sample: list[dict], records: list[dict] | None = None, 
     user = json.dumps({"profile": prof, "sample_rows": sample}, ensure_ascii=False)
     if (len(SYSTEM) + len(user)) / 4 > MAX_PROMPT_TOKENS:   # chars/4 ~ tokens
         return fallback(msg(lang, "w_big"))
-    system = SYSTEM if lang == "en" else SYSTEM + f"\n- Write every question, reason and sentence template in {LANGS[lang]} (natural, neutral phrasing). Keep column names, labels, values and the {{value}} placeholder exactly as they are."
+    system = SYSTEM if lang == "en" else SYSTEM + f"\n- Write every question, reason and sentence template in {LANGS[lang]} (natural, neutral phrasing). Do not translate column names, mapping values or labels (labels stay in the data's own words and language), and keep the {{value}} placeholder."
     messages, errs = [{"role": "user", "content": user}], []
     for _ in range(2):
         try:
@@ -603,7 +632,7 @@ def llm_plan(prof: dict, sample: list[dict], records: list[dict] | None = None, 
             return fallback(msg(lang, "w_fail", err=str(e)))
         try:
             plan = _from_llm(raw)
-            errs = validate_plan(plan, prof, lang)
+            errs = _coverage_errors(plan, prof) + validate_plan(plan, prof, lang)
         except (ValueError, KeyError, TypeError) as e:
             errs = [f"the JSON does not match the schema: {e!r}"]
         if not errs:

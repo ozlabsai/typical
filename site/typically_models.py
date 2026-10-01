@@ -211,7 +211,8 @@ QUESTION_SCHEMA = {
 QUESTION_SYSTEM = (
     "Turn the user's text into ONE decision question about a case (a support ticket, a document, a record). Return type: "
     '"choice" = pick one of 2+ named options (labels = the options); "noul" = a yes/no question (labels = ["no", "yes"]); '
-    '"score" = a rating on an ordered scale (labels = the scale, lowest first, default ["1","2","3","4","5"]). '
+    '"score" = a rating on an ordered scale (labels = the scale from least to most, default ["1","2","3","4","5"]; '
+    'for priority/severity codes where 1 is the most severe, P1 comes LAST: ["P4","P3","P2","P1"]). '
     "Keep the user's wording and language; only fix grammar and add a question mark.")
 
 
@@ -225,11 +226,20 @@ def _llm_question(text: str, lang: str) -> dict:
     return q
 
 
+def _as_scale(q: dict) -> dict:
+    """Options that form a known scale (low/medium/high, P1..P4, 1..5) become a score ordered least -> most (P1 = most severe = last)."""
+    if q["type"] == "noul":
+        return q
+    by_norm = {tp.norm(l): l for l in q["labels"]}
+    o = tp._ordinal(list(by_norm)) if len(by_norm) == len(q["labels"]) else None
+    return {**q, "type": "score", "labels": [by_norm[v] for v in o["labels"]]} if o else q
+
+
 @router.post("/api/typically/parse_question")
 def parse_question(req: ParseRequest):
     if tllm.available():
         try:
-            return {**_llm_question(req.text, req.lang), "source": "llm"}
+            return {**_as_scale(_llm_question(req.text, req.lang)), "source": "llm"}
         except Exception:   # any API / schema failure: the heuristic is always available (never echo the key)
             pass
-    return {**_heuristic_question(req.text), "source": "heuristic"}
+    return {**_as_scale(_heuristic_question(req.text)), "source": "heuristic"}

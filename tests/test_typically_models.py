@@ -128,6 +128,8 @@ def test_ask(env, monkeypatch):
     ("איזו מחלקה: חיובים, תביעות או מכירות?", "choice", ["חיובים", "תביעות", "מכירות"]),
     ("Is this billing or claims?", "noul", ["no", "yes"]),
     ("What is the customer mood", "noul", ["no", "yes"]),
+    ("priority (P1 / P2 / P3 / P4)", "score", ["P4", "P3", "P2", "P1"]),   # a known scale: P1 = most severe = last
+    ("Risk: high, low or medium?", "score", ["low", "medium", "high"]),
 ])
 def test_parse_heuristic(env, text, type_, labels):
     r = env[0].post("/api/typically/parse_question", json={"text": text}).json()
@@ -139,5 +141,7 @@ def test_parse_llm_and_fallback(env, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.setattr(tm, "_llm_question", lambda text, lang: {"question": "Refund?", "type": "noul", "labels": ["no", "yes"]})
     assert c.post("/api/typically/parse_question", json={"text": "refund"}).json()["source"] == "llm"
+    monkeypatch.setattr(tm, "_llm_question", lambda text, lang: {"question": "Priority?", "type": "choice", "labels": ["P1", "P2", "P3"]})
+    assert c.post("/api/typically/parse_question", json={"text": "priority"}).json()["labels"] == ["P3", "P2", "P1"]
     monkeypatch.setattr(tm, "_llm_question", lambda *a: 1 / 0)
     assert c.post("/api/typically/parse_question", json={"text": "Should we refund?"}).json()["source"] == "heuristic"

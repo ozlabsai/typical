@@ -85,6 +85,29 @@ def test_validate_plan_unmapped_value_is_soft():
     assert d["mapping"]["billing"] is None and d["needs_review"]
 
 
+def test_issues_count_mapped_labels_not_raw_spellings():
+    # "y"/"yes" on the same case are one answer, the "billin" typo merged into billing is not a rare label, "n a" -> null is no answer
+    recs = [{"t": f"message number {i} about something that happened", "ok": ["yes", "no"][i % 2], "team": ["billing", "claims"][i % 2]}
+            for i in range(40)]
+    recs += [{"t": "the very same message on several rows of the table", "ok": v, "team": "billin"} for v in ("y", "yes", "Y", "n a")]
+    prof = tp.profile(recs)
+    plan = {"case": {"parts": [{"column": "t", "role": "body", "sentence": None}], "max_tokens": 1024},
+            "decisions": [{"column": "ok", "include": True, "labels": ["no", "yes"], "mapping": {"yes": "yes", "y": "yes", "no": "no", "n a": None}},
+                          {"column": "team", "include": True, "labels": ["billing", "claims"], "mapping": {"billing": "billing", "billin": "billing", "claims": "claims"}}],
+            "excluded": []}
+    issues = tp._finish(plan, prof, recs)["issues"]
+    assert {(i["kind"], i.get("column")) for i in issues} == {("duplicates", None), ("empty", "ok")}, issues
+    assert prof["decisions"]["team"]["rare"] == ["billin"]   # the raw profile does see a rare spelling
+
+
+def test_llm_plan_coverage_error_for_a_dropped_long_tail():
+    recs = [{"t": f"ticket {i} body text here", "q": f"queue {i % 100}"} for i in range(300)]   # 100 values, 1% of the rows each
+    prof = tp.profile(recs)
+    plan = lambda n: {"decisions": [{"column": "q", "include": True, "mapping": {f"queue {i}": "x" for i in range(n)}}]}
+    assert tp._coverage_errors(plan(99), prof) == []   # 1% left out: fine
+    assert "leaves 5 observed values" in tp._coverage_errors(plan(95), prof)[0]   # 5% silently dropped: back to the model
+
+
 def test_sheets_url():
     u = "https://docs.google.com/spreadsheets/d/1AbC_-x/edit?usp=sharing#gid=42"
     assert tp.sheets_export_url(u) == "https://docs.google.com/spreadsheets/d/1AbC_-x/export?format=csv&gid=42"
