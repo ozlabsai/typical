@@ -260,7 +260,7 @@ export function ChatPage({ modelId }: { modelId?: string }) {
   const custom = model?.kind === "custom"
   const trained = (model?.decisions ?? []).map(({ question, type, labels }) => ({ question, type, labels }))
   const shown = turns.filter((x) => x.model === model?.id)
-  const canSend = Boolean(model && caseText.trim() && questions.length)
+  const canSend = Boolean(model && caseText.trim() && questions.length && !parsing)   // a question still being parsed would miss this send
 
   useEffect(() => { localStorage.setItem(STORE, JSON.stringify(turns.slice(-50))) }, [turns])
   // braces: scrollIntoView returns a Promise in newer Chromium, which React would call as an effect cleanup

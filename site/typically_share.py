@@ -120,7 +120,7 @@ def _public(share_id: str) -> dict:
 
 
 def _pct(x: float) -> str:
-    return f"{round(x * 100)}%"
+    return f"{int(x * 100 + 0.5)}%"   # half up, like the app's Math.round (round() is half-even: .605 -> 60 here, 61 there)
 
 
 PAGE = """<!doctype html>
