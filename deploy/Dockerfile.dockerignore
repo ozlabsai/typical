@@ -1,0 +1,23 @@
+# docker build -f deploy/Dockerfile reads this (BuildKit): the repo minus heavy and secret dirs
+.git
+.venv
+.context
+.claude
+.env
+deploy/hosted.env
+deploy/.pod
+**/node_modules
+**/__pycache__
+.pytest_cache
+site/app
+figures
+paper
+blog
+docs
+vendor
+wandb
+data
+data_*
+runs/*/*.pt
+*.pt
+*.npz

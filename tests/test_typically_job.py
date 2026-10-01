@@ -268,7 +268,7 @@ def test_train_endpoint_409_and_404(env, monkeypatch):
     assert c.post("/api/typically/build", json={**build, "name": "other"}).status_code != 409
     gate.set()
     for _ in range(100):   # the lock is released when the job thread ends
-        if not server._job_lock.locked():
+        if not server._jobs:
             break
         time.sleep(0.02)
     assert c.post("/api/typically/train", json={"name": "Acme"}).status_code == 200
@@ -366,7 +366,7 @@ def test_train_and_build_endpoints_take_base_and_steps(env, monkeypatch):
     c = TestClient(server.app)
     assert c.post("/api/typically/train", json={"name": "Acme", "base": "medium", "steps": 800}).status_code == 200
     for _ in range(100):
-        if not server._job_lock.locked():
+        if not server._jobs:
             break
         time.sleep(0.02)
     assert seen == [("medium", 800)]
@@ -503,3 +503,10 @@ def test_runpodctl_error_json_is_kept_from_under_the_usage_text(monkeypatch):
     monkeypatch.setattr(tj.subprocess, "run", lambda *a, **k: tj.subprocess.CompletedProcess(a, 1, "", out))
     with pytest.raises(RuntimeError, match="context deadline exceeded"):
         tj._run(["runpodctl", "pod", "get", "x"], 5)
+
+
+def test_hosted_prefix_never_touches_local_pods(env, monkeypatch):
+    monkeypatch.setattr(tj, "POD_PREFIX", "typically-hosted-job-")   # deploy/serve.sh: a hosted server and a local one share the account
+    cli = use(monkeypatch, FakeCli(pods=[{"id": "local", "name": "typically-job-ghost-dddd4444"},
+                                         {"id": "hosted", "name": "typically-hosted-job-ghost-eeee5555"}]))
+    assert tj.reconcile(lambda m: None) == ["hosted"] and cli.deleted_ids() == {"hosted"}

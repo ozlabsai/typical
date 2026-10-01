@@ -12,6 +12,8 @@ sys.path[:0] = [str(ROOT / "site"), str(ROOT / "scripts")]
 import server  # noqa: E402  (first: the routers read server at call time)
 from fastapi.testclient import TestClient  # noqa: E402
 
+REAL_START_JOB = server.start_job
+
 EVAL_CASE = "held out case"
 Q = {"question": "Which team?", "type": "choice", "labels": ["A", "B"]}
 
@@ -105,11 +107,12 @@ def test_retrain_refusals(env, monkeypatch):
     fix(c, "acme", EVAL_CASE)
     assert c.post("/api/typically/models/acme/retrain", json={}).status_code == 400   # only held-out cases
     fix(c, "acme", "new case")
-    assert server._job_lock.acquire(blocking=False)
-    try:
-        assert c.post("/api/typically/models/acme/retrain", json={}).status_code == 409
-    finally:
-        server._job_lock.release()
+    monkeypatch.setattr(server, "start_job", REAL_START_JOB)   # the real admission check; nothing starts: it refuses
+    monkeypatch.setenv("TYPICALLY_MAX_JOBS", "1")
+    monkeypatch.setitem(server._jobs, "other", None)   # every GPU busy
+    assert c.post("/api/typically/models/acme/retrain", json={}).status_code == 429
+    assert not (root / "jobs" / "acme_v2").exists()
+    server._jobs.pop("other")
 
     def busy(*a, **k):
         raise HTTPException(409, "busy")

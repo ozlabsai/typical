@@ -174,6 +174,15 @@ const en = {
   "chart.stepOf": "Step {step} of {total}", "chart.eta": "about {n} min left", "chart.etaSoon": "under a minute left",
   "chart.best": "best so far at step {step}", "chart.waiting": "The first measurements arrive after 50 steps.",
   "chart.desc": "Lower is better. At step {step}: training loss {loss}, validation loss {val}.",
+  "auth.title": "Sign in", "auth.lede": "typically is invite-only for now. Enter the code you were given.",
+  "auth.code": "Invite code", "auth.name": "Your name", "auth.optional": "(optional)", "auth.namePlaceholder": "Shown on your models",
+  "auth.submit": "Sign in", "auth.invalid": "That invite code is not valid. Check it and try again.",
+  "auth.noCode": "No code? Ask the person who invited you.", "auth.signOut": "Sign out", "auth.signedInAs": "Signed in as {name}", "auth.admin": "Admin",
+  "share.button": "Share", "share.title": "Share the results",
+  "share.lede": "A public page with this model's name, its score against the standard model and the questions it answers. No cases or data are ever shown.",
+  "share.private": "This model is private. Create a link to share its results; you can turn the link off at any time.",
+  "share.create": "Create link", "share.link": "Share link", "share.preview": "Preview of the share image", "share.open": "Open",
+  "share.revoke": "Turn off link", "share.revoked": "The link is off",
 }
 
 type Key = keyof typeof en
@@ -333,6 +342,15 @@ const he: Record<Key, string> = {
   "chart.stepOf": "צעד {step} מתוך {total}", "chart.eta": "עוד כ־{n} דק׳", "chart.etaSoon": "פחות מדקה",
   "chart.best": "הטוב ביותר עד כה בצעד {step}", "chart.waiting": "המדידות הראשונות מגיעות אחרי 50 צעדים.",
   "chart.desc": "נמוך יותר עדיף. בצעד {step}: הפסד באימון {loss}, הפסד באימות {val}.",
+  "auth.title": "כניסה", "auth.lede": "בינתיים typically פתוח בהזמנה בלבד. הזינו את הקוד שקיבלתם.",
+  "auth.code": "קוד הזמנה", "auth.name": "השם שלכם", "auth.optional": "(לא חובה)", "auth.namePlaceholder": "יוצג על המודלים שלכם",
+  "auth.submit": "כניסה", "auth.invalid": "קוד ההזמנה לא תקין. בדקו אותו ונסו שוב.",
+  "auth.noCode": "אין לכם קוד? בקשו ממי שהזמין אתכם.", "auth.signOut": "יציאה", "auth.signedInAs": "מחוברים בתור {name}", "auth.admin": "מנהל",
+  "share.button": "שיתוף", "share.title": "שיתוף התוצאות",
+  "share.lede": "עמוד ציבורי עם שם המודל, הציון שלו מול המודל הרגיל והשאלות שהוא עונה עליהן. מקרים ונתונים לא מוצגים לעולם.",
+  "share.private": "המודל הזה פרטי. צרו קישור כדי לשתף את התוצאות שלו; אפשר לכבות את הקישור בכל עת.",
+  "share.create": "יצירת קישור", "share.link": "קישור לשיתוף", "share.preview": "תצוגה מקדימה של תמונת השיתוף", "share.open": "פתיחה",
+  "share.revoke": "כיבוי הקישור", "share.revoked": "הקישור כבוי",
 }
 
 const DICTS: Record<Lang, Record<Key, string>> = { en, he }

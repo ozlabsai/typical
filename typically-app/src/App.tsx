@@ -3,12 +3,14 @@ import { ThemeProvider } from "next-themes"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { CommandPalette } from "@/components/command-palette"
+import { SignIn } from "@/components/sign-in"
 import { HeaderSlotProvider } from "@/components/layout"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { AuthGate } from "@/lib/auth"
 import { I18nProvider, useI18n } from "@/lib/i18n"
 import { LibraryProvider, useLibrary } from "@/lib/library"
 import { href, useRoute } from "@/lib/router"
@@ -71,11 +73,13 @@ export default function App() {
   return (
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} disableTransitionOnChange>
       <I18nProvider>
-        <LibraryProvider>
-          <TooltipProvider delayDuration={300}>
-            <Shell />
-          </TooltipProvider>
-        </LibraryProvider>
+        <AuthGate signIn={(done) => <SignIn done={done} />}>
+          <LibraryProvider>
+            <TooltipProvider delayDuration={300}>
+              <Shell />
+            </TooltipProvider>
+          </LibraryProvider>
+        </AuthGate>
       </I18nProvider>
     </ThemeProvider>
   )

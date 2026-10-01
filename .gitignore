@@ -46,3 +46,7 @@ designs/
 
 # typically-app build output (npm run build in typically-app/)
 site/app/
+
+# deploy/runpod.sh: secrets and the running host pod id
+deploy/hosted.env
+deploy/.pod
