@@ -1,7 +1,6 @@
 """Models library (base + fine-tunes) and the chat endpoints: /ask (one case, free-form questions) and /parse_question.
 Reads server.TYPICALLY / _lock / get_model / base_of / _run at call time, so it is included at the end of server.py."""
 import json
-import os
 import re
 import shutil
 import time
@@ -14,6 +13,7 @@ from pydantic import BaseModel, Field
 import server as S
 import typically_deploy as D
 import typically_job
+import typically_llm as tllm
 import typically_plan as tp
 
 router = APIRouter()
@@ -210,13 +210,9 @@ QUESTION_SYSTEM = (
     "Keep the user's wording and language; only fix grammar and add a question mark.")
 
 
-def _llm_question(text: str, lang: str, key: str) -> dict:
-    import anthropic
+def _llm_question(text: str, lang: str) -> dict:
     system = QUESTION_SYSTEM + (f" Write the question in {tp.LANGS[lang]}." if lang in tp.LANGS and lang != "en" else "")
-    resp = anthropic.Anthropic(api_key=key).messages.create(
-        model=tp.MODEL, max_tokens=1000, system=system, messages=[{"role": "user", "content": text}],
-        output_config={"format": {"type": "json_schema", "schema": QUESTION_SCHEMA}})
-    q = json.loads(next(b.text for b in resp.content if b.type == "text"))
+    q, _ = tllm.complete_json(system, text, QUESTION_SCHEMA, max_tokens=1000)
     if q["type"] == "noul":
         q["labels"] = ["no", "yes"]
     if not q["question"].strip() or (q["type"] != "noul" and len(q["labels"]) < 2):
@@ -226,9 +222,9 @@ def _llm_question(text: str, lang: str, key: str) -> dict:
 
 @router.post("/api/typically/parse_question")
 def parse_question(req: ParseRequest):
-    if key := os.environ.get("ANTHROPIC_API_KEY"):
+    if tllm.available():
         try:
-            return {**_llm_question(req.text, req.lang, key), "source": "llm"}
+            return {**_llm_question(req.text, req.lang), "source": "llm"}
         except Exception:   # any API / schema failure: the heuristic is always available (never echo the key)
             pass
     return {**_heuristic_question(req.text), "source": "heuristic"}

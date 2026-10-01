@@ -131,12 +131,12 @@ class FakeClient:
         r = self.replies.pop(0)
         if isinstance(r, Exception):
             raise r
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(r))])
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(r))], usage=SimpleNamespace(input_tokens=1, output_tokens=1))
 
 
 def run_llm(*replies):
     c = FakeClient(*replies)
-    return c, tp.llm_plan(PROF, tp.sample_rows(PROF, RECORDS), "sk-test", RECORDS, client=c)
+    return c, tp.llm_plan(PROF, tp.sample_rows(PROF, RECORDS), RECORDS, client=c)
 
 
 def test_llm_plan_ok():
@@ -157,13 +157,13 @@ def test_llm_plan_retries_then_falls_back():
     assert source == "heuristic" and "validation" in warnings[0] and len(c.calls) == 2 and plan["decisions"]
     err = anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com"))
     c, (plan, source, warnings) = run_llm(err)
-    assert source == "heuristic" and "sk-test" not in warnings[0]
+    assert source == "heuristic" and "APIConnectionError" in warnings[0]
 
 
 def test_llm_prompt_cap_and_sample_rows():
     big = {**PROF, "junk": "x" * 200_000}
     c = FakeClient()
-    _, source, warnings = tp.llm_plan(big, [], "k", RECORDS, client=c)
+    _, source, warnings = tp.llm_plan(big, [], RECORDS, client=c)
     assert source == "heuristic" and not c.calls and "too large" in warnings[0]
     rows = tp.sample_rows(PROF, RECORDS)
     assert len(rows) == 25 and len({r["team"] for r in rows}) == 4
@@ -177,6 +177,7 @@ def test_hebrew_heuristic_plan_and_analyze_lang(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(typically_analyze, "UPLOADS", Path(__import__("tempfile").mkdtemp()))
     app = FastAPI()
     app.include_router(typically_analyze.router)

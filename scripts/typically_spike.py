@@ -32,6 +32,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import typically_llm as tllm
 import typically_plan as tp
 CTX = ROOT / ".context" / "typically"
 ISSUES = ["lost_package", "damaged_goods", "invoice_dispute", "delivery_delay", "address_change", "quote_request"]
@@ -386,7 +387,7 @@ def build_import(records, text_col, decisions, rng, balance=True, flips=0.10):
 
 # ============================== typically UI import v2: from a confirmed DatasetPlan ==============================
 FLIP_RATE, POLICY_RATE, SYNTH_SHARE, SYNTH_MIN, TRANSLATE_RATE, EVAL_TRANSLATE_RATE = 0.10, 0.30, 0.15, 10, 0.20, 0.10
-LLM_CAP_USD, USD_PER_MTOK = 2.0, (4.0, 20.0)   # claude-opus-5-5 input / output; estimate = chars / 4 tokens
+LLM_CAP_USD = 2.0   # priced by tllm.usd (the active provider's list price); estimate = chars / 4 tokens
 TEXTS = {"type": "object", "properties": {"texts": {"type": "array", "items": {"type": "string"}}}, "required": ["texts"],
          "additionalProperties": False}
 
@@ -484,22 +485,9 @@ def _translate_tasks(states, lang, emit):
              + json.dumps(c, ensure_ascii=False), 1.5 * sum(map(len, c)), lambda texts, c=c: apply(texts, c)) for c in chunks]
 
 
-def _usd(tokens_in, tokens_out):
-    return (tokens_in * USD_PER_MTOK[0] + tokens_out * USD_PER_MTOK[1]) / 1e6
-
-
-def _ask(llm, prompt, max_tokens):
-    return llm.messages.create(model=tp.MODEL, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}],
-                               output_config={"format": {"type": "json_schema", "schema": TEXTS}})
-
-
-def _texts(resp):
-    return json.loads(next(b.text for b in resp.content if b.type == "text"))["texts"]
-
-
 def build_from_plan(records, plan, enrich, settings, rng, llm=None):
     """records + a confirmed DatasetPlan -> (split dict for write(), stats). enrich = {balance, dedupe_soft, policy: {column: text},
-    synthetic, languages: [code]}, settings = {holdout %, seed}; llm = an Anthropic client, needed only for synthetic / languages.
+    synthetic, languages: [code]}, settings = {holdout %, seed}; llm = tllm.complete_json (or a stand-in), needed only for synthetic / languages.
     Eval and val are never enriched (except the separate translated eval files import_<lang>). Rule flips are always on (10%, paired).
     ponytail: split is by case hash only; a time split (newest held out) for a timestamp column is not implemented."""
     decisions = [d for d in plan["decisions"] if d["include"]]
@@ -567,20 +555,20 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None):
             tr_states = rng.sample(sorted(base["train"]), max(1, round(TRANSLATE_RATE * len(base["train"]))))
             tasks += _translate_tasks(tr_states, lang, lambda l, s, t: tr.extend(_copy(base["train"][s], t, l)))
             tasks += _translate_tasks(ev_states, lang, lambda l, s, t: ev.setdefault(l, []).extend(_copy(base["import_oneliner"][s], t, l)))
-        est = sum(_usd(len(p) / 4, o / 4) for p, o, _ in tasks)
+        est = sum(tllm.usd(len(p) / 4, o / 4) for p, o, _ in tasks)
         if est > LLM_CAP_USD:
             raise ValueError(f"AI enrichment would cost about ${est:.2f}, over the ${LLM_CAP_USD:.2f} limit; "
                              "turn off synthetic cases or add fewer languages")
         for prompt, out_chars, apply in tasks:
             # the hard cap: reserve this call's worst case (chars/3 input tokens + all max_tokens out), then charge the real usage
             max_tokens = min(16000, int(out_chars / 2) + 500)
-            if cost + _usd(len(prompt) / 3, max_tokens) > LLM_CAP_USD:
+            if cost + tllm.usd(len(prompt) / 3, max_tokens) > LLM_CAP_USD:
                 warnings.append(f"AI enrichment stopped early to stay under the ${LLM_CAP_USD:.2f} limit; the remaining cases were skipped.")
                 break
             try:
-                resp = _ask(llm, prompt, max_tokens)
-                cost += _usd(resp.usage.input_tokens, resp.usage.output_tokens)
-                apply(_texts(resp))
+                out, usage = llm("Return only the JSON requested.", prompt, TEXTS, max_tokens=max_tokens)
+                cost += tllm.usd(usage["input_tokens"], usage["output_tokens"])
+                apply(out["texts"])
             except Exception as e:   # experimental: one failed call skips its cases; never echo the message (may hold the key)
                 warnings.append(f"An AI enrichment call failed ({type(e).__name__}); its cases were skipped.")
         # a synthetic / translated case must not share a normalised state with the other side: train side vs val + real eval + eval

@@ -22,10 +22,12 @@ from collections import Counter, defaultdict
 from itertools import islice
 from pathlib import Path
 
+import typically_llm as tllm
+
 REPO = Path(__file__).resolve().parent.parent
 SAMPLE_CSV = REPO / "site" / "data" / "typically_sample.csv"
 MAX_ROWS, MAX_VALUES, MAX_CANDIDATES = 20_000, 200, 12
-MODEL, MAX_PROMPT_TOKENS = "claude-opus-5-5", 30_000
+MAX_PROMPT_TOKENS = 30_000
 MAX_CASE_TOKENS = 1024
 
 # ---------------------------------------------------------------- loading
@@ -547,33 +549,28 @@ def _from_llm(raw: dict) -> dict:
     }
 
 
-def llm_plan(prof: dict, sample: list[dict], key: str | None, records: list[dict] | None = None, client=None, lang: str = "en"):
+def llm_plan(prof: dict, sample: list[dict], records: list[dict] | None = None, client=None, lang: str = "en"):
     """One structured-output call (plus one retry with the validation errors) -> (plan, "llm"|"heuristic", warnings).
     Any API failure, an oversized prompt or two invalid plans fall back to heuristic_plan with a warning."""
     fallback = lambda why: (heuristic_plan(prof, records, lang), "heuristic", [why])
     user = json.dumps({"profile": prof, "sample_rows": sample}, ensure_ascii=False)
     if (len(SYSTEM) + len(user)) / 4 > MAX_PROMPT_TOKENS:   # chars/4 ~ tokens
         return fallback(msg(lang, "w_big"))
-    import anthropic
-    client = client or anthropic.Anthropic(api_key=key)
     system = SYSTEM if lang == "en" else SYSTEM + f"\n- Write every question, reason and sentence template in {LANGS[lang]} (natural, neutral phrasing). Keep column names, labels, values and the {{value}} placeholder exactly as they are."
     messages, errs = [{"role": "user", "content": user}], []
     for _ in range(2):
         try:
-            resp = client.messages.create(
-                model=MODEL, max_tokens=16000, system=system, messages=messages,
-                output_config={"format": {"type": "json_schema", "schema": PLAN_SCHEMA}, "effort": "medium"})
-        except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:   # never echo the key: type + status only
-            return fallback(msg(lang, "w_fail", err=f"{type(e).__name__}{getattr(e, 'status_code', '') and ' ' + str(e.status_code)}"))
-        text = next((b.text for b in resp.content if b.type == "text"), "")
+            raw, _usage = tllm.complete_json(system, messages, PLAN_SCHEMA, max_tokens=16000, client=client)
+        except tllm.LLMError as e:   # type + status only, never a key
+            return fallback(msg(lang, "w_fail", err=str(e)))
         try:
-            plan = _from_llm(json.loads(text))
+            plan = _from_llm(raw)
             errs = validate_plan(plan, prof, lang)
         except (ValueError, KeyError, TypeError) as e:
             errs = [f"the JSON does not match the schema: {e!r}"]
         if not errs:
             return _finish(plan, prof, records, lang), "llm", []
-        messages += [{"role": "assistant", "content": text},
+        messages += [{"role": "assistant", "content": json.dumps(raw, ensure_ascii=False)},
                      {"role": "user", "content": "The plan has these problems, return a corrected full plan:\n- " + "\n- ".join(errs[:20])}]
     return fallback(msg(lang, "w_invalid", err=errs[0][:120]))
 

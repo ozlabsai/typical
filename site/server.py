@@ -47,6 +47,7 @@ from typical.core import to_labels
 from typical.native import native_kv_decide
 import typically_analyze
 import typically_job
+import typically_llm
 import typically_plan
 from typically_reveal import reveal
 from typically_spike import build_from_plan, build_import, write
@@ -243,8 +244,8 @@ class Enrich(BaseModel):
     balance: bool = True
     dedupe_soft: bool = True
     policy: dict[str, str] = {}
-    synthetic: bool = False   # experimental: ignored (with a warning) when the server has no ANTHROPIC_API_KEY
-    languages: list[str] = []   # experimental: ignored (with a warning) when the server has no ANTHROPIC_API_KEY
+    synthetic: bool = False   # experimental: ignored (with a warning) when the server has no LLM key
+    languages: list[str] = []   # experimental: ignored (with a warning) when the server has no LLM key
 
 
 class Settings(BaseModel):
@@ -279,11 +280,7 @@ def _build_plan(req: BuildPlanRequest, slug: str) -> dict:
     if not typically_job.SLUG_RE.fullmatch(slug):
         raise HTTPException(400, "need a model name (letters and digits, up to 40 characters)")
     records, plan = typically_analyze.load_upload(req.records_token), req.plan
-    key = os.environ.get("ANTHROPIC_API_KEY")   # the operator's key only
-    llm = None
-    if key and (req.enrich.synthetic or req.enrich.languages):
-        import anthropic
-        llm = anthropic.Anthropic(api_key=key)
+    llm = typically_llm.complete_json if typically_llm.available() and (req.enrich.synthetic or req.enrich.languages) else None   # the operator's key only
     try:
         if errs := typically_plan.validate_plan(plan, typically_plan.profile(records)):
             raise HTTPException(400, "the plan does not match the data: " + "; ".join(errs[:5]))

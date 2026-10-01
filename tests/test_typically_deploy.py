@@ -266,6 +266,9 @@ def test_capabilities(env, hub, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     assert env.get("/api/typically/capabilities").json() == {"ai": True, "hf_namespace": "OzLabs", "languages": ["en", "he"]}
     monkeypatch.delenv("ANTHROPIC_API_KEY")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")   # either key turns the AI features on
+    assert env.get("/api/typically/capabilities").json()["ai"] is True
+    monkeypatch.delenv("OPENROUTER_API_KEY")
     td._namespaces.clear()
     api.whoami.return_value = {"name": "me", "orgs": [{"name": "Other"}]}   # not in the org: the token owner's own name
     assert env.get("/api/typically/capabilities").json() == {"ai": False, "hf_namespace": "me", "languages": ["en", "he"]}

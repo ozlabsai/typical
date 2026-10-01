@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 import server as S
 import typically_job
+import typically_llm
 
 router = APIRouter()
 ALIASES = {"northwind": "co_f"}   # the demo model id -> its run
@@ -188,7 +189,7 @@ def _namespace(api: HfApi, token: str | None) -> str | None:
 @router.get("/api/typically/capabilities")
 def capabilities():
     token = _hf_token()
-    return {"ai": bool(os.environ.get("ANTHROPIC_API_KEY")), "hf_namespace": _namespace(HfApi(token=token), token), "languages": ["en", "he"]}
+    return {"ai": typically_llm.available(), "hf_namespace": _namespace(HfApi(token=token), token), "languages": ["en", "he"]}
 
 
 # -- push to Hugging Face

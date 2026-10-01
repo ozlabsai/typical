@@ -40,6 +40,7 @@ def trained(root, run, acc=None):
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "TYPICALLY", tmp_path)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     job(tmp_path, "old_done", {"phase": "done", "started_at": "2026-09-01T00:00:00+00:00"}, name="Old")
     trained(tmp_path, "co_old_done", {"eval_co.json": 0.8, "base_eval_co.json": 0.5})
     job(tmp_path, "new_run", {"phase": "evaluating", "started_at": "2026-09-30T00:00:00+00:00", "progress": 0.4})
@@ -136,7 +137,7 @@ def test_parse_heuristic(env, text, type_, labels):
 def test_parse_llm_and_fallback(env, monkeypatch):
     c, _ = env
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-    monkeypatch.setattr(tm, "_llm_question", lambda text, lang, key: {"question": "Refund?", "type": "noul", "labels": ["no", "yes"]})
+    monkeypatch.setattr(tm, "_llm_question", lambda text, lang: {"question": "Refund?", "type": "noul", "labels": ["no", "yes"]})
     assert c.post("/api/typically/parse_question", json={"text": "refund"}).json()["source"] == "llm"
     monkeypatch.setattr(tm, "_llm_question", lambda *a: 1 / 0)
     assert c.post("/api/typically/parse_question", json={"text": "Should we refund?"}).json()["source"] == "heuristic"

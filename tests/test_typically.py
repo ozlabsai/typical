@@ -162,16 +162,14 @@ def test_build_from_plan_llm_flags_without_key_are_ignored():
 
 
 class FakeLLM:
-    """Stands in for anthropic.Anthropic: translates by prefixing [lang], writes numbered synthetic cases."""
+    """Stands in for typically_llm.complete_json: translates by prefixing [lang], writes numbered synthetic cases."""
     def __init__(self, fixed=None, usage=None):
         self.calls, self.max_tokens, self.fixed, self.usage = [], [], fixed, usage   # fixed: every returned text; usage: (in, out) tokens per call
-        self.messages = SimpleNamespace(create=self.create)
 
-    def create(self, **kw):
-        prompt = kw["messages"][0]["content"]
+    def __call__(self, system, prompt, schema, *, max_tokens):
         self.calls.append(prompt)
-        self.max_tokens.append(kw["max_tokens"])
-        assert kw["output_config"]["format"]["type"] == "json_schema" and kw["model"] == "claude-opus-5-5"
+        self.max_tokens.append(max_tokens)
+        assert schema is ts.TEXTS
         if prompt.startswith("Translate"):
             lang = re.search(r"code '(\w+)'", prompt).group(1)
             texts = [f"[{lang}] {s}" for s in json.loads(prompt.split("\n\n", 1)[1])]
@@ -179,9 +177,8 @@ class FakeLLM:
             n = int(re.search(r"Write (\d+) NEW", prompt).group(1))
             texts = [f"synthetic case {len(self.calls)}-{k} in the style of the real ones" for k in range(n)]
         texts = [self.fixed] * len(texts) if self.fixed else texts
-        text = json.dumps({"texts": texts})
-        i, o = self.usage or (len(prompt) // 4, len(text) // 4)
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], usage=SimpleNamespace(input_tokens=i, output_tokens=o))
+        i, o = self.usage or (len(prompt) // 4, len(json.dumps(texts)) // 4)
+        return {"texts": texts}, {"input_tokens": i, "output_tokens": o}
 
 
 def test_build_from_plan_llm_enrichment_with_fake_client():

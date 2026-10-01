@@ -2,7 +2,6 @@
 DatasetPlan (.context/typically/FLOW.md). Parsed records are kept server-side under `records_token` so /build does not
 need the file again: in memory and in .context/typically/uploads/<token>.jsonl (see load_upload)."""
 import json
-import os
 import random
 import re
 import sys
@@ -16,6 +15,7 @@ from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import typically_llm as tllm
 import typically_plan as tp
 
 UPLOADS = REPO_ROOT / ".context" / "typically" / "uploads"
@@ -63,10 +63,9 @@ def analyze(req: AnalyzeRequest):
     try:
         records = tp.load_records(src)
         prof = tp.profile(records)
-        key = os.environ.get("ANTHROPIC_API_KEY")   # the operator's key only: users never bring one
         warnings: list[str] = []
-        if key:
-            plan, source, warnings = tp.llm_plan(prof, tp.sample_rows(prof, records), key, records, lang=req.lang)
+        if tllm.available():   # the operator's key only: users never bring one
+            plan, source, warnings = tp.llm_plan(prof, tp.sample_rows(prof, records), records, lang=req.lang)
         else:
             plan, source = tp.heuristic_plan(prof, records, req.lang), "heuristic"
     except ValueError as e:
