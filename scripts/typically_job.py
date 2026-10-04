@@ -54,7 +54,7 @@ _ACTIVE: set[str] = set()   # job_ids running in THIS process; ponytail: reconci
 REMOTE = "/workspace/pcdm"
 JOB_SH = """trap 'echo $? > /workspace/job.exit' EXIT   # the poller reads the chain's exit code, not log text
 set -e
-export PATH=$HOME/.local/bin:$PATH
+export PATH=$HOME/.local/bin:$PATH UV_HTTP_TIMEOUT=300   # uv's 30s default timed out on a 567 MB cuBLAS wheel (2026-10-04)
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 cd {REMOTE}
 bash scripts/typically_spike_pod.sh job {slug} {base} {steps}

@@ -164,7 +164,12 @@ export interface Reveal {
   n_cases: number
   n_answers: number
   score: { standard: number; yours: number }
-  decisions: { key: string; question: string; type: DecisionType; labels: string[]; standard: number; yours: number }[]
+  decisions: {
+    key: string; question: string; type: DecisionType; labels: string[]; standard: number; yours: number
+    majority?: string; baseline?: number // always giving the most common answer; absent in reveals scored before it existed
+    catch?: { standard: number | null; yours: number | null } // yes/no: share of the real "yes" cases in each model's top catch_top
+  }[]
+  catch_top?: number
   fixed: number
   broken: number
   abstained: { standard: number; yours: number }

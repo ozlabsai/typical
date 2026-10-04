@@ -10,7 +10,7 @@ import re
 import sys
 import time
 import urllib.request
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -18,16 +18,27 @@ EVAL = "data_co_a/eval/a_oneliner.jsonl"
 COMPANY = "Northwind Freight"
 sys.path.insert(0, str(ROOT / "inference"))
 TOP = lambda v: {"answer": v["argmax"], "p": round(v["probs"][v["argmax"]], 2)}
+CATCH_TOP = 0.2   # catch: share of the real "yes" cases among the top 20% a model ranks by p("yes") (yes/no decisions)
+
+
+def catch(ranked):
+    """[(p_yes, is_yes)] -> share of the yes cases in the top CATCH_TOP by p_yes (stable on ties); None without a yes."""
+    yes = sum(y for _, y in ranked)
+    top = sorted(ranked, key=lambda x: -x[0])[:max(1, round(CATCH_TOP * len(ranked)))]
+    return sum(y for _, y in top) / yes if yes else None
 
 
 def reveal(rows, run_models, company="", tuned=""):
     """rows: eval rows (one-liner questions per held-out case). run_models(state, rows) -> [standard_results, yours_results],
-    each a list parallel to rows of {"probs", "p_null", "argmax"}. Decisions are keyed by task suffix."""
+    each a list parallel to rows of {"probs", "p_null", "argmax"}. Decisions are keyed by task suffix. Per decision, besides each
+    side's agreement: `baseline` = the agreement of always giving its most common answer (`majority`) on these rows, and for
+    yes/no decisions `catch` = {side: catch@CATCH_TOP} (agreement on an 89/11 split rewards always saying "no")."""
     cases = defaultdict(list)
     for r in rows:
         cases[r["state"]].append(r)
     sides = ("standard", "yours")
     hits, decisions, disagreements = {s: defaultdict(list) for s in sides}, {}, []
+    golds, ranked = defaultdict(list), {s: defaultdict(list) for s in sides}
     # ponytail: accuracy = top answer among the offered options, same as the page shows (eval_wf's acc_k);
     # a p_null >= .5 "none of these fit" is counted separately instead of as a wrong answer
     abstained, fixed, broken = dict.fromkeys(sides, 0), 0, 0
@@ -37,8 +48,10 @@ def reveal(rows, run_models, company="", tuned=""):
             decisions[key] = {"key": key, "question": r["query"], "type": r["meta"]["qtype"], "labels": r["candidates"]}
             v = dict(zip(sides, res))
             ok = {s: v[s]["argmax"] == gold for s in sides}
+            golds[key].append(gold)
             for s in sides:
                 hits[s][key].append(ok[s])
+                ranked[s][key].append((v[s]["probs"].get("yes", 0.0), gold == "yes"))
                 abstained[s] += v[s]["p_null"] >= 0.5
             fixed += ok["yours"] and not ok["standard"]
             broken += ok["standard"] and not ok["yours"]
@@ -52,9 +65,15 @@ def reveal(rows, run_models, company="", tuned=""):
     lost = disagreements[len(won):]
     n_lost = max(min(10, len(lost)), 30 - len(won))   # the page shows losses too: up to 10 of the 30 kept, more if there are few wins
     disagreements = won[:30 - n_lost] + lost[:n_lost]
+
+    def extra(k, d):
+        (majority, n), = Counter(golds[k]).most_common(1)   # first seen on ties
+        out = {"majority": majority, "baseline": n / len(golds[k])}
+        return {**out, "catch": {s: catch(ranked[s][k]) for s in sides}} if d["type"] == "noul" else out
     return {"company": company, "tuned": tuned, "n_cases": len(cases), "n_answers": len(flat(hits["standard"])),
             "score": {s: acc(flat(hits[s])) for s in sides},
-            "decisions": [{**d, **{s: acc(hits[s][k]) for s in sides}} for k, d in decisions.items()],
+            "decisions": [{**d, **{s: acc(hits[s][k]) for s in sides}, **extra(k, d)} for k, d in decisions.items()],
+            "catch_top": CATCH_TOP,
             "fixed": fixed, "broken": broken, "abstained": abstained, "disagreements": disagreements,
             "measured": f"{len(cases)} {company or 'held-out'} cases neither model saw while learning"}
 
@@ -134,7 +153,7 @@ def main():
     Path(a.out).write_text(json.dumps(result, indent=2) + "\n")
     print(f"runtime {time.time() - t0:.0f}s\nscore standard {result['score']['standard']:.3f}  yours {result['score']['yours']:.3f}")
     for d in result["decisions"]:
-        print(f"  {d['key']:9s} standard {d['standard']:.3f}  yours {d['yours']:.3f}")
+        print(f"  {d['key']:9s} standard {d['standard']:.3f}  yours {d['yours']:.3f}  always {d['majority']!r} {d['baseline']:.3f}  catch {d.get('catch')}")
     print(f"fixed {result['fixed']}  broken {result['broken']}  abstained {result['abstained']}")
 
 

@@ -70,6 +70,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
     )
 
   const gain = Math.round((data.score.yours - data.score.standard) * 100)
+  const mail = data.disagreements.some((c) => /^Subject: /m.test(c.case))   // a mail import: its yes/no "reply" reads as replies
   const summary = t("ev.summary", { who, a: pct(data.score.standard), mine: t(model.sample ? "ev.mineNorthwind" : "ev.mineOur"), b: pct(data.score.yours), n: data.n_cases })
 
   return (
@@ -118,7 +119,19 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
                 const delta = Math.round((d.yours - d.standard) * 100)
                 return (
                   <TableRow key={d.key}>
-                    <TableCell className="ps-6 whitespace-normal"><span dir="auto">{d.question}</span></TableCell>
+                    <TableCell className="ps-6 whitespace-normal">
+                      <span dir="auto">{d.question}</span>
+                      {d.catch?.yours != null && d.catch.standard != null && (
+                        <p className="mt-1 text-sm font-medium">
+                          {t("ev.catch", { k: pct(data.catch_top ?? 0.2), y: pct(d.catch.yours), s: pct(d.catch.standard),
+                            what: t(mail && d.key === "reply" ? "ev.catchReplied" : "ev.catchYes") })}
+                        </p>
+                      )}
+                      {/* only where it changes the reading: a model that does not beat always giving the most common answer */}
+                      {d.majority != null && d.baseline != null && d.baseline >= Math.min(d.standard, d.yours) && (
+                        <p className="mt-1 text-xs text-muted-foreground">{t("ev.baseline", { a: say(t, d.type, d.majority), p: pct(d.baseline) })}</p>
+                      )}
+                    </TableCell>
                     <TableCell><Meter value={d.standard} tone="standard" /></TableCell>
                     <TableCell><Meter value={d.yours} tone="yours" /></TableCell>
                     <TableCell className={cn("hidden md:table-cell pe-6 text-end font-mono tabular", delta > 0 ? "text-yours" : "text-muted-foreground")}>

@@ -274,3 +274,20 @@ def test_build_endpoint_v2(tmp_path, monkeypatch):
     bad["plan"]["decisions"][0]["mapping"]["nope"] = "yes"
     assert c.post("/api/typically/build", json=bad).status_code == 400
     assert c.post("/api/typically/build", json={**body, "records_token": "b" * 32}).status_code == 404
+
+
+def test_reveal_baseline_and_catch():
+    from scripts.typically_reveal import reveal
+    noul = lambda i, gold: {"state": f"case {i}", "query": "Reply?", "candidates": ["no", "yes"], "label": gold, "task": "import_reply",
+                            "meta": {"qtype": "noul"}}
+    rows = [noul(i, int(i in (0, 3))) for i in range(10)] + [
+        {"state": f"case {i}", "query": "Folder?", "candidates": ["a", "b"], "label": g, "task": "import_folder", "meta": {"qtype": "choice"}}
+        for i, g in ((0, 0), (1, 0), (2, 1))]
+    std = {0: .9, 1: .8}   # p(yes): top 20% = cases 0, 1 -> catches 1 of the 2 yes
+    yours = {3: .7, 0: .5, 5: .5}   # cases 3, 0 (0 before the tied 5: stable) -> catches both
+    res = lambda p, i, q: ({"probs": {"no": 1 - p.get(i, .1), "yes": p.get(i, .1)}, "p_null": 0, "argmax": "yes" if p.get(i, .1) > .5 else "no"}
+                           if q == "Reply?" else {"probs": {"a": .6, "b": .4}, "p_null": 0, "argmax": "a"})
+    run = lambda state, group: [[res(p, int(state.split()[1]), r["query"]) for r in group] for p in (std, yours)]
+    d = {x["key"]: x for x in reveal(rows, run)["decisions"]}
+    assert d["reply"]["majority"] == "no" and d["reply"]["baseline"] == 0.8 and d["reply"]["catch"] == {"standard": 0.5, "yours": 1.0}
+    assert d["folder"]["majority"] == "a" and d["folder"]["baseline"] == 2 / 3 and "catch" not in d["folder"]

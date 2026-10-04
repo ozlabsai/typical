@@ -339,7 +339,9 @@ def keyword_conds(states):
 
 
 def balance_rows(rows):
-    """Oversample minority labels up to 1/3 of the majority count, no further (more = memorising)."""
+    """Oversample minority labels up to 1/3 of the majority count, no further (more = memorising).
+    ponytail: a 1/2 floor for yes/no decisions lost on Enron "reply" (2026-10-04, 88/12): catch@20 .51 vs .53, agreement .81 vs .87,
+    mean p(yes) .28 vs actual .12 -- ranking did not improve, calibration got worse. Kept 1/3 for every decision."""
     by = {}
     for r in rows:
         by.setdefault(r["label"], []).append(r)
