@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.eval_s2_crossed import aggregate_predictions, parse_adapter
+from scripts.eval_s2_crossed import aggregate_predictions, parse_adapter, select_subset
 
 
 def prediction(example_id, source_id, group, order, gold, predicted, p_yes, correct, nll, brier):
@@ -22,6 +22,7 @@ def test_aggregates_cells_recall_groups_order_robustness_and_failure_ids():
     ]
     result = aggregate_predictions(rows)
 
+    assert result["predictions"] == rows
     assert result["overall"] == {"n": 4, "accuracy": .75, "nll": .4125, "brier": .040625}
     assert result["per_condition_recall"] == {
         "no": {"n": 2, "recall": 1.0}, "yes": {"n": 2, "recall": .5}}
@@ -50,3 +51,18 @@ def test_adapter_parser_accepts_explicit_base_convention():
     assert parse_adapter("s1=/models/adapter") == ("s1", "/models/adapter")
     with pytest.raises(Exception):
         parse_adapter("not-a-pair")
+
+
+def test_compact_and_full_subsets_preserve_both_order_pairs():
+    examples = []
+    for view in ("compact", "full"):
+        for order in (("no", "yes"), ("yes", "no")):
+            examples.append({"source_id": "src", "source_group": "group",
+                             "question_style": "interrogative", "criteria_style": "explicit",
+                             "polarity": "negative", "context_view": view, "placement": "middle",
+                             "option_order": order})
+    assert len(select_subset(examples, "all")) == 4
+    assert len(select_subset(examples, "compact")) == 2
+    assert len(select_subset(examples, "full")) == 2
+    with pytest.raises(ValueError, match="subset"):
+        select_subset(examples, "training")

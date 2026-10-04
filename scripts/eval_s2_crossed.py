@@ -119,8 +119,26 @@ def aggregate_predictions(records):
             "both_correct_rate": sum(pair["both_correct"] for pair in pairs) / len(pairs),
             "mean_abs_aligned_p_yes_delta": sum(pair["p_yes_delta"] for pair in pairs) / len(pairs),
         },
+        "predictions": records,
         "failures": failures,
     }
+
+
+def select_subset(examples, subset):
+    if subset not in {"all", "compact", "full"}:
+        raise ValueError("subset must be all, compact, or full")
+    selected = list(examples) if subset == "all" else [
+        example for example in examples if example["context_view"] == subset
+    ]
+    pairs = defaultdict(list)
+    for example in selected:
+        key = (example["source_id"], example["question_style"], example["criteria_style"],
+               example["polarity"], example["context_view"], example["placement"])
+        pairs[key].append(example["option_order"])
+    if any(Counter(pair) != {("no", "yes"): 1, ("yes", "no"): 1}
+           for pair in pairs.values()):
+        raise ValueError(f"{subset} subset split an option-order pair")
+    return selected
 
 
 def score_adapter(model_name, adapter_name, adapter_path, examples, max_length):
@@ -201,12 +219,13 @@ def main():
     parser.add_argument("--adapter", action="append", type=parse_adapter, required=True,
                         metavar="NAME=PATH", help="use NAME=base to score the unadapted base")
     parser.add_argument("--data", required=True)
+    parser.add_argument("--subset", choices=("all", "compact", "full"), default="all")
     parser.add_argument("--max-length", type=int, default=16384)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     if len({name for name, _ in args.adapter}) != len(args.adapter):
         parser.error("adapter names must be unique")
-    examples = load_panel(args.data)
+    examples = select_subset(load_panel(args.data), args.subset)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     results = []
@@ -215,7 +234,8 @@ def main():
         out.write_text(json.dumps({
             "model": args.model, "data": args.data,
             "data_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
-            "rows": len(examples), "max_length": args.max_length,
+            "rows": len(examples), "subset": args.subset,
+            "max_length": args.max_length,
             "complete": len(results) == len(args.adapter), "results": results,
         }, indent=2) + "\n")
     print(f"wrote {out}")
