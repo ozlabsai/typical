@@ -2912,13 +2912,15 @@ def test_checkpoint_metric_uses_best_on_mean_not_val_nll(monkeypatch):
     """tl1b item 4: with --best_on set, checkpoint_metric returns the unweighted mean NLL of
     the named eval sets, not val_nll -- and None (default) returns val_nll unchanged."""
     nll_by_set = {"data_u_val": 0.1, "data_wh_val": 0.3}  # mean = 0.2, far from val_nll=1.0
+    calls = []
 
     def fake_eval_val_loss(backbone, model, cache, examples, bs, **kw):
+        calls.append(kw)
         return nll_by_set[examples]  # examples stands in for its own set name here
 
     monkeypatch.setattr(T, "eval_val_loss", fake_eval_val_loss)
     eval_sets = {"data_u_val": "data_u_val", "data_wh_val": "data_wh_val"}
-    args = argparse.Namespace(eval_bs=8, joint=False, readout="native", shots=0)
+    args = argparse.Namespace(eval_bs=8, joint=False, readout="native", shots=0, max_state=2048)
 
     unchanged = T.checkpoint_metric(None, None, None, eval_sets, None, args, None, val_nll=1.0, wb=None, step=1)
     assert unchanged == 1.0
@@ -2926,6 +2928,7 @@ def test_checkpoint_metric_uses_best_on_mean_not_val_nll(monkeypatch):
     best_on = T.resolve_best_on("data_u_val,data_wh_val", eval_sets)
     metric = T.checkpoint_metric(None, None, None, eval_sets, best_on, args, None, val_nll=1.0, wb=None, step=1)
     assert metric == pytest.approx(0.2)
+    assert all(call["max_state"] == 2048 for call in calls)
 
 
 def test_eval_dataset_accepts_T_offset_pairs(tiny_backbone, tiny_cache):

@@ -683,7 +683,8 @@ def checkpoint_metric(backbone, model, cache, eval_sets, best_on, args, vec_cach
     if not best_on:
         return val_nll
     per_set = {name: eval_val_loss(backbone, model, cache, eval_sets[name], args.eval_bs, joint=args.joint,
-                                    readout=args.readout, vec_cache=vec_cache, shots=args.shots)
+                                    readout=args.readout, vec_cache=vec_cache, shots=args.shots,
+                                    max_state=args.max_state)
                for name in best_on}
     metric = sum(per_set.values()) / len(per_set)
     print(f"step {step} best_on_nll {metric:.4f} (" + ", ".join(f"{k}={v:.4f}" for k, v in per_set.items()) + ")")
@@ -1210,7 +1211,8 @@ def main():
 
     if args.zero_shot:
         val_nll = eval_val_loss(backbone, model, cache, val_examples, args.eval_bs, joint=args.joint,
-                                 readout=args.readout, vec_cache=vec_cache, shots=args.shots)
+                                 readout=args.readout, vec_cache=vec_cache, shots=args.shots,
+                                 max_state=args.max_state)
         results = run_full_eval(args, backbone, model, cache, val_examples, eval_sets, val_nll)
         with open(results_path, "w") as f:
             json.dump(results, f, indent=2)
@@ -1222,7 +1224,8 @@ def main():
         model.load_state_dict(ckpt["tower"])
         backbone.load_lora_state_dict(ckpt["lora"])
         val_nll = eval_val_loss(backbone, model, cache, val_examples, args.eval_bs, joint=args.joint,
-                                 readout=args.readout, vec_cache=vec_cache, shots=args.shots)
+                                 readout=args.readout, vec_cache=vec_cache, shots=args.shots,
+                                 max_state=args.max_state)
         results = run_full_eval(args, backbone, model, cache, val_examples, eval_sets, val_nll)
         if args.dump_logits:
             dump_eval_logits(args, backbone, model, cache, val_examples, eval_sets)
@@ -1308,7 +1311,8 @@ def main():
 
         if step % args.val_every == 0 or step == args.steps:
             val_nll = eval_val_loss(backbone, model, cache, val_examples, args.eval_bs, joint=args.joint,
-                                     readout=args.readout, vec_cache=vec_cache, shots=args.shots)
+                                     readout=args.readout, vec_cache=vec_cache, shots=args.shots,
+                                     max_state=args.max_state)
             print(f"step {step} val_nll {val_nll:.4f}")
             if wb:
                 wb.log({"val/nll": val_nll}, step=step)

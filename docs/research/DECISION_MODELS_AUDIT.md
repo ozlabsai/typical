@@ -2,6 +2,13 @@
 
 **Date:** 2026-10-04
 
+> **Superseded for execution:** the completed E1 result falsified this audit's
+> recommendation to keep extending the frozen 4B shared head. See
+> [`JEV_PARITY_STRATEGY_20261004.md`](JEV_PARITY_STRATEGY_20261004.md) for the
+> post-E1 root-cause analysis, current v1.5.6 leaderboard evidence, official
+> WorkflowEvals targets, and active baseline-first plan. The source summaries
+> below remain useful; the old prioritization does not.
+
 **Scope:** the 21 artifacts supplied by the project lead, plus inspection of released model code where available.
 
 **Evidence policy:** architecture and recipe claims come from primary model cards, repositories, and author posts. Scores are treated as self-reported unless the source identifies an independent evaluation. The audit structure follows the evidence-first procedure described by [Scientific Agent Skills](https://arxiv.org/abs/2609.00065).
