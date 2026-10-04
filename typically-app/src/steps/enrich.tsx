@@ -74,7 +74,7 @@ export function EnrichStep({ project, update, back, next }: { project: Project; 
           <div className="py-4">
             <Row id="langs" title={t("enr.langs")} checked={e.languages.length > 0} onChange={(v) => set({ languages: v ? ["es"] : [] })} disabled={!ai} tags={<>{experimental}{needsKey}</>}>
               {t("enr.langsBody")}
-              {project.plan.languages.length > 0 && <> {t("enr.yourData", { l: project.plan.languages.map((l) => `${l.code} ${Math.round(l.share * 100)}%`).join(", ") })}</>}
+              {project.plan.languages.length > 0 && <> {t("enr.yourData", { l: project.plan.languages.filter((l) => l.share >= 0.005).map((l) => `${l.code} ${Math.round(l.share * 100)}%`).join(", ") })}</>}
             </Row>
             {e.languages.length > 0 && (
               <div className="flex flex-wrap gap-4 pb-1">

@@ -124,7 +124,13 @@ def analyze(req: AnalyzeRequest):
         meta = {"name": name + (f" ({sheet})" if sheets and len(sheets) > 1 else ""), "kind": src["kind"], "rows": len(records),
                 "columns": list(prof["columns"]), "created": datetime.now(timezone.utc).isoformat(timespec="seconds"), **auth.stamp()}
         (UPLOADS / f"{token}.meta.json").write_text(json.dumps(meta, ensure_ascii=False))
-    pick = sorted(random.Random(0).sample(range(len(records)), min(3, len(records))))
+    # preview: 3 rows that between them show the most different answers (a mailbox sample is mostly unanswered junk otherwise)
+    pool, seen, pick = random.Random(0).sample(range(len(records)), min(200, len(records))), set(), []
+    for _ in range(min(3, len(pool))):
+        i = max((j for j in pool if j not in pick), key=lambda j: len({kv for kv in tp.answers(records[j], plan).items() if kv[1] is not None} - seen))
+        pick.append(i)
+        seen |= {kv for kv in tp.answers(records[i], plan).items() if kv[1] is not None}
+    pick.sort()
     return {
         "name_hint": name, "n_rows": len(records), "columns": list(prof["columns"]),
         "profile": trim(prof), "plan": plan, "plan_source": source, "lang": req.lang,

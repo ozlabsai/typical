@@ -28,6 +28,7 @@ export function CustomizePage({ data }: { data?: string }) {
   const at = STEPS.indexOf(step)
 
   useEffect(() => { if (project?.slug) refresh() }, [project?.slug, project?.run, refresh])
+  useEffect(() => { document.getElementById("scroller")?.scrollTo(0, 0) }, [step])   // Continue sits at the bottom; each step starts at its top
 
   return (
     <Page>

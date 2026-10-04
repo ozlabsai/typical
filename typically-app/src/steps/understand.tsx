@@ -105,7 +105,7 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
           {analysis.preview_cases.slice(0, 3).map((c, i) => (
             <div key={i} className="rounded-lg bg-muted/50 p-3 text-xs">
               <p dir="auto" className="line-clamp-6 whitespace-pre-wrap text-muted-foreground">{c.case}</p>
-              <div className="mt-2 flex flex-wrap gap-1">{Object.entries(c.answers).map(([k, v]) => <Badge key={k} variant="outline" className="font-normal">{k}: {v}</Badge>)}</div>
+              <div className="mt-2 flex flex-wrap gap-1">{Object.entries(c.answers).filter(([, v]) => v != null).map(([k, v]) => <Badge key={k} variant="outline" className="font-normal">{k}: {v}</Badge>)}</div>
             </div>
           ))}
         </CardContent>
@@ -135,7 +135,7 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
           <CardContent>
             <ul className="grid gap-1.5 text-sm">
               {plan.issues.map((s, i) => (
-                <li key={i} className="flex gap-2"><span className="text-muted-foreground">•</span><span>{s.detail}{s.action ? <span className="text-muted-foreground"> {s.action}</span> : null}</span></li>
+                <li key={i} className="flex gap-2"><span className="text-muted-foreground">•</span><span>{s.column && <><bdi className="font-mono text-xs">{s.column}</bdi>{" · "}</>}{s.detail}{s.action ? <span className="text-muted-foreground"> {s.action}</span> : null}</span></li>
               ))}
             </ul>
           </CardContent>

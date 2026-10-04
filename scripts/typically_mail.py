@@ -31,7 +31,7 @@ MAX_UNZIPPED = 1_000_000_000   # a zip that inflates past this is refused (zip b
 MAX_BODY = 1500
 THREAD_GAP = timedelta(days=14)   # subject fallback: a quiet thread this long is closed; the same subject later is a new thread
 DEGENERATE, MIN_ANSWERS = 0.95, 30   # a decision needs answers on >= 30 rows, none of them on >= 95%
-SYSTEM_FOLDERS = re.compile(r"(notes_)?inbox|.*sent.*|deleted([ _]items)?|trash|bin|drafts?|outbox|junk|spam|all[ _]?(mail|documents)|"
+SYSTEM_FOLDERS = re.compile(r"(\w+[ _])?inbox|.*sent.*|deleted([ _]items)?|trash|bin|drafts?|outbox|junk|spam|all[ _]?(mail|documents)|"
                             r"discussion_threads|notes|archived?|important|starred|unread|opened|category .*|chats?|calendar|contacts|tasks", re.I)
 _SENT = re.compile(r"(^|[/_ ])sent", re.I)
 _PREFIX = re.compile(r"^\s*((re|fw|fwd|aw|sv|tr|wg)\s*(\[\d+\])?\s*:\s*)+", re.I)

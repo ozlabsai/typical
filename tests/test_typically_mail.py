@@ -97,6 +97,11 @@ def test_maildir_outcomes(ids):
     assert {r["reply_within"] for r in rows if r["reply"] == "yes"} == {"within an hour", "within a day", "after a day"}
 
 
+def test_inbox_variants_are_system_folders():   # Enron maildirs have old_inbox / notes_inbox next to inbox
+    assert all(tm.SYSTEM_FOLDERS.fullmatch(f) for f in ["inbox", "old_inbox", "notes_inbox", "Old Inbox", "sent_items"])
+    assert not any(tm.SYSTEM_FOLDERS.fullmatch(f) for f in ["projects", "inbox_clients", "universities"])
+
+
 def test_case_text_clean_redacted_no_leak():
     rows, _, _ = tm.read_mail(as_maildir_zip(mailbox(False)))
     alice, = by_subject(rows, "Budget Q3", "Alice Ames")

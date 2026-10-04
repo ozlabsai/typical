@@ -340,7 +340,7 @@ TEXT = {
         "i_dup": "{n} rows repeat another case.", "a_dup": "merge into soft answers",
         "i_conflict": "The same case has different answers; expect about {pct}% at best.", "a_conflict": "review or merge into soft answers",
         "i_rare": "Rare answers: {vals}.", "a_rare": "balance rare answers",
-        "i_empty": "Rows with no answer are not used.", "a_empty": "skip those rows",
+        "i_empty": "{n} rows have no answer here; they are not used for this decision.", "a_empty": "skip those rows",
         "i_leak": "Predicts '{c}' {pct}% of the time by itself.", "a_leak": "remove from the case",
         "i_textleak": "The text often contains the answer to '{c}' word for word.", "a_textleak": "review",
         "i_pii": "Contains {kinds}.", "a_pii": "review or remove",
@@ -366,7 +366,7 @@ TEXT = {
         "i_dup": "{n} שורות חוזרות על מקרה אחר.", "a_dup": "לאחד לתשובות רכות",
         "i_conflict": "לאותו מקרה יש תשובות שונות; צפו לדיוק של כ-{pct}% לכל היותר.", "a_conflict": "לבדוק או לאחד לתשובות רכות",
         "i_rare": "תשובות נדירות: {vals}.", "a_rare": "לאזן תשובות נדירות",
-        "i_empty": "שורות ללא תשובה אינן בשימוש.", "a_empty": "לדלג על השורות האלה",
+        "i_empty": "ל-{n} שורות אין כאן תשובה; הן לא משמשות להחלטה הזו.", "a_empty": "לדלג על השורות האלה",
         "i_leak": "מנבא את '{c}' ב-{pct}% מהמקרים גם לבדו.", "a_leak": "להסיר מהמקרה",
         "i_textleak": "הטקסט מכיל לעיתים קרובות את התשובה ל-'{c}' מילה במילה.", "a_textleak": "לבדוק",
         "i_pii": "מכיל {kinds}.", "a_pii": "לבדוק או להסיר",
@@ -469,7 +469,7 @@ def _finish(plan: dict, prof: dict, records: list[dict] | None, lang: str = "en"
         if s["rare"]:
             issues.append({"kind": "rare_labels", "column": c, "count": len(s["rare"]), "detail": msg(lang, "i_rare", vals=", ".join(s["rare"][:5])), "action": msg(lang, "a_rare")})
         if s["empty"]:
-            issues.append({"kind": "empty", "column": c, "count": s["empty"], "detail": msg(lang, "i_empty"), "action": msg(lang, "a_empty")})
+            issues.append({"kind": "empty", "column": c, "count": s["empty"], "detail": msg(lang, "i_empty", n=f"{s['empty']:,}"), "action": msg(lang, "a_empty")})
         for l in cand[c]["leaks"] if c in cand else []:
             if l["column"] in used:
                 issues.append({"kind": "leakage", "column": l["column"], "count": prof["n_rows"], "detail": msg(lang, "i_leak", c=c, pct=round(100 * l["purity"])), "action": msg(lang, "a_leak")})

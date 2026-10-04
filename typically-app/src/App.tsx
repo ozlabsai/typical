@@ -54,7 +54,7 @@ function Shell() {
               </Breadcrumb>
               <div ref={setSlot} className="ms-auto flex min-w-0 items-center gap-2" />
             </header>
-            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+            <div id="scroller" className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
               {route.name === "chat" && <ChatPage modelId={route.model} />}
               {route.name === "models" && <ModelsPage />}
               {route.name === "model" && <ModelPage id={route.id} tab={route.tab} />}
