@@ -2,6 +2,7 @@
 
     if available(): out, usage = complete_json(system, user, schema, max_tokens=1000)   # out: dict; usage: {input_tokens, output_tokens}
     usd(tokens_in, tokens_out)                                                           # list price of the active provider, for budgets
+    msg, usage = chat_tools(messages, tools, model=...)                                   # one tool-use turn (OpenRouter), usage["usd"] = billed cost
 
 `user` is a string or a full messages list (user/assistant turns). Failures raise LLMError (type + status only, never a key).
 """
@@ -107,3 +108,26 @@ def complete_json(system: str, user: str | list[dict], schema: dict, *, max_toke
     except (KeyError, IndexError, TypeError):
         raise LLMError("unexpected OpenRouter response") from None
     return _parse(text), {"input_tokens": u.get("prompt_tokens", 0), "output_tokens": u.get("completion_tokens", 0)}
+
+
+def chat_tools(messages: list[dict], tools: list[dict], *, model: str | None = None, max_tokens: int = 2000,
+               tool_choice: str | dict = "auto"):
+    """One OpenRouter chat/completions turn with OpenAI-format `tools` -> (assistant message dict, usage). `messages` start with the
+    system message; it is marked for Anthropic prompt caching (OpenRouter passes cache_control through; below the model's minimum
+    prompt size it is a no-op). usage: {input_tokens, output_tokens, cached_tokens, usd} (usd: OpenRouter's billed cost, else list price)."""
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise LLMError("chat_tools needs OPENROUTER_API_KEY")
+    sys_, *rest = messages
+    sys_ = {"role": "system", "content": [{"type": "text", "text": sys_["content"], "cache_control": {"type": "ephemeral"}}]}
+    data = _http("POST", f"{OR_URL}/chat/completions", timeout=TIMEOUT_S, headers={
+        "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}", "HTTP-Referer": "https://typical.ozlabs.ai", "X-Title": "typically"},
+        body={"model": _model(model)[0], "max_tokens": max_tokens, "messages": [sys_, *rest], "tools": tools, "tool_choice": tool_choice,
+              "usage": {"include": True}, **({"provider": {"order": ["Anthropic"]}} if _model(model)[0].startswith("anthropic/") else {})})   # one provider keeps the cache warm
+    try:
+        msg, u = data["choices"][0]["message"], data.get("usage") or {}
+    except (KeyError, IndexError, TypeError):
+        raise LLMError("unexpected OpenRouter response") from None
+    tin, tout = u.get("prompt_tokens", 0), u.get("completion_tokens", 0)
+    cost = u.get("cost")
+    return msg, {"input_tokens": tin, "output_tokens": tout, "cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
+                 "usd": float(cost) if cost is not None else usd(tin, tout, model)}
