@@ -78,12 +78,21 @@ def encode(row, tokenizer, compile_row, marker_id, max_length):
         raise ValueError(f"{row.get('id')}: decision marker mismatch")
     targets = []
     for field in compiled.fields:
-        symbol = compiled.targets[field]
-        token_ids = tokenizer.encode(symbol, add_special_tokens=False)
-        if len(token_ids) != 1:
-            raise ValueError(f"answer symbol {symbol!r} is not one token")
-        targets.append(token_ids[0])
-    return ids, positions, torch.tensor(targets)
+        symbols = compiled.symbols[field]
+        token_ids = [tokenizer.encode(symbol, add_special_tokens=False) for symbol in symbols]
+        if any(len(value) != 1 for value in token_ids):
+            raise ValueError("answer symbols must each be one token")
+        probabilities = row.get("soft_targets", {}).get(field)
+        if probabilities is None:
+            probabilities = [float(symbol == compiled.targets[field]) for symbol in symbols]
+        if len(probabilities) != len(symbols) or any(value < 0 for value in probabilities):
+            raise ValueError(f"{row.get('id')}/{field}: invalid soft target")
+        total = sum(probabilities)
+        if total <= 0:
+            raise ValueError(f"{row.get('id')}/{field}: empty soft target")
+        targets.append((torch.tensor([value[0] for value in token_ids]),
+                        torch.tensor([value / total for value in probabilities])))
+    return ids, positions, targets
 
 
 def loss_for_rows(model, rows, tokenizer, compile_row, marker_id, max_length, device):
@@ -96,11 +105,13 @@ def loss_for_rows(model, rows, tokenizer, compile_row, marker_id, max_length, de
         logits_to_keep=union.to(device),
     )
     offsets = {position.item(): index for index, position in enumerate(union)}
-    logits, targets = [], []
-    for batch_index, (_, positions, target) in enumerate(encoded):
-        logits.append(output.logits[batch_index, [offsets[position.item()] for position in positions]])
-        targets.append(target)
-    return F.cross_entropy(torch.cat(logits), torch.cat(targets).to(device))
+    losses = []
+    for batch_index, (_, positions, targets) in enumerate(encoded):
+        logits = output.logits[batch_index, [offsets[position.item()] for position in positions]].float()
+        for field_logits, (candidate_ids, probabilities) in zip(logits, targets):
+            log_probabilities = F.log_softmax(field_logits, dim=-1)[candidate_ids.to(device)]
+            losses.append(-(probabilities.to(device) * log_probabilities).sum())
+    return torch.stack(losses).mean()
 
 
 @torch.no_grad()

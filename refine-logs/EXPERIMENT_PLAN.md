@@ -121,7 +121,8 @@ Only after B5 quality passes: Q8, prefix packing, concurrent questions, and then
 | G0-INTERN4 | Same matrix for Intern-Decision-4B | establish fast/MM candidate | DONE: 200/231; workflow mean 49.9 |
 | G0-TL2 | Evaluate existing 9B checkpoint before training | use correct context/grouping | QUEUED |
 | G1-READOUT | Final-token vs pointer vs native | development-only winner | BLOCKED on G0 |
-| G2-TEXT | First competence LoRA | ≥200/231 diagnostic and no workflow-dev regression | RUNNING: fixed 250-step Intern gate |
+| G2-TEXT | First competence LoRA | ≥200/231 diagnostic and no workflow-dev regression | FAILED: clean pilot 197/231; official workflow transfer below target |
+| G2-SOFT | Filtered public soft-distillation LoRA | locked internal retention before any diagnostic | RUNNING: base reset, lower LR, 30% replay |
 | G3-HARD | Long/hard-negative refinement | improves locked internal hard families | BLOCKED on G2 |
 | G4-MMHE | Residual Hebrew/MM continuation | all retention gates | BLOCKED on text winner |
 | G5-OFFICIAL | Frozen official submission/evals | all primary gates | BLOCKED on candidate |

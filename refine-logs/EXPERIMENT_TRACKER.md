@@ -17,8 +17,8 @@
 | R016 | B1 | Existing 9B evaluation | `tl2` | corrected context/grouping | QUEUED | evaluate before any new training |
 | R017 | B0 | Grouped typed baseline | full five-question cases | accuracy/KL/Brier/ECE | QUEUED | replaces non-comparable first-N row proxy |
 | R018 | B2 | Readout ablation | final symbol vs pointer vs native | held-out accuracy/NLL/Brier | BLOCKED | run only after baseline matrix |
-| R019 | B3 | 250-step competence gate | Intern-Decision-4B + rank-16 language LoRA | hard + workflow dev + retention | RUNNING | 40k clean hard/replay mix; step-0 NLL wf/wh/replay `.775/.949/.598`; pod `ujiq3ud4vnhf80` |
-| R020 | B3 | Text competence run | selected LoRA + audited mix | locked dev gates | BLOCKED | target ≥198/231 diagnostic before refinement |
+| R019 | B3 | 250-step clean competence gate | Intern-Decision-4B + rank-16 language LoRA | hard + workflow dev + retention | FAILED | Internal NLL improved `.775/.949/.598`→`.359/.180/.423`, but public Jev fell 200→197/231; WorkflowEvals security/trace/invoice `.479/.500/.478`, customer exceeded the unoptimized 96 GB runtime ceiling |
+| R020 | B3 | Soft public-distillation gate | base-reset Intern LoRA; filtered Tasksource/Open-Jev/Sarge + 30% replay | locked dev gates | RUNNING | 40k rows, 4,812 soft targets; exact public overlap 0; LR `2e-5`; pod `ujiq3ud4vnhf80` |
 | R021 | B3 | Hard refinement | long docs + staged hard negatives | hard families + workflow | BLOCKED | attention still excluded |
 | R022 | B4 | Hebrew/MM residual | text winner + residual/KL retention | MM/HE plus all retention gates | BLOCKED | cannot share the old unconstrained continuation path |
 | R023 | B5 | Frozen final public eval | promoted checkpoint | all declared gates | BLOCKED | one run after freeze |
@@ -28,5 +28,5 @@
 ## Active resource
 
 - Pod: `ujiq3ud4vnhf80` (`typical-jev-parity-g1`), one RTX PRO 6000 (96 GB, $2.09/hour).
-- Job: fixed 250-step Intern LoRA gate; 32,464,896 trainable parameters; 13.4 GiB observed peak VRAM.
+- Job: R020 fixed 250-step Intern LoRA gate; 32,464,896 trainable parameters; base reset after R019 failed transfer.
 - Stop condition: pull adapter, optimizer state, and metrics after step 250; stop immediately on failure or after collection.
