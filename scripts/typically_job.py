@@ -413,7 +413,7 @@ def train_flags(company: str, steps: int, run: str, base_args: dict, base: str =
             "--max_state", "1024", *BASES[base]["mem"], "--data", "data_v5", "--extra_data", f"data_wf,data_wh,data_u,{d}",
             "--bucket_map", f"data_wh=W,data_u=U,{d}=C", "--family_weights", "C:0.5,W:0.3,E:0.15,U:0.05", "--null_aug", "W:0.20",
             "--steps", str(steps), "--bs", "64", "--val_every", "50", "--ckpt_every", "100", "--eval_every", str(steps),
-            "--eval_limit", "200", "--eval_bs", "8", "--best_on", f"{d}_val"]
+            "--eval_limit", "200", "--eval_bs", "8", "--best_on", f"{d}_val", "--no_final_eval"]
 
 
 def log_series(path: Path, limit: int = 200, tail: int = 64_000) -> dict:

@@ -1025,6 +1025,7 @@ def parse_args():
                         "is correct (p_null=1.0, label=-1, meta.null_aug=True); the original row is kept as-is")
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--eval_limit", type=int, default=0, help="cap each eval set (smoke runs)")
+    p.add_argument("--no_final_eval", action="store_true", help="skip the closing eval of best.pt over every eval set (~10 min on an H100)")
     p.add_argument("--tap_layer", type=int, default=0, help="tower memory from layer T (0 = last layer)")
     p.add_argument("--zscore", action="store_true", help="per-dim standardise backbone features (stats from 512 train states)")
     p.add_argument("--grad_ckpt", action="store_true",
@@ -1306,6 +1307,8 @@ def main():
             if args.ckpt_upload and args.hf_repo:
                 upload_ckpt(args, run_dir)
 
+    if args.no_final_eval:   # typically jobs: scripts/eval_wf.py scores best.pt on the company's own rows instead
+        return
     # final eval on the best-by-val checkpoint (as v0), not the last step
     if best_path.exists():
         ckpt = torch.load(best_path, map_location=device, weights_only=False)
