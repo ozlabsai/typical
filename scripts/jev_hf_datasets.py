@@ -66,7 +66,8 @@ def row(task, state, question, candidates, label=None, probs=None, meta=None):
         s = sum(probs) or 1.0
         target = [p / s for p in probs]
         label = max(range(len(candidates)), key=lambda j: target[j]) if label is None else label
-    return {"state": state, "query": query_text(question), "candidates": list(candidates), "target": target,
+    return {"state": state, "question": question, "query": query_text(question),
+            "candidates": list(candidates), "target": target,
             "p_null": 0.0, "task": task, "label": label, "meta": {"qtype": question["type"], **(meta or {})}}
 
 

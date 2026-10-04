@@ -51,7 +51,8 @@ _gid = itertools.count(1)
 # ============================================================================
 
 
-def make_row(decision_type, task, candidates, gold_idx, query, state, *, rule_depth=0, exception_depth=0,
+def make_row(decision_type, task, candidates, gold_idx, query, state, *, question=None,
+             rule_depth=0, exception_depth=0,
              workflow_family="", rubric_family="", rubric_style="", gold_source="programmatic",
              soft_target=False, source_dataset="synthetic:decisionmix_v2", fam_bucket="W", target=None,
              catch_all_present=False, extra_meta=None):
@@ -73,10 +74,13 @@ def make_row(decision_type, task, candidates, gold_idx, query, state, *, rule_de
     }
     if extra_meta:
         meta.update(extra_meta)
-    return {"state": state[:MAX_STATE_CHARS], "query": query, "candidates": list(candidates), "target": target,
+    row = {"state": state[:MAX_STATE_CHARS], "query": query, "candidates": list(candidates), "target": target,
             "p_null": 1.0 if not gold_present and not soft_target else 0.0,
             "task": task, "label": gold_idx if gold_present else (target.index(max(target)) if soft_target else -1),
             "meta": meta}
+    if question is not None:
+        row["question"] = question
+    return row
 
 
 def render_state(sentences, rng):
@@ -125,12 +129,14 @@ def finish(decision_type, spec, candidates, gold_idx, rng, *, task, rule_depth, 
            requires=None, extra_meta=None):
     style_name = style_name or pick_style(rng, heldout_style)
     instructions, criteria = RENDER[decision_type][style_name](spec)
-    query = query_text({"type": decision_type, "instructions": instructions, "criteria": criteria})
+    question = {"type": decision_type, "instructions": instructions, "criteria": criteria}
+    query = query_text(question)
     # state_sentences is rendered ONCE per group by the caller and passed as a string across all
     # variants (a group must share the exact same state string); a raw list is still accepted and
     # rendered here for single-row callers.
     state = state_sentences if isinstance(state_sentences, str) else render_state(state_sentences, rng)
-    row = make_row(decision_type, task, candidates, gold_idx, query, state, rule_depth=rule_depth,
+    row = make_row(decision_type, task, candidates, gold_idx, query, state, question=question,
+                   rule_depth=rule_depth,
                    exception_depth=exception_depth, workflow_family=workflow_family, rubric_family=rubric_family,
                    rubric_style=style_name, catch_all_present=catch_all, extra_meta=extra_meta)
     for k in (requires or []):
@@ -153,6 +159,12 @@ def null_group(rows, rng, frac):
     out = []
     for r in rows:
         r = dict(r, candidates=list(new_cands))
+        question = dict(r["question"])
+        criteria = question["criteria"]
+        question["criteria"] = ([v for i, v in enumerate(criteria) if i != victim]
+                                if isinstance(criteria, list)
+                                else {k: v for k, v in criteria.items() if k != cands[victim]})
+        r["question"] = question
         r["meta"] = dict(r["meta"], candidate_count=len(new_cands))
         if r["label"] == victim:
             r["label"], r["p_null"] = -1, 1.0
@@ -618,6 +630,13 @@ def _apply_catch_all(rows, rng):
         cands, target = list(r["candidates"]), list(r["target"])
         extra_cand = "not applicable" if r["meta"]["decision_type"] == "score" else "none_apply"
         r = dict(r, candidates=cands + [extra_cand], target=target + [0.0])
+        question = dict(r["question"])
+        criteria = question["criteria"]
+        if isinstance(criteria, list):
+            question["criteria"] = criteria + ["The rubric does not apply to this case"]
+        else:
+            question["criteria"] = {**criteria, extra_cand: "None of the listed outcomes apply"}
+        r["question"] = question
         r["meta"] = dict(r["meta"], catch_all_present=True, candidate_count=len(r["candidates"]))
         out.append(r)
     return out

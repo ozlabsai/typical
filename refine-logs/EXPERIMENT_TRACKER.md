@@ -10,14 +10,14 @@
 | R005 | prior | E1 gate | frozen LoRA, E/K/W/U/V/H | all prior gates | FAILED | Jev 164→159/231; typed `.373→.340`; mismatch null `.105`; MM/HE improved |
 | R010 | B0 | Correct state length | all `eval_val_loss` entry points | propagated `max_state` | DONE | fixed 256-token default leak; targeted tests pass |
 | R011 | B0 | Official workflow harness audit | WorkflowEvals 705 cases | exact actions, request shape | DONE | Jev target mean 67.8; benchmark quarantined |
-| R012 | B0/B1 | Cygnet identity | pinned Gemma-4-12B-it + exact letter readout | public Jev 203/231 ±1 | RUNNING | RTX PRO 6000 pod `ohvl25cthtpqr8`; exact vLLM 0.30.0; model revision pinned |
-| R013 | B1 | Cygnet workflow baseline | same untouched model, official WorkflowEvals | 61.7/71.6/61.8/76.0 and mean 67.8 targets | BLOCKED on R012 | all 705 cases, joint questions |
-| R014 | B1 | Winnow baseline matrix | Winnow-12B | Jev/workflow/grouped/MM/HE | QUEUED | official Jev score already 73.2, Intelligence 74.4 |
-| R015 | B1 | Intern fast/MM matrix | Intern-Decision-4B | Jev/workflow/grouped/MM/HE/latency | QUEUED | public claims are self-reported; needs untouched local run |
+| R012 | B0/B1 | Cygnet identity | pinned Gemma-4-12B-it + exact letter readout | public Jev 203/231 ±1 | DONE | 203/231 exactly: 48 easy, 70 standard, 85 hard |
+| R013 | B1 | Cygnet workflow baseline | same untouched model, official WorkflowEvals | 61.7/71.6/61.8/76.0 and mean 67.8 targets | DONE | security/trace/invoice/customer `.333/.523/.531/.698`; mean `.521` |
+| R014 | B1 | Winnow baseline matrix | Winnow-12B Q8 reference runtime | Jev/workflow | DONE | 199/231; workflow `.392/.626/.478/.735`; best baseline mean `.558` |
+| R015 | B1 | Intern fast/MM matrix | Intern-Decision-4B | Jev/workflow/latency | DONE | 200/231; workflow `.521/.468/.447/.559`; mean `.499`; trainable native-MM base selected |
 | R016 | B1 | Existing 9B evaluation | `tl2` | corrected context/grouping | QUEUED | evaluate before any new training |
 | R017 | B0 | Grouped typed baseline | full five-question cases | accuracy/KL/Brier/ECE | QUEUED | replaces non-comparable first-N row proxy |
 | R018 | B2 | Readout ablation | final symbol vs pointer vs native | held-out accuracy/NLL/Brier | BLOCKED | run only after baseline matrix |
-| R019 | B3 | 250-step competence gate | selected backbone/readout | hard + workflow dev + retention | BLOCKED | no full run before throughput and gate check |
+| R019 | B3 | 250-step competence gate | Intern-Decision-4B + rank-16 language LoRA | hard + workflow dev + retention | RUNNING | 40k clean hard/replay mix; step-0 NLL wf/wh/replay `.775/.949/.598`; pod `ujiq3ud4vnhf80` |
 | R020 | B3 | Text competence run | selected LoRA + audited mix | locked dev gates | BLOCKED | target ≥198/231 diagnostic before refinement |
 | R021 | B3 | Hard refinement | long docs + staged hard negatives | hard families + workflow | BLOCKED | attention still excluded |
 | R022 | B4 | Hebrew/MM residual | text winner + residual/KL retention | MM/HE plus all retention gates | BLOCKED | cannot share the old unconstrained continuation path |
@@ -27,6 +27,6 @@
 
 ## Active resource
 
-- Pod: `ohvl25cthtpqr8` (`typical-jev-parity-g0-bw`), one RTX PRO 6000 (96 GB).
-- Job: install pinned serving stack, reproduce Cygnet public identity, then run four official WorkflowEvals.
-- Stop condition: results persisted to `/workspace/jev-parity-g0`; stop the pod after collection or on failure.
+- Pod: `ujiq3ud4vnhf80` (`typical-jev-parity-g1`), one RTX PRO 6000 (96 GB, $2.09/hour).
+- Job: fixed 250-step Intern LoRA gate; 32,464,896 trainable parameters; 13.4 GiB observed peak VRAM.
+- Stop condition: pull adapter, optimizer state, and metrics after step 250; stop immediately on failure or after collection.

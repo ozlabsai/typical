@@ -128,7 +128,8 @@ def make_row(qtype, family, spec, state, labels, gold, style, p_null=0.0, extra_
     instructions, criteria = fn(spec)
     if spec.get("prefix"):  # rubric groups: the deciding rule (policy / thresholds) lives in the instructions
         instructions = f"{spec['prefix']} {instructions}"
-    query = query_text({"type": qtype, "instructions": instructions, "criteria": criteria})
+    question = {"type": qtype, "instructions": instructions, "criteria": criteria}
+    query = query_text(question)
     if p_null and len(labels) < 3:
         p_null = 0.0  # never leave a single candidate
     if p_null:
@@ -136,7 +137,8 @@ def make_row(qtype, family, spec, state, labels, gold, style, p_null=0.0, extra_
         target = [1.0 / len(labels)] * len(labels)
     else:
         target = [1.0 if i == gold else 0.0 for i in range(len(labels))]
-    return {"state": state[:MAX_STATE_CHARS], "query": query, "candidates": list(labels), "target": target,
+    return {"state": state[:MAX_STATE_CHARS], "question": question, "query": query,
+            "candidates": list(labels), "target": target,
             "p_null": float(p_null), "task": f"wf_{family}", "label": gold,
             "meta": {"family": family, "rubric_style": name, "qtype": qtype, "fam_bucket": "W", **(extra_meta or {})}}
 

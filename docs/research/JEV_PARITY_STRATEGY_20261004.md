@@ -66,6 +66,17 @@ Run exact, pinned evaluations before any training:
 
 For each: JevBench public, official WorkflowEvals, grouped typed-decisions, Hebrew pairs, and an image benchmark. Promote no checkpoint based on a public benchmark result.
 
+G0 is complete for the three public leaders. These are pinned, untouched reference runtimes; the WorkflowEvals values are equal-weight exact-action/primary-action scores on all 705 current cases.
+
+| Model | Public JevBench | Security | Agent trace | Invoice | Customer | Workflow mean |
+|---|---:|---:|---:|---:|---:|---:|
+| Cygnet | 203/231 | 33.3% | 52.3% | 53.1% | 69.8% | 52.1% |
+| Winnow-12B Q8 | 199/231 | 39.2% | 62.6% | 47.8% | 73.5% | **55.8%** |
+| Intern-Decision-4B | 200/231 | **52.1%** | 46.8% | 44.7% | 55.9% | 49.9% |
+| Jev target | 200/231 public reference | 61.7% | 71.6% | 61.8% | 76.0% | **67.8%** |
+
+This changes the optimization target: public JevBench parity is necessary but not predictive of workflow parity. Winnow is the strongest workflow baseline and remains twelve mean points below Jev. Intern is the trainable native-multimodal base and is closest on security, so G1 starts from Intern with a reversible language-only adapter.
+
 ### G1 — flagship text decision model
 
 Only if an untouched baseline does not already clear the full target:
@@ -81,6 +92,18 @@ Only if an untouched baseline does not already clear the full target:
 ### G2 — fast 4B lane
 
 Start from Intern-Decision-4B or reproduce its final-marker objective on Qwen3.5-4B-it. Keep the vision tower/projector frozen and adapt the language model with rank-16/32 LoRA. This lane must pass sealed generalization before it can replace the 12B flagship; current 4B leaderboard entries often gain composite rank from speed/cost while losing badly on sealed Noul.
+
+The first G1/G2 pilot is now locked:
+
+- Released `internlm/Intern-Decision-4B`; rank-16 language LoRA, 32.46M trainable parameters (0.71%).
+- Exact Intern JSON-marker objective, 4,096 tokens, effective batch 16, `5e-5` cosine LR, 250-step first gate.
+- 40,000 grouped requests: 28,000 hard workflow/rule requests and 12,000 broad E/K replay requests.
+- Final corpus SHA-256: `1ffd2262b14845e569002ae50fc7e0fb3333ade2b437dc5110fda94dfc796c44`.
+- All requests fit without truncation: max 3,482 tokens, p99 3,044.
+- Zero exact, normalized-stem, or word-trigram MinHash ≥0.8 overlap against 1,336 locked inputs: 231 JevBench, 705 WorkflowEvals, and 400 typed-decisions test cases.
+- One real forward/backward smoke step passed at 10.05 GiB peak VRAM. The full gate uses separate workflow, hard-rule, and replay validation floors.
+
+The referenced public corpora stay out of this first pilot. Tasksource has mixed row-level licensing; Open-Jev includes workflow-control sources close to the target domains; Sarge includes uniform placeholders and Jev-teacher distributions that the released hard-label objective cannot represent. They remain a filtered G2 curriculum only if the clean internal pilot misses its locked gate.
 
 ### G3 — Hebrew and multimodal retention
 
@@ -107,4 +130,4 @@ After quality is frozen: Q8, shared-prefix packing, concurrent questions, CUDA g
 
 ## Immediate execution
 
-G0 has started on one RTX PRO 6000: pinned Cygnet reproduction (`203/231` identity target), then all 705 official WorkflowEvals cases against the untouched checkpoint. This is higher-information and cheaper than another E1-style continuation. The GPU run must stop after results are persisted; no training begins until this baseline table is complete.
+Run the fixed 250-step Intern LoRA gate. Reject it if any internal retention suite regresses, then evaluate the frozen candidate once on public JevBench and all official WorkflowEvals cases. Public results do not select a checkpoint. Hebrew and multimodal training remains G3 and begins only after text/workflow promotion.

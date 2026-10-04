@@ -116,12 +116,12 @@ Only after B5 quality passes: Q8, prefix packing, concurrent questions, and then
 
 | Run | Purpose | Advancement rule | Status |
 |---|---|---|---|
-| G0-CYGNET | Pinned Cygnet identity + 705-case WorkflowEvals | identity 203/231 ±1; zero request failures | RUNNING |
-| G0-WINNOW | Same matrix for Winnow | compare quality/MM/HE/workflow against Cygnet | QUEUED |
-| G0-INTERN4 | Same matrix for Intern-Decision-4B | establish fast/MM candidate | QUEUED |
+| G0-CYGNET | Pinned Cygnet identity + 705-case WorkflowEvals | identity 203/231 ±1; zero request failures | DONE: 203/231; workflow mean 52.1 |
+| G0-WINNOW | Same matrix for Winnow | compare workflow against Cygnet | DONE: 199/231; workflow mean 55.8 |
+| G0-INTERN4 | Same matrix for Intern-Decision-4B | establish fast/MM candidate | DONE: 200/231; workflow mean 49.9 |
 | G0-TL2 | Evaluate existing 9B checkpoint before training | use correct context/grouping | QUEUED |
 | G1-READOUT | Final-token vs pointer vs native | development-only winner | BLOCKED on G0 |
-| G2-TEXT | First competence LoRA | ≥198/231 diagnostic and no workflow-dev regression | BLOCKED on G1 |
+| G2-TEXT | First competence LoRA | ≥200/231 diagnostic and no workflow-dev regression | RUNNING: fixed 250-step Intern gate |
 | G3-HARD | Long/hard-negative refinement | improves locked internal hard families | BLOCKED on G2 |
 | G4-MMHE | Residual Hebrew/MM continuation | all retention gates | BLOCKED on text winner |
 | G5-OFFICIAL | Frozen official submission/evals | all primary gates | BLOCKED on candidate |
@@ -129,7 +129,7 @@ Only after B5 quality passes: Q8, prefix packing, concurrent questions, and then
 
 ## Compute budget
 
-- G0: one H100, run baselines sequentially; persist results before stopping. Expected tens of GPU-hours at most, dominated by downloads and 705 workflow cases.
+- G0 completed sequentially on one RTX PRO 6000; artifacts persisted under `.context/g0-{cygnet,winnow,intern}` before stopping.
 - First training gate: cap at 250 steps; estimate throughput/memory before authorizing the full run.
 - Never run extra seeds until seed 0 clears all declared gates.
 - Stop idle pods automatically after artifacts persist.
@@ -150,7 +150,7 @@ Only after B5 quality passes: Q8, prefix packing, concurrent questions, and then
 - [x] Claims, anti-claims, and numeric targets declared
 - [x] Official WorkflowEvals replaces the stale proxy as the primary workflow target
 - [x] Untouched baselines precede training
-- [ ] G0 baseline matrix complete
+- [x] G0 baseline matrix complete for Cygnet, Winnow, and Intern
 - [ ] Candidate clears locked development gates
 - [ ] Official JevBench score and Intelligence equal/beat Jev
 - [ ] Official WorkflowEvals mean equal/beats 67.8
