@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { corrections, library, type AskQuestion, type AskResult, type LibraryModel, type Result } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { useLibrary } from "@/lib/library"
-import { pct, say, TYPES } from "@/lib/project"
+import { pct, say, snippet, TYPES } from "@/lib/project"
 import { go } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
@@ -431,7 +431,7 @@ export function ChatPage({ modelId }: { modelId?: string }) {
                   <button key={i} type="button" onClick={() => setCase(ex)}
                     className="grid content-start gap-1 rounded-xl border bg-card p-3 text-start text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
                     <span className="font-medium text-foreground">{t("chat.try")}</span>
-                    <span dir="auto" className="line-clamp-3">{ex.split("\n\n").at(-1)}</span>
+                    <span dir="auto" className="line-clamp-3">{snippet(ex)}</span>
                   </button>
                 ))}
               </div>

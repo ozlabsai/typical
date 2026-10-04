@@ -19,7 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { corrections, library, type CorrectionItem, type LibraryModel } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { refOf, useLibrary } from "@/lib/library"
-import { BASES, pct, say, signed } from "@/lib/project"
+import { BASES, pct, say, signed, snippet } from "@/lib/project"
 import { go, href } from "@/lib/router"
 import { DeployPanel } from "@/steps/deploy"
 import { Results } from "@/steps/evaluate"
@@ -198,7 +198,7 @@ function Corrections({ m }: { m: LibraryModel }) {
           <TableBody>
             {items.map((c) => (
               <TableRow key={c.n}>
-                <TableCell className="max-w-72 ps-6 whitespace-normal"><span dir="auto" className="line-clamp-2 text-sm text-muted-foreground">{c.case.split("\n\n").at(-1)}</span></TableCell>
+                <TableCell className="max-w-72 ps-6 whitespace-normal"><span dir="auto" className="line-clamp-2 text-sm text-muted-foreground">{snippet(c.case)}</span></TableCell>
                 <TableCell className="hidden md:table-cell whitespace-normal"><span dir="auto" className="text-sm">{c.question}</span></TableCell>
                 <TableCell>
                   <span className="inline-flex items-center gap-2 text-sm whitespace-nowrap">

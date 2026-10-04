@@ -13,14 +13,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { downloadUrl, results, type Reveal } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import type { ModelRef } from "@/lib/library"
-import { pct, say, signed } from "@/lib/project"
+import { pct, say, signed, snippet } from "@/lib/project"
 import { cn } from "@/lib/utils"
 
 /* ---------------------------------------------------------------- 4. Results */
 
 /** One row per distinct case text (sample bodies repeat), wins AND losses: 7 where yours was right, 3 where it wasn't. */
 function mixed(rows: Reveal["disagreements"]) {
-  const body = (c: Reveal["disagreements"][number]) => c.case.split("\n\n").at(-1)
+  const body = (c: Reveal["disagreements"][number]) => snippet(c.case)
   const unique = rows.filter((c, i) => rows.findIndex((o) => body(o) === body(c)) === i)
   const won = unique.filter((c) => c.yours.answer === c.decided), lost = unique.filter((c) => c.yours.answer !== c.decided)
   return [...won.slice(0, 10 - Math.min(3, lost.length)), ...lost.slice(0, 3)]
@@ -76,7 +76,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
     <>
       <SectionHeader
         title={t("ev.results")}
-        description={t("ev.lede", { who: t(model.sample ? "ev.gaveNorthwind" : "ev.gaveYou"), n: data.n_cases, a: data.n_answers })}
+        description={t("ev.lede", { who: t(model.sample ? "ev.gaveNorthwind" : "ev.gaveYou"), n: data.n_cases.toLocaleString(), a: data.n_answers.toLocaleString() })}
         actions={<>
           <Button variant="outline" onClick={() => navigator.clipboard.writeText(summary).then(() => toast.success(t("ev.summaryCopied")))}>
             <Copy data-icon="inline-start" /> {t("ev.copySummary")}
@@ -158,7 +158,7 @@ export function Results({ model, next }: { model: ModelRef; next?: () => void })
                     <span className="font-mono text-xs text-muted-foreground tabular">{pct(x.p)}</span>
                   </span>
                 )
-                const body = c.case.split("\n\n").at(-1)
+                const body = snippet(c.case)
                 return (
                   <TableRow key={i}>
                     <TableCell className="max-w-0 w-[38%] ps-6 whitespace-normal">

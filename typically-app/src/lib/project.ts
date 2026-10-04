@@ -118,3 +118,10 @@ export const SAMPLE = {
 }
 
 export const LANGUAGES = ["es", "fr", "de", "pt", "he", "ar"] as const
+
+/** The part of a case worth a glance: the text after the facts; an email's own words after its subject, not its sign-off. */
+export function snippet(text: string) {
+  const [head, ...rest] = text.split("\n\n")
+  const subject = head.match(/^Subject: (.+)$/m)?.[1]
+  return subject ? [subject, rest.join(" ")].filter(Boolean).join(" — ") : (rest.at(-1) ?? head)
+}

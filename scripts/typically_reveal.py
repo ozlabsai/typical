@@ -48,10 +48,14 @@ def reveal(rows, run_models, company="", tuned=""):
     acc = lambda xs: sum(xs) / len(xs)
     flat = lambda h: [x for xs in h.values() for x in xs]
     disagreements.sort(key=lambda d: (d["yours"]["answer"] != d["decided"], len(d["case"])))  # yours right first, shortest read best
+    won = [d for d in disagreements if d["yours"]["answer"] == d["decided"]]
+    lost = disagreements[len(won):]
+    n_lost = max(min(10, len(lost)), 30 - len(won))   # the page shows losses too: up to 10 of the 30 kept, more if there are few wins
+    disagreements = won[:30 - n_lost] + lost[:n_lost]
     return {"company": company, "tuned": tuned, "n_cases": len(cases), "n_answers": len(flat(hits["standard"])),
             "score": {s: acc(flat(hits[s])) for s in sides},
             "decisions": [{**d, **{s: acc(hits[s][k]) for s in sides}} for k, d in decisions.items()],
-            "fixed": fixed, "broken": broken, "abstained": abstained, "disagreements": disagreements[:30],
+            "fixed": fixed, "broken": broken, "abstained": abstained, "disagreements": disagreements,
             "measured": f"{len(cases)} {company or 'held-out'} cases neither model saw while learning"}
 
 
