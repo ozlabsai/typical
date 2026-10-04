@@ -126,7 +126,7 @@ Only after B5 quality passes: Q8, prefix packing, concurrent questions, and then
 | G2-SOFT | Filtered public soft-distillation LoRA | locked internal retention before any diagnostic | FAILED: 199/231; no transferable workflow gain |
 | G2-S0 | Fresh Gemma broad-LoRA sensitivity control | measure own-lineage adaptation | FAILED: public 203/231; workflow mean 46.2; invoice exact/primary 29.8/57.3 |
 | G2-S1 | Exact-serving scorer control | isolate six-alias/two-alias mismatch | FAILED: corrected support did not recover aggregate held-out behavior |
-| G2-INTERFACE | Semantic fallback inference control, then matched format-coverage arms | isolate Noul symbol binding from new content | RUNNING: canonical inference complete; paired fresh-base arms launched |
+| G2-INTERFACE | Semantic fallback inference control, then matched format-coverage arms | isolate Noul symbol binding from new content | RUNNING: A/B localized convention interference; exact interpolation failed; audited mixed Arm C live |
 | G3-RETENTION | Base-output KL, then localized LoRA as separate factors | improve retention beyond adapter-scale tradeoff | BLOCKED on G2-INTERFACE |
 | G3-HARD | Long/hard-negative refinement | improves locked internal hard families | BLOCKED on corrected retention control |
 | G4-MMHE | Residual Hebrew/MM continuation | all retention gates | BLOCKED on text winner |

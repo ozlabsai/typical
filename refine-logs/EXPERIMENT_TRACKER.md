@@ -28,10 +28,12 @@
 | R027 | B5 | Official JevBench submission | promoted checkpoint | score ≥72.1, Intelligence ≥72.0 | BLOCKED | sealed result required for completion |
 | R028 | B6 | Serving optimization | Q8/prefix/concurrency | equivalence, p50/p95, cost | BLOCKED | quality first |
 | R029 | B0/B3 | Noul interface canonicalization | S1; generic semantic `False/True` fallback for `criteria=null` | crossed prompt probe; invoice actions reporting-only | DONE | Same-weight generic renderer exact/primary `.396/.649`; canonical `.504/.811` (`+.109/+.162`), matching the predeclared counterfactual replay |
-| R030 | B3 | Matched interface-coverage screen | fresh base; 1,488 shared + 512 matched Noul presentations per arm | independent 2,048-view crossed panel plus retention | RUNNING | Arm A then B launched after two independent audits; exact maxima 3,181 train / 9,298 eval tokens; presentation-matched, with A using 1.15% more tokens |
+| R030 | B3 | Matched interface-coverage screen | fresh base; 1,488 shared + 512 matched Noul presentations per arm | independent 2,048-view crossed panel plus retention | DONE | A `.836`, B `.911`; B repaired negated declarative/generic `4.7→95.3%` but reduced negated explicit to `78–79%`; paired-group B−A `+7.42` points, 95% CI `[+4.69,+10.06]` |
+| R031 | B3 | Exact LoRA-delta interpolation | exact rank-64 `(1−λ)ΔA+λΔB`, frozen `λ=.25/.5/.75` | all 1,024 compact crossed views | FAILED | Best `λ=.75`: overall `.943`, worst cell `.875`, target `.914`; missed locked `.90/.93` gates, so no grid refinement or full eval |
+| R032 | B3 | Confound-resistant mixed-interface arm | fresh base; 1,488 shared + balanced 256 A-format / 256 B-format views | full 2,048 crossed panel plus retention | RUNNING | Two audits caught and removed a 100%-accurate answer-letter shortcut and presentation-order mismatch before launch; final data SHA `d4d51b91…` |
 
 ## Active resource
 
 - Pod: `ujiq3ud4vnhf80` (`typical-jev-parity-g1`), one RTX PRO 6000 (96 GB, $2.09/hour).
-- Job: R030 Arm A (`/workspace/g1/gemma-s2-arm-a`), followed automatically by fresh-base Arm B.
-- Stop condition: fixed-final checkpoints only; the independent crossed panel and locked retention gates select whether either arm advances. The cost guard checks utilization every 30 minutes and stops the pod only after artifacts are persisted and no job remains.
+- Job: R032 Arm C (`/workspace/g1/gemma-s2-arm-c`), followed automatically by its full crossed evaluation.
+- Stop condition: fixed-final checkpoint only; persist checkpoint/logs/results, then advance only on the locked worst-cell, order, recall, and retention gates. The cost guard checks utilization every 30 minutes and stops the pod only after artifacts are persisted and no job remains.
