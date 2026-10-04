@@ -4,6 +4,15 @@
 **Method Thesis**: Reuse Qwen3.5's native visual prefix and Typical's existing cached native head; add visual and Hebrew buckets instead of a new fusion architecture.
 **Date**: 2026-09-29
 
+**2026-10-04 research update:** The competitive audit in
+[`docs/research/DECISION_MODELS_AUDIT.md`](../docs/research/DECISION_MODELS_AUDIT.md)
+keeps the existing multimodal-prefix thesis. Before B1, add three same-backbone P0
+baselines: current native head, frozen direct option-letter logits, and endpoint
+pooling in the native head. Fit temperature on the same calibration split. Defer
+cross-field attention until a dedicated multi-question interaction suite shows a
+repeatable gap. If B2/B3 pass, prioritize grouped hard-negative refinement with
+40% text replay and paired English/Hebrew probability consistency.
+
 ## Claim Map
 
 | Claim | Why It Matters | Minimum Convincing Evidence | Linked Blocks |
@@ -66,7 +75,8 @@
 
 | Milestone | Goal | Runs | Decision Gate | Estimated Cost | Risk |
 |---|---|---|---|---|---|
-| M0 | Restore inputs | R001 | tm2 checkpoint and all E/K/W/U/V/H data validate | CPU/download time | Workspace currently lacks every required artifact |
+| M0 | Restore inputs | R001 | tm2 checkpoint and all E/K/W/U/V/H data validate | CPU/download time | complete: 1,054,473 training rows schema-checked |
+| M0.5 | Readout baselines | R001a-c | native head beats or complements direct-letter and endpoint variants on held-out NLL/Brier | <1 H100-hour | architecture gain may be prompt/readout only |
 | M1 | Sanity | R002 | 200-step loss drop and visual/cache checks pass | <1 H100-hour | path or processor mismatch |
 | M2 | Baselines | R003-R004 | direct VLM and tm2 baseline numbers recorded | 1-2 H100-hours | prompt baseline mismatch |
 | M3 | E1 decision | R005, then R006-R007 | B2 gates pass on seed 0 before extra seeds | roughly 3-6 H100-hours/seed; recalibrate after 100 steps | visual data license and throughput |
@@ -78,7 +88,9 @@
 - Must-run: one smoke, two frozen baselines, one E1 seed, two confirming seeds only after the seed-0 gate, and one H=0 ablation.
 - Estimated E1 cost is provisional; record tokens/sec and memory over the first 100 steps before reserving the remaining runs.
 - Data preparation: restore E/K/W/U corpora; generate MASSIVE Hebrew; generate ScienceQA only for research-only weights.
-- Biggest bottleneck: missing `runs/tm2/best.pt` and base corpora, not code.
+- M0 inputs are restored locally. `runs/tm2/best.pt` came from the public `OzLabs/typical-medium`
+  release and was verified from its payload as Qwen3.5-4B/tap-23; the exact training buckets came
+  from pinned `guychuk/pcdm-data` revision `946aee5c2a4c25b7df7da099a1510946b6349d2e`.
 
 ## Risks and Mitigations
 
@@ -94,4 +106,3 @@
 - [x] Simplicity is defended by making E2 conditional
 - [x] VLM necessity is compared with direct Qwen3.5
 - [x] Nice-to-have runs are separated from must-run runs
-

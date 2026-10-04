@@ -1,0 +1,21 @@
+flowchart LR
+    A[Shared state<br/>text + image] --> B[Qwen3.5-4B<br/>native multimodal prefix]
+    B --> C[Cached state representation]
+    C --> D[Question + runtime options]
+    D --> E[Existing candidate/query head]
+    E --> F[Typed probabilities<br/>choice · noul · score]
+
+    G[English + Hebrew parallel rows] --> H[Gold CE + probability consistency]
+    I[Visual counterfactuals<br/>real · shuffled · no image] --> H
+    J[Hard negative options<br/>and trace outcomes] --> H
+    H --> B
+
+    K[Only if simple head fails] -.-> L[Cross-field attention ablation]
+    L -.-> E
+
+    classDef keep fill:#E8F5E9,stroke:#2E7D32,color:#143D18,stroke-width:2px;
+    classDef data fill:#E3F2FD,stroke:#1565C0,color:#0D3264,stroke-width:2px;
+    classDef optional fill:#FFF3E0,stroke:#EF6C00,color:#6B3200,stroke-width:2px,stroke-dasharray: 5 5;
+    class A,B,C,D,E,F keep;
+    class G,H,I,J data;
+    class K,L optional;
