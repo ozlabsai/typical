@@ -36,6 +36,7 @@ export interface Analysis {
   warnings?: string[]
   sheets?: string[] // xlsx: every sheet in the workbook; `sheet` is the one read
   sheet?: string
+  mail?: { owner: string; messages: number; threads: number; inbound: number } // mail: what was read
 }
 
 export type Base = "small" | "medium"

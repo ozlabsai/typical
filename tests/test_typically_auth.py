@@ -151,8 +151,8 @@ def test_datasets_are_per_user(env):
     tok = a.post("/api/typically/analyze", json={"source": {"kind": "csv", "text": csv_text, "name": "mine.csv"}}).json()["records_token"]
     assert json.loads((env / "uploads" / f"{tok}.meta.json").read_text())["owner"] == auth.uid_of(ALICE)
     mine = a.get("/api/typically/datasets").json()["datasets"]
-    assert [d["token"] for d in mine] == [tok, "sample"] and "owner" not in mine[0]
-    assert [d["token"] for d in b.get("/api/typically/datasets").json()["datasets"]] == ["sample"]
+    assert [d["token"] for d in mine] == [tok, "sample", "sample-enron"] and "owner" not in mine[0]
+    assert [d["token"] for d in b.get("/api/typically/datasets").json()["datasets"]] == ["sample", "sample-enron"]
     assert b.post("/api/typically/analyze", json={"source": {"kind": "upload", "token": tok}}).status_code == 404
     assert b.delete(f"/api/typically/datasets/{tok}").status_code == 404
     assert a.delete(f"/api/typically/datasets/{tok}").status_code == 200

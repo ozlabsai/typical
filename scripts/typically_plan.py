@@ -1,7 +1,7 @@
 """typically: read a table, profile it, and plan how to teach a model from it (the DatasetPlan of
 .context/typically/FLOW.md).
 
-    records = load_records({"kind": "sample"})            # csv | xlsx | hf | sheets | sample -> [dict[str, str]]
+    records = load_records({"kind": "sample"})            # csv | xlsx | hf | sheets | sample (name: northwind | enron) -> [dict[str, str]]
     prof = profile(records)                               # facts about the data, no opinions
     plan, source, warnings = llm_plan(prof, sample_rows(prof, records), key, records)   # or heuristic_plan(prof, records)
     render_case(record, plan), answers(record, plan)      # what the model will see / be taught
@@ -12,6 +12,7 @@ Self-check: uv run python scripts/typically_plan.py
 import base64
 import csv
 import datetime as dt
+import gzip
 import io
 import json
 import os
@@ -28,6 +29,8 @@ import typically_llm as tllm
 
 REPO = Path(__file__).resolve().parent.parent
 SAMPLE_CSV = REPO / "site" / "data" / "typically_sample.csv"
+# name -> (name hint, file). enron: one executive's mailbox through typically_mail (scripts/typically_enron.py)
+SAMPLES = {"northwind": ("Northwind", SAMPLE_CSV), "enron": ("Enron inbox (Vince Kaminski)", REPO / "site" / "data" / "typically_enron.jsonl.gz")}
 MAX_ROWS, MAX_VALUES, MAX_CANDIDATES = 20_000, 200, 12
 MAX_PROMPT_TOKENS = 30_000
 MAX_CASE_TOKENS = 1024
@@ -91,7 +94,7 @@ def read_xlsx(data_base64: str, sheet: str | None = None) -> tuple[list[str], li
 
 
 def load_records(source: dict) -> list[dict]:
-    """source: {kind: csv, text} | {kind: xlsx, data_base64, sheet?} | {kind: hf, dataset, config?, split?, limit?} | {kind: sheets, url} | {kind: sample}.
+    """source: {kind: csv, text} | {kind: xlsx, data_base64, sheet?} | {kind: hf, dataset, config?, split?, limit?} | {kind: sheets, url} | {kind: sample, name?}.
     All values become stripped strings, at most 20k rows; ValueError carries a message fit for the user."""
     kind = source.get("kind")
     if kind == "csv":
@@ -99,7 +102,10 @@ def load_records(source: dict) -> list[dict]:
     if kind == "xlsx":
         return read_xlsx(source.get("data_base64") or "", source.get("sheet"))[1]
     if kind == "sample":
-        return _parse_csv(SAMPLE_CSV.read_text())
+        if (name := source.get("name") or "northwind") not in SAMPLES:
+            raise ValueError(f"unknown sample {name!r}")
+        f = SAMPLES[name][1]
+        return _parse_csv(f.read_text()) if f.suffix == ".csv" else [json.loads(l) for l in gzip.open(f, "rt", encoding="utf-8")]
     if kind == "sheets":
         try:
             with urllib.request.urlopen(sheets_export_url(source.get("url") or ""), timeout=30) as r:
@@ -134,9 +140,11 @@ def name_hint(source: dict) -> str:
     kind = source.get("kind")
     if kind == "hf":
         return source["dataset"].split("/")[-1]
-    if kind in ("csv", "xlsx"):
+    if kind in ("csv", "xlsx", "mail"):
         return source.get("name") or "upload"
-    return {"sheets": "sheet", "sample": "Northwind"}.get(kind, "data")
+    if kind == "sample":
+        return SAMPLES.get(source.get("name") or "northwind", ("sample",))[0]
+    return {"sheets": "sheet"}.get(kind, "data")
 
 
 # ---------------------------------------------------------------- profiling

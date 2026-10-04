@@ -94,7 +94,7 @@ export function DataPage() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {rows.length === 1 && (
+                {rows.every((d) => d.sample) && (
                   <TableRow><TableCell colSpan={5} className="ps-6 text-sm text-muted-foreground">{t("data.empty")}</TableCell></TableRow>
                 )}
               </TableBody>

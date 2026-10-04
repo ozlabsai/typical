@@ -6,7 +6,7 @@ export type Route =
   | { name: "chat"; model?: string }
   | { name: "models" }
   | { name: "model"; id: string; tab?: string }
-  | { name: "new"; data?: string } // data: start from a dataset already uploaded (its records_token, or "sample")
+  | { name: "new"; data?: string } // data: start from a dataset already uploaded (its records_token, "sample" or "sample-enron")
   | { name: "data" }
 
 export function parse(hash: string): Route {
