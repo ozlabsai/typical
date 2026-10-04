@@ -978,7 +978,7 @@ def parse_args():
     p.add_argument("--name", required=True)
     p.add_argument("--backbone", default="Qwen/Qwen3-1.7B-Base")
     p.add_argument("--multimodal", action="store_true",
-                   help="native readout only: allow examples with one image path in the state")
+                   help="native or mcq readout: allow examples with one image path in the state")
     p.add_argument("--max_image_pixels", type=int, default=262144,
                    help="processor cap per image; 262144 is roughly <=256 Qwen3.5 visual tokens")
     p.add_argument("--freeze_lora", action="store_true",
@@ -1166,11 +1166,11 @@ def main():
                 setattr(args, k, ckpt["args"][k])
 
     if args.readout == "mcq":
-        assert not args.multimodal, "--multimodal currently requires --readout native"
         assert not args.zscore and not args.joint and not args.listwise, \
             "--zscore/--joint/--listwise are energy-only (mcq mode has no tower)"
         backbone = MCQHead(args.backbone, lora_layers=args.lora_layers, lora_r=args.lora_r, device=device,
-                           tap_layer=args.tap_layer)
+                           tap_layer=args.tap_layer, multimodal=args.multimodal,
+                           max_image_pixels=args.max_image_pixels)
         model = nn.Module()  # no tower: optimiser/checkpoint code below stays generic (empty param group / state dict)
     elif args.readout == "native":
         assert not args.joint and not args.listwise and not args.shots, "--joint/--listwise/--shots are not native options"
@@ -1180,7 +1180,7 @@ def main():
         model = NativeHead(backbone.backbone.d, nc_head=args.nc_head, null=args.null, render=args.nc_render,
                            score_head=args.score_head, noul_head=args.noul_head).to(device)
     else:
-        assert not args.multimodal, "--multimodal currently requires --readout native"
+        assert not args.multimodal, "--multimodal requires --readout native or mcq"
         assert not args.extra_tap or args.cand_encoder == "qwen3emb", "--extra_tap doubles the top width; candidates must come from the embedder"
         backbone = Backbone(args.backbone, lora_layers=args.lora_layers, lora_r=args.lora_r, device=device,
                             tap_layer=args.tap_layer, extra_tap=args.extra_tap)

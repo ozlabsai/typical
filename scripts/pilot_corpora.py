@@ -17,6 +17,7 @@ from data import cls_examples, words, write_jsonl  # noqa: E402
 
 
 MASSIVE = "hf://datasets/mteb/amazon_massive_intent/{split}/he.json.gz"
+MASSIVE_EN = "hf://datasets/mteb/amazon_massive_intent/{split}/en.json.gz"
 HEBREW_QUERIES = (
     "מהי כוונת המשתמש?",
     "מה המשתמש רוצה לעשות?",
@@ -28,6 +29,8 @@ HEBREW_QUERIES = (
 def build_hebrew(out: Path, seed: int = 0, limit: int = 0):
     raw = {split: list(load_dataset("json", data_files=MASSIVE.format(split=split), split="train"))
            for split in ("train", "validation", "test")}
+    raw_en = {split: list(load_dataset("json", data_files=MASSIVE_EN.format(split=split), split="train"))
+              for split in ("validation", "test")}
     labels = sorted({row["label_text"] for rows in raw.values() for row in rows})
     label_id = {label: i for i, label in enumerate(labels)}
     names = [words(label) for label in labels]
@@ -43,11 +46,24 @@ def build_hebrew(out: Path, seed: int = 0, limit: int = 0):
         for example in examples:
             example["query"] = rng.choice(HEBREW_QUERIES)
             example["meta"].update({"fam_bucket": "H", "lang": "he", "source": "MASSIVE"})
+        if split != "train":
+            en = raw_en[split][:limit or None]
+            assert [(row["id"], row["label_text"]) for row in rows] == \
+                   [(row["id"], row["label_text"]) for row in en]
+            for example, he_row in zip(examples, rows):
+                example["meta"]["pair"] = f"massive-{split}-{he_row['id']}"
+            result[f"{split}_en"] = [
+                {**example, "state": en_row["text"], "query": "What is the user's intent?",
+                 "task": "massive_en_pair",
+                 "meta": {**example["meta"], "lang": "en"}}
+                for example, en_row in zip(examples, en)
+            ]
         result[split] = examples
     write_jsonl(out / "train.jsonl", result["train"])
     write_jsonl(out / "val.jsonl", result["validation"])
     write_jsonl(out / "eval" / "massive_he_test.jsonl", result["test"])
-    return {split: len(rows) for split, rows in result.items()}
+    write_jsonl(out / "eval" / "massive_en_test_paired.jsonl", result["test_en"])
+    return {split: len(result[split]) for split in ("train", "validation", "test")}
 
 
 def _scienceqa_split(split: str, image_dir: Path, json_dir: Path, null_fraction: float, seed: int, limit: int):
@@ -86,11 +102,27 @@ def build_scienceqa(out: Path, seed: int = 0, limit: int = 0, null_fraction: flo
     test = _scienceqa_split("test", out / "images" / "test", out / "eval", 0, seed + 2, limit)
     write_jsonl(out / "train.jsonl", train)
     write_jsonl(out / "val.jsonl", val)
+    test = [dict(row, meta={**row["meta"], "pair": f"scienceqa-test-{i}", "variant": "base"})
+            for i, row in enumerate(test)]
     write_jsonl(out / "eval" / "scienceqa_test.jsonl", test)
-    shuffled = [dict(row, image=test[(i + 1) % len(test)]["image"]) for i, row in enumerate(test)]
+    shuffled = [dict(row, image=test[(i + 1) % len(test)]["image"],
+                     meta={**row["meta"], "variant": "shuffled_forced_answer"})
+                for i, row in enumerate(test)]
     write_jsonl(out / "eval" / "scienceqa_test_shuffled.jsonl", shuffled)
     write_jsonl(out / "eval" / "scienceqa_test_noimage.jsonl", [{k: v for k, v in row.items() if k != "image"}
                                                                   for row in test])
+    mismatch = [dict(row, image=shuffled[i]["image"], p_null=1.0, label=-1,
+                     meta={**row["meta"], "variant": "image_mismatch"})
+                for i, row in enumerate(test)]
+    dropped = []
+    for row in test:
+        kept = [candidate for i, candidate in enumerate(row["candidates"]) if i != row["label"]]
+        dropped.append(dict(row, candidates=kept, target=[1 / len(kept)] * len(kept), p_null=1.0, label=-1,
+                            meta={**row["meta"], "variant": "remove_gold"}))
+    write_jsonl(out / "eval" / "scienceqa_test_mismatch.jsonl", mismatch)
+    write_jsonl(out / "eval" / "scienceqa_test_gold_dropped.jsonl", dropped)
+    answerability = [variant for rows in zip(test, mismatch, dropped) for variant in rows]
+    write_jsonl(out / "eval" / "scienceqa_test_answerability.jsonl", answerability)
     return {"train": len(train), "validation": len(val), "test": len(test)}
 
 

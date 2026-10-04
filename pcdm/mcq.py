@@ -144,16 +144,35 @@ def _tokenize_mcq(backbone, states: list[str], suffixes: list[str], max_state: i
     return _pack(tok, _ids(tok, states, max_state), _ids(tok, suffixes, max_suffix))
 
 
-def _score_batch_direct(head: MCQHead, states, queries, cand_lists, max_state, max_suffix):
+def _score_batch_direct(head: MCQHead, states, queries, cand_lists, max_state, max_suffix, images=None):
     """cand_lists: list of candidate-text lists, each len <= MAXK_DIRECT.
     -> (logits [B, Kmax+1] on head.device, n_tokens int); null last, pad = finfo.min."""
     dev = head.device
     B = len(states)
     Kmax = max(len(c) for c in cand_lists)
     suffixes = [_build_suffix(q, c) for q, c in zip(queries, cand_lists)]
-    input_ids, attention_mask, lengths = _tokenize_mcq(head.backbone, states, suffixes, max_state, max_suffix)
-    input_ids, attention_mask = input_ids.to(dev), attention_mask.to(dev)
-    out = head.backbone.model(input_ids=input_ids, attention_mask=attention_mask)
+    if images is None:
+        input_ids, attention_mask, lengths = _tokenize_mcq(head.backbone, states, suffixes, max_state, max_suffix)
+        input_ids, attention_mask = input_ids.to(dev), attention_mask.to(dev)
+        out = head.backbone.model(input_ids=input_ids, attention_mask=attention_mask)
+    else:
+        if len(images) != B or any(image is None for image in images):
+            raise ValueError("visual batches require exactly one image per row")
+        prefix = head.backbone.visual_prefix(states, images, max_state)
+        rows = [ids[mask.bool()].tolist() for ids, mask in zip(prefix["input_ids"], prefix["attention_mask"])]
+        types = [ids[mask.bool()].tolist() for ids, mask in zip(prefix["mm_token_type_ids"],
+                                                                 prefix["attention_mask"])]
+        rows = [[head.backbone.tokenizer.eos_token_id] + row for row in rows]
+        types = [[0] + row for row in types]
+        suffix_ids = _ids(head.backbone.tokenizer, suffixes, max_suffix)
+        input_ids, attention_mask, lengths = _pack(head.backbone.tokenizer, rows, suffix_ids, sink=False)
+        mm_types = torch.zeros_like(input_ids)
+        for i, (prefix_types, suffix) in enumerate(zip(types, suffix_ids)):
+            mm_types[i, :len(prefix_types) + len(suffix)] = torch.tensor(prefix_types + [0] * len(suffix))
+        out = head.backbone.multimodal_model(
+            input_ids=input_ids.to(dev), attention_mask=attention_mask.to(dev),
+            mm_token_type_ids=mm_types.to(dev), pixel_values=prefix["pixel_values"].to(dev),
+            image_grid_thw=prefix["image_grid_thw"].to(dev))
     last = out.last_hidden_state[torch.arange(B, device=dev), (lengths - 1).to(dev)]  # [B, d]
 
     letter_ids = head.letter_ids.to(dev)
@@ -193,10 +212,11 @@ def _score_chunked(score_fn, cand_texts, idx_chunks):
     return out, n_tok1 + n_tok2
 
 
-def _score_one_chunked(head: MCQHead, state, query, cand_texts, max_state, max_suffix):
+def _score_one_chunked(head: MCQHead, state, query, cand_texts, max_state, max_suffix, image=None):
     """CHUNK-sized chunks through _score_batch_direct, composed by _score_chunked."""
     idx_chunks = [list(range(i, min(i + CHUNK, len(cand_texts)))) for i in range(0, len(cand_texts), CHUNK)]
-    score_fn = lambda cl: _score_batch_direct(head, [state] * len(cl), [query] * len(cl), cl, max_state, max_suffix)
+    score_fn = lambda cl: _score_batch_direct(head, [state] * len(cl), [query] * len(cl), cl, max_state,
+                                               max_suffix, [image] * len(cl) if image is not None else None)
     return _score_chunked(score_fn, cand_texts, idx_chunks)
 
 
@@ -228,6 +248,7 @@ def run_batch_mcq(head: MCQHead, batch, examples, max_state: int = 256, max_suff
     states = [prefix + ex["state"] for ex in examples]
     queries = [ex["query"] for ex in examples]
     cand_lists = [ex["candidates"] for ex in examples]
+    images = [ex.get("image") for ex in examples]
     if prefix:
         max_state += len(head.backbone.tokenizer.encode(prefix, add_special_tokens=False))
     Kmax = batch["cmask"].shape[1]
@@ -238,17 +259,21 @@ def run_batch_mcq(head: MCQHead, batch, examples, max_state: int = 256, max_suff
     direct_i = [i for i, c in enumerate(cand_lists) if len(c) <= MAXK_DIRECT]
     chunk_i = [i for i, c in enumerate(cand_lists) if len(c) > MAXK_DIRECT]
 
-    if direct_i:
-        sub, n_tok = _score_batch_direct(head, [states[i] for i in direct_i], [queries[i] for i in direct_i],
-                                          [cand_lists[i] for i in direct_i], max_state, max_suffix)
+    for visual in (False, True):
+        idx = [i for i in direct_i if bool(images[i]) == visual]
+        if not idx:
+            continue
+        sub, n_tok = _score_batch_direct(head, [states[i] for i in idx], [queries[i] for i in idx],
+                                          [cand_lists[i] for i in idx], max_state, max_suffix,
+                                          [images[i] for i in idx] if visual else None)
         n_tokens += n_tok
-        for row, i in enumerate(direct_i):
+        for row, i in enumerate(idx):
             k = len(cand_lists[i])
             logits[i, :k] = sub[row, :k]
             logits[i, -1] = sub[row, -1]
 
     for i in chunk_i:
-        row, n_tok = _score_one_chunked(head, states[i], queries[i], cand_lists[i], max_state, max_suffix)
+        row, n_tok = _score_one_chunked(head, states[i], queries[i], cand_lists[i], max_state, max_suffix, images[i])
         n_tokens += n_tok
         k = len(cand_lists[i])
         logits[i, :k] = row[:k]

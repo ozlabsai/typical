@@ -123,7 +123,7 @@ def test_visual_native_cache_matches_full_qwen35_fp32():
     """One-image state prefill must preserve Qwen3.5's M-RoPE offset in cached suffixes."""
     from PIL import Image
 
-    from mcq import MCQHead, collate_mcq
+    from mcq import MCQHead, collate_mcq, run_batch_mcq
     from native import NativeHead, native_kv_decide, run_batch_native
 
     torch.manual_seed(0)
@@ -138,9 +138,13 @@ def test_visual_native_cache_matches_full_qwen35_fp32():
                  "target": [1.0, 0.0], "p_null": 0.0, "task": "scienceqa_image", "image": image}
                 for query, candidates in queries]
     with torch.inference_mode():
+        direct = run_batch_mcq(head, collate_mcq(examples), examples)
         probs = torch.softmax(run_batch_native(head, model, collate_mcq(examples), examples), dim=-1)
         blue = [dict(example, image=Image.new("RGB", (64, 64), "blue")) for example in examples]
+        blue_direct = run_batch_mcq(head, collate_mcq(blue), blue)
         blue_probs = torch.softmax(run_batch_native(head, model, collate_mcq(blue), blue), dim=-1)
+    assert direct.shape == blue_direct.shape == (2, 3)
+    assert not torch.allclose(direct, blue_direct, atol=1e-5), "direct visual scorer ignored the image"
     assert not torch.allclose(probs, blue_probs, atol=1e-5), "visual state ignored the image"
     cached = native_kv_decide(head, model, state, queries, chunk=2, image=image)
     for row, distribution in enumerate(cached):
