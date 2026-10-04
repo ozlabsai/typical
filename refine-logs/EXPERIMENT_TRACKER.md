@@ -18,15 +18,20 @@
 | R017 | B0 | Grouped typed baseline | full five-question cases | accuracy/KL/Brier/ECE | QUEUED | replaces non-comparable first-N row proxy |
 | R018 | B2 | Readout ablation | final symbol vs pointer vs native | held-out accuracy/NLL/Brier | BLOCKED | run only after baseline matrix |
 | R019 | B3 | 250-step clean competence gate | Intern-Decision-4B + rank-16 language LoRA | hard + workflow dev + retention | FAILED | Internal NLL improved `.775/.949/.598`→`.359/.180/.423`, but public Jev fell 200→197/231; WorkflowEvals security/trace/invoice `.479/.500/.478`, customer exceeded the unoptimized 96 GB runtime ceiling |
-| R020 | B3 | Soft public-distillation gate | base-reset Intern LoRA; filtered Tasksource/Open-Jev/Sarge + 30% replay | locked dev gates | RUNNING | 40k rows, 4,812 soft targets; exact public overlap 0; LR `2e-5`; pod `ujiq3ud4vnhf80` |
-| R021 | B3 | Hard refinement | long docs + staged hard negatives | hard families + workflow | BLOCKED | attention still excluded |
-| R022 | B4 | Hebrew/MM residual | text winner + residual/KL retention | MM/HE plus all retention gates | BLOCKED | cannot share the old unconstrained continuation path |
-| R023 | B5 | Frozen final public eval | promoted checkpoint | all declared gates | BLOCKED | one run after freeze |
-| R024 | B5 | Official JevBench submission | promoted checkpoint | score ≥72.1, Intelligence ≥72.0 | BLOCKED | sealed result required for completion |
-| R025 | B6 | Serving optimization | Q8/prefix/concurrency | equivalence, p50/p95, cost | BLOCKED | quality first |
+| R020 | B3 | Soft public-distillation gate | base-reset Intern LoRA; filtered Tasksource/Open-Jev/Sarge + 30% replay | locked dev gates | FAILED | Public `199/231`; workflow security/trace/invoice `.588/.495/.469`; no transferable workflow gain |
+| R021 | B3 | Fresh-base sensitivity control | pinned `google/gemma-4-12B-it` + own option-logit rank-32 LoRA | internal option NLL/accuracy, retention | FAILED | Public diagnostic 203/231, but workflows `.300/.536/.298/.716`, mean `.462`; invoice primary `.573` vs Cygnet `.813` |
+| R022 | B0/B3 | Scorer + action-threshold forensics | cached probabilities; no training | scorer parity, threshold/action failure decomposition | DONE | S0 trained on six aliases/letter while structured serving allowed two exact-uppercase aliases; scale `.25/.5/.75/1` did not expose a retention-preserving interior optimum |
+| R023 | B3 | Exact-serving scorer control | fresh base; otherwise identical to R021 | corrected internal option NLL/accuracy, retention | FAILED | Public-source/replay/workflow/hard-rule `.652/.797/.832/.836`; forbidden aliases held <`.005%` mass; no aggregate rescue |
+| R024 | B3 | Output-retention ablation | own fresh base; corrected scorer + base-logit KL | grouped/source-balanced internal dev | BLOCKED | interface-coverage factor now precedes KL; localization remains separate |
+| R025 | B4 | Hebrew/MM residual | own text winner + residual/KL retention | MM/HE plus all retention gates | BLOCKED | must use pixels; cannot share the old unconstrained continuation path |
+| R026 | B5 | Frozen final public eval | promoted checkpoint | diagnostic only | BLOCKED | one run after internal freeze; not a promotion gate |
+| R027 | B5 | Official JevBench submission | promoted checkpoint | score ≥72.1, Intelligence ≥72.0 | BLOCKED | sealed result required for completion |
+| R028 | B6 | Serving optimization | Q8/prefix/concurrency | equivalence, p50/p95, cost | BLOCKED | quality first |
+| R029 | B0/B3 | Noul interface canonicalization | S1; generic semantic `False/True` fallback for `criteria=null` | crossed prompt probe; invoice actions reporting-only | DONE | Same-weight generic renderer exact/primary `.396/.649`; canonical `.504/.811` (`+.109/+.162`), matching the predeclared counterfactual replay |
+| R030 | B3 | Matched interface-coverage screen | fresh base; 1,488 shared + 512 matched Noul presentations per arm | independent 2,048-view crossed panel plus retention | RUNNING | Arm A then B launched after two independent audits; exact maxima 3,181 train / 9,298 eval tokens; presentation-matched, with A using 1.15% more tokens |
 
 ## Active resource
 
 - Pod: `ujiq3ud4vnhf80` (`typical-jev-parity-g1`), one RTX PRO 6000 (96 GB, $2.09/hour).
-- Job: R020 fixed 250-step Intern LoRA gate; 32,464,896 trainable parameters; base reset after R019 failed transfer.
-- Stop condition: pull adapter, optimizer state, and metrics after step 250; stop immediately on failure or after collection.
+- Job: R030 Arm A (`/workspace/g1/gemma-s2-arm-a`), followed automatically by fresh-base Arm B.
+- Stop condition: fixed-final checkpoints only; the independent crossed panel and locked retention gates select whether either arm advances. The cost guard checks utilization every 30 minutes and stops the pod only after artifacts are persisted and no job remains.

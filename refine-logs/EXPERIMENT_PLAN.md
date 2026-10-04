@@ -12,7 +12,7 @@ The prior multimodal/Hebrew plan and completed E1 history remain in `EXPERIMENT_
 
 | Claim | Minimum convincing evidence | Blocks |
 |---|---|---|
-| C1: Typical equals or beats Jev's decision capability | Official JevBench score ≥72.1 **and** Intelligence ≥72.0; public diagnostic ≥200/231, hard ≥81/111 | B0, B2, B5 |
+| C1: Typical equals or beats Jev's decision capability | Official JevBench score ≥72.1 **and** Intelligence ≥72.0; public diagnostic reported but not used as a gate | B0, B2, B5 |
 | C2: Typical equals or beats Jev on real workflows | Official WorkflowEvals exact-actions mean ≥67.8 and each workflow within two points of Jev | B0, B1, B3, B5 |
 | C3: The model is genuinely multimodal | Pinned image benchmark plus real/shuffled/no-image and mismatch-null controls | B0, B4, B5 |
 | C4: Hebrew improves without erasing English | Paired Hebrew gain; English loss ≤1 point; calibration and pair JSD reported | B0, B4, B5 |
@@ -24,7 +24,7 @@ The prior multimodal/Hebrew plan and completed E1 history remain in `EXPERIMENT_
 | Evaluation | Jev target | Promotion gate |
 |---|---:|---:|
 | JevBench official v1.5.x | score 72.1; Intelligence 72.0 | ≥ both; report open/sealed and type breakdown |
-| JevBench public diagnostic | about 200/231; hard 81/111 | ≥200/231 and hard ≥81/111; stretch 203/231 and 85/111 |
+| JevBench public diagnostic | Cygnet 203/231; Winnow 199/231 | report paired/family results; no pass/fail threshold |
 | WorkflowEvals security | 61.7% | ≥59.7% |
 | WorkflowEvals agent trace | 71.6% | ≥69.6% |
 | WorkflowEvals invoice | 61.8% | ≥59.8% |
@@ -69,7 +69,7 @@ Compare on disjoint development data only:
 
 Candidate backbones: Gemma-4-12B-it for the flagship, Qwen3.5-4B-it/Intern for the fast lane. Do not return to Qwen3.5-4B-Base layer 23 unless it wins this ablation.
 
-**Pass:** chosen readout improves held-out accuracy/NLL/Brier, not formatting alone, and supports at least 16k context.
+**Pass:** chosen readout improves grouped, source-balanced held-out accuracy/NLL/Brier, not formatting alone, and supports at least 16k context.
 
 ### B3 — text/workflow competence training
 
@@ -80,6 +80,7 @@ Candidate backbones: Gemma-4-12B-it for the flagship, Qwen3.5-4B-it/Intern for t
 - Hard gold: full-vocabulary symbol CE. Soft distributions: `KL(target || model)`. Score: add `0.5 ×` ranked-probability score. Teacher signal applies only when teacher argmax agrees with verified gold.
 - LoRA: flagship rank 32 over attention and MLP; fast lane rank 16/32; freeze vision tower/projector initially.
 - Checkpoints advance on per-suite floors, never a mean validation loss alone.
+- Before another training run, audit training/serving candidate-token parity, workflow threshold margins, evidence position, and adapter-scale interpolation using frozen logits/checkpoints. S1 repaired the six-alias/two-alias mismatch but did not recover aggregate behavior; forbidden aliases held less than `.005%` mass. The dominant invoice regression is instead a bare-declarative + generic `No/Yes` + option-position interaction. Test that interface factor before retention methods.
 
 **Stop rule:** if two successive gates fail to improve both hard capability and workflow dev without regression, change data/readout rather than extending steps.
 
@@ -122,8 +123,12 @@ Only after B5 quality passes: Q8, prefix packing, concurrent questions, and then
 | G0-TL2 | Evaluate existing 9B checkpoint before training | use correct context/grouping | QUEUED |
 | G1-READOUT | Final-token vs pointer vs native | development-only winner | BLOCKED on G0 |
 | G2-TEXT | First competence LoRA | ≥200/231 diagnostic and no workflow-dev regression | FAILED: clean pilot 197/231; official workflow transfer below target |
-| G2-SOFT | Filtered public soft-distillation LoRA | locked internal retention before any diagnostic | RUNNING: base reset, lower LR, 30% replay |
-| G3-HARD | Long/hard-negative refinement | improves locked internal hard families | BLOCKED on G2 |
+| G2-SOFT | Filtered public soft-distillation LoRA | locked internal retention before any diagnostic | FAILED: 199/231; no transferable workflow gain |
+| G2-S0 | Fresh Gemma broad-LoRA sensitivity control | measure own-lineage adaptation | FAILED: public 203/231; workflow mean 46.2; invoice exact/primary 29.8/57.3 |
+| G2-S1 | Exact-serving scorer control | isolate six-alias/two-alias mismatch | FAILED: corrected support did not recover aggregate held-out behavior |
+| G2-INTERFACE | Semantic fallback inference control, then matched format-coverage arms | isolate Noul symbol binding from new content | RUNNING: canonical inference complete; paired fresh-base arms launched |
+| G3-RETENTION | Base-output KL, then localized LoRA as separate factors | improve retention beyond adapter-scale tradeoff | BLOCKED on G2-INTERFACE |
+| G3-HARD | Long/hard-negative refinement | improves locked internal hard families | BLOCKED on corrected retention control |
 | G4-MMHE | Residual Hebrew/MM continuation | all retention gates | BLOCKED on text winner |
 | G5-OFFICIAL | Frozen official submission/evals | all primary gates | BLOCKED on candidate |
 | G6-SERVE | Q8/prefix optimization | prediction equivalence + latency/cost | BLOCKED on G5 quality |

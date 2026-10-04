@@ -46,7 +46,7 @@ Observed effect: public JevBench moved from `164/231` to `159/231`; the exact-ro
 The goal is not complete until a frozen submitted checkpoint meets every primary gate.
 
 1. **Official JevBench v1.5.x:** score `≥72.1` and Intelligence `≥72.0`; additionally target Winnow's `74.4` Intelligence. Report open/sealed and Choice/Noul/Score separately.
-2. **Public JevBench diagnostic:** at least `200/231`, with hard `≥81/111`; stretch target Cygnet `203/231`, hard `85/111`. The public set is diagnostic, never a checkpoint-selection set.
+2. **Public JevBench diagnostic:** report total, family breakdown, paired deltas, and uncertainty, with no promotion threshold. Winnow demonstrates why: `199/231` public but `74.4` official Intelligence, above Jev's `72.0`.
 3. **Official WorkflowEvals:** equal-weight exact-actions mean `≥67.8`, with no workflow more than two points below Jev's published row.
 4. **Typed-decisions:** grouped five-question protocol; accuracy `≥.727` plus KL, Brier, and ECE no worse than Jev.
 5. **Multimodal:** submit to Image JevBench or run its pinned public protocol; meanwhile require real-image accuracy, shuffled/no-image counterfactuals, and mismatch abstention. ScienceQA alone is not the final MM claim.
@@ -73,9 +73,10 @@ G0 is complete for the three public leaders. These are pinned, untouched referen
 | Cygnet | 203/231 | 33.3% | 52.3% | 53.1% | 69.8% | 52.1% |
 | Winnow-12B Q8 | 199/231 | 39.2% | 62.6% | 47.8% | 73.5% | **55.8%** |
 | Intern-Decision-4B | 200/231 | **52.1%** | 46.8% | 44.7% | 55.9% | 49.9% |
+| Typical S0, fresh Gemma LoRA | 203/231 | 30.0% | 53.6% | 29.8% | 71.6% | 46.2% |
 | Jev target | 200/231 public reference | 61.7% | 71.6% | 61.8% | 76.0% | **67.8%** |
 
-This changes the optimization target: public JevBench parity is necessary but not predictive of workflow parity. Winnow is the strongest workflow baseline and remains twelve mean points below Jev. Intern is the trainable native-multimodal base and is closest on security, so G1 starts from Intern with a reversible language-only adapter.
+This changes the optimization target: public JevBench is not predictive enough to be a gate. Typical S0 exactly matched Cygnet's public total while losing 5.9 workflow-mean points and 23.8 invoice primary-action points. Winnow is the strongest workflow baseline and remains twelve mean points below Jev. The two Intern pilots were useful negative controls, but the final lineage now starts from a fresh general multimodal base rather than a pretrained decision model.
 
 ### G1 — flagship text decision model
 
@@ -130,4 +131,4 @@ After quality is frozen: Q8, shared-prefix packing, concurrent questions, CUDA g
 
 ## Immediate execution
 
-Run the fixed 250-step Intern LoRA gate. Reject it if any internal retention suite regresses, then evaluate the frozen candidate once on public JevBench and all official WorkflowEvals cases. Public results do not select a checkpoint. Hebrew and multimodal training remains G3 and begins only after text/workflow promotion.
+The pinned Gemma-4-12B S0 and exact-uppercase S1 controls are complete. S1 did not recover the held-out tradeoff, and serving-forbidden aliases contained less than `.005%` of the relevant probability mass; scorer mismatch is not the main cause. Failure localization instead found an unsupported Noul interface: bare declaratives with generic `No/Yes` labels interact sharply with option position, despite random option shuffling elsewhere in training. Run a task-agnostic semantic `False/True` renderer control, then a matched data-only interface-coverage screen. Base-output KL and localized LoRA remain separate later factors. Hebrew and multimodal training begins only after text/workflow promotion and must exercise the real pixel path.
