@@ -34,12 +34,82 @@ def test_reconstructs_matched_arms_and_locked_crossed_eval(tmp_path):
     s1_path = tmp_path / "s1.jsonl"
     write_rows(s1_path, s1_rows)
 
-    arm_a, arm_b, crossed_eval, manifest = build([s1_path], train, val, seed=42)
+    arm_a, arm_b, arm_c, crossed_eval, manifest = build([s1_path], train, val, seed=42)
     assert len(arm_a) == len(arm_b) == 2000
     assert arm_a[:1488] == arm_b[:1488]
+    assert arm_a[:1488] == arm_c[:1488]
     assert all("soft_targets" in row for row in arm_a[:1488])
     a, b = arm_a[1488:], arm_b[1488:]
     assert len(a) == len(b) == 512
+    c = arm_c[1488:]
+    assert len(c) == 512
+    for row_c, row_a, row_b in zip(c, a, b):
+        assert row_c["state"] == row_a["state"] == row_b["state"]
+        assert row_c["targets"] == row_a["targets"] == row_b["targets"]
+        assert row_c["meta"]["source_id"] == row_a["meta"]["source_id"] == row_b["meta"]["source_id"]
+        assert row_c["meta"]["context_view"] == row_a["meta"]["context_view"] == row_b["meta"]["context_view"]
+        assert row_c["meta"]["polarity"] == row_a["meta"]["polarity"] == row_b["meta"]["polarity"]
+        assert list(row_c["questions"]["decision"]["criteria"]) == list(
+            row_a["questions"]["decision"]["criteria"]) == list(
+                row_b["questions"]["decision"]["criteria"])
+    assert Counter(row["meta"]["s2_arm"] for row in c) == {"A": 256, "B": 256}
+    assert Counter(row["targets"]["decision"]["label"] for row in c) == {"no": 256, "yes": 256}
+    assert Counter(row["meta"]["source_label"] for row in c) == {"no": 256, "yes": 256}
+    for field in ("polarity", "context_view", "decisive_placement"):
+        counts = Counter((row["meta"][field], row["meta"]["s2_arm"]) for row in c)
+        for category in {row["meta"][field] for row in c}:
+            assert counts[(category, "A")] == counts[(category, "B")]
+    for order in (("no", "yes"), ("yes", "no")):
+        counts = Counter(row["meta"]["s2_arm"] for row in c
+                         if tuple(row["questions"]["decision"]["criteria"]) == order)
+        assert counts == {"A": 128, "B": 128}
+    joint = Counter((row["meta"]["s2_arm"], row["meta"]["context_view"],
+                     row["meta"]["polarity"],
+                     tuple(row["questions"]["decision"]["criteria"]),
+                     row["targets"]["decision"]["label"]) for row in c)
+    for arm in ("A", "B"):
+        for view in ("compact", "full"):
+            for polarity in ("positive", "negative"):
+                for order in (("no", "yes"), ("yes", "no")):
+                    # Each visible conjunction has both target labels equally often.
+                    assert joint[(arm, view, polarity, order, "no")] == 16
+                    assert joint[(arm, view, polarity, order, "yes")] == 16
+    # Explicitly reject the former shortcut: answer index was a function of
+    # format, context, and polarity alone under a single parity orientation.
+    old_shortcut = {}
+    for row in c:
+        format_b = int(row["meta"]["s2_arm"] == "B")
+        full = int(row["meta"]["context_view"] == "full")
+        negative = int(row["meta"]["polarity"] == "negative")
+        answer_index = list(row["questions"]["decision"]["criteria"]).index(
+            row["targets"]["decision"]["label"])
+        old_shortcut.setdefault((format_b, full, negative), set()).add(answer_index)
+    assert len(old_shortcut) == 8 and all(indices == {0, 1}
+                                          for indices in old_shortcut.values())
+    assert all(joint[(arm, view, polarity, order, label)] > 0
+               for arm in ("A", "B") for view in ("compact", "full")
+               for polarity in ("positive", "negative")
+               for order in (("no", "yes"), ("yes", "no"))
+               for label in ("no", "yes"))
+    assert len({row["meta"]["source_group"] for row in c}) == 64
+    orientations_by_polarity = Counter()
+    for group in {row["meta"]["source_group"] for row in c}:
+        rows = [row for row in c if row["meta"]["source_group"] == group]
+        inferred = {int(row["meta"]["source_label"] == "yes") ^
+                    int(row["meta"]["context_view"] == "full") ^
+                    int(list(row["questions"]["decision"]["criteria"]) == ["yes", "no"]) ^
+                    int(row["meta"]["s2_arm"] == "B") for row in rows}
+        assert len(inferred) == 1
+        orientations_by_polarity[(rows[0]["meta"]["polarity"], next(iter(inferred)))] += 1
+    assert orientations_by_polarity == Counter({
+        ("positive", 0): 16, ("positive", 1): 16,
+        ("negative", 0): 16, ("negative", 1): 16,
+    })
+    assert all(CLOSED_WORLD_CAVEAT in row["state"] for row in c)
+    assert all(row["meta"]["question_style"] ==
+               ("interrogative" if row["meta"]["s2_arm"] == "A" else "declarative") and
+               row["meta"]["criteria_style"] ==
+               ("explicit" if row["meta"]["s2_arm"] == "A" else "generic") for row in c)
     assert len({row["id"] for row in arm_a}) == len(arm_a)
     assert len({row["id"] for row in arm_b}) == len(arm_b)
     assert [(r["state"], r["targets"]) for r in a] == [(r["state"], r["targets"]) for r in b]
@@ -92,7 +162,13 @@ def test_reconstructs_matched_arms_and_locked_crossed_eval(tmp_path):
     assert not set(manifest["train_distractor_groups"]) & set(manifest["crossed_eval"]["distractor_groups"])
     assert manifest["output_sha256"] == {
         "arm_a": _hash_rows(arm_a), "arm_b": _hash_rows(arm_b),
+        "arm_c": _hash_rows(arm_c),
         "crossed_eval": _hash_rows(crossed_eval),
+    }
+    assert manifest["arm_c"]["groups_each_with_4_A_4_B"] == 64
+    assert manifest["arm_c"]["format_counts"] == {"A": 256, "B": 256}
+    assert manifest["arm_c"]["orientation_groups_by_polarity"] == {
+        "positive_0": 16, "positive_1": 16, "negative_0": 16, "negative_1": 16,
     }
     assert all(len(row["state"]) >= 40_000 for row in crossed_eval
                if row["meta"]["context_view"] == "full")

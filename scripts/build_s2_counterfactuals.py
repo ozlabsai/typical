@@ -339,6 +339,46 @@ def crossed_eval_rows(train_rows, val_rows, seed):
                   "cell_counts": {"each_of_16_cells": 128}}
 
 
+def _mixed_arm_c(arm_a, arm_b):
+    """Use an orthogonal parity split within each group's 2x2x2 views."""
+    if len(arm_a) != PRESENTATIONS or len(arm_b) != PRESENTATIONS:
+        raise ValueError("mixed arm requires complete A and B arms")
+    rows = list(arm_a[:S1_COUNT])
+    by_group = defaultdict(list)
+    for row_a, row_b in zip(arm_a[S1_COUNT:], arm_b[S1_COUNT:]):
+        if row_a["meta"]["source_group"] != row_b["meta"]["source_group"]:
+            raise ValueError("A/B donor rows are not aligned")
+        meta = row_a["meta"]
+        source_label_bit = int(meta["source_label"] == "yes")
+        view_bit = int(meta["context_view"] == "full")
+        order_bit = int(list(row_a["questions"]["decision"]["criteria"]) == ["yes", "no"])
+        by_group[meta["source_group"]].append((row_a, row_b, source_label_bit,
+                                               view_bit, order_bit, meta))
+    orientations = {}
+    for polarity in ("positive", "negative"):
+        groups = sorted(group for group, entries in by_group.items()
+                        if entries[0][-1]["polarity"] == polarity)
+        if len(groups) != DONOR_GROUPS // 2:
+            raise AssertionError(f"expected {DONOR_GROUPS // 2} {polarity} groups")
+        # Balance orientation independently within polarity, so no fixed
+        # polarity/context/order/format combination reveals the target label.
+        orientations.update({group: int(index >= len(groups) // 2)
+                             for index, group in enumerate(groups)})
+    selected_groups = {}
+    for group, entries in sorted(by_group.items()):
+        orientation = orientations[group]
+        assigned = []
+        for row_a, row_b, source_label_bit, view_bit, order_bit, meta in entries:
+            use_a = (source_label_bit ^ view_bit ^ order_bit ^ orientation) == 0
+            assigned.append((row_a if use_a else row_b, "A" if use_a else "B", meta))
+        if len(assigned) != 8 or Counter(arm for _, arm, _ in assigned) != {"A": 4, "B": 4}:
+            raise AssertionError(f"mixed arm split is not balanced for group {group}")
+        selected_groups[group] = assigned
+    # Keep the original sampled donor presentation schedule, not group sort order.
+    rows.extend(row for group in by_group for row, _, _ in selected_groups[group])
+    return rows, selected_groups
+
+
 def build(train_paths, donor_train, donor_val, seed=42):
     schedule, full_s1 = s1_schedule(train_paths, seed)
     groups, held_out = _by_group(donor_train, donor_val)
@@ -351,7 +391,8 @@ def build(train_paths, donor_train, donor_val, seed=42):
                                 polarity=polarity, placement=placement, context_chars=TRAIN_FULL_CHARS))
         arm_b.append(_make_view(source, "B", view, order, distractor_rows, index, group,
                                 polarity=polarity, placement=placement, context_chars=TRAIN_FULL_CHARS))
-    if len(arm_a) != PRESENTATIONS or len(arm_b) != PRESENTATIONS:
+    arm_c, c_groups = _mixed_arm_c(arm_a, arm_b)
+    if len(arm_a) != PRESENTATIONS or len(arm_b) != PRESENTATIONS or len(arm_c) != PRESENTATIONS:
         raise AssertionError("S2 arms must contain exactly 2,000 presentations")
     eval_rows, eval_stats = crossed_eval_rows(donor_train, donor_val, seed)
     train_distractor_groups = {group for row in arm_a[S1_COUNT:]
@@ -388,9 +429,42 @@ def build(train_paths, donor_train, donor_val, seed=42):
     }
     manifest["crossed_eval"] = eval_stats
     manifest["train_eval_group_intersection"] = 0
+    c_donors = arm_c[S1_COUNT:]
+    c_orientation_counts = Counter()
+    for entries in c_groups.values():
+        row = entries[0][0]
+        meta = row["meta"]
+        orientation = (int(meta["source_label"] == "yes") ^
+                       int(meta["context_view"] == "full") ^
+                       int(list(row["questions"]["decision"]["criteria"]) == ["yes", "no"]) ^
+                       int(meta["s2_arm"] == "B"))
+        c_orientation_counts[(meta["polarity"], orientation)] += 1
+    manifest["arm_c"] = {
+        "format_counts": dict(Counter(row["meta"]["s2_arm"] for row in c_donors)),
+        "format_by_source_label": {label: dict(Counter(
+            row["meta"]["s2_arm"] for row in c_donors
+            if row["meta"]["source_label"] == label)) for label in OPTIONS},
+        "format_by_polarity": {value: dict(Counter(
+            row["meta"]["s2_arm"] for row in c_donors
+            if row["meta"]["polarity"] == value)) for value in ("positive", "negative")},
+        "format_by_context_view": {value: dict(Counter(
+            row["meta"]["s2_arm"] for row in c_donors
+            if row["meta"]["context_view"] == value)) for value in ("compact", "full")},
+        "format_by_option_order": {("no_yes" if value[0] == "no" else "yes_no"): dict(Counter(
+            row["meta"]["s2_arm"] for row in c_donors
+            if list(row["questions"]["decision"]["criteria"]) == list(value)))
+            for value in (OPTIONS, tuple(reversed(OPTIONS)))},
+        "format_by_decisive_placement": {value: dict(Counter(
+            row["meta"]["s2_arm"] for row in c_donors
+            if row["meta"]["decisive_placement"] == value)) for value in POSITIONS},
+        "groups_each_with_4_A_4_B": len(c_groups),
+        "orientation_groups_by_polarity": {
+            f"{polarity}_{orientation}": c_orientation_counts[(polarity, orientation)]
+            for polarity in ("positive", "negative") for orientation in (0, 1)},
+    }
     manifest["output_sha256"] = {"arm_a": _hash_rows(arm_a), "arm_b": _hash_rows(arm_b),
-                                 "crossed_eval": _hash_rows(eval_rows)}
-    return arm_a, arm_b, eval_rows, manifest
+                                 "arm_c": _hash_rows(arm_c), "crossed_eval": _hash_rows(eval_rows)}
+    return arm_a, arm_b, arm_c, eval_rows, manifest
 
 
 def main():
@@ -402,7 +476,7 @@ def main():
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    arm_a, arm_b, eval_rows, manifest = build([Path(p) for p in args.s1_input],
+    arm_a, arm_b, arm_c, eval_rows, manifest = build([Path(p) for p in args.s1_input],
                                    read_jsonl(args.programmatic_train),
                                    read_jsonl(args.programmatic_val), args.seed)
     source_paths = [*args.s1_input, args.programmatic_train, args.programmatic_val]
@@ -413,6 +487,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     write_jsonl(out / "arm-a.jsonl", arm_a)
     write_jsonl(out / "arm-b.jsonl", arm_b)
+    write_jsonl(out / "arm-c.jsonl", arm_c)
     write_jsonl(out / "crossed-eval.jsonl", eval_rows)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     summary = {key: value for key, value in manifest.items()
