@@ -207,14 +207,17 @@ def main():
     if len({name for name, _ in args.adapter}) != len(args.adapter):
         parser.error("adapter names must be unique")
     examples = load_panel(args.data)
-    results = [score_adapter(args.model, name, path, examples, args.max_length)
-               for name, path in args.adapter]
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"model": args.model, "data": args.data,
-                               "data_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
-                               "rows": len(examples), "max_length": args.max_length,
-                               "results": results}, indent=2) + "\n")
+    results = []
+    for name, path in args.adapter:
+        results.append(score_adapter(args.model, name, path, examples, args.max_length))
+        out.write_text(json.dumps({
+            "model": args.model, "data": args.data,
+            "data_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
+            "rows": len(examples), "max_length": args.max_length,
+            "complete": len(results) == len(args.adapter), "results": results,
+        }, indent=2) + "\n")
     print(f"wrote {out}")
 
 
