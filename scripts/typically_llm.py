@@ -56,12 +56,12 @@ def _openrouter_model(pinned: str) -> tuple[str, tuple[float, float]]:
         return mid, USD_PER_MTOK
 
 
-def _model() -> tuple[str, tuple[float, float]]:
-    return _openrouter_model(os.environ.get("OPENROUTER_MODEL", ""))
+def _model(model: str | None = None) -> tuple[str, tuple[float, float]]:
+    return _openrouter_model(model or os.environ.get("OPENROUTER_MODEL", ""))
 
 
-def usd(tokens_in: float, tokens_out: float) -> float:
-    pin, pout = _model()[1] if provider() == "openrouter" else USD_PER_MTOK
+def usd(tokens_in: float, tokens_out: float, model: str | None = None) -> float:
+    pin, pout = _model(model)[1] if provider() == "openrouter" else USD_PER_MTOK
     return (tokens_in * pin + tokens_out * pout) / 1e6
 
 
@@ -80,15 +80,17 @@ def _parse(text: str) -> dict:
     return out
 
 
-def complete_json(system: str, user: str | list[dict], schema: dict, *, max_tokens: int, effort: str = "medium", client=None):
-    """One structured-output call -> (dict, {"input_tokens", "output_tokens"}). `client`: an anthropic-shaped client (tests) forcing that path."""
+def complete_json(system: str, user: str | list[dict], schema: dict, *, max_tokens: int, effort: str = "medium", client=None,
+                  model: str | None = None):
+    """One structured-output call -> (dict, {"input_tokens", "output_tokens"}). `client`: an anthropic-shaped client (tests) forcing that path.
+    `model`: a per-call override (e.g. a cheap triage model); price it with usd(..., model=model)."""
     messages = [{"role": "user", "content": user}] if isinstance(user, str) else user
     if client is not None or provider() == "anthropic":
         import anthropic
         client = client or anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], timeout=TIMEOUT_S)
         try:
             resp = client.messages.create(
-                model=ANTHROPIC_MODEL, max_tokens=max_tokens, system=system, messages=messages,
+                model=model or ANTHROPIC_MODEL, max_tokens=max_tokens, system=system, messages=messages,
                 output_config={"format": {"type": "json_schema", "schema": schema}, "effort": effort})
         except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
             raise LLMError(f"{type(e).__name__}{getattr(e, 'status_code', '') and ' ' + str(e.status_code)}") from None
@@ -98,7 +100,7 @@ def complete_json(system: str, user: str | list[dict], schema: dict, *, max_toke
         raise LLMError("no LLM key configured (ANTHROPIC_API_KEY or OPENROUTER_API_KEY)")
     data = _http("POST", f"{OR_URL}/chat/completions", timeout=TIMEOUT_S, headers={
         "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}", "HTTP-Referer": "https://typical.ozlabs.ai", "X-Title": "typically"},
-        body={"model": _model()[0], "max_tokens": max_tokens, "messages": [{"role": "system", "content": system}, *messages],
+        body={"model": _model(model)[0], "max_tokens": max_tokens, "messages": [{"role": "system", "content": system}, *messages],
               "response_format": {"type": "json_schema", "json_schema": {"name": "out", "strict": True, "schema": schema}}})
     try:
         text, u = data["choices"][0]["message"]["content"] or "", data.get("usage") or {}
