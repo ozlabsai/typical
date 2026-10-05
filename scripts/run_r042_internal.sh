@@ -7,6 +7,7 @@ MODEL=${R042_MODEL:-$ROOT/hf-gemma/hub/models--google--gemma-4-12B-it/snapshots/
 RUN=${R042_RUN:-$ROOT/r042}
 PYTHON=${R042_PYTHON:-$ROOT/.venv-pinned/bin/python}
 PROBE_SHA=a477f8347c0d2a6ac4898e7c6e119f69450669b44b2943d1d55aa3089b27a297
+ACTION_CAL_SHA=82afc31f76e7a11dad0749de8b0ba29622740affc39f54af1353cf5a1f5b8f60
 HE_LEFT=${R042_HE_LEFT:?set R042_HE_LEFT to the frozen Hebrew panel}
 HE_RIGHT=${R042_HE_RIGHT:?set R042_HE_RIGHT to the paired English panel}
 MM_DIR=${R042_MM_DIR:?set R042_MM_DIR to the frozen image-panel directory}
@@ -16,6 +17,8 @@ cd "$ROOT"
 [[ -f "$HE_LEFT" && -f "$HE_RIGHT" && -d "$MM_DIR" ]]
 [[ ! -e "$RUN/card" && ! -e "$RUN/prose" && ! -e "$RUN/internal-finalized" ]]
 [[ $(sha256sum "$RUN/renderer-probe-eval.jsonl" | awk '{print $1}') == "$PROBE_SHA" ]]
+[[ $(sha256sum "$RUN/action-cal.jsonl" | awk '{print $1}') == "$ACTION_CAL_SHA" ]]
+[[ $(sha256sum "$RUN/action-eval.jsonl" | awk '{print $1}') == "$PROBE_SHA" ]]
 
 "$PYTHON" -m scripts.build_r042_record_cards --out "$RUN" --replay "$RUN/replay.jsonl"
 [[ $(wc -l < "$RUN/replay.jsonl" | tr -d ' ') == 1488 ]]
@@ -57,7 +60,7 @@ for arm in base card prose; do
     --data "$RUN/action-cal.jsonl" --out "$RUN/$arm-action-cal"
   "$PYTHON" -m scripts.score_action_panel --model "$MODEL" "${adapter[@]}" \
     --data "$RUN/action-eval.jsonl" --calibration-data "$RUN/action-cal.jsonl" \
-    --calibration-predictions "$RUN/$arm-action-cal/predictions.jsonl" --out "$RUN/$arm-action"
+    --calibration-predictions "$RUN/$arm-action-cal/predictions.jsonl" --limit 256 --out "$RUN/$arm-action"
 done
 for arm in card prose; do
   "$PYTHON" -m scripts.eval_gemma_mm_he --model "$MODEL" --adapter "$RUN/$arm/step-000450" \
