@@ -339,6 +339,27 @@ def crossed_eval_rows(train_rows, val_rows, seed):
                   "cell_counts": {"each_of_16_cells": 128}}
 
 
+def canonical_teacher_rows(train_rows, selected_groups, train_polarity_by_group):
+    groups, _ = _by_group(train_rows, [])
+    rows = []
+    for group_index, group in enumerate(selected_groups):
+        if group not in groups:
+            raise ValueError(f"canonical teacher group missing from selected training data: {group}")
+        placement = POSITIONS[group_index % len(POSITIONS)]
+        for label in OPTIONS:
+            source = _first_variant(groups[group][label])
+            for order in (OPTIONS, tuple(reversed(OPTIONS))):
+                rows.append(_make_view(
+                    source, "crossed_eval", "compact", order, [], len(rows), group,
+                    "interrogative", "explicit", "positive", placement, 0,
+                ))
+                rows[-1]["meta"]["rubric_style"] = source["meta"]["rubric_style"]
+                rows[-1]["meta"]["arm_d_train_polarity"] = train_polarity_by_group[group]
+    if len(rows) != 256:
+        raise AssertionError(f"canonical teacher panel must have 256 rows, got {len(rows)}")
+    return rows
+
+
 def _mixed_arm_c(arm_a, arm_b):
     """Use an orthogonal parity split within each group's 2x2x2 views."""
     if len(arm_a) != PRESENTATIONS or len(arm_b) != PRESENTATIONS:
@@ -417,6 +438,10 @@ def build(train_paths, donor_train, donor_val, seed=42):
     if any(len(arm) != PRESENTATIONS for arm in (arm_a, arm_b, arm_c, arm_d)):
         raise AssertionError("S2 arms must contain exactly 2,000 presentations")
     eval_rows, eval_stats = crossed_eval_rows(donor_train, donor_val, seed)
+    train_polarity_by_group = {}
+    for row in arm_a[S1_COUNT:]:
+        train_polarity_by_group.setdefault(row["meta"]["source_group"], row["meta"]["polarity"])
+    teacher_rows = canonical_teacher_rows(donor_train, selected, train_polarity_by_group)
     train_distractor_groups = {group for row in arm_a[S1_COUNT:]
                                for group in row["meta"]["distractor_groups"]}
     train_eval_source_groups = train_distractor_groups | set(selected)
@@ -424,6 +449,14 @@ def build(train_paths, donor_train, donor_val, seed=42):
     source_group_overlap = train_eval_source_groups & eval_source_groups
     if source_group_overlap:
         raise ValueError(f"train/eval context group overlap: {sorted(source_group_overlap)[:3]}")
+    teacher_source_ids = {row["meta"]["source_id"] for row in teacher_rows}
+    arm_d_source_ids = {view["meta"]["source_id"] for row in arm_d[S1_COUNT:]
+                        for view in row["paired_views"]}
+    if teacher_source_ids != arm_d_source_ids:
+        raise ValueError("canonical teacher source IDs must exactly cover Arm D donor sources")
+    teacher_group_overlap = {row["meta"]["source_group"] for row in teacher_rows} & eval_source_groups
+    if teacher_group_overlap:
+        raise ValueError(f"canonical teacher sources overlap crossed eval groups: {sorted(teacher_group_overlap)[:3]}")
     manifest = {
         "seed": seed, "s1_source_examples_flattened": len(full_s1),
         "promotion_scope": "policy_permit only; no non-permission family transfer panel",
@@ -450,6 +483,16 @@ def build(train_paths, donor_train, donor_val, seed=42):
         "train_eval_context_group_intersection": len(source_group_overlap),
     }
     manifest["crossed_eval"] = eval_stats
+    manifest["canonical_teacher"] = {
+        "rows": len(teacher_rows), "source_cases": len(teacher_rows) // 2,
+        "groups": selected,
+        "source_labels": dict(Counter(row["meta"]["source_label"] for row in teacher_rows[::2])),
+        "option_orders": dict(Counter("no_yes" if list(row["questions"]["decision"]["criteria"])
+                                       == ["no", "yes"] else "yes_no" for row in teacher_rows)),
+        "question_style": "interrogative", "criteria_style": "explicit",
+        "polarity": "positive", "context_view": "compact", "distractors": 0,
+        "sha256": _hash_rows(teacher_rows),
+    }
     manifest["train_eval_group_intersection"] = 0
     c_donors = arm_c[S1_COUNT:]
     c_orientation_counts = Counter()
@@ -491,8 +534,9 @@ def build(train_paths, donor_train, donor_val, seed=42):
     }
     manifest["output_sha256"] = {"arm_a": _hash_rows(arm_a), "arm_b": _hash_rows(arm_b),
                                  "arm_c": _hash_rows(arm_c), "arm_d": _hash_rows(arm_d),
-                                 "crossed_eval": _hash_rows(eval_rows)}
-    return arm_a, arm_b, arm_c, arm_d, eval_rows, manifest
+                                 "crossed_eval": _hash_rows(eval_rows),
+                                 "canonical_teacher": _hash_rows(teacher_rows)}
+    return arm_a, arm_b, arm_c, arm_d, eval_rows, teacher_rows, manifest
 
 
 def main():
@@ -504,7 +548,7 @@ def main():
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    arm_a, arm_b, arm_c, arm_d, eval_rows, manifest = build([Path(p) for p in args.s1_input],
+    arm_a, arm_b, arm_c, arm_d, eval_rows, teacher_rows, manifest = build([Path(p) for p in args.s1_input],
                                    read_jsonl(args.programmatic_train),
                                    read_jsonl(args.programmatic_val), args.seed)
     source_paths = [*args.s1_input, args.programmatic_train, args.programmatic_val]
@@ -518,6 +562,7 @@ def main():
     write_jsonl(out / "arm-c.jsonl", arm_c)
     write_jsonl(out / "arm-d.jsonl", arm_d)
     write_jsonl(out / "crossed-eval.jsonl", eval_rows)
+    write_jsonl(out / "canonical-teacher.jsonl", teacher_rows)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     summary = {key: value for key, value in manifest.items()
                if key not in {"shared_s1_example_ids", "shared_s1_example_source_refs", "selected_groups",

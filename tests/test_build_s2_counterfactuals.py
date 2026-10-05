@@ -6,6 +6,7 @@ from scripts.build_s2_counterfactuals import (
     _explicit_criteria, _hash_rows, _make_view, build,
 )
 from scripts.train_gemma_decision_lora import flatten_row, load_examples, mean_logical_slot_loss
+from scripts.eval_s2_crossed import load_panel
 import torch
 from scripts.workflow_corpus import NOUL_POLICY_SPEC, make_row, NOUL_STYLES
 
@@ -35,7 +36,8 @@ def test_reconstructs_matched_arms_and_locked_crossed_eval(tmp_path):
     s1_path = tmp_path / "s1.jsonl"
     write_rows(s1_path, s1_rows)
 
-    arm_a, arm_b, arm_c, arm_d, crossed_eval, manifest = build([s1_path], train, val, seed=42)
+    arm_a, arm_b, arm_c, arm_d, crossed_eval, teacher_rows, manifest = build(
+        [s1_path], train, val, seed=42)
     assert len(arm_a) == len(arm_b) == 2000
     assert arm_a[:1488] == arm_b[:1488]
     assert arm_a[:1488] == arm_c[:1488]
@@ -162,6 +164,49 @@ def test_reconstructs_matched_arms_and_locked_crossed_eval(tmp_path):
                for row in a if row["meta"]["context_view"] == "full"
                and row["meta"]["decisive_placement"] == "middle")
     assert len(crossed_eval) == 2048
+    assert len(teacher_rows) == 256
+    teacher_cases = Counter(row["meta"]["source_id"] for row in teacher_rows)
+    assert len(teacher_cases) == 128 and set(teacher_cases.values()) == {2}
+    assert Counter((row["meta"]["source_id"],
+                    tuple(row["questions"]["decision"]["criteria"]))
+                   for row in teacher_rows) == {
+        (source_id, order): 1 for source_id in teacher_cases
+        for order in (("no", "yes"), ("yes", "no"))}
+    assert Counter(tuple(row["questions"]["decision"]["criteria"]) for row in teacher_rows) == {
+        ("no", "yes"): 128, ("yes", "no"): 128}
+    assert Counter(row["targets"]["decision"]["label"] for row in teacher_rows) == {
+        "no": 128, "yes": 128}
+    source_by_id = {row["id"]: row for row in train}
+    teacher_source_ids = {row["meta"]["source_id"] for row in teacher_rows}
+    arm_d_source_ids = {view["meta"]["source_id"] for row in d for view in row["paired_views"]}
+    assert teacher_source_ids == arm_d_source_ids
+    teacher_groups = {row["meta"]["source_group"] for row in teacher_rows}
+    assert teacher_groups == set(manifest["selected_groups"])
+    assert not teacher_groups & set(manifest["crossed_eval"]["groups"])
+    assert not teacher_groups & set(manifest["crossed_eval"]["distractor_groups"])
+    for row in teacher_rows:
+        meta = row["meta"]
+        assert meta["question_style"] == "interrogative"
+        assert meta["criteria_style"] == "explicit"
+        assert meta["polarity"] == "positive"
+        assert meta["context_view"] == "compact"
+        assert meta["distractor_groups"] == []
+        assert meta["fixed_option_order"] is True
+        assert row["questions"]["decision"]["instructions"] == EVAL_QUESTIONS[("positive", "interrogative")]
+        assert row["targets"]["decision"]["label"] == meta["source_label"]
+        assert meta["rubric_style"] == source_by_id[meta["source_id"]]["meta"]["rubric_style"]
+        assert meta["arm_d_train_polarity"] == next(
+            view["meta"]["polarity"] for paired in d
+            for view in paired["paired_views"]
+            if view["meta"]["source_group"] == meta["source_group"])
+        expected = _explicit_criteria(source_by_id[meta["source_id"]], "positive")
+        assert row["questions"]["decision"]["criteria"] == {
+            key: expected[key] for key in row["questions"]["decision"]["criteria"]}
+    teacher_path = tmp_path / "canonical-teacher.jsonl"
+    write_rows(teacher_path, teacher_rows)
+    assert len(load_panel(teacher_path, expected_rows=256)) == 256
+    assert manifest["canonical_teacher"]["rows"] == 256
+    assert manifest["canonical_teacher"]["source_cases"] == 128
     assert Counter(row["targets"]["decision"]["label"] for row in crossed_eval) == {
         "no": 1024, "yes": 1024}
     assert manifest["crossed_eval"]["cell_counts"]["each_of_16_cells"] == 128
@@ -172,7 +217,7 @@ def test_reconstructs_matched_arms_and_locked_crossed_eval(tmp_path):
     assert manifest["output_sha256"] == {
         "arm_a": _hash_rows(arm_a), "arm_b": _hash_rows(arm_b),
         "arm_c": _hash_rows(arm_c), "arm_d": _hash_rows(arm_d),
-        "crossed_eval": _hash_rows(crossed_eval),
+        "crossed_eval": _hash_rows(crossed_eval), "canonical_teacher": _hash_rows(teacher_rows),
     }
     assert manifest["arm_c"]["groups_each_with_4_A_4_B"] == 64
     assert manifest["arm_c"]["format_counts"] == {"A": 256, "B": 256}

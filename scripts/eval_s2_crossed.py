@@ -8,15 +8,15 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 
-def load_panel(path):
+def load_panel(path, expected_rows=2048):
     try:
         from scripts.train_gemma_decision_lora import flatten_row
     except ModuleNotFoundError:
         from train_gemma_decision_lora import flatten_row
 
     rows = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
-    if len(rows) != 2048:
-        raise ValueError(f"crossed panel must contain exactly 2,048 rows; got {len(rows)}")
+    if len(rows) != expected_rows:
+        raise ValueError(f"panel must contain exactly {expected_rows:,} rows; got {len(rows)}")
     examples = []
     for row in rows:
         flattened = flatten_row(row)
@@ -42,14 +42,29 @@ def load_panel(path):
                                example["context_view"], "_".join(example["option_order"]))
                               for example in examples)
     labels = Counter(example["gold"] for example in examples)
-    if len({example["source_group"] for example in examples}) != 64:
-        raise ValueError("crossed panel must contain 64 rubric groups")
-    if len(cells) != 32 or set(cells.values()) != {64}:
-        raise ValueError("crossed panel must contain 64 examples in each of 32 polarity-aware cells")
-    if len(collapsed_cells) != 16 or set(collapsed_cells.values()) != {128}:
-        raise ValueError("crossed panel must collapse to 128 examples in each of 16 cells")
-    if labels != {"no": 1024, "yes": 1024}:
-        raise ValueError(f"crossed panel labels are not balanced: {dict(labels)}")
+    if expected_rows == 2048:
+        if len({example["source_group"] for example in examples}) != 64:
+            raise ValueError("crossed panel must contain 64 rubric groups")
+        if len(cells) != 32 or set(cells.values()) != {64}:
+            raise ValueError("crossed panel must contain 64 examples in each of 32 polarity-aware cells")
+        if len(collapsed_cells) != 16 or set(collapsed_cells.values()) != {128}:
+            raise ValueError("crossed panel must collapse to 128 examples in each of 16 cells")
+        if labels != {"no": 1024, "yes": 1024}:
+            raise ValueError(f"crossed panel labels are not balanced: {dict(labels)}")
+    elif expected_rows == 256:
+        if (len({example["source_group"] for example in examples}) != 64 or
+                len(collapsed_cells) != 2 or set(collapsed_cells.values()) != {128} or
+                labels != {"no": 128, "yes": 128}):
+            raise ValueError("canonical teacher panel must have 64 groups, balanced labels, and 128 rows per order")
+        if any(example["question_style"] != "interrogative" or
+               example["criteria_style"] != "explicit" or example["polarity"] != "positive" or
+               example["context_view"] != "compact" for example in examples):
+            raise ValueError("canonical teacher panel must be positive/interrogative/explicit/compact")
+        if any((json.loads(line).get("meta") or {}).get("distractor_groups") != []
+               for line in Path(path).read_text().splitlines() if line.strip()):
+            raise ValueError("canonical teacher panel must not contain distractors")
+    else:
+        raise ValueError("locked panel validation supports expected row counts 256 or 2048")
     pairs = defaultdict(list)
     for example in examples:
         key = (example["source_id"], example["question_style"], example["criteria_style"],
@@ -219,13 +234,14 @@ def main():
     parser.add_argument("--adapter", action="append", type=parse_adapter, required=True,
                         metavar="NAME=PATH", help="use NAME=base to score the unadapted base")
     parser.add_argument("--data", required=True)
+    parser.add_argument("--expected-rows", type=int, default=2048)
     parser.add_argument("--subset", choices=("all", "compact", "full"), default="all")
     parser.add_argument("--max-length", type=int, default=16384)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     if len({name for name, _ in args.adapter}) != len(args.adapter):
         parser.error("adapter names must be unique")
-    examples = select_subset(load_panel(args.data), args.subset)
+    examples = select_subset(load_panel(args.data, args.expected_rows), args.subset)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     results = []
