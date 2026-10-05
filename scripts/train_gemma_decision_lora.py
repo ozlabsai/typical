@@ -56,6 +56,7 @@ def parse_args():
     parser.add_argument("--project-consistency-against-guard", action="store_true")
     parser.add_argument("--pair-flip-weight", type=float, default=0.0)
     parser.add_argument("--pair-flip-margin", type=float, default=1.0)
+    parser.add_argument("--pair-flip-start-step", type=int, default=0)
     return parser.parse_args()
 
 
@@ -229,14 +230,23 @@ def pair_consistency_stats(active, seen):
 
 
 def validate_pair_objectives(pair_consistency_weight, project_consistency_against_guard,
-                             pair_flip_weight, pair_flip_margin):
+                             pair_flip_weight, pair_flip_margin, pair_flip_start_step=0,
+                             steps=None):
     if pair_flip_weight < 0:
         raise ValueError("pair flip weight must be nonnegative")
     if pair_flip_margin <= 0:
         raise ValueError("pair flip margin must be positive")
+    if pair_flip_start_step < 0:
+        raise ValueError("pair flip start step must be nonnegative")
+    if steps is not None and pair_flip_weight > 0 and pair_flip_start_step > steps:
+        raise ValueError("pair flip start step cannot exceed training steps")
     if pair_flip_weight > 0 and (pair_consistency_weight > 0 or
                                  project_consistency_against_guard):
         raise ValueError("pair flip is incompatible with pair consistency and guard projection")
+
+
+def pair_flip_weight_at_step(weight, start_step, step):
+    return weight if step >= start_step else 0.0
 
 
 def guard_logical_slot_loss(view_losses):
@@ -504,7 +514,8 @@ def main():
         raise ValueError("guard projection requires a positive pair consistency weight")
     validate_pair_objectives(args.pair_consistency_weight,
                              args.project_consistency_against_guard,
-                             args.pair_flip_weight, args.pair_flip_margin)
+                             args.pair_flip_weight, args.pair_flip_margin,
+                             args.pair_flip_start_step, args.steps)
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     train = load_examples(args.train)
@@ -575,6 +586,8 @@ def main():
     cumulative_cons_energy = 0.0
     for step in range(1, args.steps + 1):
         accumulated = 0.0
+        flip_weight = pair_flip_weight_at_step(
+            args.pair_flip_weight, args.pair_flip_start_step, step)
         pair_active = pair_seen = 0
         flip_active = flip_seen = 0
         flip_loss_sum = 0.0
@@ -594,7 +607,7 @@ def main():
                     pair_consistency_min_gold_probability=args.pair_consistency_min_gold_probability,
                     pair_consistency_clip=args.pair_consistency_clip,
                     pair_consistency_beta=args.pair_consistency_beta,
-                    pair_flip_weight=args.pair_flip_weight,
+                    pair_flip_weight=flip_weight,
                     pair_flip_margin=args.pair_flip_margin,
                     return_components=True)
                 pair_active += pair_stats["pair_consistency_active"]
@@ -657,7 +670,7 @@ def main():
                     pair_consistency_min_gold_probability=args.pair_consistency_min_gold_probability,
                     pair_consistency_clip=args.pair_consistency_clip,
                     pair_consistency_beta=args.pair_consistency_beta,
-                    pair_flip_weight=args.pair_flip_weight,
+                    pair_flip_weight=flip_weight,
                     pair_flip_margin=args.pair_flip_margin)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
@@ -680,7 +693,9 @@ def main():
                   "pair_consistency_rate": pair_active / pair_seen if pair_seen else 0.0,
                   "pair_flip_active": flip_active,
                   "pair_flip_seen": flip_seen,
-                  "pair_flip_loss": flip_loss_sum / flip_seen if flip_seen else 0.0}
+                  "pair_flip_loss": flip_loss_sum / flip_seen if flip_seen else 0.0,
+                  "pair_flip_weight": flip_weight,
+                  "pair_flip_weight_configured": args.pair_flip_weight}
         early_stop = False
         if projection_stats is not None:
             metric.update(projection_stats)

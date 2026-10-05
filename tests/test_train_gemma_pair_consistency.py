@@ -15,6 +15,7 @@ from scripts.train_gemma_decision_lora import (
     pair_consistency_stats,
     pair_slot_loss,
     pair_flip_term,
+    pair_flip_weight_at_step,
     encode,
     loss_for_examples,
     load_examples,
@@ -119,6 +120,16 @@ def test_pair_flip_configuration_rejects_invalid_or_mixed_objectives():
         validate_pair_objectives(0.1, False, 0.1, 1.0)
     with pytest.raises(ValueError, match="incompatible"):
         validate_pair_objectives(0.0, True, 0.1, 1.0)
+    with pytest.raises(ValueError, match="nonnegative"):
+        validate_pair_objectives(0.0, False, 0.0, 1.0, pair_flip_start_step=-1)
+    with pytest.raises(ValueError, match="cannot exceed"):
+        validate_pair_objectives(0.0, False, 0.1, 1.0, pair_flip_start_step=11, steps=10)
+    validate_pair_objectives(0.0, False, 0.0, 1.0, pair_flip_start_step=11, steps=10)
+
+
+def test_pair_flip_weight_starts_at_configured_step():
+    assert pair_flip_weight_at_step(0.25, start_step=10, step=9) == 0.0
+    assert pair_flip_weight_at_step(0.25, start_step=10, step=10) == 0.25
 
 
 def test_consistency_gate_inclusive_threshold_and_anchor_stop_gradient():
