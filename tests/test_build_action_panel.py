@@ -14,6 +14,7 @@ def test_action_panel_is_deterministic_and_split_disjoint(tmp_path, monkeypatch)
                   for index, name in enumerate(row["meta"]["action_trace"])}
         assert action_for(fields) == row["meta"]["action_gold"]
         assert row["meta"]["family"] in SPLITS["eval"]["families"]
+        assert 0 < row["meta"]["decision_threshold"] < 1
     for axis in ("families", "templates", "bands"):
         for left in SPLITS.values():
             for right in SPLITS.values():

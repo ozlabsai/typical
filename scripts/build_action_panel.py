@@ -23,6 +23,10 @@ LIMITS = {
     "low": (100, 20), "mid": (250, 45), "upper_low": (175, 30),
     "upper_mid": (400, 60), "high": (700, 90), "off_grid": (325, 52),
 }
+DECISION_THRESHOLDS = {
+    "low": 0.15, "mid": 0.30, "upper_low": 0.45,
+    "upper_mid": 0.60, "high": 0.75, "off_grid": 0.52,
+}
 FAMILY_NAMES = {
     "access": "access request", "commerce": "purchase request", "safety": "safety review",
     "support": "support case", "finance": "payment review", "operations": "operations request",
@@ -78,6 +82,7 @@ def _state(family, value_limit, age_limit, fields, rng):
     risk = 20 if fields["safe"] else 91
     facts = [
         f"Case type: {FAMILY_NAMES[family]}.", f"Recorded risk score: {risk}/100.",
+        "Policy risk limit: 50/100.",
         f"Requested amount: ${value}.", f"Request age: {age} days.",
         "Manager approval: recorded." if fields["approved"] else "Manager approval: not recorded.",
     ]
@@ -132,6 +137,7 @@ def build(seed, *, split, cases_per_cell):
                         "questions": questions, "targets": targets,
                         "meta": {"panel": "action_v1", "split": split, "family": family,
                                  "template": template, "threshold_band": band,
+                                 "decision_threshold": DECISION_THRESHOLDS[band],
                                  "action_gold": action, "action_trace": fields,
                                  "group_id": f"{split}:{family}:{template}:{band}:{cell_index}"},
                     })
