@@ -1,4 +1,4 @@
-"""Build matched 789-row R045 control and treatment training arms."""
+"""Build matched 800-row R045 control and treatment training arms."""
 
 import argparse
 import copy
@@ -15,8 +15,13 @@ COUNTS = {"hebrew": 100, "visual": 200, "prose": 44, "replay": 45,
           "wh": 300, "compositional": 100}
 DEFECTIVE_REPLAY_IDS = {f"r044-replay-{index:04d}" for index in
                         (10, 25, 72, 79, 85, 86, 108, 137, 147, 161, 180)}
-EXPECTED_ARM_ROWS = 789
-RETENTION_ROWS = sum(COUNTS[name] for name in ("hebrew", "visual", "prose", "replay"))
+SHARED_REPEAT_ROWS = 11
+R044_CLEAN_ROWS = 789
+EXPECTED_ARM_ROWS = 800
+EXPECTED_PAIR_SLOTS = 100
+EXPECTED_PRESENTATIONS = 900
+RETENTION_ROWS = (sum(COUNTS[name] for name in ("hebrew", "visual", "prose", "replay"))
+                  + SHARED_REPEAT_ROWS)
 BENCHMARK_RE = re.compile(r"jev[\W_]*bench|workflow[\W_]*evals", re.IGNORECASE)
 
 
@@ -134,8 +139,8 @@ def _r044_categories(rows):
     if missing:
         raise ValueError(f"R044 replay pool is missing expected defective IDs: {sorted(missing)}")
     clean = [row for row in rows if row["id"] not in DEFECTIVE_REPLAY_IDS]
-    if len(clean) != EXPECTED_ARM_ROWS:
-        raise ValueError(f"R044 clean pool must contain {EXPECTED_ARM_ROWS} rows")
+    if len(clean) != R044_CLEAN_ROWS:
+        raise ValueError(f"R044 clean pool must contain {R044_CLEAN_ROWS} rows")
     categories["replay"] = [row for row in categories["replay"]
                              if row["id"] not in DEFECTIVE_REPLAY_IDS]
     return categories, clean
@@ -308,6 +313,7 @@ def _exposure(rows):
     states = [view["state"] for row in rows for view in row.get("paired_views", [])]
     states.extend(row["state"] for row in rows if "paired_views" not in row)
     return {"slots": len(rows), "presentations": len(states),
+            "pair_slots": sum("paired_views" in row for row in rows),
             "state_characters": sum(map(len, states))}
 
 
@@ -341,13 +347,21 @@ def build(r044_path, wh_path, compositional_path, out, seed=45):
                          lambda row, category=category: category)
         common.extend(copy.deepcopy(picked))
         selections[category] = [row["id"] for row in picked]
+    repeats = copy.deepcopy(_sample(
+        [row for row in common if "paired_views" not in row], SHARED_REPEAT_ROWS, seed, _stratum))
+    for index, row in enumerate(repeats):
+        source_id = row["id"]
+        row["id"] = f"r045-shared-repeat-{index:02d}::{source_id}"
+        row["meta"]["r045_repeat_of"] = source_id
+    common.extend(repeats)
+    selections["shared_repeats"] = [row["meta"]["r045_repeat_of"] for row in repeats]
     wh_rows = _sample(wh, COUNTS["wh"], seed,
                       lambda row: ("wh", len(row.get("questions", {}))))
     selections["wh"] = [row["id"] for row in wh_rows]
     r045_rows = copy.deepcopy(_sample_compositional(compositional, COUNTS["compositional"], seed))
     selections["compositional"] = [row["id"] for row in r045_rows]
 
-    arm_a = copy.deepcopy(clean_r044)
+    arm_a = [*copy.deepcopy(clean_r044), *copy.deepcopy(repeats)]
     arm_b = [*common, *copy.deepcopy(wh_rows), *r045_rows]
     if len(common) != RETENTION_ROWS or len(arm_a) != EXPECTED_ARM_ROWS or len(arm_b) != EXPECTED_ARM_ROWS:
         raise AssertionError("arm row count invariant failed")
@@ -374,12 +388,16 @@ def build(r044_path, wh_path, compositional_path, out, seed=45):
         (out / f"{name}.jsonl").write_bytes(payload)
     image_tree_hash, image_count = _tree_hash(out, image_manifest)
     exposure = {"arm-a": _exposure(arm_a), "arm-b": _exposure(arm_b)}
-    if exposure["arm-a"]["presentations"] != exposure["arm-b"]["presentations"]:
-        raise AssertionError("arm presentation count mismatch")
+    expected_exposure = {"slots": EXPECTED_ARM_ROWS, "presentations": EXPECTED_PRESENTATIONS,
+                         "pair_slots": EXPECTED_PAIR_SLOTS}
+    if any({key: values[key] for key in expected_exposure} != expected_exposure
+           for values in exposure.values()):
+        raise AssertionError(f"arm exposure invariant failed: {exposure}")
     manifest = {
         "experiment": "r045_matched_arms", "seed": seed,
         "logical_rows": {name: len(rows) for name, rows in (("arm-a", arm_a), ("arm-b", arm_b))},
-        "composition": {"common_retention": RETENTION_ROWS, **COUNTS,
+        "composition": {"common_retention": RETENTION_ROWS,
+                        "shared_repeats": SHARED_REPEAT_ROWS, **COUNTS,
                         "control_old_text": EXPECTED_ARM_ROWS - RETENTION_ROWS},
         "inputs": inputs,
         "selection": selections,

@@ -7,7 +7,9 @@ import pytest
 from scripts.build_r045_arms import (
     COUNTS,
     DEFECTIVE_REPLAY_IDS,
+    EXPECTED_PAIR_SLOTS,
     RETENTION_ROWS,
+    SHARED_REPEAT_ROWS,
     build,
 )
 from scripts.build_r045_compositional_transfer import build as build_compositional
@@ -91,17 +93,18 @@ def _rows(path):
     return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
 
 
-def test_builds_matched_789_row_arms_with_clean_common_rows_and_assets(tmp_path):
+def test_builds_matched_800_row_arms_with_clean_common_rows_and_assets(tmp_path):
     r044, wh, compositional, r044_ids = _fixture(tmp_path)
     out = tmp_path / "out"
     manifest = build(r044, wh, compositional, out, seed=45)
     arm_a, arm_b = _rows(out / "arm-a.jsonl"), _rows(out / "arm-b.jsonl")
 
-    assert len(arm_a) == len(arm_b) == 789
-    assert len({row["id"] for row in arm_a}) == len({row["id"] for row in arm_b}) == 789
-    assert {row["id"] for row in arm_a} == r044_ids - DEFECTIVE_REPLAY_IDS
+    assert len(arm_a) == len(arm_b) == 800
+    assert len({row["id"] for row in arm_a}) == len({row["id"] for row in arm_b}) == 800
+    assert {row["id"] for row in arm_a if "r045_repeat_of" not in row["meta"]} == (
+        r044_ids - DEFECTIVE_REPLAY_IDS)
     common = {row["id"] for row in arm_a} & {row["id"] for row in arm_b}
-    assert len(common) == RETENTION_ROWS == 389
+    assert len(common) == RETENTION_ROWS == 400
     assert {row["id"] for row in arm_a} & {row["id"] for row in arm_b} == common
     a_by_id = {row["id"]: row for row in arm_a}
     b_by_id = {row["id"]: row for row in arm_b}
@@ -109,8 +112,13 @@ def test_builds_matched_789_row_arms_with_clean_common_rows_and_assets(tmp_path)
     assert all(bool(a_by_id[row_id].get("image")) == bool(b_by_id[row_id].get("image"))
                for row_id in common)
     assert all((out / row["image"]).is_file() for row in arm_a if row.get("image"))
-    assert Counter(row["meta"]["r044_category"] for row in arm_b if row["id"] in common) == {
+    assert Counter(row["meta"]["r044_category"] for row in arm_b
+                   if row["id"] in common and "r045_repeat_of" not in row["meta"]) == {
         "hebrew": 100, "visual": 200, "prose": 44, "replay": 45}
+    repeats = [row for row in arm_b if "r045_repeat_of" in row.get("meta", {})]
+    assert len(repeats) == SHARED_REPEAT_ROWS == 11
+    assert all("paired_views" not in row for row in repeats)
+    assert {row["id"] for row in repeats} <= common
     assert Counter((row.get("meta") or {}).get("source") for row in arm_b
                    if (row.get("meta") or {}).get("source") == "r045_generated") == {
         "r045_generated": 100}
@@ -122,12 +130,16 @@ def test_builds_matched_789_row_arms_with_clean_common_rows_and_assets(tmp_path)
                                  if row.get("meta", {}).get("source") == "r045_generated")
     assert set(selected_scenarios.values()) <= {2, 4}
     assert not ({row["id"] for row in arm_b} & DEFECTIVE_REPLAY_IDS)
-    assert manifest["logical_rows"] == {"arm-a": 789, "arm-b": 789}
-    assert manifest["composition"]["common_retention"] == 389
+    assert manifest["logical_rows"] == {"arm-a": 800, "arm-b": 800}
+    assert manifest["composition"]["common_retention"] == 400
+    assert manifest["composition"]["shared_repeats"] == 11
     assert manifest["compute_contract"]["matched_presentations"]
     assert not manifest["compute_contract"]["matched_state_characters"]
     assert {arm: values["presentations"] for arm, values in
-            manifest["compute_contract"]["exposure"].items()} == {"arm-a": 889, "arm-b": 889}
+            manifest["compute_contract"]["exposure"].items()} == {"arm-a": 900, "arm-b": 900}
+    assert {arm: values["pair_slots"] for arm, values in
+            manifest["compute_contract"]["exposure"].items()} == {
+        "arm-a": EXPECTED_PAIR_SLOTS, "arm-b": EXPECTED_PAIR_SLOTS}
     assert manifest["inputs"]["r044_arm_b"]["sha256"]
     assert manifest["outputs"]["arm-a"]["sha256"]
     assert manifest["images"]["files"] == 200
