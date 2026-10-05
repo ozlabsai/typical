@@ -39,7 +39,7 @@ def classify(row, probabilities):
 
 
 def _named(row, values):
-    names = row["meta"]["action_trace"]
+    names = row["meta"]["field_order"]
     return {name: values[f"q{index:02d}"] for index, name in enumerate(names)}
 
 

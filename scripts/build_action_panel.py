@@ -138,7 +138,7 @@ def build(seed, *, split, cases_per_cell):
                         "meta": {"panel": "action_v1", "split": split, "family": family,
                                  "template": template, "threshold_band": band,
                                  "decision_threshold": DECISION_THRESHOLDS[band],
-                                 "action_gold": action, "action_trace": fields,
+                                 "action_gold": action, "field_order": list(fields), "action_trace": fields,
                                  "group_id": f"{split}:{family}:{template}:{band}:{cell_index}"},
                     })
     validate(rows, split=split)
@@ -158,7 +158,7 @@ def validate(rows, *, split):
                 or meta["threshold_band"] not in spec["bands"]):
             raise ValueError(f"{row['id']}: split contamination")
         fields = {name: targets[f"q{index:02d}"]["label"] == "yes"
-                  for index, name in enumerate(meta["action_trace"])}
+                  for index, name in enumerate(meta["field_order"])}
         if fields != meta["action_trace"] or action_for(fields) != meta["action_gold"]:
             raise ValueError(f"{row['id']}: action trace mismatch")
         if any(question["type"] != "noul" or set(question["criteria"]) != {"no", "yes"}

@@ -12,7 +12,7 @@ def test_action_panel_is_deterministic_and_split_disjoint(tmp_path, monkeypatch)
     for row in first:
         assert 2 <= len(row["questions"]) <= 6
         fields = {name: row["targets"][f"q{index:02d}"]["label"] == "yes"
-                  for index, name in enumerate(row["meta"]["action_trace"])}
+                  for index, name in enumerate(row["meta"]["field_order"])}
         assert action_for(fields) == row["meta"]["action_gold"]
         assert row["meta"]["family"] in SPLITS["eval"]["families"]
         assert 0 < row["meta"]["decision_threshold"] < 1
