@@ -14,8 +14,10 @@ def _validate_report(report):
     if report.get("input_sha256") != LOCKED_R037_SHA256 or report.get("per_label") != 65:
         raise ValueError("renderer report did not use the locked 65-per-label R037 panel")
     for cell in PAIR_CELLS:
-        if report.get(cell, {}).get("n") != 130:
+        if report.get(cell, {}).get("n") != 130 or f"{cell}_both_orders" not in report:
             raise ValueError(f"renderer report has incomplete {cell} predictions")
+    if any(metric not in report for metric in ("bare_mean_order_delta", "canonical_mean_order_delta")):
+        raise ValueError("renderer report has incomplete order metrics")
 
 
 def _paired(records, renderer, label):
@@ -48,8 +50,13 @@ def compare(treatment, control, treatment_records, control_records):
     report = {}
     for cell in PAIR_CELLS:
         renderer, label = cell.split("_", 1)
-        delta, lower = _paired_delta(_paired(treatment_records, renderer, label),
-                                     _paired(control_records, renderer, label))
+        treatment_pairs = _paired(treatment_records, renderer, label)
+        control_pairs = _paired(control_records, renderer, label)
+        for name, summary, pairs in (("treatment", treatment, treatment_pairs),
+                                     ("control", control, control_pairs)):
+            if abs(summary[f"{cell}_both_orders"] - sum(pairs.values()) / 65) > 1e-12:
+                raise ValueError(f"{name} {cell} report does not match its prediction pairs")
+        delta, lower = _paired_delta(treatment_pairs, control_pairs)
         report[f"{cell}_paired_delta"] = delta
         report[f"{cell}_paired_delta_lower_95"] = lower
     for metric in ("bare_mean_order_delta", "canonical_mean_order_delta"):
