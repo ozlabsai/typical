@@ -15,6 +15,7 @@ from scripts.build_r043_causal_pairs import (
     _validate_true_pair,
     build,
     execute,
+    main,
     write_outputs,
 )
 
@@ -101,3 +102,42 @@ def test_r043_quarantine_rejects_exact_and_near_duplicate_text():
     assert unrelated.collision(view) is None
     accepted, rejected = _build_split(8, "train", 43, 0, exact)
     assert len(accepted) == 8 and sum(rejected.values()) >= 1
+
+
+def test_r043_quarantine_recognizes_nested_official_case_fields_and_rejects_empty_coverage():
+    pair = _source("train", "security", 0, 43, 0)
+    view = pair["paired_views"][0]
+    nested = {"payload": {"case": {"input": view["state"]},
+                          "request": {"instructions": "unrelated instruction"}}}
+    assert Quarantine([nested]).collision(view) == "exact"
+    with pytest.raises(ValueError, match="no recognized text fields"):
+        Quarantine([{"id": "official-case-with-unsupported-shape", "answer": "yes"}])
+
+
+def test_r043_cli_concatenates_repeatable_replay_inputs_in_order(tmp_path, monkeypatch, capsys):
+    first = tmp_path / "typed.jsonl"
+    second = tmp_path / "broad.jsonl"
+    first_rows = [{"id": f"typed-{index}"} for index in range(1488)]
+    second_rows = [{"id": f"broad-{index}"} for index in range(112)]
+    first.write_text("".join(json.dumps(row) + "\n" for row in first_rows))
+    second.write_text("".join(json.dumps(row) + "\n" for row in second_rows))
+    out = tmp_path / "out"
+    monkeypatch.setattr("sys.argv", ["build_r043_causal_pairs.py", "--out", str(out),
+                                     "--replay", str(first), "--replay", str(second)])
+    main()
+    capsys.readouterr()
+    manifest = json.loads((out / "manifest.json").read_text())
+    arm = [json.loads(line) for line in (out / "arm-a.jsonl").read_text().splitlines()]
+    assert [entry["rows"] for entry in manifest["inputs"]["replay"]] == [1488, 112]
+    assert all(len(entry["sha256"]) == 64 for entry in manifest["inputs"]["replay"])
+    assert [row["id"] for row in arm[:REPLAY_ROWS]] == [
+        *(row["id"] for row in first_rows), *(row["id"] for row in second_rows)
+    ]
+    assert len(manifest["selected_replay_sha256"]) == 64
+    empty_quarantine = tmp_path / "empty-quarantine.jsonl"
+    empty_quarantine.write_text("")
+    monkeypatch.setattr("sys.argv", ["build_r043_causal_pairs.py", "--out", str(out),
+                                     "--replay", str(first), "--replay", str(second),
+                                     "--quarantine", str(empty_quarantine)])
+    with pytest.raises(ValueError, match="no recognized text fields"):
+        main()

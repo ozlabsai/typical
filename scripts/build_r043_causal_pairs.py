@@ -26,6 +26,10 @@ FAMILIES = (
 )
 GENERIC_CRITERIA = {"no": "No", "yes": "Yes"}
 WORD_RE = re.compile(r"\w+", re.UNICODE)
+QUARANTINE_TEXT_KEYS = {
+    "state", "question", "questions", "policy", "policy_text",
+    "input", "input_json", "instructions", "criteria", "content", "text", "prompt", "description",
+}
 
 
 SPECS = {
@@ -105,7 +109,7 @@ def _selected_texts(row):
     def visit(value):
         if isinstance(value, dict):
             for key, item in value.items():
-                if str(key).casefold() in {"state", "question", "questions", "policy", "policy_text"}:
+                if str(key).casefold() in QUARANTINE_TEXT_KEYS:
                     text = _normalize(_field_value_text(item))
                     if text:
                         texts.append(text)
@@ -121,7 +125,10 @@ def _selected_texts(row):
 
 class Quarantine:
     def __init__(self, rows=()):
+        rows = list(rows)
         self.texts = list(dict.fromkeys(text for row in rows for text in _selected_texts(row)))
+        if rows and not self.texts:
+            raise ValueError("quarantine input contains no recognized text fields")
         self._trigrams = [_trigrams(text) for text in self.texts]
 
     def collision(self, row):
@@ -423,20 +430,27 @@ def write_outputs(out, replay, train_pairs, shuffled, evaluation, provenance, se
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--replay", required=True)
+    parser.add_argument("--replay", action="append", required=True)
     parser.add_argument("--quarantine", action="append", default=[])
     parser.add_argument("--seed", type=int, default=43)
     args = parser.parse_args()
-    replay, replay_hash = _read_jsonl(args.replay)
+    replay, replay_inputs = [], []
+    for path in args.replay:
+        rows, digest = _read_jsonl(path)
+        replay.extend(rows)
+        replay_inputs.append({"path": str(path), "rows": len(rows), "sha256": digest})
     quarantine_rows, quarantine_inputs = [], []
     for path in args.quarantine:
         rows, digest = _read_jsonl(path)
+        selected_texts = len(Quarantine(rows).texts)
+        if not selected_texts:
+            raise ValueError(f"quarantine input contains no recognized text fields: {path}")
         quarantine_rows.extend(rows)
-        quarantine_inputs.append({"path": str(path), "rows": len(rows), "sha256": digest})
+        quarantine_inputs.append({"path": str(path), "rows": len(rows), "selected_texts": selected_texts,
+                                  "sha256": digest})
     train, shuffled, evaluation, rejections = build(args.seed, quarantine_rows)
     provenance = {"rejections": rejections,
-                  "inputs": {"replay": {"path": str(args.replay), "rows": len(replay),
-                                          "sha256": replay_hash},
+                  "inputs": {"replay": replay_inputs, "replay_rows": len(replay),
                              "quarantine": quarantine_inputs,
                              "quarantine_rows": len(quarantine_rows)}}
     manifest = write_outputs(args.out, replay, train, shuffled, evaluation, provenance, args.seed)
