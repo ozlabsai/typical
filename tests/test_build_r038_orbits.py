@@ -1,6 +1,7 @@
 from collections import Counter
 
 from scripts.build_r038_orbits import _by_source, add_replay, build
+from scripts.eval_r038_orbits import audit
 
 
 def test_r038_arms_are_matched_complete_and_source_disjoint():
@@ -37,3 +38,15 @@ def test_r038_replay_prefix_is_identical_between_arms():
     full, half = add_replay(replay, complete, partial)
     assert full[:2] == half[:2] == replay
     assert len(full) == len(half) == 258
+
+
+def test_r038_audit_recovers_perfect_twin_and_order_metrics():
+    _, _, rows = build(train_sources=8, eval_sources=8, seed=42)
+    predictions = [{"id": row["id"], "probabilities": {
+        "yes": float(row["targets"]["decision"]["label"] == "yes"),
+        "no": float(row["targets"]["decision"]["label"] == "no"),
+    }} for row in rows]
+    report = audit(rows, predictions)
+    assert report["accuracy"] == report["counterfactual_twins_both_correct"] == 1.0
+    assert report["both_orders_correct"] == 1.0
+    assert report["mean_semantic_order_delta"] == 0.0
