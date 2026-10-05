@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT=${R042_ROOT:-$PWD}
-MODEL=${R042_MODEL:-$ROOT/hf-gemma}
+MODEL=${R042_MODEL:-$ROOT/hf-gemma/hub/models--google--gemma-4-12B-it/snapshots/707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7}
 RUN=${R042_RUN:-$ROOT/r042}
 PYTHON=${R042_PYTHON:-$ROOT/.venv-pinned/bin/python}
 PROBE_SHA=a477f8347c0d2a6ac4898e7c6e119f69450669b44b2943d1d55aa3089b27a297
@@ -14,6 +14,10 @@ cd "$ROOT"
 [[ $(sha256sum "$RUN/renderer-probe-eval.jsonl" | awk '{print $1}') == "$PROBE_SHA" ]]
 
 "$PYTHON" -m scripts.build_r042_record_cards --out "$RUN" --replay "$RUN/replay.jsonl"
+[[ $(wc -l < "$RUN/replay.jsonl" | tr -d ' ') == 1488 ]]
+[[ $(wc -l < "$RUN/card.jsonl" | tr -d ' ') == 3600 ]]
+[[ $(wc -l < "$RUN/prose.jsonl" | tr -d ' ') == 3600 ]]
+[[ $(jq -r '.rows.card, .rows.prose, .rows["eval-card"], .rows["eval-prose"]' "$RUN/manifest.json" | tr '\n' ' ') == '3600 3600 3072 3072 ' ]]
 for arm in card prose; do
   "$PYTHON" -m scripts.train_gemma_decision_lora --model "$MODEL" --train "$RUN/$arm.jsonl" \
     --val wf="$RUN/val-wf.jsonl" --val wh="$RUN/val-wh.jsonl" --val replay="$RUN/val-replay.jsonl" \
