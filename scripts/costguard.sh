@@ -8,11 +8,12 @@ INTERVAL_SECONDS=${COSTGUARD_INTERVAL_SECONDS:-1800}
 SSH_KEY=${COSTGUARD_SSH_KEY:-/Users/guynachshon/.runpod/ssh/RunPod-Key-Go}
 SCRIPT_DIR=${0:A:h}
 ROOT_DIR=${SCRIPT_DIR:h}
-CONTEXT_DIR="$ROOT_DIR/.context"
+CONTEXT_DIR=${COSTGUARD_CONTEXT_DIR:-$ROOT_DIR/.context}
 LOG_FILE=${COSTGUARD_LOG_FILE:-$CONTEXT_DIR/costguard.log}
 PID_FILE="$CONTEXT_DIR/costguard.pid"
 LOCK_DIR="$CONTEXT_DIR/costguard.lock"
 HOLD_FILE="$CONTEXT_DIR/costguard.hold"
+SAFE_TO_STOP_FILE=${COSTGUARD_SAFE_TO_STOP_FILE:-$CONTEXT_DIR/costguard.safe-to-stop.$POD_ID}
 
 mkdir -p "$CONTEXT_DIR"
 
@@ -39,7 +40,7 @@ trap cleanup EXIT
 trap 'exit 0' INT TERM
 
 check_pod() {
-  local pod_json pod_status ip port remote metrics util memory active artifacts processes stopped_status local_transfer
+  local pod_json pod_status volume_in_gb ip port remote metrics util memory active artifacts processes stopped_status local_transfer
 
   pod_json=$(runpodctl pod get "$POD_ID" -o json 2>/dev/null) || {
     log "pod=$POD_ID state=UNKNOWN reason=runpodctl_failed action=none"
@@ -48,6 +49,12 @@ check_pod() {
   pod_status=$(jq -r '.desiredStatus // "UNKNOWN"' <<< "$pod_json")
   if [[ "$pod_status" != "RUNNING" ]]; then
     log "pod=$POD_ID state=$pod_status action=none"
+    return
+  fi
+  volume_in_gb=$(jq -r '.volumeInGb // "UNKNOWN"' <<< "$pod_json")
+
+  if [[ "$volume_in_gb" == 0 && ! -f "$SAFE_TO_STOP_FILE" ]]; then
+    log "pod=$POD_ID state=RUNNING action=none reason=ephemeral_without_archive_receipt receipt=$SAFE_TO_STOP_FILE"
     return
   fi
 
