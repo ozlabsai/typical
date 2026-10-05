@@ -13,6 +13,7 @@ from scripts.build_r043_causal_pairs import (
     _build_split,
     _select_replay,
     _source,
+    _stratum_key,
     _validate_true_pair,
     build,
     execute,
@@ -71,12 +72,30 @@ def test_r043_true_pairs_are_balanced_executable_single_fact_counterfactuals(gen
 def test_r043_shuffled_control_is_within_family_source_derangement(generated):
     train, shuffled, _, _ = generated
     assert len(shuffled) == len(train) == TRAIN_PAIRS
+    true_presentations = Counter(view["meta"]["presentation_id"] for pair in train
+                                 for view in pair["paired_views"])
+    shuffled_presentations = Counter(view["meta"]["presentation_id"] for pair in shuffled
+                                     for view in pair["paired_views"])
+    true_yes_positions = {
+        next(view["meta"]["presentation_id"] for view in pair["paired_views"]
+             if view["targets"]["decision"]["label"] == "yes"):
+        next(index for index, view in enumerate(pair["paired_views"])
+             if view["targets"]["decision"]["label"] == "yes")
+        for pair in train
+    }
     for pair in shuffled:
         assert pair["pair_mode"] == "shuffled_counterfactual"
         assert len(set(pair["source_ids"])) == 2
-        assert {view["meta"]["family"] for view in pair["paired_views"]} == {pair["meta"]["family"]}
-        assert {view["targets"]["decision"]["label"] for view in pair["paired_views"]} == {"yes", "no"}
-        assert [view["meta"]["s2_arm"] for view in pair["paired_views"]] == ["A", "B"]
+        left, right = pair["paired_views"]
+        assert _stratum_key(left) == _stratum_key(right)
+        assert {left["meta"]["action_gold"], right["meta"]["action_gold"]} == {"execute", "withhold"}
+        assert {left["targets"]["decision"]["label"], right["targets"]["decision"]["label"]} == {"yes", "no"}
+        assert [left["meta"]["s2_arm"], right["meta"]["s2_arm"]] == ["A", "B"]
+        yes_position = next(index for index, view in enumerate(pair["paired_views"])
+                            if view["targets"]["decision"]["label"] == "yes")
+        yes_id = pair["paired_views"][yes_position]["meta"]["presentation_id"]
+        assert yes_position == true_yes_positions[yes_id]
+    assert shuffled_presentations == true_presentations
 
 
 def test_r043_outputs_match_counts_hashes_and_frozen_replay(tmp_path, generated):
@@ -87,16 +106,21 @@ def test_r043_outputs_match_counts_hashes_and_frozen_replay(tmp_path, generated)
     manifest = write_outputs(tmp_path, replay, train, shuffled, evaluation, provenance, 43)
     payload_a = (tmp_path / "arm-a.jsonl").read_bytes()
     payload_b = (tmp_path / "arm-b.jsonl").read_bytes()
+    payload_c = (tmp_path / "arm-c.jsonl").read_bytes()
+    payload_d = (tmp_path / "arm-d.jsonl").read_bytes()
     assert payload_a == payload_b
+    assert payload_c == payload_d
     arms = [[json.loads(line) for line in (tmp_path / f"arm-{name}.jsonl").read_text().splitlines()]
-            for name in ("a", "b", "c")]
+            for name in ("a", "b", "c", "d")]
     assert all(len(arm) == 2800 for arm in arms)
     assert arms[0][:REPLAY_ROWS] == arms[1][:REPLAY_ROWS] == arms[2][:REPLAY_ROWS] == supported
     assert manifest["logical_rows"] == {"arm-a": 2800, "arm-b": 2800, "arm-c": 2800,
-                                         "eval": EVAL_PAIRS}
+                                         "arm-d": 2800, "eval": EVAL_PAIRS}
     assert manifest["presentations"]["arm-a"] == 4000
     assert manifest["trainer_examples"]["arm-a"] == 2800
+    assert manifest["trainer_examples"]["arm-d"] == 2800
     assert manifest["outputs"]["arm-a"]["sha256"] == manifest["outputs"]["arm-b"]["sha256"]
+    assert manifest["outputs"]["arm-c"]["sha256"] == manifest["outputs"]["arm-d"]["sha256"]
     assert manifest["replay_selection"]["skipped"] == {"unsupported_option_count": 1}
     assert manifest["replay_selection"]["selected_positions"] == list(range(1, REPLAY_ROWS + 1))
     with pytest.raises(ValueError, match="supported frozen replay"):

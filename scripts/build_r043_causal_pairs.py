@@ -318,32 +318,57 @@ def _build_split(total_pairs, split, seed, range_start, quarantine):
     return rows, rejected
 
 
+def _stratum_key(view):
+    meta, program = view["meta"], view["meta"]["action_program"]
+    return (meta["family"], meta["polarity"], meta["yes_first"], meta["evidence_position"],
+            meta["decisive_field"], program["op"], json.dumps(program["value"], sort_keys=True),
+            tuple(program.get("order", ())))
+
+
+def _stratum_meta(view):
+    meta, program = view["meta"], view["meta"]["action_program"]
+    return {"family": meta["family"], "polarity": meta["polarity"],
+            "yes_first": meta["yes_first"], "evidence_position": meta["evidence_position"],
+            "decisive_field": meta["decisive_field"], "action_program_op": program["op"],
+            "action_program_value": program["value"],
+            "action_program_order": program.get("order")}
+
+
 def shuffled_control(true_pairs):
-    by_family = defaultdict(list)
+    by_stratum = defaultdict(list)
     for pair in true_pairs:
-        by_family[pair["meta"]["family"]].append(pair)
+        if _stratum_key(pair["paired_views"][0]) != _stratum_key(pair["paired_views"][1]):
+            raise ValueError(f"{pair['id']}: true pair crosses shuffled-control strata")
+        by_stratum[_stratum_key(pair["paired_views"][0])].append(pair)
     shuffled = []
-    for family in FAMILIES:
-        pairs = by_family[family]
-        yes_views = [{view["targets"]["decision"]["label"]: view for view in pair["paired_views"]}["yes"]
-                     for pair in pairs]
-        no_views = [{view["targets"]["decision"]["label"]: view for view in pair["paired_views"]}["no"]
-                    for pair in pairs]
-        for index, (yes_view, no_view) in enumerate(zip(yes_views, no_views[1:] + no_views[:1])):
-            views = [copy.deepcopy(yes_view), copy.deepcopy(no_view)]
-            if index % 2:
-                views.reverse()
+    for stratum_index, (_, pairs) in enumerate(sorted(by_stratum.items())):
+        if len(pairs) < 2:
+            raise ValueError("shuffled-control stratum needs at least two distinct sources")
+        no_donors = [next(view for view in pair["paired_views"]
+                          if view["targets"]["decision"]["label"] == "no") for pair in pairs]
+        no_donors = no_donors[1:] + no_donors[:1]
+        for pair_index, (anchor, no_donor) in enumerate(zip(pairs, no_donors)):
+            yes_position = next(index for index, view in enumerate(anchor["paired_views"])
+                                if view["targets"]["decision"]["label"] == "yes")
+            yes_view = anchor["paired_views"][yes_position]
+            views = [None, None]
+            views[yes_position] = copy.deepcopy(yes_view)
+            views[1 - yes_position] = copy.deepcopy(no_donor)
             for arm, view in zip(("A", "B"), views):
                 view["meta"].update({"s2_arm": arm, "pair_mode": "shuffled_counterfactual"})
             source_ids = [view["meta"]["source_id"] for view in views]
-            if source_ids[0] == source_ids[1]:
-                raise AssertionError("within-family derangement retained a source")
+            if (source_ids[0] == source_ids[1] or _stratum_key(views[0]) != _stratum_key(views[1])
+                    or {view["meta"]["action_gold"] for view in views} != {"execute", "withhold"}):
+                raise AssertionError("invalid exact-stratum counterfactual derangement")
             shuffled.append({
-                "id": f"r043-shuffled-{family}-{index:04d}",
+                "id": f"r043-shuffled-{stratum_index:03d}-{pair_index:04d}",
                 "pair_mode": "shuffled_counterfactual", "source_ids": source_ids,
                 "paired_views": views,
-                "meta": {"source": "r043_programmatic", "split": "train", "family": family,
-                         "source_ids": source_ids,
+                "meta": {"source": "r043_programmatic", "split": "train",
+                         "family": yes_view["meta"]["family"], "source_ids": source_ids,
+                         "anchor_source_id": yes_view["meta"]["source_id"],
+                         "donor_source_id": no_donor["meta"]["source_id"],
+                         "stratum": _stratum_meta(yes_view),
                          "presentation_ids": [view["meta"]["presentation_id"] for view in views]},
             })
     return shuffled
@@ -368,8 +393,16 @@ def validate(train_pairs, shuffled, eval_pairs):
         views = pair["paired_views"]
         if (pair["pair_mode"] != "shuffled_counterfactual" or len(set(pair["source_ids"])) != 2
                 or len({view["meta"]["family"] for view in views}) != 1
+                or _stratum_key(views[0]) != _stratum_key(views[1])
+                or {view["meta"]["action_gold"] for view in views} != {"execute", "withhold"}
                 or {view["targets"]["decision"]["label"] for view in views} != {"yes", "no"}):
             raise ValueError(f"{pair['id']}: invalid shuffled control")
+    true_presentations = Counter(view["meta"]["presentation_id"] for pair in train_pairs
+                                 for view in pair["paired_views"])
+    shuffled_presentations = Counter(view["meta"]["presentation_id"] for pair in shuffled
+                                     for view in pair["paired_views"])
+    if true_presentations != shuffled_presentations:
+        raise ValueError("shuffled control must preserve the exact presentation-id multiset")
     presentations = [view for pair in train_pairs for view in pair["paired_views"]]
     for field in ("polarity", "yes_first", "evidence_position"):
         counts = Counter(view["meta"][field] for view in presentations)
@@ -453,7 +486,9 @@ def write_outputs(out, replay, train_pairs, shuffled, evaluation, provenance, se
     arm_a = [*copy.deepcopy(replay), *copy.deepcopy(train_pairs)]
     arm_b = copy.deepcopy(arm_a)
     arm_c = [*copy.deepcopy(replay), *copy.deepcopy(shuffled)]
-    named = {"arm-a": arm_a, "arm-b": arm_b, "arm-c": arm_c, "eval": evaluation}
+    arm_d = copy.deepcopy(arm_c)
+    named = {"arm-a": arm_a, "arm-b": arm_b, "arm-c": arm_c, "arm-d": arm_d,
+             "eval": evaluation}
     payloads = {name: _jsonl_bytes(rows) for name, rows in named.items()}
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -463,13 +498,15 @@ def write_outputs(out, replay, train_pairs, shuffled, evaluation, provenance, se
         "experiment": "r043_causal_pairs", "seed": seed,
         "families": list(FAMILIES), "train_pairs": TRAIN_PAIRS, "eval_pairs": EVAL_PAIRS,
         "replay_rows": REPLAY_ROWS,
-        "logical_rows": {"arm-a": 2800, "arm-b": 2800, "arm-c": 2800, "eval": EVAL_PAIRS},
-        "trainer_examples": {"arm-a": 2800, "arm-b": 2800, "arm-c": 2800,
+        "logical_rows": {"arm-a": 2800, "arm-b": 2800, "arm-c": 2800, "arm-d": 2800,
+                         "eval": EVAL_PAIRS},
+        "trainer_examples": {"arm-a": 2800, "arm-b": 2800, "arm-c": 2800, "arm-d": 2800,
                              "eval": EVAL_PAIRS},
-        "presentations": {"arm-a": 4000, "arm-b": 4000, "arm-c": 4000,
+        "presentations": {"arm-a": 4000, "arm-b": 4000, "arm-c": 4000, "arm-d": 4000,
                           "eval": EVAL_PAIRS * 2},
         "pair_modes": {"arm-a": "counterfactual", "arm-b": "counterfactual",
-                       "arm-c": "shuffled_counterfactual", "eval": "counterfactual"},
+                       "arm-c": "shuffled_counterfactual", "arm-d": "shuffled_counterfactual",
+                       "eval": "counterfactual"},
         "source_ranges": {"train": [0, 999_999], "eval": [1_000_000, None]},
         "eval_seed": seed + 104_729, "quarantine_rejections": provenance["rejections"],
         "inputs": provenance["inputs"],
