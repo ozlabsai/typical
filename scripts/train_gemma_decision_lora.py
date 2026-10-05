@@ -54,6 +54,8 @@ def parse_args():
     parser.add_argument("--pair-consistency-clip", type=float, default=4.0)
     parser.add_argument("--pair-consistency-beta", type=float, default=1.0)
     parser.add_argument("--project-consistency-against-guard", action="store_true")
+    parser.add_argument("--pair-flip-weight", type=float, default=0.0)
+    parser.add_argument("--pair-flip-margin", type=float, default=1.0)
     return parser.parse_args()
 
 
@@ -107,6 +109,44 @@ def load_examples(paths):
                         if any(len(view) != 1 for view in views):
                             raise ValueError(f"{row.get('id')}: each paired view must flatten to one example")
                         paired_metas = [(raw.get("meta") or {}) for raw in row["paired_views"]]
+                        pair_mode = row.get("pair_mode")
+                        if pair_mode is not None:
+                            if pair_mode not in ("counterfactual", "shuffled_counterfactual"):
+                                raise ValueError(f"{row.get('id')}: unsupported pair mode {pair_mode!r}")
+                            labels = [[label for label, _ in view[0]["items"]] for view in views]
+                            if any(len(view_labels) != 2 for view_labels in labels):
+                                raise ValueError(f"{row.get('id')}: counterfactual views need exactly two options")
+                            if set(labels[0]) != set(labels[1]):
+                                raise ValueError(
+                                    f"{row.get('id')}: counterfactual views need identical option labels")
+                            if views[0][0]["gold_label"] == views[1][0]["gold_label"]:
+                                raise ValueError(
+                                    f"{row.get('id')}: counterfactual views need opposite gold labels")
+                            source_ids = row.get("source_ids")
+                            if not isinstance(source_ids, list) or len(source_ids) != 2:
+                                raise ValueError(f"{row.get('id')}: counterfactual pair needs two source_ids")
+                            view_source_ids = [meta.get("source_id") for meta in paired_metas]
+                            if any(source_id is None for source_id in source_ids + view_source_ids):
+                                raise ValueError(f"{row.get('id')}: counterfactual source_ids cannot be null")
+                            if view_source_ids != source_ids:
+                                raise ValueError(
+                                    f"{row.get('id')}: wrapper and view source_ids must match")
+                            if pair_mode == "counterfactual" and source_ids[0] != source_ids[1]:
+                                raise ValueError(
+                                    f"{row.get('id')}: counterfactual views must share a source_id")
+                            if pair_mode == "shuffled_counterfactual":
+                                families = [meta.get("family") for meta in paired_metas]
+                                if source_ids[0] == source_ids[1]:
+                                    raise ValueError(
+                                        f"{row.get('id')}: shuffled counterfactual needs distinct source_ids")
+                                if None in families or families[0] != families[1]:
+                                    raise ValueError(
+                                        f"{row.get('id')}: shuffled counterfactual needs one shared family")
+                            examples.append({"id": row["id"],
+                                             "paired_views": [view[0] for view in views],
+                                             "pair_mode": pair_mode,
+                                             "pair_source_ids": source_ids})
+                            continue
                         arms = [meta.get("s2_arm") for meta in paired_metas]
                         polarities = [meta.get("polarity") for meta in paired_metas]
                         if arms == [None, None]:
@@ -145,6 +185,23 @@ def semantic_margin(option_scores, item_labels, polarity):
     return sign * (option_scores[yes_index] - option_scores[no_index])
 
 
+def semantic_gold_margin(option_scores, item_labels, gold_label):
+    """Gold-minus-other score for a binary decision, independent of option order."""
+    if len(item_labels) != 2 or len(set(item_labels)) != 2:
+        raise ValueError("counterfactual margin requires exactly two option labels")
+    try:
+        gold_index = item_labels.index(gold_label)
+    except ValueError as error:
+        raise ValueError("counterfactual gold label is not an option") from error
+    return option_scores[gold_index] - option_scores[1 - gold_index]
+
+
+def pair_flip_term(margin_a, margin_b, margin):
+    if margin <= 0:
+        raise ValueError("pair flip margin must be positive")
+    return F.relu(2 * margin - (margin_a + margin_b))
+
+
 def pair_consistency_term(anchor_margin, view_b_margin, anchor_gold_probability,
                           min_gold_probability=0.80, clip=4.0, beta=1.0):
     """Return gated Smooth-L1 and whether anchor A passed the confidence gate."""
@@ -169,6 +226,17 @@ def pair_consistency_stats(active, seen):
     return {"pair_consistency_active": active,
             "pair_consistency_seen": seen,
             "pair_consistency_rate": active / seen if seen else 0.0}
+
+
+def validate_pair_objectives(pair_consistency_weight, project_consistency_against_guard,
+                             pair_flip_weight, pair_flip_margin):
+    if pair_flip_weight < 0:
+        raise ValueError("pair flip weight must be nonnegative")
+    if pair_flip_margin <= 0:
+        raise ValueError("pair flip margin must be positive")
+    if pair_flip_weight > 0 and (pair_consistency_weight > 0 or
+                                 project_consistency_against_guard):
+        raise ValueError("pair flip is incompatible with pair consistency and guard projection")
 
 
 def guard_logical_slot_loss(view_losses):
@@ -289,7 +357,10 @@ def encode(example, tokenizer, max_length, shuffle, include_labels=False):
 def loss_for_examples(model, examples, tokenizer, groups, max_length, device, shuffle,
                       pair_consistency_weight=0.0, pair_consistency_min_gold_probability=0.80,
                       pair_consistency_clip=4.0, pair_consistency_beta=1.0,
+                      pair_flip_weight=0.0, pair_flip_margin=1.0,
                       return_components=False):
+    validate_pair_objectives(pair_consistency_weight, return_components,
+                             pair_flip_weight, pair_flip_margin)
     logical_views = [example.get("paired_views", [example]) for example in examples]
     flat_examples = [view for views in logical_views for view in views]
     encoded = [encode(example, tokenizer, max_length, shuffle, include_labels=True)
@@ -324,11 +395,30 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     slot_correct = []
     consistency_seen = 0
     consistency_active = 0
+    flip_losses = []
+    flip_active = 0
     cursor = 0
     for logical_example, views in zip(examples, logical_views):
         end = cursor + len(views)
         slot_view_losses = view_losses[cursor:end]
-        if len(views) == 2 and (pair_consistency_weight > 0 or return_components):
+        if logical_example.get("pair_mode") is not None:
+            if len(views) != 2:
+                raise ValueError(f"{logical_example['id']}: counterfactual pair needs two views")
+            margin_a = semantic_gold_margin(
+                *view_scores[cursor], flat_examples[cursor]["gold_label"])
+            margin_b = semantic_gold_margin(
+                *view_scores[cursor + 1], flat_examples[cursor + 1]["gold_label"])
+            flip = pair_flip_term(margin_a, margin_b, pair_flip_margin)
+            flip_losses.append(flip)
+            flip_active += int(flip.detach().item() > 0)
+            if pair_flip_weight > 0:
+                slot_losses.append([pair_slot_loss(slot_view_losses, flip, pair_flip_weight)])
+            else:
+                # Preserve the exact CE graph while still running both matched-compute views.
+                slot_losses.append(slot_view_losses)
+            if return_components:
+                raise ValueError("counterfactual pair flip is incompatible with guard projection")
+        elif len(views) == 2 and (pair_consistency_weight > 0 or return_components):
             if logical_example.get("paired_view_arms") != ["A", "B"]:
                 raise ValueError(f"{logical_example['id']}: paired views must be ordered A then B")
             polarity = logical_example["paired_polarity"]
@@ -362,6 +452,10 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
         slot_correct.append(sum(view_correct[cursor:end]) / len(views))
         cursor = end
     stats = pair_consistency_stats(consistency_active, consistency_seen)
+    stats.update({"pair_flip_seen": len(flip_losses),
+                  "pair_flip_active": flip_active,
+                  "pair_flip_loss": (sum(loss.detach().item() for loss in flip_losses) /
+                                     len(flip_losses) if flip_losses else 0.0)})
     loss = mean_logical_slot_loss(slot_losses)
     if return_components:
         components = {"d_loss": loss,
@@ -408,6 +502,9 @@ def main():
         raise ValueError("pair consistency clip and beta must be positive")
     if args.project_consistency_against_guard and args.pair_consistency_weight <= 0:
         raise ValueError("guard projection requires a positive pair consistency weight")
+    validate_pair_objectives(args.pair_consistency_weight,
+                             args.project_consistency_against_guard,
+                             args.pair_flip_weight, args.pair_flip_margin)
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     train = load_examples(args.train)
@@ -479,6 +576,8 @@ def main():
     for step in range(1, args.steps + 1):
         accumulated = 0.0
         pair_active = pair_seen = 0
+        flip_active = flip_seen = 0
+        flip_loss_sum = 0.0
         if args.project_consistency_against_guard:
             for buffers in (grad_d, grad_guard, grad_cons):
                 for buffer in buffers:
@@ -495,9 +594,14 @@ def main():
                     pair_consistency_min_gold_probability=args.pair_consistency_min_gold_probability,
                     pair_consistency_clip=args.pair_consistency_clip,
                     pair_consistency_beta=args.pair_consistency_beta,
+                    pair_flip_weight=args.pair_flip_weight,
+                    pair_flip_margin=args.pair_flip_margin,
                     return_components=True)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
+                flip_active += pair_stats["pair_flip_active"]
+                flip_seen += pair_stats["pair_flip_seen"]
+                flip_loss_sum += pair_stats["pair_flip_loss"] * pair_stats["pair_flip_seen"]
                 scale = 1.0 / args.grad_accum
                 backward_into_dense_gradients_(
                     components["d_loss"] * scale, params, grad_d, "D loss", retain_graph=True)
@@ -552,9 +656,14 @@ def main():
                     pair_consistency_weight=args.pair_consistency_weight,
                     pair_consistency_min_gold_probability=args.pair_consistency_min_gold_probability,
                     pair_consistency_clip=args.pair_consistency_clip,
-                    pair_consistency_beta=args.pair_consistency_beta)
+                    pair_consistency_beta=args.pair_consistency_beta,
+                    pair_flip_weight=args.pair_flip_weight,
+                    pair_flip_margin=args.pair_flip_margin)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
+                flip_active += pair_stats["pair_flip_active"]
+                flip_seen += pair_stats["pair_flip_seen"]
+                flip_loss_sum += pair_stats["pair_flip_loss"] * pair_stats["pair_flip_seen"]
                 (loss / args.grad_accum).backward()
                 accumulated += loss.item()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -568,7 +677,10 @@ def main():
                   "reserved_vram_gb": torch.cuda.memory_reserved() / 2**30,
                   "pair_consistency_active": pair_active,
                   "pair_consistency_seen": pair_seen,
-                  "pair_consistency_rate": pair_active / pair_seen if pair_seen else 0.0}
+                  "pair_consistency_rate": pair_active / pair_seen if pair_seen else 0.0,
+                  "pair_flip_active": flip_active,
+                  "pair_flip_seen": flip_seen,
+                  "pair_flip_loss": flip_loss_sum / flip_seen if flip_seen else 0.0}
         early_stop = False
         if projection_stats is not None:
             metric.update(projection_stats)

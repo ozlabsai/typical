@@ -3,6 +3,7 @@ import json
 import random
 from types import SimpleNamespace
 
+import pytest
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
@@ -13,6 +14,7 @@ from scripts.train_gemma_decision_lora import (
     pair_consistency_term,
     pair_consistency_stats,
     pair_slot_loss,
+    pair_flip_term,
     encode,
     loss_for_examples,
     load_examples,
@@ -21,6 +23,8 @@ from scripts.train_gemma_decision_lora import (
     project_conflicting_gradient,
     projection_early_stop,
     semantic_margin,
+    semantic_gold_margin,
+    validate_pair_objectives,
 )
 
 
@@ -30,6 +34,91 @@ def test_semantic_margin_is_option_order_invariant_and_polarity_signed():
     assert semantic_margin(scores_no_yes, ["no", "yes"], "positive").item() == 2.0
     assert semantic_margin(scores_yes_no, ["yes", "no"], "positive").item() == 2.0
     assert semantic_margin(scores_no_yes, ["no", "yes"], "negative").item() == -2.0
+
+
+def counterfactual_pair(mode="counterfactual"):
+    source_ids = ["source-a", "source-a" if mode == "counterfactual" else "source-b"]
+
+    def view(identifier, source_id, criteria, target):
+        return {
+            "id": identifier,
+            "state": identifier,
+            "questions": {"q": {"type": "noul", "instructions": "Choose.",
+                                  "criteria": criteria}},
+            "targets": {"q": {"label": target}},
+            "meta": {"source_id": source_id, "family": "approval"},
+        }
+
+    return {"id": f"pair-{mode}", "pair_mode": mode, "source_ids": source_ids,
+            "paired_views": [
+                view("left", source_ids[0], {"no": "No", "yes": "Yes"}, "yes"),
+                view("right", source_ids[1], {"yes": "Yes", "no": "No"}, "no"),
+            ]}
+
+
+def test_counterfactual_loader_distinguishes_true_and_shuffled_pairs(tmp_path):
+    path = tmp_path / "pairs.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in (
+        counterfactual_pair(), counterfactual_pair("shuffled_counterfactual"))))
+    true_pair, shuffled = load_examples([path])
+    assert true_pair["pair_mode"] == "counterfactual"
+    assert true_pair["pair_source_ids"] == ["source-a", "source-a"]
+    assert shuffled["pair_mode"] == "shuffled_counterfactual"
+    assert shuffled["pair_source_ids"] == ["source-a", "source-b"]
+
+
+def test_counterfactual_loader_fails_closed_on_invalid_pair_metadata(tmp_path):
+    invalid = []
+    row = counterfactual_pair()
+    row["source_ids"][1] = "source-b"
+    row["paired_views"][1]["meta"]["source_id"] = "source-b"
+    invalid.append((row, "must share a source_id"))
+    row = counterfactual_pair("shuffled_counterfactual")
+    row["paired_views"][1]["meta"]["family"] = "other"
+    invalid.append((row, "one shared family"))
+    row = counterfactual_pair("shuffled_counterfactual")
+    row["source_ids"][1] = "source-a"
+    row["paired_views"][1]["meta"]["source_id"] = "source-a"
+    invalid.append((row, "distinct source_ids"))
+    row = counterfactual_pair()
+    row["paired_views"][1]["targets"]["q"]["label"] = "yes"
+    invalid.append((row, "opposite gold labels"))
+    row = counterfactual_pair()
+    row["paired_views"][1]["questions"]["q"]["criteria"] = {"off": "No", "on": "Yes"}
+    row["paired_views"][1]["targets"]["q"]["label"] = "off"
+    invalid.append((row, "identical option labels"))
+    row = counterfactual_pair()
+    row["paired_views"][0]["questions"]["q"]["criteria"]["maybe"] = "Maybe"
+    invalid.append((row, "exactly two options"))
+    for index, (row, message) in enumerate(invalid):
+        path = tmp_path / f"invalid-{index}.jsonl"
+        path.write_text(json.dumps(row) + "\n")
+        with pytest.raises(ValueError, match=message):
+            load_examples([path])
+
+
+def test_flip_margin_is_semantic_order_invariant_and_uses_both_gold_labels():
+    assert semantic_gold_margin(torch.tensor([1.0, 3.0]), ["no", "yes"], "yes").item() == 2.0
+    assert semantic_gold_margin(torch.tensor([3.0, 1.0]), ["yes", "no"], "yes").item() == 2.0
+    margin_a = torch.tensor(0.25, requires_grad=True)
+    margin_b = torch.tensor(0.50, requires_grad=True)
+    flip = pair_flip_term(margin_a, margin_b, margin=1.0)
+    combined = pair_slot_loss([torch.tensor(2.0), torch.tensor(4.0)], flip, weight=0.5)
+    assert combined.item() == 3.625
+    combined.backward()
+    assert margin_a.grad.item() == margin_b.grad.item() == -0.5
+
+
+def test_pair_flip_configuration_rejects_invalid_or_mixed_objectives():
+    validate_pair_objectives(0.0, False, 0.0, 1.0)
+    with pytest.raises(ValueError, match="nonnegative"):
+        validate_pair_objectives(0.0, False, -0.1, 1.0)
+    with pytest.raises(ValueError, match="positive"):
+        validate_pair_objectives(0.0, False, 0.0, 0.0)
+    with pytest.raises(ValueError, match="incompatible"):
+        validate_pair_objectives(0.1, False, 0.1, 1.0)
+    with pytest.raises(ValueError, match="incompatible"):
+        validate_pair_objectives(0.0, True, 0.1, 1.0)
 
 
 def test_consistency_gate_inclusive_threshold_and_anchor_stop_gradient():
@@ -137,6 +226,41 @@ def legacy_ce(model, examples, tokenizer, groups, max_length, device, shuffle):
         slot_correct.append(sum(correct[cursor:end]) / len(views))
         cursor = end
     return mean_logical_slot_loss(slot_losses), sum(slot_correct)
+
+
+def test_counterfactual_zero_weight_matches_ce_and_positive_weight_adds_flip(tmp_path):
+    path = tmp_path / "pair.jsonl"
+    path.write_text(json.dumps(counterfactual_pair()) + "\n")
+    examples = load_examples([path])
+    groups = [torch.tensor([1]), torch.tensor([2])]
+    model = TinyModel()
+    rng = random.Random(307).getstate()
+
+    random.setstate(rng)
+    zero, zero_correct, zero_stats = loss_for_examples(
+        model, examples, TinyTokenizer(), groups, 100, torch.device("cpu"), shuffle=True,
+        pair_flip_weight=0.0)
+    zero.backward()
+    zero_grad = model.theta.grad.detach().clone()
+
+    model.theta.grad = None
+    random.setstate(rng)
+    legacy, legacy_correct = legacy_ce(
+        model, examples, TinyTokenizer(), groups, 100, torch.device("cpu"), shuffle=True)
+    legacy.backward()
+    assert torch.equal(zero, legacy)
+    assert torch.equal(zero_grad, model.theta.grad)
+    assert zero_correct == legacy_correct
+    assert zero_stats["pair_flip_seen"] == 1
+
+    model.theta.grad = None
+    random.setstate(rng)
+    weighted, _, weighted_stats = loss_for_examples(
+        model, examples, TinyTokenizer(), groups, 100, torch.device("cpu"), shuffle=True,
+        pair_flip_weight=0.25, pair_flip_margin=1.0)
+    assert weighted_stats["pair_flip_seen"] == 1
+    assert torch.allclose(
+        weighted, legacy.detach() + 0.25 * weighted.new_tensor(weighted_stats["pair_flip_loss"]))
 
 
 def test_zero_weight_matches_legacy_loss_gradients_rng_and_option_order():
