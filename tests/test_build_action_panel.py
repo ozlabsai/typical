@@ -47,7 +47,8 @@ def test_action_report_separates_ranking_and_threshold_errors():
     report = summarize([row], [{"id": row["id"], "probabilities": ranked_wrong}])
     assert report["error_categories"]["ranking"] == 1
 
-    records = calibration_records([row], [{"id": row["id"], "probabilities": good}])
+    unmatched = dict(row, id="unmatched")
+    records = calibration_records([row, unmatched], [{"id": row["id"], "probabilities": good}])
     recalibrated = calibrate([{"id": row["id"], "probabilities": good}], {
         "noul": {"temperature": 1.0, "logit_intercept_true": 0.0},
     })

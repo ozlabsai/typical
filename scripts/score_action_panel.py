@@ -64,10 +64,17 @@ def calibration_records(rows, prediction_rows):
     by_id = {item["id"]: item for item in prediction_rows}
     records = []
     for row in rows:
-        probabilities = by_id[row["id"]]["probabilities"]
+        item = by_id.get(row["id"])
+        if item is None:
+            continue
+        probabilities = item["probabilities"]
+        if set(probabilities) != set(row["questions"]):
+            raise ValueError(f"incomplete calibration prediction for {row['id']}")
         for qid, target in row["targets"].items():
             records.append({"qtype": "noul", "target": target["label"],
                             "probabilities": probabilities[qid]})
+    if not records:
+        raise ValueError("no calibration rows matched the supplied predictions")
     return records
 
 
