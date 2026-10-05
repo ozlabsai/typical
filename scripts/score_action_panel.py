@@ -20,6 +20,27 @@ from scripts.fit_internal_calibration import _scaled, fit
 from scripts.train_gemma_decision_lora import encode, flatten_row, letter_token_groups
 
 
+def limited_rows(rows, limit):
+    """Take an even, deterministic panel-cell sample instead of a file prefix."""
+    if not limit or limit >= len(rows):
+        return rows
+    cells = {}
+    for row in rows:
+        meta = row["meta"]
+        cell = (meta["family"], meta["template"], meta["threshold_band"])
+        cells.setdefault(cell, []).append(row)
+    if limit < len(cells):
+        raise ValueError(f"limit {limit} is smaller than {len(cells)} action-panel cells")
+    per_cell, remainder = divmod(limit, len(cells))
+    selected = []
+    for index, cell in enumerate(sorted(cells)):
+        count = per_cell + (index < remainder)
+        if len(cells[cell]) < count:
+            raise ValueError(f"action-panel cell {cell} has only {len(cells[cell])} rows")
+        selected.extend(cells[cell][:count])
+    return selected
+
+
 def classify(row, probabilities):
     """Replay a group's policy and identify its first actionable error class."""
     threshold = row["meta"]["decision_threshold"]
@@ -127,7 +148,7 @@ def main():
     if bool(args.calibration_data) != bool(args.calibration_predictions):
         raise ValueError("calibration data and predictions must be supplied together")
     rows = [json.loads(line) for line in Path(args.data).read_text().splitlines() if line.strip()]
-    rows = rows[:args.limit] if args.limit else rows
+    rows = limited_rows(rows, args.limit)
     device = torch.device("cuda")
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
     groups = letter_token_groups(tokenizer)

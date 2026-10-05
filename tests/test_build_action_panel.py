@@ -1,7 +1,7 @@
 import json
 
 from scripts.build_action_panel import SPLITS, action_for, build, main
-from scripts.score_action_panel import calibrate, calibration_records, summarize
+from scripts.score_action_panel import calibrate, calibration_records, limited_rows, summarize
 
 
 def test_action_panel_is_deterministic_and_split_disjoint(tmp_path, monkeypatch):
@@ -56,3 +56,12 @@ def test_action_report_separates_ranking_and_threshold_errors():
     for qid, values in good.items():
         for label, value in values.items():
             assert abs(recalibrated[0]["probabilities"][qid][label] - value) < 1e-12
+
+
+def test_action_panel_limit_is_balanced_across_cells():
+    rows, _ = build(42, split="eval", cases_per_cell=4)
+    sample = limited_rows(rows, 16)
+    cells = [(row["meta"]["family"], row["meta"]["template"], row["meta"]["threshold_band"])
+             for row in sample]
+    assert len(sample) == 16
+    assert all(cells.count(cell) == 2 for cell in set(cells))
