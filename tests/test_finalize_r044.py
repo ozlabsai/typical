@@ -88,7 +88,8 @@ def test_r044_promotes_b_and_keeps_causal_claim_separate():
 def test_r044_rejects_relative_preservation_without_absolute_mmhe_pass():
     args = _inputs()
     args[-1]["b"] = _mmhe(absolute=False)
-    result = finalize(*args, parent_adapter=PARENT)
+    result = finalize(*args, parent_adapter=PARENT,
+                      pairs={arm: _pairs() for arm in ("parent", "a", "b")})
     assert not result["gates"]["b_absolute_mmhe_promotion_pass"]
     assert not result["promotion_pass"]
 
@@ -96,12 +97,14 @@ def test_r044_rejects_relative_preservation_without_absolute_mmhe_pass():
 def test_r044_enforces_one_error_and_exact_exposure():
     args = _inputs()
     args[-1]["b"]["candidate"]["he"]["accuracy"] = .9 - 2 / 128
-    result = finalize(*args, parent_adapter=PARENT)
+    result = finalize(*args, parent_adapter=PARENT,
+                      pairs={arm: _pairs() for arm in ("parent", "a", "b")})
     assert not result["gates"]["b_he_loses_at_most_1_of_128_vs_parent"]
     args = _inputs()
     args[2]["a"][-1]["pair_flip_seen"] = 0
     with pytest.raises(ValueError, match="each of 100 pairs exactly once"):
-        finalize(*args, parent_adapter=PARENT)
+        finalize(*args, parent_adapter=PARENT,
+                 pairs={arm: _pairs() for arm in ("parent", "a", "b")})
 
 
 def test_r044_cli_returns_two_for_completed_nonpromotion(tmp_path):
@@ -119,6 +122,9 @@ def test_r044_cli_returns_two_for_completed_nonpromotion(tmp_path):
     for arm, rows in metrics.items():
         paths[f"{arm}-metrics"] = tmp_path / f"{arm}-metrics.jsonl"
         paths[f"{arm}-metrics"].write_text("".join(json.dumps(row) + "\n" for row in rows))
+    for arm in ("parent", "a", "b"):
+        paths[f"{arm}-pairs"] = tmp_path / f"{arm}-pairs.json"
+        paths[f"{arm}-pairs"].write_text(json.dumps(_pairs()))
     argv = ["--parent-adapter", PARENT, "--out", str(tmp_path / "out.json")]
     for name, path in paths.items():
         argv.extend((f"--{name}", str(path)))

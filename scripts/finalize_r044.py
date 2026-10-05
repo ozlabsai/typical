@@ -151,6 +151,8 @@ def finalize(manifest, configs, metrics, retentions, actions, renderers, mmhe,
         raise ValueError("retention, action, renderer and MM/HE reports require parent/A/B")
     if set(configs) != {"a", "b"} or set(metrics) != {"a", "b"}:
         raise ValueError("training evidence requires exactly A/B")
+    if pairs is None or set(pairs) != set(ARMS):
+        raise ValueError("pair reports require parent/A/B")
     _manifest(manifest)
     training = {arm: _training(configs[arm], metrics[arm], arm, parent_adapter)
                 for arm in ("a", "b")}
@@ -180,14 +182,10 @@ def finalize(manifest, configs, metrics, retentions, actions, renderers, mmhe,
         a_mm_gates[suite] = mm["a"][suite] >= mm["parent"][suite] - 1 / 128
         gates[f"b_{suite}_loses_at_most_1_of_128_vs_parent"] = b_mm_gates[suite]
 
-    pair_values = None
-    if pairs is not None:
-        if set(pairs) != set(ARMS):
-            raise ValueError("pair reports require parent/A/B")
-        pair_values = {arm: _pair(pairs[arm], f"{arm}_pairs") for arm in ARMS}
-        for metric in PAIR_METRICS:
-            gates[f"b_pair_{metric}_loses_at_most_.01_vs_parent"] = (
-                pair_values["b"][metric] >= pair_values["parent"][metric] - .01)
+    pair_values = {arm: _pair(pairs[arm], f"{arm}_pairs") for arm in ARMS}
+    for metric in PAIR_METRICS:
+        gates[f"b_pair_{metric}_loses_at_most_.01_vs_parent"] = (
+            pair_values["b"][metric] >= pair_values["parent"][metric] - .01)
 
     b_mm_pass = absolute_mmhe["b"] and all(b_mm_gates.values())
     a_mm_pass = absolute_mmhe["a"] and all(a_mm_gates.values())
@@ -235,12 +233,9 @@ def main(argv=None):
     for arm in ARMS:
         for report in ("retention", "action", "renderer", "mmhe"):
             parser.add_argument(f"--{arm}-{report}", required=True)
-        parser.add_argument(f"--{arm}-pairs")
+        parser.add_argument(f"--{arm}-pairs", required=True)
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
-    pair_paths = [getattr(args, f"{arm}_pairs") for arm in ARMS]
-    if any(pair_paths) and not all(pair_paths):
-        raise ValueError("provide either all three pair reports or none")
     result = finalize(
         _load(args.manifest),
         {arm: _load(getattr(args, f"{arm}_config")) for arm in ("a", "b")},
@@ -250,8 +245,7 @@ def main(argv=None):
         {arm: _load(getattr(args, f"{arm}_renderer")) for arm in ARMS},
         {arm: _load(getattr(args, f"{arm}_mmhe")) for arm in ARMS},
         parent_adapter=args.parent_adapter,
-        pairs=({arm: _load(getattr(args, f"{arm}_pairs")) for arm in ARMS}
-               if all(pair_paths) else None),
+        pairs={arm: _load(getattr(args, f"{arm}_pairs")) for arm in ARMS},
     )
     output = Path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)
