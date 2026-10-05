@@ -1,6 +1,7 @@
 from collections import Counter
+import re
 
-from scripts.build_r039_orbits import _by_source, build, semantic_signature
+from scripts.build_r039_orbits import _by_source, build, rendered_signature
 from scripts.train_gemma_decision_lora import encode, flatten_row
 
 
@@ -16,7 +17,10 @@ class _Tokenizer:
 def test_r039_arms_are_matched_but_differ_in_surface_interactions():
     complete, partial, evaluation = build(train_sources=8, eval_sources=8, seed=42)
     assert len(complete) == len(partial) == len(evaluation) == 512
-    assert not (set(map(semantic_signature, complete)) & set(map(semantic_signature, evaluation)))
+    assert not (set(map(rendered_signature, complete)) & set(map(rendered_signature, evaluation)))
+    assert all((left["meta"]["source_id"], left["meta"]["world"], left["meta"]["yes_first"]) ==
+               (right["meta"]["source_id"], right["meta"]["world"], right["meta"]["yes_first"])
+               for left, right in zip(complete, partial))
     for full, half in zip(_by_source(complete).values(), _by_source(partial).values()):
         full_pairs = {(row["meta"]["criteria_style"], row["meta"]["wording"]) for row in full}
         half_pairs = {(row["meta"]["criteria_style"], row["meta"]["wording"]) for row in half}
@@ -24,6 +28,10 @@ def test_r039_arms_are_matched_but_differ_in_surface_interactions():
         assert len(half_pairs) == 8
         assert Counter(row["targets"]["decision"]["label"] for row in full) == Counter(yes=32, no=32)
         assert Counter(row["targets"]["decision"]["label"] for row in half) == Counter(yes=32, no=32)
+        values = {label: {int(re.search(r"\d+", row["state"]).group()) for row in half
+                          if row["targets"]["decision"]["label"] == label}
+                  for label in ("yes", "no")}
+        assert values["yes"] == values["no"]
 
 
 def test_r039_freezes_both_rendered_option_orders_without_label_shortcuts():

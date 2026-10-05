@@ -3,7 +3,6 @@
 import argparse
 import hashlib
 import json
-import random
 from collections import Counter
 from pathlib import Path
 
@@ -41,15 +40,16 @@ EVAL_CLAIM = (
 
 
 def _facts(source_id, split):
-    offset = source_id + (10_000 if split == "eval" else 0)
+    offset = source_id + (31 if split == "eval" else 0)
     topic, unit = TOPICS[offset % len(TOPICS)]
-    limit = 80 + offset * 7
-    return topic, unit, limit, limit - 11, limit + 13
+    value = 100 + ((source_id * 73 + (29 if split == "eval" else 0)) % 800)
+    gap = 7 + ((source_id * 19 + (11 if split == "eval" else 0)) % 41)
+    return topic, unit, value, gap
 
 
 def _row(source_id, split, world, state_variant, claim_variant, yes_first, copy_index, arm):
-    topic, unit, limit, inside, outside = _facts(source_id, split)
-    value = inside if world == 0 else outside
+    topic, unit, value, gap = _facts(source_id, split)
+    limit = value + gap if world == 0 else value - gap
     state_templates = EVAL_STATE if split == "eval" else TRAIN_STATE
     claim_templates = EVAL_CLAIM if split == "eval" else TRAIN_CLAIM
     criteria = {"yes": "Yes", "no": "No"}
@@ -79,10 +79,11 @@ def _rows_for_source(source_id, split, arm):
     selected = _selected_pairs()
     rows = []
     for world in (0, 1):
-        for state_variant in range(4):
-            for claim_variant in range(4):
-                copies = 1 if arm in {"complete", "eval"} else 2 if (state_variant, claim_variant) in selected else 0
-                for yes_first in (False, True):
+        for yes_first in (False, True):
+            for state_variant in range(4):
+                for claim_variant in range(4):
+                    copies = (1 if arm in {"complete", "eval"} else
+                              2 if (state_variant, claim_variant) in selected else 0)
                     for copy_index in range(copies):
                         rows.append(_row(source_id, split, world, state_variant, claim_variant,
                                          yes_first, copy_index, arm))
@@ -96,10 +97,6 @@ def build(train_sources=32, eval_sources=8, seed=42):
         partial.extend(_rows_for_source(source_id, "train", "partial"))
     for source_id in range(eval_sources):
         evaluation.extend(_rows_for_source(source_id, "eval", "eval"))
-    rng = random.Random(seed)
-    rng.shuffle(complete)
-    rng.shuffle(partial)
-    rng.shuffle(evaluation)
     validate(complete, partial, evaluation)
     return complete, partial, evaluation
 
@@ -111,8 +108,8 @@ def _by_source(rows):
     return grouped
 
 
-def semantic_signature(row):
-    """The actual model-facing semantics, excluding only opaque bookkeeping metadata."""
+def rendered_signature(row):
+    """The actual model-facing prompt and label, excluding opaque bookkeeping metadata."""
     question = row["questions"]["decision"]
     return (row["state"], question["instructions"], tuple(question["criteria"].items()),
             row["targets"]["decision"]["label"])
@@ -123,9 +120,13 @@ def validate(complete, partial, evaluation):
         raise ValueError("arms must have equal physical rows and complete 64-view source orbits")
     if {row["meta"]["source_id"] for row in complete} & {row["meta"]["source_id"] for row in evaluation}:
         raise ValueError("source overlap between training and evaluation")
-    if set(map(semantic_signature, complete)) & set(map(semantic_signature, evaluation)):
-        raise ValueError("semantic train/eval overlap")
-    for full_rows, partial_rows in zip(_by_source(complete).values(), _by_source(partial).values()):
+    if set(map(rendered_signature, complete)) & set(map(rendered_signature, evaluation)):
+        raise ValueError("rendered train/eval overlap")
+    full_by_source, partial_by_source = _by_source(complete), _by_source(partial)
+    if set(full_by_source) != set(partial_by_source):
+        raise ValueError("arm source mismatch")
+    for source_id, full_rows in full_by_source.items():
+        partial_rows = partial_by_source[source_id]
         full_pairs = Counter((row["meta"]["criteria_style"], row["meta"]["wording"])
                              for row in full_rows)
         half_pairs = Counter((row["meta"]["criteria_style"], row["meta"]["wording"])
@@ -145,6 +146,10 @@ def validate(complete, partial, evaluation):
                 raise ValueError("partial arm does not balance state surfaces")
             if sum(pair[1] == f"claim-{state}" for pair in half_pairs) != 2:
                 raise ValueError("partial arm does not balance claim surfaces")
+    for full, half in zip(complete, partial):
+        if (full["meta"]["source_id"], full["meta"]["world"], full["meta"]["yes_first"]) != (
+                half["meta"]["source_id"], half["meta"]["world"], half["meta"]["yes_first"]):
+            raise ValueError("arms do not share the same source/label/order curriculum")
 
 
 def _write(path, rows):
