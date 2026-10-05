@@ -80,6 +80,18 @@ The canonical-teacher eligibility check passed. Frozen Arm A was scored on 128 t
 
 This is evidence that our own Arm A can supply a stable privileged view, not evidence that binary output distillation will transfer semantics. A binary teacher exposes only one case-specific scalar, so aligned label-preserving soft targets can collapse to ordinary confidence-dependent label smoothing; a within-label shuffled control may differ too little to falsify that explanation. No student run is authorized until the target distribution is measured and the objective plus negative control can distinguish semantic correspondence from regularization.
 
+R035 isolates the smallest relational objective justified by the failure. It reruns matched Arm D from the same fresh base with the same data bytes, paired A/B inputs, rank-32 adapter, optimizer, seed, 250 updates, and evaluation. For each paired donor slot, map letter scores back to semantic `yes/no`, let `m = polarity_sign * (logit_yes - logit_no)`, and use the explicit/interrogative A margin as a one-way anchor for the declarative/generic B margin:
+
+```text
+teacher = clip(stop_gradient(m_A), -4, 4)
+L = 0.5 CE_A + 0.5 CE_B
+    + 0.25 * 1[P_A(gold) >= 0.80] * SmoothL1(m_B, teacher; beta=1)
+```
+
+Shared singleton slots remain unchanged. The gate avoids exporting an uncertain A prediction; stop-gradient prevents the weak B view from directly dragging A toward its failure. Cached D is the same-seed, same-environment matched CE-only control, so the intended experimental factor is only the added loss. CUDA deterministic algorithms were not enabled for D, so this remains a cached single-seed comparison rather than a bit-exact counterfactual; the material delta gates below are required. This follows the relational lesson from [PairCFR](https://aclanthology.org/2024.acl-long.646/) and the instruction-variation motivation of [consistency alignment](https://aclanthology.org/2024.lrec-main.782/), without importing their larger training machinery.
+
+The mechanism gate is preregistered before launch: active pairs must exceed 50% over the final 100 updates; negative declarative/generic accuracy must improve by at least five points over D; full-context negative declarative/generic `no` recall must improve by at least ten points from its `.5000` baseline; the full/negative/middle A-to-B accuracy gap must shrink by at least ten points because B improves, not because A falls; no explicit/interrogative cell or WH/replay retention metric may fall by more than two points; order delta may not worsen; and overall NLL/Brier may not worsen by more than 5%. Mechanism success is not promotion: all prior absolute target, worst-cell, full-context, recall, order, and retention gates must still pass before official evaluation. Stop at step 250 with no coefficient search, EMA teacher, symmetric retry, or extra epochs.
+
 If balanced augmentation improves order consistency but not counterfactual accuracy, test a swap-cancelled counterfactual margin: align both option orders to semantic true/false logits, penalize their log-odds disagreement, and require verified counterfactual twins to cross a margin. This is conditional; ordinary CE remains the default.
 
 ### H1 — Probability-to-program mismatch is a primary workflow bottleneck

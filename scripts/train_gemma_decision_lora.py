@@ -49,6 +49,10 @@ def parse_args():
     parser.add_argument("--eval-every", type=int, default=250)
     parser.add_argument("--eval-samples", type=int, default=128)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--pair-consistency-weight", type=float, default=0.0)
+    parser.add_argument("--pair-consistency-min-gold-probability", type=float, default=0.80)
+    parser.add_argument("--pair-consistency-clip", type=float, default=4.0)
+    parser.add_argument("--pair-consistency-beta", type=float, default=1.0)
     return parser.parse_args()
 
 
@@ -83,6 +87,7 @@ def flatten_row(row):
             "items": [(str(key), value) for key, value in items],
             "probabilities": [float(value) / total for value in probabilities],
             "fixed_order": bool((row.get("meta") or {}).get("fixed_option_order")),
+            "gold_label": label,
         })
     return examples
 
@@ -100,8 +105,21 @@ def load_examples(paths):
                         views = [flatten_row(view) for view in row["paired_views"]]
                         if any(len(view) != 1 for view in views):
                             raise ValueError(f"{row.get('id')}: each paired view must flatten to one example")
+                        paired_metas = [(raw.get("meta") or {}) for raw in row["paired_views"]]
+                        arms = [meta.get("s2_arm") for meta in paired_metas]
+                        polarities = [meta.get("polarity") for meta in paired_metas]
+                        if arms == [None, None]:
+                            arms = ["A", "B"]
+                        if polarities == [None, None]:
+                            polarities = ["positive", "positive"]
+                        if arms != ["A", "B"]:
+                            raise ValueError(f"{row.get('id')}: paired views must be ordered A then B")
+                        if polarities[0] not in ("positive", "negative") or polarities[1] != polarities[0]:
+                            raise ValueError(f"{row.get('id')}: paired views need matching polarity")
                         examples.append({"id": row["id"],
-                                         "paired_views": [view[0] for view in views]})
+                                         "paired_views": [view[0] for view in views],
+                                         "paired_polarity": polarities[0],
+                                         "paired_view_arms": arms})
                     else:
                         examples.extend(flatten_row(row))
     return examples
@@ -112,6 +130,44 @@ def mean_logical_slot_loss(view_losses):
     if not view_losses or any(not losses for losses in view_losses):
         raise ValueError("each logical slot needs at least one view loss")
     return torch.stack([torch.stack(losses).mean() for losses in view_losses]).mean()
+
+
+def semantic_margin(option_scores, item_labels, polarity):
+    """Polarity-aligned semantic margin, independent of option order."""
+    if polarity not in ("positive", "negative"):
+        raise ValueError(f"unsupported pair polarity: {polarity}")
+    try:
+        no_index, yes_index = item_labels.index("no"), item_labels.index("yes")
+    except ValueError as error:
+        raise ValueError("paired views must expose no/yes item labels") from error
+    sign = 1.0 if polarity == "positive" else -1.0
+    return sign * (option_scores[yes_index] - option_scores[no_index])
+
+
+def pair_consistency_term(anchor_margin, view_b_margin, anchor_gold_probability,
+                          min_gold_probability=0.80, clip=4.0, beta=1.0):
+    """Return gated Smooth-L1 and whether anchor A passed the confidence gate."""
+    if not 0 <= min_gold_probability <= 1 or clip <= 0 or beta <= 0:
+        raise ValueError("invalid pair consistency configuration")
+    eligible = bool(anchor_gold_probability.detach().item() >= min_gold_probability)
+    if not eligible:
+        return view_b_margin.new_zeros(()), False
+    target = anchor_margin.detach().clamp(-clip, clip)
+    return F.smooth_l1_loss(view_b_margin, target, beta=beta), True
+
+
+def pair_slot_loss(view_losses, consistency, weight):
+    """Mean paired CE plus optional consistency; preserve the exact zero-weight path."""
+    base = torch.stack(view_losses).mean()
+    if weight == 0 or consistency is None:
+        return base
+    return base + weight * consistency
+
+
+def pair_consistency_stats(active, seen):
+    return {"pair_consistency_active": active,
+            "pair_consistency_seen": seen,
+            "pair_consistency_rate": active / seen if seen else 0.0}
 
 
 def render(example, order=None):
@@ -145,7 +201,7 @@ def letter_token_groups(tokenizer):
     return [torch.tensor(groups[letter]) for letter in LETTERS]
 
 
-def encode(example, tokenizer, max_length, shuffle):
+def encode(example, tokenizer, max_length, shuffle, include_labels=False):
     order = list(range(len(example["items"])))
     if shuffle and not example.get("fixed_order", False):
         random.shuffle(order)
@@ -157,13 +213,20 @@ def encode(example, tokenizer, max_length, shuffle):
     ids = tokenizer(text, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
     if len(ids) > max_length:
         raise ValueError(f"{example['id']}: {len(ids)} tokens exceeds {max_length}")
-    return ids, torch.tensor(probabilities)
+    encoded = (ids, torch.tensor(probabilities))
+    if include_labels:
+        labels = [example["items"][source_index][0] for source_index in order]
+        return (*encoded, labels)
+    return encoded
 
 
-def loss_for_examples(model, examples, tokenizer, groups, max_length, device, shuffle):
+def loss_for_examples(model, examples, tokenizer, groups, max_length, device, shuffle,
+                      pair_consistency_weight=0.0, pair_consistency_min_gold_probability=0.80,
+                      pair_consistency_clip=4.0, pair_consistency_beta=1.0):
     logical_views = [example.get("paired_views", [example]) for example in examples]
     flat_examples = [view for views in logical_views for view in views]
-    encoded = [encode(example, tokenizer, max_length, shuffle) for example in flat_examples]
+    encoded = [encode(example, tokenizer, max_length, shuffle, include_labels=True)
+               for example in flat_examples]
     ids = pad_sequence([item[0] for item in encoded], batch_first=True,
                        padding_value=tokenizer.pad_token_id)
     mask = ids.ne(tokenizer.pad_token_id)
@@ -174,7 +237,10 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     offsets = {position.item(): index for index, position in enumerate(union)}
     view_losses = []
     view_correct = []
-    for batch_index, ((_, probabilities), position) in enumerate(zip(encoded, positions)):
+    view_scores = []
+    view_gold_probabilities = []
+    for batch_index, ((_, probabilities, labels), position, example) in enumerate(
+            zip(encoded, positions, flat_examples)):
         logits = output.logits[batch_index, offsets[position.item()]].float()
         option_scores = torch.stack([
             torch.logsumexp(logits[token_ids.to(device)], dim=0)
@@ -182,15 +248,42 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
         ])
         view_losses.append(-(probabilities.to(device) * F.log_softmax(option_scores, dim=0)).sum())
         view_correct.append(float(option_scores.argmax().item() == probabilities.argmax().item()))
+        view_scores.append((option_scores, labels))
+        gold_index = labels.index(example["gold_label"])
+        view_gold_probabilities.append(F.softmax(option_scores.detach(), dim=0)[gold_index])
     slot_losses = []
     slot_correct = []
+    consistency_seen = 0
+    consistency_active = 0
     cursor = 0
-    for views in logical_views:
+    for logical_example, views in zip(examples, logical_views):
         end = cursor + len(views)
-        slot_losses.append(view_losses[cursor:end])
+        slot_view_losses = view_losses[cursor:end]
+        if len(views) == 2 and pair_consistency_weight > 0:
+            if logical_example.get("paired_view_arms") != ["A", "B"]:
+                raise ValueError(f"{logical_example['id']}: paired views must be ordered A then B")
+            polarity = logical_example["paired_polarity"]
+            margin_a = semantic_margin(*view_scores[cursor], polarity)
+            margin_b = semantic_margin(*view_scores[cursor + 1], polarity)
+            consistency, eligible = pair_consistency_term(
+                margin_a, margin_b, view_gold_probabilities[cursor],
+                pair_consistency_min_gold_probability, pair_consistency_clip,
+                pair_consistency_beta,
+            )
+            consistency_seen += 1
+            if eligible:
+                consistency_active += 1
+            else:
+                consistency = None
+            slot_losses.append([pair_slot_loss(slot_view_losses, consistency,
+                                               pair_consistency_weight)])
+        else:
+            # Preserve the existing CE graph and exact aggregation when disabled.
+            slot_losses.append(slot_view_losses)
         slot_correct.append(sum(view_correct[cursor:end]) / len(views))
         cursor = end
-    return mean_logical_slot_loss(slot_losses), sum(slot_correct)
+    stats = pair_consistency_stats(consistency_active, consistency_seen)
+    return mean_logical_slot_loss(slot_losses), sum(slot_correct), stats
 
 
 @torch.no_grad()
@@ -201,8 +294,8 @@ def evaluate(model, examples, args, tokenizer, groups, device):
     count = 0
     for start in range(0, min(args.eval_samples, len(examples)), args.microbatch):
         batch = examples[start:start + args.microbatch]
-        loss, batch_correct = loss_for_examples(model, batch, tokenizer, groups,
-                                                args.max_length, device, shuffle=False)
+        loss, batch_correct, _ = loss_for_examples(model, batch, tokenizer, groups,
+                                                   args.max_length, device, shuffle=False)
         losses.append(loss.item())
         correct += batch_correct
         count += len(batch)
@@ -222,6 +315,12 @@ def save(model, optimizer, scheduler, step, out):
 
 def main():
     args = parse_args()
+    if args.pair_consistency_weight < 0:
+        raise ValueError("pair consistency weight must be nonnegative")
+    if not 0 <= args.pair_consistency_min_gold_probability <= 1:
+        raise ValueError("pair consistency minimum gold probability must be in [0, 1]")
+    if args.pair_consistency_clip <= 0 or args.pair_consistency_beta <= 0:
+        raise ValueError("pair consistency clip and beta must be positive")
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     train = load_examples(args.train)
@@ -283,14 +382,21 @@ def main():
     print(json.dumps(baseline), flush=True)
     for step in range(1, args.steps + 1):
         accumulated = 0.0
+        pair_active = pair_seen = 0
         for _ in range(args.grad_accum):
             if cursor + args.microbatch > len(order):
                 random.shuffle(order)
                 cursor = 0
             batch = [train[index] for index in order[cursor:cursor + args.microbatch]]
             cursor += args.microbatch
-            loss, _ = loss_for_examples(model, batch, tokenizer, groups, args.max_length,
-                                        device, shuffle=True)
+            loss, _, pair_stats = loss_for_examples(
+                model, batch, tokenizer, groups, args.max_length, device, shuffle=True,
+                pair_consistency_weight=args.pair_consistency_weight,
+                pair_consistency_min_gold_probability=args.pair_consistency_min_gold_probability,
+                pair_consistency_clip=args.pair_consistency_clip,
+                pair_consistency_beta=args.pair_consistency_beta)
+            pair_active += pair_stats["pair_consistency_active"]
+            pair_seen += pair_stats["pair_consistency_seen"]
             (loss / args.grad_accum).backward()
             accumulated += loss.item()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -299,7 +405,10 @@ def main():
         optimizer.zero_grad(set_to_none=True)
         metric = {"step": step, "train_loss": accumulated / args.grad_accum,
                   "lr": scheduler.get_last_lr()[0], "elapsed_s": time.time() - started,
-                  "peak_vram_gb": torch.cuda.max_memory_allocated() / 2**30}
+                  "peak_vram_gb": torch.cuda.max_memory_allocated() / 2**30,
+                  "pair_consistency_active": pair_active,
+                  "pair_consistency_seen": pair_seen,
+                  "pair_consistency_rate": pair_active / pair_seen if pair_seen else 0.0}
         if step == 1 or step % args.eval_every == 0 or step == args.steps:
             metric["validation"] = {
                 name: evaluate(model, rows, args, tokenizer, groups, device)
