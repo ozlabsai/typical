@@ -1,6 +1,7 @@
 import json
 
 from scripts.build_action_panel import SPLITS, action_for, build, main
+from scripts.probe_action_renderer import render, select_approved, summarize as summarize_renderer
 from scripts.score_action_panel import calibrate, calibration_records, limited_rows, summarize
 
 
@@ -78,3 +79,22 @@ def test_action_panel_exercises_every_available_field_polarity():
         for index, name in enumerate(row["meta"]["field_order"]):
             labels[name].add(row["targets"][f"q{index:02d}"]["label"])
     assert all(values == {"no", "yes"} for values in labels.values())
+
+
+def test_renderer_probe_selects_paired_orders_without_changing_labels():
+    rows, _ = build(42, split="eval", cases_per_cell=250)
+    selected = select_approved(rows, 65)
+    assert [row["targets"]["q01"]["label"] for row in selected].count("no") == 65
+    assert [row["targets"]["q01"]["label"] for row in selected].count("yes") == 65
+    no_first = render(selected[0], canonical=True, yes_first=False)
+    yes_first = render(selected[0], canonical=True, yes_first=True)
+    assert list(no_first["questions"]["q00"]["criteria"]) == ["no", "yes"]
+    assert list(yes_first["questions"]["q00"]["criteria"]) == ["yes", "no"]
+    assert no_first["targets"] == yes_first["targets"]
+    report = summarize_renderer([
+        {"id": "x", "label": "no", "renderer": "bare", "p_yes": .1, "correct": True},
+        {"id": "x", "label": "no", "renderer": "bare", "p_yes": .2, "correct": True},
+    ])
+    assert report["bare_no"]["accuracy"] == 1.0
+    assert report["bare_no_both_orders"] == 1.0
+    assert report["bare_mean_order_delta"] == .1
