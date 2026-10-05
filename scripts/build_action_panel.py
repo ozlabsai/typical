@@ -182,7 +182,7 @@ def main():
         rows, report = build(args.seed, split=split, cases_per_cell=count)
         with (out / f"{split}.jsonl").open("w") as target:
             for row in rows:
-                target.write(json.dumps(row, sort_keys=True) + "\n")
+                target.write(json.dumps(row) + "\n")
         manifest["splits"][split] = report
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps(manifest, indent=2))

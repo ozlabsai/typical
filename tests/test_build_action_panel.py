@@ -31,6 +31,10 @@ def test_action_panel_is_deterministic_and_split_disjoint(tmp_path, monkeypatch)
     main()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["splits"]["train"]["rows"] == 8
+    stored = [json.loads(line) for line in (tmp_path / "eval.jsonl").read_text().splitlines()]
+    stored_orders = [next(iter(question["criteria"]))
+                     for row in stored for question in row["questions"].values()]
+    assert abs(stored_orders.count("yes") - stored_orders.count("no")) <= 1
 
 
 def test_action_report_separates_ranking_and_threshold_errors():
