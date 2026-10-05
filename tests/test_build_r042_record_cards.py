@@ -31,3 +31,6 @@ def test_r042_replay_is_identical_in_both_arms_and_rejects_forbidden_or_duplicat
         add_replay([{"id": "x", "meta": {"panel": "action_v1"}}], card, prose)
     with pytest.raises(ValueError, match="exclude"):
         add_replay([dict(card[0], id="copy")], card, prose)
+    list_criteria = {"id": "typed-replay", "state": "independent", "questions": {
+        "decision": {"criteria": ["a", "b"]}}, "targets": {}, "meta": {}}
+    assert add_replay([list_criteria], card, prose)[0][0] == list_criteria

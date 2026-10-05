@@ -204,8 +204,10 @@ def add_replay(replay, card, prose):
     signatures = {rendered_signature(row) for row in card + prose}
     for row in replay:
         meta = row.get("meta") or {}
+        question = row.get("questions", {}).get("decision", {})
+        comparable = isinstance(question.get("criteria"), dict)
         if (meta.get("panel") == "action_v1" or str(row.get("id", "")).startswith(("r040-", "r042-"))
-                or ("decision" in row.get("questions", {}) and rendered_signature(row) in signatures)):
+                or (comparable and rendered_signature(row) in signatures)):
             raise ValueError("R042 replay must exclude action-panel, R040/R042, and duplicate rendered rows")
     return [*replay, *card], [*replay, *prose]
 
