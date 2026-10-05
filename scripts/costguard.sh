@@ -1,26 +1,119 @@
 #!/bin/zsh
-# Cost guard: every 10 min, check each RunPod pod; stop it if idle (no train/baselines/bench python AND GPU util < 5%)
-# for 2 consecutive checks. Log to /tmp/costguard.log. Pods: id|ssh-info-file
-set -a; source /Users/guynachshon/conductor/workspaces/typical/buffalo/.env; set +a
-# PODS: one line per pod in /tmp/PODS_ACTIVE -> "<id>|<ssh-info-file>|<waiter-pattern>" (workers append; re-read every loop)
-typeset -A idle
+
+# Guard one RunPod pod. A recent .context/costguard.hold pauses one check, never two.
+set -u
+
+POD_ID=${COSTGUARD_POD_ID:-ujiq3ud4vnhf80}
+INTERVAL_SECONDS=${COSTGUARD_INTERVAL_SECONDS:-1800}
+SSH_KEY=${COSTGUARD_SSH_KEY:-/Users/guynachshon/.runpod/ssh/RunPod-Key-Go}
+SCRIPT_DIR=${0:A:h}
+ROOT_DIR=${SCRIPT_DIR:h}
+CONTEXT_DIR="$ROOT_DIR/.context"
+LOG_FILE=${COSTGUARD_LOG_FILE:-$CONTEXT_DIR/costguard.log}
+PID_FILE="$CONTEXT_DIR/costguard.pid"
+LOCK_DIR="$CONTEXT_DIR/costguard.lock"
+HOLD_FILE="$CONTEXT_DIR/costguard.hold"
+
+mkdir -p "$CONTEXT_DIR"
+
+log() {
+  print -r -- "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" | tee -a "$LOG_FILE"
+}
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  old_pid=$(cat "$PID_FILE" 2>/dev/null || true)
+  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+    log "guard already running pid=$old_pid"
+    exit 0
+  fi
+  rmdir "$LOCK_DIR" 2>/dev/null || { log "cannot clear stale lock $LOCK_DIR"; exit 1; }
+  mkdir "$LOCK_DIR" || exit 1
+fi
+
+print -r -- $$ > "$PID_FILE"
+trap 'rm -f "$PID_FILE"; rmdir "$LOCK_DIR" 2>/dev/null' EXIT INT TERM
+
+check_pod() {
+  local pod_json pod_status ip port remote metrics util memory active artifacts processes stopped_status
+
+  pod_json=$(runpodctl pod get "$POD_ID" -o json 2>/dev/null) || {
+    log "pod=$POD_ID state=UNKNOWN reason=runpodctl_failed action=none"
+    return
+  }
+  pod_status=$(jq -r '.desiredStatus // "UNKNOWN"' <<< "$pod_json")
+  if [[ "$pod_status" != "RUNNING" ]]; then
+    log "pod=$POD_ID state=$pod_status action=none"
+    return
+  fi
+
+  if [[ -f "$HOLD_FILE" ]] && find "$HOLD_FILE" -mmin -25 -print -quit | grep -q .; then
+    log "pod=$POD_ID state=RUNNING action=hold reason=recent_costguard_hold"
+    return
+  fi
+
+  ip=$(jq -r '.ssh.ip // empty' <<< "$pod_json")
+  port=$(jq -r '.ssh.port // empty' <<< "$pod_json")
+  if [[ -z "$ip" || -z "$port" ]]; then
+    log "pod=$POD_ID state=RUNNING action=none reason=ssh_not_ready"
+    return
+  fi
+
+  remote=$(ssh -i "$SSH_KEY" -p "$port" -o BatchMode=yes -o ConnectTimeout=20 \
+    -o StrictHostKeyChecking=accept-new "root@$ip" '
+      util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -n1)
+      memory=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -n1)
+      processes=$(ps -eo pid=,comm=,args= | awk -v self=$$ '\''
+        $1 == self { next }
+        $2 ~ /^(python|python3|uv|vllm|torchrun|accelerate|deepspeed|VLLM|rsync|scp|curl|wget|git|huggingface-cli)/ { print; next }
+        $2 ~ /^(bash|zsh|sh)$/ && $0 ~ /\/workspace\/.*(train|eval|bench|serve|launch|run_)/ { print }
+      '\'')
+      active=$(printf "%s\n" "$processes" | awk "NF { n++ } END { print n+0 }")
+      artifacts=$(find /workspace/g1 -mindepth 1 -maxdepth 3 -type f -print 2>/dev/null | wc -l | tr -d " ")
+      printf "METRICS|%s|%s|%s|%s\n%s\n" "${util:-0}" "${memory:-0}" "$active" "$artifacts" "$processes"
+    ' 2>/dev/null) || {
+      log "pod=$POD_ID state=RUNNING action=none reason=ssh_failed"
+      return
+    }
+
+  metrics=${remote%%$'\n'*}
+  if [[ "$remote" == *$'\n'* ]]; then
+    processes=${remote#*$'\n'}
+  else
+    processes=''
+  fi
+  IFS='|' read -r _ util memory active artifacts <<< "$metrics"
+  if [[ ! "$util" =~ '^[0-9]+$' || ! "$active" =~ '^[0-9]+$' || ! "$artifacts" =~ '^[0-9]+$' ]]; then
+    log "pod=$POD_ID state=RUNNING action=none reason=invalid_probe"
+    return
+  fi
+
+  if (( active > 0 || util >= 5 )); then
+    log "pod=$POD_ID state=RUNNING gpu=${util}% memory=${memory}MiB active=$active action=keep"
+    [[ -n "$processes" ]] && print -r -- "$processes" | sed 's/^/  process: /' >> "$LOG_FILE"
+    return
+  fi
+  if (( artifacts == 0 )); then
+    log "pod=$POD_ID state=RUNNING gpu=${util}% active=0 action=none reason=no_persisted_artifacts"
+    return
+  fi
+
+  ssh -i "$SSH_KEY" -p "$port" -o BatchMode=yes -o ConnectTimeout=20 \
+    -o StrictHostKeyChecking=accept-new "root@$ip" 'sync' 2>/dev/null || {
+      log "pod=$POD_ID state=RUNNING action=none reason=artifact_sync_failed"
+      return
+    }
+  if runpodctl pod stop "$POD_ID" >/dev/null 2>&1; then
+    sleep 2
+    stopped_status=$(runpodctl pod get "$POD_ID" -o json 2>/dev/null | jq -r '.desiredStatus // "UNKNOWN"')
+    log "pod=$POD_ID state=RUNNING gpu=${util}% memory=${memory}MiB active=0 artifacts=$artifacts action=STOP_REQUESTED state_after=$stopped_status"
+  else
+    log "pod=$POD_ID state=RUNNING action=none reason=stop_failed"
+  fi
+}
+
+log "guard started pid=$$ pod=$POD_ID interval=${INTERVAL_SECONDS}s"
 while true; do
-  PODS=$(grep -v "^#" /tmp/PODS_ACTIVE 2>/dev/null | tr "\n" " ")
-  for entry in ${=PODS}; do
-    pid=${entry%%|*}; rest=${entry#*|}; sshf=${rest%%|*}
-    st=$(runpodctl pod get $pid 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('desiredStatus','?'))" 2>/dev/null)
-    [ "$st" != "RUNNING" ] && { echo "$(date +%H:%M) $pid $st"; continue; }
-    eval "$(cat $sshf)"
-    info=$(ssh -i "$KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=20 -p "$PORT" root@"$IP" 'u=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | head -1); n=$(ps -eo args | grep -E "python (train|baselines|bench)\.py" | grep -v grep | wc -l); w=$(ps -eo args | grep -E "bash /workspace/|python scripts/|python train|jevbench_run|bench\.py|hf upload|hf download|uv sync|pip install" | grep -v grep | wc -l); echo "$u $n $w"' 2>/dev/null)
-    if [ -z "$info" ]; then echo "$(date +%H:%M) $pid ssh failed"; continue; fi
-    util=${info%% *}; rest=${info#* }; nproc=${rest%% *}; nwait=${rest##* }
-    if [ "$nproc" -eq 0 ] && [ "${util:-0}" -lt 5 ] && [ "${nwait:-0}" -eq 0 ]; then
-      idle[$pid]=$(( ${idle[$pid]:-0} + 1 ))
-      echo "$(date +%H:%M) $pid IDLE (util=$util%, trainers=0, waiters=$nwait) strike ${idle[$pid]}"
-      if [ ${idle[$pid]} -ge 6 ]; then echo "$(date +%H:%M) $pid STOPPING (idle 6 checks = 60 min)"; runpodctl pod stop $pid >/dev/null 2>&1; idle[$pid]=0; fi
-    else
-      idle[$pid]=0; echo "$(date +%H:%M) $pid busy (util=$util%, trainers=$nproc, waiters=$nwait)"
-    fi
-  done
-  sleep 600
+  check_pod
+  [[ ${COSTGUARD_ONCE:-0} == 1 ]] && break
+  sleep "$INTERVAL_SECONDS"
 done

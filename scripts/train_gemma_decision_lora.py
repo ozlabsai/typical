@@ -93,8 +93,25 @@ def load_examples(paths):
         with open(path) as source:
             for line in source:
                 if line.strip():
-                    examples.extend(flatten_row(json.loads(line)))
+                    row = json.loads(line)
+                    if "paired_views" in row:
+                        if len(row["paired_views"]) != 2:
+                            raise ValueError(f"{row.get('id')}: paired slot must have exactly two views")
+                        views = [flatten_row(view) for view in row["paired_views"]]
+                        if any(len(view) != 1 for view in views):
+                            raise ValueError(f"{row.get('id')}: each paired view must flatten to one example")
+                        examples.append({"id": row["id"],
+                                         "paired_views": [view[0] for view in views]})
+                    else:
+                        examples.extend(flatten_row(row))
     return examples
+
+
+def mean_logical_slot_loss(view_losses):
+    """Average views within each logical slot, then average logical slots."""
+    if not view_losses or any(not losses for losses in view_losses):
+        raise ValueError("each logical slot needs at least one view loss")
+    return torch.stack([torch.stack(losses).mean() for losses in view_losses]).mean()
 
 
 def render(example, order=None):
@@ -144,7 +161,9 @@ def encode(example, tokenizer, max_length, shuffle):
 
 
 def loss_for_examples(model, examples, tokenizer, groups, max_length, device, shuffle):
-    encoded = [encode(example, tokenizer, max_length, shuffle) for example in examples]
+    logical_views = [example.get("paired_views", [example]) for example in examples]
+    flat_examples = [view for views in logical_views for view in views]
+    encoded = [encode(example, tokenizer, max_length, shuffle) for example in flat_examples]
     ids = pad_sequence([item[0] for item in encoded], batch_first=True,
                        padding_value=tokenizer.pad_token_id)
     mask = ids.ne(tokenizer.pad_token_id)
@@ -153,17 +172,25 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     output = model(input_ids=ids.to(device), attention_mask=mask.to(device), use_cache=False,
                    logits_to_keep=union.to(device))
     offsets = {position.item(): index for index, position in enumerate(union)}
-    losses = []
-    correct = 0
+    view_losses = []
+    view_correct = []
     for batch_index, ((_, probabilities), position) in enumerate(zip(encoded, positions)):
         logits = output.logits[batch_index, offsets[position.item()]].float()
         option_scores = torch.stack([
             torch.logsumexp(logits[token_ids.to(device)], dim=0)
             for token_ids in groups[:len(probabilities)]
         ])
-        losses.append(-(probabilities.to(device) * F.log_softmax(option_scores, dim=0)).sum())
-        correct += int(option_scores.argmax().item() == probabilities.argmax().item())
-    return torch.stack(losses).mean(), correct
+        view_losses.append(-(probabilities.to(device) * F.log_softmax(option_scores, dim=0)).sum())
+        view_correct.append(float(option_scores.argmax().item() == probabilities.argmax().item()))
+    slot_losses = []
+    slot_correct = []
+    cursor = 0
+    for views in logical_views:
+        end = cursor + len(views)
+        slot_losses.append(view_losses[cursor:end])
+        slot_correct.append(sum(view_correct[cursor:end]) / len(views))
+        cursor = end
+    return mean_logical_slot_loss(slot_losses), sum(slot_correct)
 
 
 @torch.no_grad()

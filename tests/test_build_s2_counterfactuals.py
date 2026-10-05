@@ -5,7 +5,8 @@ from scripts.build_s2_counterfactuals import (
     ARM_A_QUESTION, ARM_B_QUESTION, CLOSED_WORLD_CAVEAT, EVAL_QUESTIONS,
     _explicit_criteria, _hash_rows, _make_view, build,
 )
-from scripts.train_gemma_decision_lora import flatten_row
+from scripts.train_gemma_decision_lora import flatten_row, load_examples, mean_logical_slot_loss
+import torch
 from scripts.workflow_corpus import NOUL_POLICY_SPEC, make_row, NOUL_STYLES
 
 
@@ -34,15 +35,23 @@ def test_reconstructs_matched_arms_and_locked_crossed_eval(tmp_path):
     s1_path = tmp_path / "s1.jsonl"
     write_rows(s1_path, s1_rows)
 
-    arm_a, arm_b, arm_c, crossed_eval, manifest = build([s1_path], train, val, seed=42)
+    arm_a, arm_b, arm_c, arm_d, crossed_eval, manifest = build([s1_path], train, val, seed=42)
     assert len(arm_a) == len(arm_b) == 2000
     assert arm_a[:1488] == arm_b[:1488]
     assert arm_a[:1488] == arm_c[:1488]
+    assert arm_a[:1488] == arm_d[:1488]
     assert all("soft_targets" in row for row in arm_a[:1488])
     a, b = arm_a[1488:], arm_b[1488:]
     assert len(a) == len(b) == 512
     c = arm_c[1488:]
+    d = arm_d[1488:]
     assert len(c) == 512
+    assert len(arm_d) == 2000 and len(d) == 512
+    for pair, row_a, row_b in zip(d, a, b):
+        assert pair["meta"]["paired_view_training"] is True
+        assert pair["paired_views"] == [row_a, row_b]
+        assert pair["paired_views"][0]["meta"]["s2_arm"] == "A"
+        assert pair["paired_views"][1]["meta"]["s2_arm"] == "B"
     for row_c, row_a, row_b in zip(c, a, b):
         assert row_c["state"] == row_a["state"] == row_b["state"]
         assert row_c["targets"] == row_a["targets"] == row_b["targets"]
@@ -162,7 +171,7 @@ def test_reconstructs_matched_arms_and_locked_crossed_eval(tmp_path):
     assert not set(manifest["train_distractor_groups"]) & set(manifest["crossed_eval"]["distractor_groups"])
     assert manifest["output_sha256"] == {
         "arm_a": _hash_rows(arm_a), "arm_b": _hash_rows(arm_b),
-        "arm_c": _hash_rows(arm_c),
+        "arm_c": _hash_rows(arm_c), "arm_d": _hash_rows(arm_d),
         "crossed_eval": _hash_rows(crossed_eval),
     }
     assert manifest["arm_c"]["groups_each_with_4_A_4_B"] == 64
@@ -170,6 +179,10 @@ def test_reconstructs_matched_arms_and_locked_crossed_eval(tmp_path):
     assert manifest["arm_c"]["orientation_groups_by_polarity"] == {
         "positive_0": 16, "positive_1": 16, "negative_0": 16, "negative_1": 16,
     }
+    assert manifest["arm_d"]["logical_slots"] == 2000
+    assert manifest["arm_d"]["paired_donor_slots"] == 512
+    assert manifest["arm_d"]["donor_view_loss_weights"] == [0.5, 0.5]
+    assert manifest["output_sha256"]["arm_d"] == _hash_rows(arm_d)
     assert all(len(row["state"]) >= 40_000 for row in crossed_eval
                if row["meta"]["context_view"] == "full")
     assert max(len(row["state"]) for row in a if row["meta"]["context_view"] == "full") < 14_000
@@ -213,3 +226,28 @@ def test_negative_propositions_rerender_style_markers_after_condition_inversion(
                     assert row["questions"]["decision"]["criteria"] == {
                         label: expected[label] for label in ("yes", "no")}
                     assert row["questions"]["decision"]["instructions"] == EVAL_QUESTIONS[(polarity, wording)]
+
+
+def test_paired_slot_loss_is_equal_view_mean_and_repeat_view_equivalent(tmp_path):
+    first = torch.tensor(2.0, requires_grad=True)
+    second = torch.tensor(6.0, requires_grad=True)
+    paired = mean_logical_slot_loss([[first, second]])
+    assert paired.item() == 4.0
+    paired.backward()
+    assert first.grad.item() == second.grad.item() == 0.5
+
+    repeated = torch.tensor(3.25)
+    assert mean_logical_slot_loss([[repeated, repeated]]).item() == repeated.item()
+
+    wrapper = {"id": "pair", "paired_views": [
+        {"id": "a", "state": "s", "questions": {"q": {"type": "noul",
+         "instructions": "q", "criteria": {"no": "No", "yes": "Yes"}}},
+         "targets": {"q": {"label": "no"}}},
+        {"id": "b", "state": "s", "questions": {"q": {"type": "noul",
+         "instructions": "q", "criteria": {"no": "No", "yes": "Yes"}}},
+         "targets": {"q": {"label": "no"}}},
+    ]}
+    path = tmp_path / "paired.jsonl"
+    write_rows(path, [wrapper])
+    loaded = load_examples([path])
+    assert len(loaded) == 1 and len(loaded[0]["paired_views"]) == 2

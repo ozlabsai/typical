@@ -379,6 +379,27 @@ def _mixed_arm_c(arm_a, arm_b):
     return rows, selected_groups
 
 
+def _paired_arm_d(arm_a, arm_b):
+    """Represent each aligned A/B donor pair as one logical training slot."""
+    if len(arm_a) != PRESENTATIONS or len(arm_b) != PRESENTATIONS:
+        raise ValueError("paired arm requires complete A and B arms")
+    rows = list(arm_a[:S1_COUNT])
+    for index, (view_a, view_b) in enumerate(zip(arm_a[S1_COUNT:], arm_b[S1_COUNT:])):
+        for key in ("state", "targets"):
+            if view_a[key] != view_b[key]:
+                raise ValueError(f"paired donor mismatch in {key}: {view_a['id']} / {view_b['id']}")
+        if view_a["meta"]["source_id"] != view_b["meta"]["source_id"]:
+            raise ValueError("paired donor source identities differ")
+        rows.append({
+            "id": f"s2-d-pair-{index:04d}-{view_a['meta']['source_group']}",
+            "paired_views": [view_a, view_b],
+            "meta": {"paired_view_training": True,
+                     "source_group": view_a["meta"]["source_group"],
+                     "source_id": view_a["meta"]["source_id"]},
+        })
+    return rows
+
+
 def build(train_paths, donor_train, donor_val, seed=42):
     schedule, full_s1 = s1_schedule(train_paths, seed)
     groups, held_out = _by_group(donor_train, donor_val)
@@ -392,7 +413,8 @@ def build(train_paths, donor_train, donor_val, seed=42):
         arm_b.append(_make_view(source, "B", view, order, distractor_rows, index, group,
                                 polarity=polarity, placement=placement, context_chars=TRAIN_FULL_CHARS))
     arm_c, c_groups = _mixed_arm_c(arm_a, arm_b)
-    if len(arm_a) != PRESENTATIONS or len(arm_b) != PRESENTATIONS or len(arm_c) != PRESENTATIONS:
+    arm_d = _paired_arm_d(arm_a, arm_b)
+    if any(len(arm) != PRESENTATIONS for arm in (arm_a, arm_b, arm_c, arm_d)):
         raise AssertionError("S2 arms must contain exactly 2,000 presentations")
     eval_rows, eval_stats = crossed_eval_rows(donor_train, donor_val, seed)
     train_distractor_groups = {group for row in arm_a[S1_COUNT:]
@@ -462,9 +484,15 @@ def build(train_paths, donor_train, donor_val, seed=42):
             f"{polarity}_{orientation}": c_orientation_counts[(polarity, orientation)]
             for polarity in ("positive", "negative") for orientation in (0, 1)},
     }
+    manifest["arm_d"] = {
+        "logical_slots": len(arm_d), "paired_donor_slots": len(arm_d) - S1_COUNT,
+        "donor_view_loss_weights": [0.5, 0.5],
+        "paired_donor_rows_sha256": _hash_rows(arm_d[S1_COUNT:]),
+    }
     manifest["output_sha256"] = {"arm_a": _hash_rows(arm_a), "arm_b": _hash_rows(arm_b),
-                                 "arm_c": _hash_rows(arm_c), "crossed_eval": _hash_rows(eval_rows)}
-    return arm_a, arm_b, arm_c, eval_rows, manifest
+                                 "arm_c": _hash_rows(arm_c), "arm_d": _hash_rows(arm_d),
+                                 "crossed_eval": _hash_rows(eval_rows)}
+    return arm_a, arm_b, arm_c, arm_d, eval_rows, manifest
 
 
 def main():
@@ -476,7 +504,7 @@ def main():
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    arm_a, arm_b, arm_c, eval_rows, manifest = build([Path(p) for p in args.s1_input],
+    arm_a, arm_b, arm_c, arm_d, eval_rows, manifest = build([Path(p) for p in args.s1_input],
                                    read_jsonl(args.programmatic_train),
                                    read_jsonl(args.programmatic_val), args.seed)
     source_paths = [*args.s1_input, args.programmatic_train, args.programmatic_val]
@@ -488,6 +516,7 @@ def main():
     write_jsonl(out / "arm-a.jsonl", arm_a)
     write_jsonl(out / "arm-b.jsonl", arm_b)
     write_jsonl(out / "arm-c.jsonl", arm_c)
+    write_jsonl(out / "arm-d.jsonl", arm_d)
     write_jsonl(out / "crossed-eval.jsonl", eval_rows)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     summary = {key: value for key, value in manifest.items()
