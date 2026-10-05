@@ -1,6 +1,7 @@
 from collections import Counter
 
 from scripts.build_r038_orbits import _by_source, add_replay, build
+from scripts.compare_r038_orbits import compare
 from scripts.eval_r038_orbits import audit
 
 
@@ -50,3 +51,17 @@ def test_r038_audit_recovers_perfect_twin_and_order_metrics():
     assert report["accuracy"] == report["counterfactual_twins_both_correct"] == 1.0
     assert report["both_orders_correct"] == 1.0
     assert report["mean_semantic_order_delta"] == 0.0
+
+
+def test_r038_comparison_uses_source_paired_bootstrap():
+    _, _, rows = build(train_sources=8, eval_sources=8, seed=42)
+    perfect = [{"id": row["id"], "probabilities": {
+        "yes": float(row["targets"]["decision"]["label"] == "yes"),
+        "no": float(row["targets"]["decision"]["label"] == "no"),
+    }} for row in rows]
+    wrong = [{"id": row["id"], "probabilities": {"yes": 1 - item["probabilities"]["yes"],
+                                                      "no": 1 - item["probabilities"]["no"]}}
+             for row, item in zip(rows, perfect)]
+    report = compare(rows, perfect, wrong, samples=100, seed=42)
+    assert report["accuracy_delta"] == report["twins_delta"] == 1.0
+    assert all(report["gates"].values())
