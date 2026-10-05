@@ -64,8 +64,8 @@ check_pod() {
       memory=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -n1)
       processes=$(ps -eo pid=,comm=,args= | awk -v self=$$ '\''
         $1 == self { next }
-        $2 ~ /^(python|python3|uv|vllm|torchrun|accelerate|deepspeed|VLLM|rsync|scp|curl|wget|git|huggingface-cli)/ { print; next }
-        $2 ~ /^(bash|zsh|sh)$/ && $0 ~ /\/workspace\/.*(train|eval|bench|serve|launch|run_)/ { print }
+        $2 ~ /^(python|python3|uv|vllm|torchrun|accelerate|deepspeed|VLLM|hf|rsync|scp|curl|wget|git|huggingface-cli)/ { print; next }
+        $2 ~ /^(bash|zsh|sh)$/ && $0 ~ /\/workspace\/.*(train|eval|bench|serve|launch|run_|setup_)/ { print }
       '\'')
       active=$(printf "%s\n" "$processes" | awk "NF { n++ } END { print n+0 }")
       artifacts=$(find /workspace/g1 -mindepth 1 -maxdepth 3 -type f -print 2>/dev/null | wc -l | tr -d " ")
