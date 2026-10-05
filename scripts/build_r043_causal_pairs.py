@@ -8,6 +8,7 @@ import random
 import re
 import unicodedata
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -387,17 +388,68 @@ def build(seed=43, quarantine_rows=()):
     return train, shuffled, evaluation, {"train": dict(train_rejected), "eval": dict(eval_rejected)}
 
 
-def _validate_replay(rows):
-    if len(rows) < REPLAY_ROWS:
-        raise ValueError(f"R043 requires at least {REPLAY_ROWS} frozen replay singles")
-    selected = copy.deepcopy(rows[:REPLAY_ROWS])
-    if any("paired_views" in row for row in selected):
-        raise ValueError("R043 replay must contain singles, not paired slots")
-    return selected
+def _replay_skip_reason(row):
+    if not isinstance(row, Mapping):
+        return "invalid_row"
+    if "paired_views" in row:
+        return "paired_views"
+    questions = row.get("questions")
+    if not isinstance(questions, Mapping) or len(questions) != 1:
+        return "question_count"
+    qid, question = next(iter(questions.items()))
+    if not isinstance(question, Mapping):
+        return "invalid_question"
+    criteria = question.get("criteria")
+    if question.get("type") == "score":
+        if not isinstance(criteria, list):
+            return "invalid_criteria"
+        labels = [str(index) for index in range(len(criteria))]
+    else:
+        if not isinstance(criteria, Mapping):
+            return "invalid_criteria"
+        labels = [str(label) for label in criteria]
+    if not 2 <= len(labels) <= 26:
+        return "unsupported_option_count"
+    targets = row.get("targets")
+    target = targets.get(qid) if isinstance(targets, Mapping) else None
+    if not isinstance(target, Mapping) or str(target.get("label")) not in labels:
+        return "missing_target_label"
+    if "state" not in row:
+        return "missing_state"
+    soft_targets = row.get("soft_targets") or {}
+    if not isinstance(soft_targets, Mapping):
+        return "invalid_soft_target"
+    probabilities = soft_targets.get(qid)
+    if probabilities is not None:
+        try:
+            valid = (len(probabilities) == len(labels) and all(value >= 0 for value in probabilities)
+                     and sum(probabilities) > 0)
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            return "invalid_soft_target"
+    return None
+
+
+def _select_replay(rows):
+    selected, positions, skipped = [], [], Counter()
+    for position, row in enumerate(rows):
+        reason = _replay_skip_reason(row)
+        if reason:
+            skipped[reason] += 1
+            continue
+        selected.append(copy.deepcopy(row))
+        positions.append(position)
+        if len(selected) == REPLAY_ROWS:
+            return selected, {"selected_positions": positions, "position_base": 0,
+                              "scanned_rows": position + 1,
+                              "skipped": dict(skipped)}
+    raise ValueError(f"R043 requires at least {REPLAY_ROWS} supported frozen replay singles; "
+                     f"found {len(selected)} after scanning {len(rows)} rows")
 
 
 def write_outputs(out, replay, train_pairs, shuffled, evaluation, provenance, seed):
-    replay = _validate_replay(replay)
+    replay, replay_selection = _select_replay(replay)
     arm_a = [*copy.deepcopy(replay), *copy.deepcopy(train_pairs)]
     arm_b = copy.deepcopy(arm_a)
     arm_c = [*copy.deepcopy(replay), *copy.deepcopy(shuffled)]
@@ -412,6 +464,8 @@ def write_outputs(out, replay, train_pairs, shuffled, evaluation, provenance, se
         "families": list(FAMILIES), "train_pairs": TRAIN_PAIRS, "eval_pairs": EVAL_PAIRS,
         "replay_rows": REPLAY_ROWS,
         "logical_rows": {"arm-a": 2800, "arm-b": 2800, "arm-c": 2800, "eval": EVAL_PAIRS},
+        "trainer_examples": {"arm-a": 2800, "arm-b": 2800, "arm-c": 2800,
+                             "eval": EVAL_PAIRS},
         "presentations": {"arm-a": 4000, "arm-b": 4000, "arm-c": 4000,
                           "eval": EVAL_PAIRS * 2},
         "pair_modes": {"arm-a": "counterfactual", "arm-b": "counterfactual",
@@ -420,6 +474,7 @@ def write_outputs(out, replay, train_pairs, shuffled, evaluation, provenance, se
         "eval_seed": seed + 104_729, "quarantine_rejections": provenance["rejections"],
         "inputs": provenance["inputs"],
         "selected_replay_sha256": _sha256_bytes(_jsonl_bytes(replay)),
+        "replay_selection": replay_selection,
         "outputs": {name: {"rows": len(named[name]), "sha256": _sha256_bytes(payload)}
                     for name, payload in payloads.items()},
     }

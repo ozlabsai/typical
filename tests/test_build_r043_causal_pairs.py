@@ -11,6 +11,7 @@ from scripts.build_r043_causal_pairs import (
     TRAIN_PAIRS,
     Quarantine,
     _build_split,
+    _select_replay,
     _source,
     _validate_true_pair,
     build,
@@ -18,6 +19,14 @@ from scripts.build_r043_causal_pairs import (
     main,
     write_outputs,
 )
+
+
+def _replay_row(identifier, option_count=2):
+    criteria = {f"option-{index}": f"Option {index}" for index in range(option_count)}
+    return {"id": identifier, "state": f"Replay state {identifier}",
+            "questions": {"decision": {"type": "noul", "instructions": "Choose.",
+                                         "criteria": criteria}},
+            "targets": {"decision": {"label": "option-0"}}}
 
 
 @pytest.fixture(scope="module")
@@ -72,8 +81,8 @@ def test_r043_shuffled_control_is_within_family_source_derangement(generated):
 
 def test_r043_outputs_match_counts_hashes_and_frozen_replay(tmp_path, generated):
     train, shuffled, evaluation, rejections = generated
-    replay = [{"id": f"replay-{index}", "state": f"frozen-{index}",
-               "questions": {}, "targets": {}} for index in range(REPLAY_ROWS)]
+    supported = [_replay_row(f"replay-{index}") for index in range(REPLAY_ROWS)]
+    replay = [_replay_row("unsupported", 27), *supported]
     provenance = {"rejections": rejections, "inputs": {"replay": {"sha256": "input"}}}
     manifest = write_outputs(tmp_path, replay, train, shuffled, evaluation, provenance, 43)
     payload_a = (tmp_path / "arm-a.jsonl").read_bytes()
@@ -82,13 +91,16 @@ def test_r043_outputs_match_counts_hashes_and_frozen_replay(tmp_path, generated)
     arms = [[json.loads(line) for line in (tmp_path / f"arm-{name}.jsonl").read_text().splitlines()]
             for name in ("a", "b", "c")]
     assert all(len(arm) == 2800 for arm in arms)
-    assert arms[0][:REPLAY_ROWS] == arms[1][:REPLAY_ROWS] == arms[2][:REPLAY_ROWS] == replay
+    assert arms[0][:REPLAY_ROWS] == arms[1][:REPLAY_ROWS] == arms[2][:REPLAY_ROWS] == supported
     assert manifest["logical_rows"] == {"arm-a": 2800, "arm-b": 2800, "arm-c": 2800,
                                          "eval": EVAL_PAIRS}
     assert manifest["presentations"]["arm-a"] == 4000
+    assert manifest["trainer_examples"]["arm-a"] == 2800
     assert manifest["outputs"]["arm-a"]["sha256"] == manifest["outputs"]["arm-b"]["sha256"]
-    with pytest.raises(ValueError, match="at least"):
-        write_outputs(tmp_path, replay[:-1], train, shuffled, evaluation, provenance, 43)
+    assert manifest["replay_selection"]["skipped"] == {"unsupported_option_count": 1}
+    assert manifest["replay_selection"]["selected_positions"] == list(range(1, REPLAY_ROWS + 1))
+    with pytest.raises(ValueError, match="supported frozen replay"):
+        write_outputs(tmp_path, supported[:-1], train, shuffled, evaluation, provenance, 43)
 
 
 def test_r043_quarantine_rejects_exact_and_near_duplicate_text():
@@ -117,8 +129,8 @@ def test_r043_quarantine_recognizes_nested_official_case_fields_and_rejects_empt
 def test_r043_cli_concatenates_repeatable_replay_inputs_in_order(tmp_path, monkeypatch, capsys):
     first = tmp_path / "typed.jsonl"
     second = tmp_path / "broad.jsonl"
-    first_rows = [{"id": f"typed-{index}"} for index in range(1488)]
-    second_rows = [{"id": f"broad-{index}"} for index in range(112)]
+    first_rows = [_replay_row(f"typed-{index}") for index in range(1488)]
+    second_rows = [_replay_row(f"broad-{index}") for index in range(112)]
     first.write_text("".join(json.dumps(row) + "\n" for row in first_rows))
     second.write_text("".join(json.dumps(row) + "\n" for row in second_rows))
     out = tmp_path / "out"
@@ -141,3 +153,16 @@ def test_r043_cli_concatenates_repeatable_replay_inputs_in_order(tmp_path, monke
                                      "--quarantine", str(empty_quarantine)])
     with pytest.raises(ValueError, match="no recognized text fields"):
         main()
+
+
+def test_r043_replay_selector_accepts_score_rows_and_rejects_multi_question_rows():
+    score = {"id": "score", "state": "score state",
+             "questions": {"decision": {"type": "score", "criteria": ["low", "high"]}},
+             "targets": {"decision": {"label": 1}}}
+    multi = _replay_row("multi")
+    multi["questions"]["second"] = copy.deepcopy(multi["questions"]["decision"])
+    multi["targets"]["second"] = {"label": "option-0"}
+    rows = [multi, score, *(_replay_row(f"fill-{index}") for index in range(REPLAY_ROWS - 1))]
+    selected, audit = _select_replay(rows)
+    assert selected[0] == score and len(selected) == REPLAY_ROWS
+    assert audit["skipped"] == {"question_count": 1}
