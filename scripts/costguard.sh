@@ -34,7 +34,7 @@ print -r -- $$ > "$PID_FILE"
 trap 'rm -f "$PID_FILE"; rmdir "$LOCK_DIR" 2>/dev/null' EXIT INT TERM
 
 check_pod() {
-  local pod_json pod_status ip port remote metrics util memory active artifacts processes stopped_status
+  local pod_json pod_status ip port remote metrics util memory active artifacts processes stopped_status local_transfer
 
   pod_json=$(runpodctl pod get "$POD_ID" -o json 2>/dev/null) || {
     log "pod=$POD_ID state=UNKNOWN reason=runpodctl_failed action=none"
@@ -55,6 +55,15 @@ check_pod() {
   port=$(jq -r '.ssh.port // empty' <<< "$pod_json")
   if [[ -z "$ip" || -z "$port" ]]; then
     log "pod=$POD_ID state=RUNNING action=none reason=ssh_not_ready"
+    return
+  fi
+
+  # A completed GPU job can still be actively copying its checkpoints locally.
+  # Keep this one pod alive until that transfer exits; the next scheduled check
+  # will stop it if nothing else is active.
+  local_transfer=$(pgrep -af "scp .*${ip}" 2>/dev/null || true)
+  if [[ -n "$local_transfer" ]]; then
+    log "pod=$POD_ID state=RUNNING action=hold reason=local_artifact_transfer"
     return
   fi
 
