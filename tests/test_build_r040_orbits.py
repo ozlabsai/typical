@@ -1,6 +1,8 @@
 from collections import Counter
 
-from scripts.build_r040_orbits import _by_source, build, rendered_signature
+import pytest
+
+from scripts.build_r040_orbits import _by_source, add_replay, build, rendered_signature
 from scripts.train_gemma_decision_lora import encode, flatten_row
 
 
@@ -42,3 +44,11 @@ def test_r040_fixes_option_order_for_both_arms():
         example = flatten_row(rows[0])[0]
         assert encode(example, _Tokenizer(), 16, shuffle=True, include_labels=True)[2] == [
             item[0] for item in example["items"]]
+
+
+def test_r040_excludes_the_approval_probe_predicate_and_action_panel_replay():
+    complete, partial, _ = build(train_sources=8, eval_sources=32)
+    rendered = "\n".join(row["state"] + row["questions"]["decision"]["instructions"] for row in complete)
+    assert "approval" not in rendered.lower()
+    with pytest.raises(ValueError, match="exclude"):
+        add_replay([{"id": "probe", "meta": {"panel": "action_v1"}}], complete, partial)

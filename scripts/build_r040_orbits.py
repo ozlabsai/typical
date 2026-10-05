@@ -13,14 +13,14 @@ from pathlib import Path
 
 
 TRAIN_STATE = (
-    "Case {entity}. Manager approval: {status}.",
-    "Review file for {entity}: the manager's approval is {status}.",
-    "The case record for {entity} lists manager approval as {status}.",
+    "Case {entity}. Required-document signature: {status}.",
+    "Review file for {entity}: the required document is {status}.",
+    "The case record for {entity} lists the required signature as {status}.",
 )
 EVAL_STATE = (
-    "Audit entry for {entity}: management approval was {status}.",
-    "For {entity}, the verified record says manager approval is {status}.",
-    "The reviewed file for {entity} reports a {status} manager approval.",
+    "Audit entry for {entity}: the required signature is {status}.",
+    "For {entity}, the verified record says the document is {status}.",
+    "The reviewed file for {entity} reports a {status} required document.",
 )
 ASSERTIONS = ("bare", "explicit", "interrogative")
 OPTION_SURFACES = (
@@ -30,7 +30,7 @@ OPTION_SURFACES = (
 
 
 def _claim(polarity):
-    return "A manager approval is recorded." if polarity == "positive" else "No manager approval is recorded."
+    return "A required document is signed." if polarity == "positive" else "No required document is signed."
 
 
 def _instructions(surface, polarity):
@@ -40,7 +40,7 @@ def _instructions(surface, polarity):
     if surface == "explicit":
         return f"Is the following statement true? {claim}"
     if surface == "interrogative":
-        return "Is a manager approval recorded?" if polarity == "positive" else "Is manager approval absent?"
+        return "Is a required document signed?" if polarity == "positive" else "Is the required document unsigned?"
     raise ValueError(f"unknown assertion surface: {surface}")
 
 
@@ -51,7 +51,7 @@ def _row(source_id, split, world, polarity, assertion_index, option_index, yes_f
     if yes_first:
         criteria = dict(reversed(list(criteria.items())))
     state_templates = EVAL_STATE if split == "eval" else TRAIN_STATE
-    status = "recorded" if world else "not recorded"
+    status = "signed" if world else "unsigned"
     entity = f"case-{split}-{source_id:03d}"
     label = "yes" if world == (polarity == "positive") else "no"
     return {
@@ -62,7 +62,7 @@ def _row(source_id, split, world, polarity, assertion_index, option_index, yes_f
                                    "criteria": criteria}},
         "targets": {"decision": {"label": label}},
         "meta": {"source": "r040_programmatic", "source_id": f"{split}-{source_id:03d}",
-                 "world": int(world), "polarity": polarity, "field": "approved",
+                 "world": int(world), "polarity": polarity, "field": "document_signed",
                  "assertion_true": label == "yes", "wording": assertion_surface,
                  "criteria_style": option_surface, "yes_first": yes_first, "fixed_option_order": True,
                  "arm": arm, "copy_index": copy_index},
@@ -164,6 +164,10 @@ def _digest(rows):
 
 
 def add_replay(replay, complete, partial):
+    for row in replay:
+        meta = row.get("meta") or {}
+        if meta.get("panel") == "action_v1" or str(row.get("id", "")).startswith("r040-"):
+            raise ValueError("R040 replay must exclude action-panel and R040 rows")
     return [*replay, *complete], [*replay, *partial]
 
 

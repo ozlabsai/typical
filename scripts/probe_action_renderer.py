@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -76,7 +77,8 @@ def main():
     parser.add_argument("--max-length", type=int, default=8192)
     args = parser.parse_args()
 
-    rows = [json.loads(line) for line in Path(args.data).read_text().splitlines() if line.strip()]
+    data = Path(args.data)
+    rows = [json.loads(line) for line in data.read_text().splitlines() if line.strip()]
     rows = select_approved(rows, args.per_label)
     device = torch.device("cuda")
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
@@ -101,6 +103,8 @@ def main():
                                     "yes_first": yes_first, "p_yes": probabilities["yes"],
                                     "correct": (probabilities["yes"] >= 0.5) == (label == "yes")})
     report = summarize(records)
+    report["input_sha256"] = hashlib.sha256(data.read_bytes()).hexdigest()
+    report["per_label"] = args.per_label
     canonical_no = report["canonical_no_both_orders"]
     bare_yes, canonical_yes = report["bare_yes_both_orders"], report["canonical_yes_both_orders"]
     report["gates"] = {
