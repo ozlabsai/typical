@@ -1,6 +1,7 @@
 import json
 
 from scripts.build_action_panel import SPLITS, action_for, build, main
+from scripts.score_action_panel import summarize
 
 
 def test_action_panel_is_deterministic_and_split_disjoint(tmp_path, monkeypatch):
@@ -30,3 +31,18 @@ def test_action_panel_is_deterministic_and_split_disjoint(tmp_path, monkeypatch)
     main()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["splits"]["train"]["rows"] == 8
+
+
+def test_action_report_separates_ranking_and_threshold_errors():
+    rows, _ = build(42, split="eval", cases_per_cell=1)
+    row = next(item for item in rows if len(item["questions"]) == 2)
+    good = {qid: {"yes": float(target["label"] == "yes"),
+                  "no": float(target["label"] == "no")}
+            for qid, target in row["targets"].items()}
+    report = summarize([row], [{"id": row["id"], "probabilities": good}])
+    assert report["exact_action_accuracy"] == 1.0
+
+    ranked_wrong = {qid: {"yes": 1 - values["yes"], "no": values["yes"]}
+                    for qid, values in good.items()}
+    report = summarize([row], [{"id": row["id"], "probabilities": ranked_wrong}])
+    assert report["error_categories"]["ranking"] == 1
