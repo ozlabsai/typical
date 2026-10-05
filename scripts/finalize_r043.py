@@ -130,7 +130,7 @@ def _load(path):
     return json.loads(Path(path).read_text())
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--comparison", required=True)
     parser.add_argument("--training-audit", required=True)
@@ -141,7 +141,7 @@ def main():
         parser.add_argument(f"--{arm}-action", required=True)
     parser.add_argument("--b-mmhe", required=True)
     parser.add_argument("--out", required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     result = finalize(
         _load(args.comparison),
         _load(args.training_audit),
@@ -153,7 +153,8 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result["promotion_pass"] else 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

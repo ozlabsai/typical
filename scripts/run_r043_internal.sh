@@ -22,7 +22,8 @@ cd "$ROOT"
 [[ -f "$RUN/manifest.json" && -f "$RUN/assets-manifest.json" && -f "$RUN/action-cal.jsonl" && -f "$RUN/action-eval.jsonl" ]]
 [[ -f "$RUN/val-wf.jsonl" && -f "$RUN/val-wh.jsonl" && -f "$RUN/val-replay.jsonl" ]]
 [[ -f "$HE_LEFT" && -f "$HE_RIGHT" && -d "$MM_DIR" ]]
-[[ ! -e "$RUN/a" && ! -e "$RUN/b" && ! -e "$RUN/c" && ! -e "$RUN/d" && ! -e "$RUN/pilot-finalized" ]]
+[[ ! -e "$RUN/a" && ! -e "$RUN/b" && ! -e "$RUN/c" && ! -e "$RUN/d" ]]
+[[ ! -e "$RUN/pilot-finalized" && ! -e "$RUN/pilot-promoted" ]]
 [[ $(sha256sum "$RUN/manifest.json" | awk '{print $1}') == "$MANIFEST_SHA" ]]
 [[ $(sha256sum "$RUN/assets-manifest.json" | awk '{print $1}') == "$ASSETS_MANIFEST_SHA" ]]
 [[ $(sha256sum "$RUN/action-cal.jsonl" | awk '{print $1}') == "$ACTION_CAL_SHA" ]]
@@ -86,12 +87,17 @@ done
 "$PYTHON" -m scripts.eval_gemma_mm_he --model "$MODEL" --adapter "$RUN/b/step-000350" \
   --he-left "$HE_LEFT" --he-right "$HE_RIGHT" --mm-dir "$MM_DIR" --out "$RUN/b-mmhe.json"
 
-"$PYTHON" -m scripts.finalize_r043 --comparison "$RUN/pair-comparison.json" \
+if "$PYTHON" -m scripts.finalize_r043 --comparison "$RUN/pair-comparison.json" \
   --training-audit "$RUN/training-audit.json" --assets "$RUN/assets-preflight.json" \
   --model-revision "$MODEL_REVISION" \
   --base-retention "$RUN/base-retention.json" --a-retention "$RUN/a-retention.json" \
   --b-retention "$RUN/b-retention.json" \
   --base-action "$RUN/base-action/report.json" --a-action "$RUN/a-action/report.json" \
   --b-action "$RUN/b-action/report.json" \
-  --b-mmhe "$RUN/b-mmhe.json" --out "$RUN/final-gates.json"
+  --b-mmhe "$RUN/b-mmhe.json" --out "$RUN/final-gates.json"; then
+  touch "$RUN/pilot-promoted"
+else
+  status=$?
+  [[ $status == 2 ]] || exit $status
+fi
 touch "$RUN/pilot-finalized"

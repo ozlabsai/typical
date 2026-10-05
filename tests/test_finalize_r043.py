@@ -1,8 +1,9 @@
 import copy
+import json
 
 import pytest
 
-from scripts.finalize_r043 import finalize
+from scripts.finalize_r043 import finalize, main
 
 
 REVISION = "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7"
@@ -63,3 +64,20 @@ def test_r043_terminal_gate_requires_training_audit():
                       model_revision=REVISION)
     assert not result["gates"]["training_audit_pass"]
     assert not result["promotion_pass"]
+
+
+def test_r043_cli_returns_distinct_nonpromotion_status(tmp_path):
+    comparison, training, assets, retentions, actions, mmhe = _inputs()
+    retentions["b"] = _retention(.87)
+    values = {"comparison": comparison, "training-audit": training, "assets": assets,
+              "b-mmhe": mmhe}
+    values.update({f"{arm}-retention": value for arm, value in retentions.items()})
+    values.update({f"{arm}-action": value for arm, value in actions.items()})
+    args = ["--model-revision", REVISION]
+    for name, value in values.items():
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(value))
+        args.extend((f"--{name}", str(path)))
+    args.extend(("--out", str(tmp_path / "result.json")))
+    assert main(args) == 2
+    assert not json.loads((tmp_path / "result.json").read_text())["promotion_pass"]
