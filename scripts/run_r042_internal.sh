@@ -7,9 +7,13 @@ MODEL=${R042_MODEL:-$ROOT/hf-gemma/hub/models--google--gemma-4-12B-it/snapshots/
 RUN=${R042_RUN:-$ROOT/r042}
 PYTHON=${R042_PYTHON:-$ROOT/.venv-pinned/bin/python}
 PROBE_SHA=a477f8347c0d2a6ac4898e7c6e119f69450669b44b2943d1d55aa3089b27a297
+HE_LEFT=${R042_HE_LEFT:?set R042_HE_LEFT to the frozen Hebrew panel}
+HE_RIGHT=${R042_HE_RIGHT:?set R042_HE_RIGHT to the paired English panel}
+MM_DIR=${R042_MM_DIR:?set R042_MM_DIR to the frozen image-panel directory}
 
 cd "$ROOT"
-[[ -f "$RUN/replay.jsonl" && -f "$RUN/renderer-probe-eval.jsonl" ]]
+[[ -f "$RUN/replay.jsonl" && -f "$RUN/renderer-probe-eval.jsonl" && -f "$RUN/action-cal.jsonl" && -f "$RUN/action-eval.jsonl" ]]
+[[ -f "$HE_LEFT" && -f "$HE_RIGHT" && -d "$MM_DIR" ]]
 [[ ! -e "$RUN/card" && ! -e "$RUN/prose" && ! -e "$RUN/internal-finalized" ]]
 [[ $(sha256sum "$RUN/renderer-probe-eval.jsonl" | awk '{print $1}') == "$PROBE_SHA" ]]
 
@@ -43,4 +47,26 @@ done
   --control "$RUN/prose-renderer-probe/report.json" \
   --treatment-predictions "$RUN/card-renderer-probe/predictions.jsonl" \
   --control-predictions "$RUN/prose-renderer-probe/predictions.jsonl" --out "$RUN/renderer-compare.json"
+for arm in base card prose; do
+  adapter=()
+  [[ "$arm" != base ]] && adapter=(--adapter "$RUN/$arm/step-000450")
+  "$PYTHON" scripts/eval_gemma_decision_lora.py --model "$MODEL" "${adapter[@]}" \
+    --val wf="$RUN/val-wf.jsonl" --val wh="$RUN/val-wh.jsonl" --val replay="$RUN/val-replay.jsonl" \
+    --samples 128 --seed 42 > "$RUN/$arm-retention.json"
+  "$PYTHON" -m scripts.score_action_panel --model "$MODEL" "${adapter[@]}" \
+    --data "$RUN/action-cal.jsonl" --out "$RUN/$arm-action-cal"
+  "$PYTHON" -m scripts.score_action_panel --model "$MODEL" "${adapter[@]}" \
+    --data "$RUN/action-eval.jsonl" --calibration-data "$RUN/action-cal.jsonl" \
+    --calibration-predictions "$RUN/$arm-action-cal/predictions.jsonl" --out "$RUN/$arm-action"
+done
+for arm in card prose; do
+  "$PYTHON" -m scripts.eval_gemma_mm_he --model "$MODEL" --adapter "$RUN/$arm/step-000450" \
+    --he-left "$HE_LEFT" --he-right "$HE_RIGHT" --mm-dir "$MM_DIR" --out "$RUN/$arm-mmhe.json"
+done
+"$PYTHON" -m scripts.finalize_r042 --representation "$RUN/representation-compare.json" \
+  --renderer "$RUN/renderer-compare.json" --base-retention "$RUN/base-retention.json" \
+  --card-retention "$RUN/card-retention.json" --prose-retention "$RUN/prose-retention.json" \
+  --card-mmhe "$RUN/card-mmhe.json" --prose-mmhe "$RUN/prose-mmhe.json" \
+  --base-action "$RUN/base-action/report.json" --card-action "$RUN/card-action/report.json" \
+  --prose-action "$RUN/prose-action/report.json" --out "$RUN/final-gates.json"
 touch "$RUN/internal-finalized"
