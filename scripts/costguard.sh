@@ -53,11 +53,6 @@ check_pod() {
   fi
   volume_in_gb=$(jq -r '.volumeInGb // "UNKNOWN"' <<< "$pod_json")
 
-  if [[ "$volume_in_gb" == 0 && ! -f "$SAFE_TO_STOP_FILE" ]]; then
-    log "pod=$POD_ID state=RUNNING action=none reason=ephemeral_without_archive_receipt receipt=$SAFE_TO_STOP_FILE"
-    return
-  fi
-
   if [[ -f "$HOLD_FILE" ]] && find "$HOLD_FILE" -mmin -25 -print -quit | grep -q .; then
     log "pod=$POD_ID state=RUNNING action=hold reason=recent_costguard_hold"
     return
@@ -111,6 +106,10 @@ check_pod() {
   if (( active > 0 || util >= 5 )); then
     log "pod=$POD_ID state=RUNNING gpu=${util}% memory=${memory}MiB active=$active action=keep"
     [[ -n "$processes" ]] && print -r -- "$processes" | sed 's/^/  process: /' >> "$LOG_FILE"
+    return
+  fi
+  if [[ "$volume_in_gb" == 0 && ! -f "$SAFE_TO_STOP_FILE" ]]; then
+    log "pod=$POD_ID state=RUNNING gpu=${util}% memory=${memory}MiB active=0 action=hold reason=ephemeral_without_archive_receipt receipt=$SAFE_TO_STOP_FILE"
     return
   fi
   if (( artifacts == 0 )); then
