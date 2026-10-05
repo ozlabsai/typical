@@ -226,6 +226,16 @@ def accumulate_dense_gradients_(buffers, grads, objective):
         buffer.add_(grad.detach().float())
 
 
+def backward_into_dense_gradients_(loss, params, buffers, objective, retain_graph=False):
+    """Copy one backward pass into dense buffers, then release parameter grads."""
+    for parameter in params:
+        parameter.grad = None
+    loss.backward(retain_graph=retain_graph)
+    accumulate_dense_gradients_(buffers, [parameter.grad for parameter in params], objective)
+    for parameter in params:
+        parameter.grad = None
+
+
 def render(example, order=None):
     order = list(range(len(example["items"]))) if order is None else list(order)
     state = example["state"]
@@ -458,6 +468,10 @@ def main():
     metrics.write_text(json.dumps(baseline) + "\n")
     print(json.dumps(baseline), flush=True)
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    if args.project_consistency_against_guard:
+        grad_d = [torch.zeros_like(p, dtype=torch.float32) for p in params]
+        grad_guard = [torch.zeros_like(p, dtype=torch.float32) for p in params]
+        grad_cons = [torch.zeros_like(p, dtype=torch.float32) for p in params]
     projection_conflicts = 0
     projection_active_steps = 0
     cumulative_removed_energy = 0.0
@@ -466,9 +480,9 @@ def main():
         accumulated = 0.0
         pair_active = pair_seen = 0
         if args.project_consistency_against_guard:
-            grad_d = [torch.zeros_like(p, dtype=torch.float32) for p in params]
-            grad_guard = [torch.zeros_like(p, dtype=torch.float32) for p in params]
-            grad_cons = [torch.zeros_like(p, dtype=torch.float32) for p in params]
+            for buffers in (grad_d, grad_guard, grad_cons):
+                for buffer in buffers:
+                    buffer.zero_()
             for _ in range(args.grad_accum):
                 if cursor + args.microbatch > len(order):
                     random.shuffle(order)
@@ -485,22 +499,18 @@ def main():
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
                 scale = 1.0 / args.grad_accum
-                d_grads = torch.autograd.grad(components["d_loss"] * scale, params,
-                                              retain_graph=True, allow_unused=True)
-                guard_grads = torch.autograd.grad(components["guard_loss"] * scale, params,
-                                                  retain_graph=components["consistency_loss"].requires_grad,
-                                                  allow_unused=True)
+                backward_into_dense_gradients_(
+                    components["d_loss"] * scale, params, grad_d, "D loss", retain_graph=True)
+                backward_into_dense_gradients_(
+                    components["guard_loss"] * scale, params, grad_guard, "guard loss",
+                    retain_graph=components["consistency_loss"].requires_grad)
                 if components["consistency_loss"].requires_grad:
-                    cons_grads = torch.autograd.grad(components["consistency_loss"] * scale,
-                                                     params, allow_unused=True)
-                else:
-                    cons_grads = None
-                accumulate_dense_gradients_(grad_d, d_grads, "D loss")
-                accumulate_dense_gradients_(grad_guard, guard_grads, "guard loss")
-                if cons_grads is not None:
-                    accumulate_dense_gradients_(grad_cons, cons_grads, "consistency loss")
+                    backward_into_dense_gradients_(
+                        components["consistency_loss"] * scale, params, grad_cons,
+                        "consistency loss")
                 accumulated += (components["d_loss"].item() +
                                 args.pair_consistency_weight * components["consistency_loss"].item())
+                del components
             if pair_active:
                 projected_cons, projection_stats = project_conflicting_gradient(
                     grad_cons, grad_guard, params=params)
@@ -519,6 +529,7 @@ def main():
                     parameter.grad = (d_grad + args.pair_consistency_weight * cons_grad).to(parameter.dtype)
                 else:
                     parameter.grad = d_grad.to(parameter.dtype)
+            del projected_cons, d_grad, cons_grad
             if projection_stats["projection_cons_energy"] > 0:
                 projection_active_steps += 1
                 projection_conflicts += int(projection_stats["projection_conflict"])
@@ -553,6 +564,8 @@ def main():
         metric = {"step": step, "train_loss": accumulated / args.grad_accum,
                   "lr": scheduler.get_last_lr()[0], "elapsed_s": time.time() - started,
                   "peak_vram_gb": torch.cuda.max_memory_allocated() / 2**30,
+                  "allocated_vram_gb": torch.cuda.memory_allocated() / 2**30,
+                  "reserved_vram_gb": torch.cuda.memory_reserved() / 2**30,
                   "pair_consistency_active": pair_active,
                   "pair_consistency_seen": pair_seen,
                   "pair_consistency_rate": pair_active / pair_seen if pair_seen else 0.0}

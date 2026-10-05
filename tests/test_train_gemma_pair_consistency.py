@@ -9,6 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from scripts.train_gemma_decision_lora import (
     accumulate_dense_gradients_,
+    backward_into_dense_gradients_,
     pair_consistency_term,
     pair_consistency_stats,
     pair_slot_loss,
@@ -248,6 +249,25 @@ def test_projection_rejects_unused_trainable_parameters_instead_of_weight_decayi
         assert "did not reach 1 trainable parameters" in str(error)
     else:
         raise AssertionError("unused trainable parameter must fail closed")
+
+
+def test_backward_extraction_matches_autograd_grad_and_clears_parameter_grads():
+    theta = torch.nn.Parameter(torch.tensor([0.2, -0.3]))
+    shared = (theta.square().sum() + theta.prod()).tanh()
+    losses = (shared * 2, shared * -3, shared.square())
+    expected = [torch.autograd.grad(loss, theta, retain_graph=True)[0] for loss in losses]
+
+    theta = torch.nn.Parameter(torch.tensor([0.2, -0.3]))
+    shared = (theta.square().sum() + theta.prod()).tanh()
+    losses = (shared * 2, shared * -3, shared.square())
+    actual = [torch.zeros_like(theta) for _ in losses]
+    for index, (loss, buffer) in enumerate(zip(losses, actual)):
+        backward_into_dense_gradients_(
+            loss, [theta], [buffer], f"loss {index}", retain_graph=index < len(losses) - 1)
+        assert theta.grad is None
+
+    for actual_grad, expected_grad in zip(actual, expected):
+        assert torch.equal(actual_grad, expected_grad)
 
 
 def load_examples_from_rows(rows):
