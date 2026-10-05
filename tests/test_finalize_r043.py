@@ -28,23 +28,38 @@ def _mmhe():
 
 def _inputs():
     comparison = {"model_revision": REVISION, "gates": {"pilot": True}, "promotion_pass": True}
+    training = {"gates": {"exposure": True}, "promotion_pass": True}
+    assets = {"assets": {name: {} for name in
+                          ("model", "val-wf", "val-wh", "val-replay", "action-cal", "action-eval",
+                           "he-left", "he-right", "mm")}, "promotion_pass": True}
     retentions = {"base": _retention(.90), "a": _retention(.90),
-                  "b": _retention(.89), "c": _retention(.90)}
-    actions = {arm: _action(.90) for arm in ("base", "a", "b", "c")}
-    return comparison, retentions, actions, _mmhe()
+                  "b": _retention(.89)}
+    actions = {arm: _action(.90) for arm in ("base", "a", "b")}
+    return comparison, training, assets, retentions, actions, _mmhe()
 
 
 def test_r043_terminal_gate_combines_causal_and_preservation_checks():
     assert finalize(*_inputs(), model_revision=REVISION)["promotion_pass"]
-    comparison, retentions, actions, mmhe = _inputs()
+    comparison, training, assets, retentions, actions, mmhe = _inputs()
     retentions["b"] = _retention(.87)
-    result = finalize(comparison, retentions, actions, mmhe, model_revision=REVISION)
+    result = finalize(comparison, training, assets, retentions, actions, mmhe,
+                      model_revision=REVISION)
     assert not result["gates"]["b_wf_loses_at_most_.02_vs_base"]
     assert not result["promotion_pass"]
 
 
 def test_r043_terminal_gate_fails_on_missing_rows():
-    comparison, retentions, actions, mmhe = _inputs()
+    comparison, training, assets, retentions, actions, mmhe = _inputs()
     retentions["a"]["wf"]["skipped_overlength"] = 1
     with pytest.raises(ValueError, match="without skipping"):
-        finalize(comparison, retentions, actions, mmhe, model_revision=REVISION)
+        finalize(comparison, training, assets, retentions, actions, mmhe,
+                 model_revision=REVISION)
+
+
+def test_r043_terminal_gate_requires_training_audit():
+    comparison, training, assets, retentions, actions, mmhe = _inputs()
+    training["gates"]["exposure"] = training["promotion_pass"] = False
+    result = finalize(comparison, training, assets, retentions, actions, mmhe,
+                      model_revision=REVISION)
+    assert not result["gates"]["training_audit_pass"]
+    assert not result["promotion_pass"]

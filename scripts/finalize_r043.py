@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 
 
-ARMS = ("base", "a", "b", "c")
+ARMS = ("base", "a", "b")
 SUITES = ("wf", "wh", "replay")
 ACTION_MODES = ("raw", "calibrated")
 
@@ -72,7 +72,18 @@ def _mmhe(report):
     return promotion
 
 
-def finalize(comparison, retentions, actions, b_mmhe, *, model_revision):
+def _gate_report(report, name):
+    report = _mapping(report, name)
+    gates = _mapping(report.get("gates"), f"{name}.gates")
+    promotion = _bool(report.get("promotion_pass"), f"{name}.promotion_pass")
+    if not gates or not all(type(value) is bool for value in gates.values()):
+        raise ValueError(f"{name}.gates must be nonempty booleans")
+    if promotion != all(gates.values()):
+        raise ValueError(f"{name} promotion result disagrees with its gates")
+    return promotion
+
+
+def finalize(comparison, training_audit, assets, retentions, actions, b_mmhe, *, model_revision):
     if not model_revision:
         raise ValueError("model revision must not be empty")
     comparison = _mapping(comparison, "comparison")
@@ -85,11 +96,18 @@ def finalize(comparison, retentions, actions, b_mmhe, *, model_revision):
     if comparison_pass != all(comparison_gates.values()):
         raise ValueError("comparison promotion result disagrees with its gates")
     if set(retentions) != set(ARMS) or set(actions) != set(ARMS):
-        raise ValueError("retention and action reports require exactly base/A/B/C")
+        raise ValueError("retention and action reports require exactly base/A/B")
     retention = {arm: _retention(retentions[arm], f"{arm}_retention") for arm in ARMS}
     action = {arm: _action(actions[arm], f"{arm}_action") for arm in ARMS}
+    assets = _mapping(assets, "assets")
+    if set(_mapping(assets.get("assets"), "assets.assets")) != {
+            "model", "val-wf", "val-wh", "val-replay", "action-cal", "action-eval",
+            "he-left", "he-right", "mm"}:
+        raise ValueError("assets report does not contain the exact frozen asset set")
 
     gates = {"causal_pair_promotion_pass": comparison_pass,
+             "training_audit_pass": _gate_report(training_audit, "training_audit"),
+             "assets_preflight_pass": _bool(assets.get("promotion_pass"), "assets.promotion_pass"),
              "b_mmhe_promotion_pass": _mmhe(b_mmhe)}
     for suite in SUITES:
         for control in ("base", "a"):
@@ -115,6 +133,8 @@ def _load(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--comparison", required=True)
+    parser.add_argument("--training-audit", required=True)
+    parser.add_argument("--assets", required=True)
     parser.add_argument("--model-revision", required=True)
     for arm in ARMS:
         parser.add_argument(f"--{arm}-retention", required=True)
@@ -124,6 +144,8 @@ def main():
     args = parser.parse_args()
     result = finalize(
         _load(args.comparison),
+        _load(args.training_audit),
+        _load(args.assets),
         {arm: _load(getattr(args, f"{arm}_retention")) for arm in ARMS},
         {arm: _load(getattr(args, f"{arm}_action")) for arm in ARMS},
         _load(args.b_mmhe), model_revision=args.model_revision)

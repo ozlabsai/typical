@@ -14,7 +14,11 @@ def test_r043_preflight_checks_trainer_visible_counts(monkeypatch, tmp_path):
         outputs[name] = {"rows": 1, "sha256": hashlib.sha256(data).hexdigest()}
     manifest = {"experiment": "r043_causal_pairs", "seed": 43,
                 "logical_rows": {name: values[0] for name, values in module.EXPECTED.items()},
+                "trainer_examples": {name: values[0] for name, values in module.EXPECTED.items()},
                 "presentations": {name: values[1] for name, values in module.EXPECTED.items()},
+                "pair_modes": {"arm-a": "counterfactual", "arm-b": "counterfactual",
+                               "arm-c": "shuffled_counterfactual",
+                               "arm-d": "shuffled_counterfactual", "eval": "counterfactual"},
                 "outputs": outputs}
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
 

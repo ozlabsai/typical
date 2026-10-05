@@ -12,6 +12,7 @@ EXPECTED = {
     "arm-a": (2800, 4000),
     "arm-b": (2800, 4000),
     "arm-c": (2800, 4000),
+    "arm-d": (2800, 4000),
     "eval": (256, 512),
 }
 
@@ -23,11 +24,18 @@ def preflight(run):
         raise ValueError("unexpected R043 experiment or seed")
     if manifest.get("logical_rows") != {name: expected[0] for name, expected in EXPECTED.items()}:
         raise ValueError("manifest logical counts are not frozen R043 counts")
+    if manifest.get("trainer_examples") != {name: expected[0] for name, expected in EXPECTED.items()}:
+        raise ValueError("manifest trainer counts are not frozen R043 counts")
     if manifest.get("presentations") != {name: expected[1] for name, expected in EXPECTED.items()}:
         raise ValueError("manifest presentation counts are not frozen R043 counts")
+    if manifest.get("pair_modes") != {
+            "arm-a": "counterfactual", "arm-b": "counterfactual",
+            "arm-c": "shuffled_counterfactual", "arm-d": "shuffled_counterfactual",
+            "eval": "counterfactual"}:
+        raise ValueError("manifest pair modes are not the frozen R043 design")
     outputs = manifest.get("outputs")
     if not isinstance(outputs, dict) or set(outputs) != set(EXPECTED):
-        raise ValueError("manifest must hash exactly arm-a/arm-b/arm-c/eval")
+        raise ValueError("manifest must hash exactly arm-a/arm-b/arm-c/arm-d/eval")
     result = {}
     for name, (logical, presentations) in EXPECTED.items():
         path = run / f"{name}.jsonl"

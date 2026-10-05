@@ -1,4 +1,4 @@
-"""Compare R043 base/A/B/C paired evaluations with source-level bootstrap."""
+"""Compare R043 base/A/B/C/D with source-paired causal bootstrap contrasts."""
 
 import argparse
 import json
@@ -46,15 +46,19 @@ def _validate_report(expected, report, name, input_sha256, model_revision):
         raise ValueError(f"{name}: report diagnostics do not match predictions")
 
 
-def _bootstrap(treatment, control, *, samples, seed):
+def _bootstrap(arms, coefficients, *, samples, seed):
     if not isinstance(samples, int) or samples < 100:
         raise ValueError("bootstrap samples must be an integer of at least 100")
-    if set(treatment) != set(control):
+    source_sets = [set(values) for values in arms.values()]
+    if not source_sets or any(values != source_sets[0] for values in source_sets[1:]):
         raise ValueError("arm source IDs differ")
-    source_ids = sorted(treatment)
+    if set(arms) != set(coefficients):
+        raise ValueError("bootstrap arms and coefficients differ")
+    source_ids = sorted(source_sets[0])
     result = {"sources": len(source_ids)}
     for offset, metric in enumerate(METRICS):
-        values = [treatment[source][metric] - control[source][metric] for source in source_ids]
+        values = [sum(coefficients[arm] * arms[arm][source][metric] for arm in arms)
+                  for source in source_ids]
         rng = random.Random(seed + offset)
         draws = sorted(sum(rng.choice(values) for _ in values) / len(values)
                        for _ in range(samples))
@@ -68,22 +72,33 @@ def _bootstrap(treatment, control, *, samples, seed):
 
 def compare(eval_rows, predictions, reports, *, input_sha256, model_revision,
             samples=10_000, seed=43):
-    if set(predictions) != {"base", "a", "b", "c"} or set(reports) != set(predictions):
-        raise ValueError("comparison requires exactly base/A/B/C")
+    required = {"base", "a", "b", "c", "d"}
+    if set(predictions) != required or set(reports) != required:
+        raise ValueError("comparison requires exactly base/A/B/C/D")
     scored = {arm: audit(eval_rows, values) for arm, values in predictions.items()}
     for arm in scored:
         _validate_report(scored[arm], reports[arm], arm, input_sha256, model_revision)
 
     deltas = {
-        "b_minus_a": _bootstrap(scored["b"]["source_metrics"], scored["a"]["source_metrics"],
-                                samples=samples, seed=seed),
-        "b_minus_c": _bootstrap(scored["b"]["source_metrics"], scored["c"]["source_metrics"],
-                                samples=samples, seed=seed + 100),
+        "b_minus_a": _bootstrap(
+            {arm: scored[arm]["source_metrics"] for arm in ("b", "a")},
+            {"b": 1, "a": -1}, samples=samples, seed=seed),
+        "c_minus_d": _bootstrap(
+            {arm: scored[arm]["source_metrics"] for arm in ("c", "d")},
+            {"c": 1, "d": -1}, samples=samples, seed=seed + 100),
+        "difference_in_differences": _bootstrap(
+            {arm: scored[arm]["source_metrics"] for arm in ("b", "a", "c", "d")},
+            {"b": 1, "a": -1, "c": -1, "d": 1}, samples=samples, seed=seed + 200),
+        "b_minus_c_raw": _bootstrap(
+            {arm: scored[arm]["source_metrics"] for arm in ("b", "c")},
+            {"b": 1, "c": -1}, samples=samples, seed=seed + 300),
     }
     gates = {}
-    for comparison, values in deltas.items():
+    for comparison in ("b_minus_a", "difference_in_differences"):
+        values = deltas[comparison]
         for metric in METRICS:
             gates[f"{comparison}_{metric}_at_least_.02"] = values[metric]["delta"] >= .02
+            gates[f"{comparison}_{metric}_lower_95_positive"] = values[metric]["lower_95"] > 0
     for family, b_values in scored["b"]["families"].items():
         for metric in METRICS:
             gates[f"b_{family}_{metric}_not_over_.02_below_a"] = (
@@ -94,7 +109,14 @@ def compare(eval_rows, predictions, reports, *, input_sha256, model_revision,
                 scored["b"][metric] <= scored[control][metric] * 1.01)
     gates["b_option_order_accuracy_delta_at_most_.01"] = (
         scored["b"]["option_order_accuracy_delta"] <= .01)
+    gates["b_polarity_accuracy_delta_at_most_.01"] = (
+        scored["b"]["polarity_accuracy_delta"] <= .01)
+    for polarity in ("negative", "positive"):
+        gates[f"b_{polarity}_accuracy_not_over_.02_below_a"] = (
+            scored["b"]["polarity"][polarity]["accuracy"] >=
+            scored["a"]["polarity"][polarity]["accuracy"] - .02)
     return {
+        "estimand": "source-paired (B-A) - (C-D); B/A true pairs, C/D matched shuffled pairs",
         "model_revision": model_revision,
         "input_sha256": input_sha256,
         "arms": scored,
@@ -108,7 +130,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", required=True)
     parser.add_argument("--model-revision", required=True)
-    for arm in ("base", "a", "b", "c"):
+    for arm in ("base", "a", "b", "c", "d"):
         parser.add_argument(f"--{arm}-predictions", required=True)
         parser.add_argument(f"--{arm}-report", required=True)
     parser.add_argument("--bootstrap-samples", type=int, default=10_000)
@@ -121,9 +143,9 @@ def main():
     import hashlib
     input_sha256 = hashlib.sha256(data_path.read_bytes()).hexdigest()
     predictions = {arm: _read(getattr(args, f"{arm}_predictions"))
-                   for arm in ("base", "a", "b", "c")}
+                   for arm in ("base", "a", "b", "c", "d")}
     reports = {arm: _load(getattr(args, f"{arm}_report"))
-               for arm in ("base", "a", "b", "c")}
+               for arm in ("base", "a", "b", "c", "d")}
     result = compare(_read(data_path), predictions, reports, input_sha256=input_sha256,
                      model_revision=args.model_revision, samples=args.bootstrap_samples, seed=args.seed)
     output = Path(args.out)
