@@ -112,6 +112,8 @@ If balanced augmentation improves order consistency but not counterfactual accur
 
 ### H1 — Probability-to-program mismatch is a primary workflow bottleneck
 
+**R037 update (2026-10-05): do not run this training ablation.** The first action-panel report was a nonrepresentative bare-renderer shard and its deterministic evaluator cannot independently measure learned action composition. A repaired paired frozen-model probe instead varied only the renderer for 65 `approved=false` cases and 65 positive controls, in both option orders. Bare negative both-orders accuracy was `0/65`; canonical interrogative/explicit accuracy was `65/65`, positive controls remained `65/65`, and canonical mean semantic order delta was `1.14e-7`. This identifies symbol/renderer binding as the active cause. It neither supports action-regret nor justifies RL; preserve the receipt under `.context/action-panel-renderer-probe/`.
+
 Workflow code consumes probabilities through thresholds and action composition. Security, for example, uses Noul thresholds including `0.15`, `0.40–0.70`, and `0.75`; two models with the same argmax can therefore take different actions. This is a decision-focused-learning problem, not plain classification. [Smart Predict-then-Optimize](https://arxiv.org/abs/1710.08005) motivates optimizing downstream decision regret rather than only prediction error.
 
 **First, no training:** audit that training and serving aggregate exactly the same allowed token surfaces, then replay saved probability vectors through independent synthetic threshold programs. Decompose every failure into:
