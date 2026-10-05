@@ -25,6 +25,7 @@ from scripts.train_gemma_decision_lora import (
     projection_early_stop,
     semantic_margin,
     semantic_gold_margin,
+    staged_counterfactual_order,
     validate_pair_objectives,
 )
 
@@ -130,6 +131,35 @@ def test_pair_flip_configuration_rejects_invalid_or_mixed_objectives():
 def test_pair_flip_weight_starts_at_configured_step():
     assert pair_flip_weight_at_step(0.25, start_step=10, step=9) == 0.0
     assert pair_flip_weight_at_step(0.25, start_step=10, step=10) == 0.25
+
+
+def test_staged_counterfactual_order_is_exact_and_deterministic():
+    examples = ([{"id": f"single-{index}"} for index in range(1600)] +
+                [{"id": f"pair-{index}", "paired_views": [1, 2],
+                  "pair_mode": "counterfactual"} for index in range(1200)])
+    random.seed(43)
+    first = staged_counterfactual_order(
+        examples, steps=350, microbatch=1, grad_accum=8, start_step=201)
+    random.seed(43)
+    second = staged_counterfactual_order(
+        examples, steps=350, microbatch=1, grad_accum=8, start_step=201)
+    assert first == second
+    assert len(first) == 2800 and len(set(first)) == 2800
+    assert all("paired_views" not in examples[index] for index in first[:1600])
+    assert all(examples[index].get("pair_mode") for index in first[1600:])
+
+
+def test_staged_counterfactual_order_rejects_invalid_arithmetic_and_rows():
+    singles = [{"id": f"single-{index}"} for index in range(8)]
+    pairs = [{"id": f"pair-{index}", "paired_views": [1, 2],
+              "pair_mode": "counterfactual"} for index in range(8)]
+    with pytest.raises(ValueError, match="got singles=8, pairs=7"):
+        staged_counterfactual_order(singles + pairs[:-1], 2, 1, 8, 2)
+    with pytest.raises(ValueError, match="only supports"):
+        staged_counterfactual_order(singles + pairs[:-1] + [{"paired_views": [1, 2]}],
+                                    2, 1, 8, 2)
+    with pytest.raises(ValueError, match="valid start step"):
+        staged_counterfactual_order(singles + pairs, 2, 1, 8, 0)
 
 
 def test_consistency_gate_inclusive_threshold_and_anchor_stop_gradient():

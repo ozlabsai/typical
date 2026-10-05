@@ -57,6 +57,7 @@ def parse_args():
     parser.add_argument("--pair-flip-weight", type=float, default=0.0)
     parser.add_argument("--pair-flip-margin", type=float, default=1.0)
     parser.add_argument("--pair-flip-start-step", type=int, default=0)
+    parser.add_argument("--stage-counterfactual-pairs", action="store_true")
     return parser.parse_args()
 
 
@@ -247,6 +248,29 @@ def validate_pair_objectives(pair_consistency_weight, project_consistency_agains
 
 def pair_flip_weight_at_step(weight, start_step, step):
     return weight if step >= start_step else 0.0
+
+
+def staged_counterfactual_order(examples, steps, microbatch, grad_accum, start_step):
+    logical_batch = microbatch * grad_accum
+    if logical_batch <= 0 or not 1 <= start_step <= steps:
+        raise ValueError("staged counterfactual schedule needs positive batches and a valid start step")
+    singles = [index for index, example in enumerate(examples)
+               if "paired_views" not in example]
+    pairs = [index for index, example in enumerate(examples)
+             if example.get("pair_mode") in ("counterfactual", "shuffled_counterfactual")]
+    if len(singles) + len(pairs) != len(examples):
+        raise ValueError("staged counterfactual schedule only supports singles and counterfactual pairs")
+    expected_singles = (start_step - 1) * logical_batch
+    expected_pairs = (steps - start_step + 1) * logical_batch
+    if len(singles) != expected_singles or len(pairs) != expected_pairs:
+        raise ValueError(
+            f"staged counterfactual counts need singles={expected_singles}, pairs={expected_pairs}; "
+            f"got singles={len(singles)}, pairs={len(pairs)}")
+    if len(examples) != steps * logical_batch:
+        raise ValueError("staged counterfactual schedule must cover exactly one epoch")
+    random.shuffle(singles)
+    random.shuffle(pairs)
+    return singles + pairs
 
 
 def guard_logical_slot_loss(view_losses):
@@ -521,6 +545,9 @@ def main():
     train = load_examples(args.train)
     validation = {name: load_examples([path]) for name, path in
                   (item.split("=", 1) for item in args.val)}
+    staged_order = (staged_counterfactual_order(
+        train, args.steps, args.microbatch, args.grad_accum, args.pair_flip_start_step)
+        if args.stage_counterfactual_pairs else None)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(vars(args), indent=2) + "\n")
@@ -563,8 +590,11 @@ def main():
         return floor + (1 - floor) * 0.5 * (1 + math.cos(math.pi * progress))
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, multiplier)
-    order = list(range(len(train)))
-    random.shuffle(order)
+    if staged_order is None:
+        order = list(range(len(train)))
+        random.shuffle(order)
+    else:
+        order = staged_order
     cursor = 0
     optimizer.zero_grad(set_to_none=True)
     metrics = out / "metrics.jsonl"
@@ -584,6 +614,7 @@ def main():
     projection_active_steps = 0
     cumulative_removed_energy = 0.0
     cumulative_cons_energy = 0.0
+    staged_singles_seen = staged_pairs_seen = 0
     for step in range(1, args.steps + 1):
         accumulated = 0.0
         flip_weight = pair_flip_weight_at_step(
@@ -591,16 +622,23 @@ def main():
         pair_active = pair_seen = 0
         flip_active = flip_seen = 0
         flip_loss_sum = 0.0
+        staged_step_singles = staged_step_pairs = 0
         if args.project_consistency_against_guard:
             for buffers in (grad_d, grad_guard, grad_cons):
                 for buffer in buffers:
                     buffer.zero_()
             for _ in range(args.grad_accum):
                 if cursor + args.microbatch > len(order):
+                    if args.stage_counterfactual_pairs:
+                        raise RuntimeError("staged counterfactual schedule exhausted early")
                     random.shuffle(order)
                     cursor = 0
                 batch = [train[index] for index in order[cursor:cursor + args.microbatch]]
                 cursor += args.microbatch
+                if args.stage_counterfactual_pairs:
+                    batch_pairs = sum(example.get("pair_mode") is not None for example in batch)
+                    staged_step_pairs += batch_pairs
+                    staged_step_singles += len(batch) - batch_pairs
                 _, _, pair_stats, components = loss_for_examples(
                     model, batch, tokenizer, groups, args.max_length, device, shuffle=True,
                     pair_consistency_weight=args.pair_consistency_weight,
@@ -660,10 +698,16 @@ def main():
             projection_stats = None
             for _ in range(args.grad_accum):
                 if cursor + args.microbatch > len(order):
+                    if args.stage_counterfactual_pairs:
+                        raise RuntimeError("staged counterfactual schedule exhausted early")
                     random.shuffle(order)
                     cursor = 0
                 batch = [train[index] for index in order[cursor:cursor + args.microbatch]]
                 cursor += args.microbatch
+                if args.stage_counterfactual_pairs:
+                    batch_pairs = sum(example.get("pair_mode") is not None for example in batch)
+                    staged_step_pairs += batch_pairs
+                    staged_step_singles += len(batch) - batch_pairs
                 loss, _, pair_stats = loss_for_examples(
                     model, batch, tokenizer, groups, args.max_length, device, shuffle=True,
                     pair_consistency_weight=args.pair_consistency_weight,
@@ -679,6 +723,14 @@ def main():
                 flip_loss_sum += pair_stats["pair_flip_loss"] * pair_stats["pair_flip_seen"]
                 (loss / args.grad_accum).backward()
                 accumulated += loss.item()
+        if args.stage_counterfactual_pairs:
+            logical_batch = args.microbatch * args.grad_accum
+            expected_pairs = logical_batch if step >= args.pair_flip_start_step else 0
+            if (staged_step_pairs != expected_pairs or
+                    staged_step_singles != logical_batch - expected_pairs):
+                raise RuntimeError(f"staged counterfactual exposure mismatch at step {step}")
+            staged_singles_seen += staged_step_singles
+            staged_pairs_seen += staged_step_pairs
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         scheduler.step()
@@ -696,6 +748,11 @@ def main():
                   "pair_flip_loss": flip_loss_sum / flip_seen if flip_seen else 0.0,
                   "pair_flip_weight": flip_weight,
                   "pair_flip_weight_configured": args.pair_flip_weight}
+        if args.stage_counterfactual_pairs:
+            metric.update({"staged_single_slots": staged_step_singles,
+                           "staged_counterfactual_slots": staged_step_pairs,
+                           "staged_singles_seen": staged_singles_seen,
+                           "staged_counterfactual_pairs_seen": staged_pairs_seen})
         early_stop = False
         if projection_stats is not None:
             metric.update(projection_stats)
