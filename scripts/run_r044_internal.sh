@@ -39,7 +39,7 @@ cd "$ROOT"
 [[ $(wc -l < "$RUN/arm-b.jsonl" | tr -d ' ') == 800 ]]
 [[ $(sha256sum "$RUN/arm-a.jsonl" | awk '{print $1}') == $(jq -r '.outputs["arm-a"].sha256' "$RUN/manifest.json") ]]
 [[ $(sha256sum "$RUN/arm-b.jsonl" | awk '{print $1}') == $(jq -r '.outputs["arm-b"].sha256' "$RUN/manifest.json") ]]
-"$PYTHON" -c 'import json, sys; from pathlib import Path; from scripts.build_r044_mm_replay import _tree_hash; p=Path(sys.argv[1]); m=json.loads((p/"manifest.json").read_text()); assert list(_tree_hash(p/"images")) == [m["images"]["tree_sha256"], m["images"]["files"]]' "$RUN"
+"$PYTHON" -c 'import json, sys; from pathlib import Path; from scripts.preflight_r043_assets import tree_hash; p=Path(sys.argv[1]); m=json.loads((p/"manifest.json").read_text()); assert list(tree_hash(p/"images")) == [m["images"]["tree_sha256"], m["images"]["files"]]' "$RUN"
 "$PYTHON" -m scripts.preflight_r043_assets --manifest "$ASSETS_MANIFEST" \
   --model "$MODEL" --val-wf "$RUN/val-wf.jsonl" --val-wh "$RUN/val-wh.jsonl" \
   --val-replay "$RUN/val-replay.jsonl" --action-cal "$RUN/action-cal.jsonl" \
