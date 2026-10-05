@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 
@@ -24,9 +25,12 @@ def audit(rows, predictions):
             raise ValueError(f"missing prediction for {row['id']}")
         probabilities = item["probabilities"]
         p_yes, label = probabilities["yes"], row["targets"]["decision"]["label"]
-        correct = (p_yes >= 0.5) == (label == "yes")
+        gold_yes = label == "yes"
+        correct = (p_yes >= 0.5) == gold_yes
         meta = row["meta"]
-        scored.append({"id": row["id"], "correct": correct, "p_yes": p_yes})
+        scored.append({"id": row["id"], "correct": correct, "p_yes": p_yes,
+                       "nll": -math.log(max(p_yes if gold_yes else 1 - p_yes, 1e-12)),
+                       "brier": (p_yes - float(gold_yes)) ** 2})
         twin_key = (meta["source_id"], meta["polarity"], meta["wording"],
                     meta["criteria_style"], meta["yes_first"])
         order_key = twin_key[:-1] + (meta["world"],)
@@ -39,6 +43,8 @@ def audit(rows, predictions):
     accuracy = sum(item["correct"] for item in scored) / len(scored)
     return {
         "n": len(scored), "accuracy": accuracy,
+        "nll": sum(item["nll"] for item in scored) / len(scored),
+        "brier": sum(item["brier"] for item in scored) / len(scored),
         "counterfactual_twins_both_correct": sum(all(values) for values in twins.values()) / len(twins),
         "both_orders_correct": sum(all(item[1] for item in values) for values in orders.values()) / len(orders),
         "mean_semantic_order_delta": sum(abs(values[0][0] - values[1][0]) for values in orders.values()) / len(orders),

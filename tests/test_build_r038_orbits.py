@@ -49,6 +49,7 @@ def test_r038_audit_recovers_perfect_twin_and_order_metrics():
     }} for row in rows]
     report = audit(rows, predictions)
     assert report["accuracy"] == report["counterfactual_twins_both_correct"] == 1.0
+    assert report["nll"] == report["brier"] == 0.0
     assert report["both_orders_correct"] == 1.0
     assert report["mean_semantic_order_delta"] == 0.0
 
@@ -64,4 +65,5 @@ def test_r038_comparison_uses_source_paired_bootstrap():
              for row, item in zip(rows, perfect)]
     report = compare(rows, perfect, wrong, samples=100, seed=42)
     assert report["accuracy_delta"] == report["twins_delta"] == 1.0
+    assert report["nll_ratio"] == report["brier_ratio"] == 0.0
     assert all(report["gates"].values())

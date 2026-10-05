@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import random
 from pathlib import Path
 
@@ -17,14 +18,20 @@ def _source_metrics(rows, predictions):
         item = by_id.get(row["id"])
         if item is None:
             raise ValueError(f"missing prediction for {row['id']}")
-        correct = (item["probabilities"]["yes"] >= .5) == (row["targets"]["decision"]["label"] == "yes")
+        p_yes = item["probabilities"]["yes"]
+        gold_yes = row["targets"]["decision"]["label"] == "yes"
+        correct = (p_yes >= .5) == gold_yes
         meta = row["meta"]
         source = groups.setdefault(meta["source_id"], {"correct": [], "twins": {}})
         source["correct"].append(correct)
+        source.setdefault("nll", []).append(-math.log(max(p_yes if gold_yes else 1 - p_yes, 1e-12)))
+        source.setdefault("brier", []).append((p_yes - float(gold_yes)) ** 2)
         key = (meta["polarity"], meta["wording"], meta["criteria_style"], meta["yes_first"])
         source["twins"].setdefault(key, []).append(correct)
     return {source_id: {"accuracy": sum(values["correct"]) / len(values["correct"]),
-                        "twins": sum(all(pair) for pair in values["twins"].values()) / len(values["twins"])}
+                        "twins": sum(all(pair) for pair in values["twins"].values()) / len(values["twins"]),
+                        "nll": sum(values["nll"]) / len(values["nll"]),
+                        "brier": sum(values["brier"]) / len(values["brier"])}
             for source_id, values in groups.items()}
 
 
@@ -34,7 +41,7 @@ def compare(rows, treatment, control, *, samples=10_000, seed=42):
         raise ValueError("treatment/control source mismatch")
     source_ids = sorted(left)
     deltas = {name: [left[source][name] - right[source][name] for source in source_ids]
-              for name in ("accuracy", "twins")}
+              for name in ("accuracy", "twins", "nll", "brier")}
     rng = random.Random(seed)
     report = {}
     for name, values in deltas.items():
@@ -42,11 +49,17 @@ def compare(rows, treatment, control, *, samples=10_000, seed=42):
         report[f"{name}_delta"] = sum(values) / len(values)
         report[f"{name}_delta_lower_95"] = bootstrap[int(.025 * samples)]
     report["sources"] = len(source_ids)
+    report["nll_ratio"] = (sum(left[source]["nll"] for source in source_ids) /
+                           sum(right[source]["nll"] for source in source_ids))
+    report["brier_ratio"] = (sum(left[source]["brier"] for source in source_ids) /
+                             sum(right[source]["brier"] for source in source_ids))
     report["gates"] = {
         "accuracy_delta_at_least_.03": report["accuracy_delta"] >= .03,
         "accuracy_delta_lower_positive": report["accuracy_delta_lower_95"] > 0,
         "twins_delta_at_least_.05": report["twins_delta"] >= .05,
         "twins_delta_lower_positive": report["twins_delta_lower_95"] > 0,
+        "nll_not_over_1pct_worse": report["nll_ratio"] <= 1.01,
+        "brier_not_over_1pct_worse": report["brier_ratio"] <= 1.01,
     }
     return report
 
