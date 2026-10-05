@@ -14,9 +14,10 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, PeftModel, get_peft_model
+from PIL import Image
 from torch.nn.utils.rnn import pad_sequence
-from transformers import AutoModelForImageTextToText, AutoTokenizer
+from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
 
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -33,6 +34,7 @@ TARGET_MODULES = (
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
+    parser.add_argument("--init-adapter")
     parser.add_argument("--train", action="append", required=True)
     parser.add_argument("--val", action="append", default=[], help="NAME=JSONL")
     parser.add_argument("--out", required=True)
@@ -61,7 +63,12 @@ def parse_args():
     return parser.parse_args()
 
 
-def flatten_row(row):
+def flatten_row(row, source_dir=None):
+    image = row.get("image")
+    if image and source_dir is not None:
+        image = Path(image)
+        image = image if image.is_absolute() else Path(source_dir) / image
+        image = str(image.resolve())
     examples = []
     for qid, question in row["questions"].items():
         criteria = question.get("criteria")
@@ -93,6 +100,7 @@ def flatten_row(row):
             "probabilities": [float(value) / total for value in probabilities],
             "fixed_order": bool((row.get("meta") or {}).get("fixed_option_order")),
             "gold_label": label,
+            "image": image,
         })
     return examples
 
@@ -100,14 +108,15 @@ def flatten_row(row):
 def load_examples(paths):
     examples = []
     for path in paths:
-        with open(path) as source:
+        path = Path(path)
+        with path.open() as source:
             for line in source:
                 if line.strip():
                     row = json.loads(line)
                     if "paired_views" in row:
                         if len(row["paired_views"]) != 2:
                             raise ValueError(f"{row.get('id')}: paired slot must have exactly two views")
-                        views = [flatten_row(view) for view in row["paired_views"]]
+                        views = [flatten_row(view, path.parent) for view in row["paired_views"]]
                         if any(len(view) != 1 for view in views):
                             raise ValueError(f"{row.get('id')}: each paired view must flatten to one example")
                         paired_metas = [(raw.get("meta") or {}) for raw in row["paired_views"]]
@@ -164,8 +173,24 @@ def load_examples(paths):
                                          "paired_polarity": polarities[0],
                                          "paired_view_arms": arms})
                     else:
-                        examples.extend(flatten_row(row))
+                        examples.extend(flatten_row(row, path.parent))
     return examples
+
+
+def examples_have_images(examples):
+    return any(view.get("image") for example in examples
+               for view in example.get("paired_views", [example]))
+
+
+def validate_multimodal_examples(examples, microbatch):
+    if not examples_have_images(examples):
+        return
+    if microbatch != 1:
+        raise ValueError("multimodal training requires --microbatch 1")
+    for example in examples:
+        views = example.get("paired_views", [example])
+        if any(view.get("image") for view in views) and len(views) != 1:
+            raise ValueError(f"{example['id']}: image examples must be singleton logical slots")
 
 
 def mean_logical_slot_loss(view_losses):
@@ -388,24 +413,58 @@ def encode(example, tokenizer, max_length, shuffle, include_labels=False):
     return encoded
 
 
+def encode_image(example, processor, max_length, shuffle, include_labels=False):
+    order = list(range(len(example["items"])))
+    if shuffle and not example.get("fixed_order", False):
+        random.shuffle(order)
+    prompt, probabilities = render(example, order)
+    text = processor.apply_chat_template(
+        [{"role": "system", "content": SYSTEM},
+         {"role": "user", "content": [
+             {"type": "image"}, {"type": "text", "text": prompt},
+         ]}],
+        tokenize=False, add_generation_prompt=True, enable_thinking=False,
+    )
+    with Image.open(example["image"]) as image:
+        inputs = processor(text=[text], images=[image.convert("RGB")], return_tensors="pt")
+    if inputs["input_ids"].shape[-1] > max_length:
+        raise ValueError(f"{example['id']}: {inputs['input_ids'].shape[-1]} tokens exceeds {max_length}")
+    encoded = (inputs, torch.tensor(probabilities))
+    if include_labels:
+        labels = [example["items"][source_index][0] for source_index in order]
+        return (*encoded, labels)
+    return encoded
+
+
 def loss_for_examples(model, examples, tokenizer, groups, max_length, device, shuffle,
                       pair_consistency_weight=0.0, pair_consistency_min_gold_probability=0.80,
                       pair_consistency_clip=4.0, pair_consistency_beta=1.0,
                       pair_flip_weight=0.0, pair_flip_margin=1.0,
-                      return_components=False):
+                      return_components=False, processor=None):
     validate_pair_objectives(pair_consistency_weight, return_components,
                              pair_flip_weight, pair_flip_margin)
     logical_views = [example.get("paired_views", [example]) for example in examples]
     flat_examples = [view for views in logical_views for view in views]
-    encoded = [encode(example, tokenizer, max_length, shuffle, include_labels=True)
-               for example in flat_examples]
-    ids = pad_sequence([item[0] for item in encoded], batch_first=True,
-                       padding_value=tokenizer.pad_token_id)
-    mask = ids.ne(tokenizer.pad_token_id)
-    positions = torch.tensor([len(item[0]) - 1 for item in encoded])
+    image_examples = [example for example in flat_examples if example.get("image")]
+    if image_examples:
+        if len(examples) != 1 or len(flat_examples) != 1:
+            raise ValueError("image examples must be singleton logical slots with --microbatch 1")
+        if processor is None:
+            raise ValueError("image example requires a multimodal processor")
+        encoded = [encode_image(flat_examples[0], processor, max_length, shuffle,
+                                include_labels=True)]
+        model_inputs = {name: value.to(device) for name, value in encoded[0][0].items()}
+        positions = torch.tensor([model_inputs["input_ids"].shape[-1] - 1])
+    else:
+        encoded = [encode(example, tokenizer, max_length, shuffle, include_labels=True)
+                   for example in flat_examples]
+        ids = pad_sequence([item[0] for item in encoded], batch_first=True,
+                           padding_value=tokenizer.pad_token_id)
+        mask = ids.ne(tokenizer.pad_token_id)
+        positions = torch.tensor([len(item[0]) - 1 for item in encoded])
+        model_inputs = {"input_ids": ids.to(device), "attention_mask": mask.to(device)}
     union = torch.unique(positions, sorted=True)
-    output = model(input_ids=ids.to(device), attention_mask=mask.to(device), use_cache=False,
-                   logits_to_keep=union.to(device))
+    output = model(**model_inputs, use_cache=False, logits_to_keep=union.to(device))
     offsets = {position.item(): index for index, position in enumerate(union)}
     view_losses = []
     view_correct = []
@@ -500,7 +559,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
 
 
 @torch.no_grad()
-def evaluate(model, examples, args, tokenizer, groups, device):
+def evaluate(model, examples, args, tokenizer, groups, device, processor=None):
     model.eval()
     losses = []
     correct = 0
@@ -508,7 +567,8 @@ def evaluate(model, examples, args, tokenizer, groups, device):
     for start in range(0, min(args.eval_samples, len(examples)), args.microbatch):
         batch = examples[start:start + args.microbatch]
         loss, batch_correct, _ = loss_for_examples(model, batch, tokenizer, groups,
-                                                   args.max_length, device, shuffle=False)
+                                                   args.max_length, device, shuffle=False,
+                                                   processor=processor)
         losses.append(loss.item())
         correct += batch_correct
         count += len(batch)
@@ -524,6 +584,33 @@ def save(model, optimizer, scheduler, step, out):
                 "scheduler": scheduler.state_dict(), "python_rng": random.getstate(),
                 "torch_rng": torch.get_rng_state(), "cuda_rng": torch.cuda.get_rng_state_all()},
                path / "trainer.pt")
+
+
+def load_tokenizer_and_processor(model_name, multimodal):
+    if multimodal:
+        processor = AutoProcessor.from_pretrained(model_name, local_files_only=True)
+        return processor.tokenizer, processor
+    return AutoTokenizer.from_pretrained(model_name, local_files_only=True), None
+
+
+def attach_lora(model, init_adapter, rank, alpha):
+    if init_adapter:
+        return PeftModel.from_pretrained(
+            model, init_adapter, is_trainable=True, local_files_only=True)
+    return get_peft_model(model, LoraConfig(
+        r=rank, lora_alpha=alpha, lora_dropout=0.0, bias="none",
+        target_modules=TARGET_MODULES,
+    ))
+
+
+def validate_trainable_path(model):
+    trainable = [name for name, parameter in model.named_parameters() if parameter.requires_grad]
+    bad = [name for name in trainable
+           if any(part in name for part in ("vision", "visual", "projector", "embedder"))]
+    if bad:
+        raise RuntimeError(f"LoRA unexpectedly touched the multimodal path: {bad[:3]}")
+    if not any("language_model" in name for name in trainable):
+        raise RuntimeError("LoRA has no trainable language-model parameters")
 
 
 def main():
@@ -545,6 +632,9 @@ def main():
     train = load_examples(args.train)
     validation = {name: load_examples([path]) for name, path in
                   (item.split("=", 1) for item in args.val)}
+    validate_multimodal_examples(train, args.microbatch)
+    for rows in validation.values():
+        validate_multimodal_examples(rows, args.microbatch)
     staged_order = (staged_counterfactual_order(
         train, args.steps, args.microbatch, args.grad_accum, args.pair_flip_start_step)
         if args.stage_counterfactual_pairs else None)
@@ -552,21 +642,16 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(vars(args), indent=2) + "\n")
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
+    multimodal = examples_have_images(train) or any(
+        examples_have_images(rows) for rows in validation.values())
+    tokenizer, processor = load_tokenizer_and_processor(args.model, multimodal)
     groups = letter_token_groups(tokenizer)
     model = AutoModelForImageTextToText.from_pretrained(
         args.model, dtype=torch.bfloat16, local_files_only=True, attn_implementation="sdpa"
     )
     model.config.use_cache = False
-    model = get_peft_model(model, LoraConfig(
-        r=args.rank, lora_alpha=args.alpha, lora_dropout=0.0, bias="none",
-        target_modules=TARGET_MODULES,
-    ))
-    bad = [name for name, parameter in model.named_parameters()
-           if parameter.requires_grad and any(part in name for part in
-                                               ("vision", "visual", "projector", "embedder"))]
-    if bad:
-        raise RuntimeError(f"LoRA unexpectedly touched the multimodal path: {bad[:3]}")
+    model = attach_lora(model, args.init_adapter, args.rank, args.alpha)
+    validate_trainable_path(model)
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()
     device = torch.device("cuda")
@@ -600,7 +685,7 @@ def main():
     metrics = out / "metrics.jsonl"
     started = time.time()
     baseline = {"step": 0, "validation": {
-        name: evaluate(model, rows, args, tokenizer, groups, device)
+        name: evaluate(model, rows, args, tokenizer, groups, device, processor)
         for name, rows in validation.items()
     }}
     metrics.write_text(json.dumps(baseline) + "\n")
@@ -647,7 +732,7 @@ def main():
                     pair_consistency_beta=args.pair_consistency_beta,
                     pair_flip_weight=flip_weight,
                     pair_flip_margin=args.pair_flip_margin,
-                    return_components=True)
+                    return_components=True, processor=processor)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
                 flip_active += pair_stats["pair_flip_active"]
@@ -715,7 +800,7 @@ def main():
                     pair_consistency_clip=args.pair_consistency_clip,
                     pair_consistency_beta=args.pair_consistency_beta,
                     pair_flip_weight=flip_weight,
-                    pair_flip_margin=args.pair_flip_margin)
+                    pair_flip_margin=args.pair_flip_margin, processor=processor)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
                 flip_active += pair_stats["pair_flip_active"]
@@ -762,7 +847,7 @@ def main():
                 metric["early_stop"] = "projection_removed_energy_fraction_below_0.01_at_step_50"
         if step == 1 or step % args.eval_every == 0 or step == args.steps:
             metric["validation"] = {
-                name: evaluate(model, rows, args, tokenizer, groups, device)
+                name: evaluate(model, rows, args, tokenizer, groups, device, processor)
                 for name, rows in validation.items()
             }
         with metrics.open("a") as target:
