@@ -6,6 +6,8 @@ data_u needs network (HF hub) for UNLI/AmbiEnt/chaos-mnli-ambiguity; skipped if 
 """
 import argparse
 import json
+import random
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -130,6 +132,43 @@ def test_wh_jevbench_leak_check_ran(wh):
     # leak_check() itself asserts 0 hits internally; a nonzero states-checked count here confirms
     # the real JevBench corpus (not the "file missing" skip path) was actually used.
     assert wh["manifest"]["jevbench_states_checked"] and wh["manifest"]["jevbench_states_checked"] > 0
+
+
+def test_score_case_renders_selected_fields_order_and_complete_mapping():
+    rows = dm.score_case("procurement_request", random.Random(4), False, 3)
+    assert {row["meta"]["score_rule"] for row in rows} == {"count", "worst_first"}
+    for row in rows:
+        fields = row["meta"]["score_fields"]
+        assert len(fields) == 4 and len(set(fields)) == 4
+        for position, field in enumerate(fields, 1):
+            assert f"{position}) {dm.DOMAINS['procurement_request']['fields'][field][0]}" in row["query"]
+        assert all(level in row["query"] for level in row["candidates"])
+
+
+def test_l4_precedence_survives_candidate_reordering(monkeypatch):
+    monkeypatch.setattr(dm, "SCORE_FRAC", 0)
+    rows = dm.l4_builder("procurement_request", random.Random(8))()
+    assert rows
+    for row in rows:
+        criteria = row["question"]["criteria"]
+        ranked = [description for label, description in criteria.items()
+                  if label != dm.DOMAINS["procurement_request"]["routes"][3]]
+        assert len(ranked) == 3
+        assert all(f"priority {rank}" in " ".join(ranked) for rank in (1, 2, 3))
+
+
+def test_temporal_rendering_matches_elapsed_gold_across_timezones():
+    for seed in range(40):
+        rows = dm.l7_temporal_builder(random.Random(seed))()
+        for row in rows:
+            times = re.findall(r"(\d\d):00 \(UTC([+-]\d+)\) on day (\d+)", row["state"])
+            assert len(times) == 2
+            utc = sorted((int(day) - 1) * 24 + int(hour) - int(offset)
+                         for hour, offset, day in times)
+            assert utc[1] - utc[0] == row["meta"]["elapsed_h"]
+            grace = 2 if row["meta"]["rubric_family"].endswith("grace") else 0
+            expected = row["meta"]["elapsed_h"] <= row["meta"]["deadline_h"] + grace
+            assert row["candidates"][row["label"]] == ("true" if expected else "false")
 
 
 def _hf_reachable():

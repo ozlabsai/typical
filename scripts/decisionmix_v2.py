@@ -339,6 +339,8 @@ def score_case(domain, rng, heldout_style, rule_depth):
     unmet = sum(1 for i in idxs if not facts[i])
     first_unmet = not facts[idxs[0]]
     names, _ = level_names(4, rng)
+    numbered = "; ".join(f"{position + 1}) {dom['fields'][field][0]}"
+                           for position, field in enumerate(idxs))
     # two genuinely different rules (not just re-labelled staircases): plain count vs. "first field is
     # decisive" -- these disagree whenever idxs[0] is unmet but the overall count is still low.
     rules = {"count": lambda u, fu: min(3, u),
@@ -346,10 +348,16 @@ def score_case(domain, rng, heldout_style, rule_depth):
     rows = []
     for rname, fn in rules.items():
         tier = fn(unmet, first_unmet)
-        spec = {"what": f"{domain.replace('_', ' ')} risk", "levels": names, "caveat": f"Counting rule: {rname}."}
+        rubric = (f"Count unmet conditions: 0 -> {names[0]}, 1 -> {names[1]}, "
+                  f"2 -> {names[2]}, 3 or 4 -> {names[3]}." if rname == "count" else
+                  f"If condition 1 is unmet choose {names[3]}; otherwise count all unmet conditions: "
+                  f"0 -> {names[0]}, 1 -> {names[1]}, 2 or more -> {names[2]}.")
+        spec = {"what": f"{domain.replace('_', ' ')} risk", "levels": names,
+                "caveat": f"Assess only these conditions in this order: {numbered}. {rubric}"}
         rows.append(finish("score", spec, names, tier, rng, task=f"wh_L{rule_depth}_{domain}", rule_depth=rule_depth,
                            workflow_family=domain, rubric_family=f"{domain}_score_{rname}", state_sentences=state,
-                           heldout_style=heldout_style, extra_meta={"unmet_count": unmet}))
+                           heldout_style=heldout_style,
+                           extra_meta={"unmet_count": unmet, "score_fields": idxs, "score_rule": rname}))
     return rows
 
 
@@ -443,11 +451,12 @@ def l4_builder(domain, rng, heldout_style=False):
             order = rules[:]
             rng.shuffle(order)
             gold_label = next((o for i, o in order if facts[i]), default)
-            crit = {o: f"applies when {dom['fields'][i][0]}" for i, o in order}
+            crit = {o: f"priority {rank + 1}: applies when {dom['fields'][i][0]}"
+                    for rank, (i, o) in enumerate(order)}
             crit[default] = "applies when none of the above rules fire"
             cands = [o for _, o in order] + [default]
             spec = {"verb": dom["verb"], "criteria": crit,
-                    "caveat": "Apply the rules in the stated precedence order; the first matching rule wins."}
+                    "caveat": "Apply numbered priorities from 1 upward; the first matching rule wins."}
             rows.append(finish("choice", spec, cands, cands.index(gold_label), rng, task=f"wh_L4_{domain}",
                                rule_depth=4, exception_depth=len(order) - 1, workflow_family=domain,
                                rubric_family=f"{domain}_prec:{sorted(idxs)}", state_sentences=state,
@@ -527,9 +536,13 @@ def l7_temporal_builder(rng, heldout_style=False):
         submit_off, resp_off = rng.randint(-8, 8), rng.randint(-8, 8)
         elapsed = rng.choice([2, 6, 11, 12, 13, 22, 23, 24, 25, 26, 47, 48, 49, 70])
         deadline_h = rng.choice([12, 24, 48])
-        resp_hour, resp_days = (9 + elapsed) % 24, (9 + elapsed) // 24
-        state = render_state([f"Request submitted at 09:00 (UTC{submit_off:+d}) on day 1.",
-                              f"Response sent at {resp_hour:02d}:00 (UTC{resp_off:+d}) on day {1 + resp_days}."], rng)
+        submit_day, submit_hour = 2, 9
+        submit_utc_hour = (submit_day - 1) * 24 + submit_hour - submit_off
+        response_local_hour = submit_utc_hour + elapsed + resp_off
+        resp_day, resp_hour = divmod(response_local_hour, 24)
+        resp_day += 1
+        state = render_state([f"Request submitted at {submit_hour:02d}:00 (UTC{submit_off:+d}) on day {submit_day}.",
+                              f"Response sent at {resp_hour:02d}:00 (UTC{resp_off:+d}) on day {resp_day}."], rng)
         rows = []
         for grace, tag in [(0, "strict"), (2, "grace")]:
             ok = elapsed <= deadline_h + grace
@@ -540,7 +553,8 @@ def l7_temporal_builder(rng, heldout_style=False):
             rows.append(finish("noul", spec, ["true", "false"], 0 if ok else 1, rng, task="wh_L7_temporal",
                                rule_depth=7, workflow_family="temporal", rubric_family=f"temporal_{tag}",
                                state_sentences=state, heldout_style=heldout_style, requires=["requires_temporal"],
-                               extra_meta={"deadline_h": deadline_h, "elapsed_h": elapsed}))
+                               extra_meta={"deadline_h": deadline_h, "elapsed_h": elapsed,
+                                           "submit_offset": submit_off, "response_offset": resp_off}))
         return rows
     return build
 
