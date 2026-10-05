@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
 from scripts.train_gemma_decision_lora import (
+    accumulate_dense_gradients_,
     pair_consistency_term,
     pair_consistency_stats,
     pair_slot_loss,
@@ -15,6 +16,9 @@ from scripts.train_gemma_decision_lora import (
     loss_for_examples,
     load_examples,
     mean_logical_slot_loss,
+    guard_logical_slot_loss,
+    project_conflicting_gradient,
+    projection_early_stop,
     semantic_margin,
 )
 
@@ -177,6 +181,73 @@ def test_zero_weight_matches_legacy_loss_gradients_rng_and_option_order():
     assert torch.equal(actual_grad, expected_grad)
     assert rng_after_actual == rng_after_legacy
     assert actual_prompts == tokenizer.prompts
+
+    model.theta.grad = None
+    random.seed(917)
+    rng_before = random.getstate()
+    combined, _, _ = loss_for_examples(
+        model, examples, TinyTokenizer(), groups, 100, torch.device("cpu"), shuffle=True,
+        pair_consistency_weight=0.25, pair_consistency_min_gold_probability=0.0)
+    combined.backward()
+    combined_grad = model.theta.grad.detach().clone()
+
+    model.theta.grad = None
+    random.setstate(rng_before)
+    _, _, _, components = loss_for_examples(
+        model, examples, TinyTokenizer(), groups, 100, torch.device("cpu"), shuffle=True,
+        pair_consistency_weight=0.25, pair_consistency_min_gold_probability=0.0,
+        return_components=True)
+    decomposed = components["d_loss"] + 0.25 * components["consistency_loss"]
+    decomposed.backward()
+    assert torch.equal(combined, decomposed)
+    assert torch.equal(combined_grad, model.theta.grad)
+
+
+def test_global_projection_removes_only_conflicting_component():
+    projected, stats = project_conflicting_gradient(
+        [torch.tensor([1.0, 2.0])], [torch.tensor([-1.0, 0.0])])
+    assert torch.equal(projected[0], torch.tensor([0.0, 2.0]))
+    assert stats["projection_conflict"] is True
+    assert stats["projection_guard_cons_dot"] == -1.0
+    assert stats["projection_removed_energy"] == 1.0
+    assert abs(stats["projection_removed_energy_fraction"] - 0.2) < 1e-7
+
+    unchanged, stats = project_conflicting_gradient(
+        [torch.tensor([1.0, 2.0])], [torch.tensor([1.0, 0.0])])
+    assert torch.equal(unchanged[0], torch.tensor([1.0, 2.0]))
+    assert stats["projection_conflict"] is False
+    assert stats["projection_removed_energy"] == 0.0
+
+    # The coefficient uses one dot/norm across both parameter tensors.
+    projected, stats = project_conflicting_gradient(
+        [torch.tensor([1.0]), torch.tensor([1.0])],
+        [torch.tensor([-2.0]), torch.tensor([1.0])])
+    assert torch.allclose(projected[0], torch.tensor([0.6]))
+    assert torch.allclose(projected[1], torch.tensor([1.2]))
+    assert stats["projection_guard_cons_dot"] == -1.0
+    projected_dot = (projected[0] * torch.tensor([-2.0])).sum() + (
+        projected[1] * torch.tensor([1.0])).sum()
+    assert abs(projected_dot.item()) < 1e-6
+
+
+def test_guard_objective_uses_half_anchor_and_stop_falsifier_boundary():
+    singleton = torch.tensor(2.0)
+    paired_a, paired_b = torch.tensor(4.0), torch.tensor(100.0)
+    # Mean of singleton CE and half-weighted paired A; B is omitted.
+    assert guard_logical_slot_loss([[singleton], [paired_a, paired_b]]).item() == 2.0
+    assert projection_early_stop(50, 0.009, 1.0)
+    assert not projection_early_stop(50, 0.01, 1.0)
+    assert not projection_early_stop(49, 0.0, 1.0)
+
+
+def test_projection_rejects_unused_trainable_parameters_instead_of_weight_decaying_them():
+    buffers = [torch.zeros(1), torch.zeros(1)]
+    try:
+        accumulate_dense_gradients_(buffers, [torch.ones(1), None], "test")
+    except RuntimeError as error:
+        assert "did not reach 1 trainable parameters" in str(error)
+    else:
+        raise AssertionError("unused trainable parameter must fail closed")
 
 
 def load_examples_from_rows(rows):

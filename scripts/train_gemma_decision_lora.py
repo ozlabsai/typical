@@ -53,6 +53,7 @@ def parse_args():
     parser.add_argument("--pair-consistency-min-gold-probability", type=float, default=0.80)
     parser.add_argument("--pair-consistency-clip", type=float, default=4.0)
     parser.add_argument("--pair-consistency-beta", type=float, default=1.0)
+    parser.add_argument("--project-consistency-against-guard", action="store_true")
     return parser.parse_args()
 
 
@@ -170,6 +171,61 @@ def pair_consistency_stats(active, seen):
             "pair_consistency_rate": active / seen if seen else 0.0}
 
 
+def guard_logical_slot_loss(view_losses):
+    """Mean slot loss, retaining only A at half weight for paired slots."""
+    if not view_losses or any(not losses for losses in view_losses):
+        raise ValueError("each logical slot needs at least one view loss")
+    slots = [losses[0] * 0.5 if len(losses) == 2 else losses[0]
+             for losses in view_losses]
+    return torch.stack(slots).mean()
+
+
+def project_conflicting_gradient(cons_grads, guard_grads, params=None, eps=1e-12):
+    """Globally project consistency gradient off guard when their dot is negative."""
+    if len(cons_grads) != len(guard_grads):
+        raise ValueError("gradient lists must be aligned")
+    params = params or [c if c is not None else g for c, g in zip(cons_grads, guard_grads)]
+    if len(params) != len(cons_grads) or any(p is None for p in params):
+        raise ValueError("a parameter reference is required for every gradient slot")
+    cons = [torch.zeros_like(p, dtype=torch.float32) if g is None else g.float()
+            for p, g in zip(params, cons_grads)]
+    guard = [torch.zeros_like(p, dtype=torch.float32) if g is None else g.float()
+             for p, g in zip(params, guard_grads)]
+    dot = sum((a * b).sum() for a, b in zip(cons, guard))
+    cons_energy = sum((a * a).sum() for a in cons)
+    guard_energy = sum((b * b).sum() for b in guard)
+    conflict = bool(dot.item() < 0)
+    if conflict:
+        coefficient = dot / (guard_energy + eps)
+        projected = [a - coefficient * b for a, b in zip(cons, guard)]
+    else:
+        projected = cons
+    removed_energy = sum(((a - b) ** 2).sum() for a, b in zip(cons, projected))
+    removed_fraction = (removed_energy / cons_energy if cons_energy.item() > 0
+                        else cons_energy.new_zeros(()))
+    cosine = dot / (torch.sqrt(cons_energy * guard_energy) + eps)
+    stats = {"projection_guard_cons_dot": float(dot.item()),
+             "projection_guard_cons_cosine": float(cosine.item()),
+             "projection_conflict": conflict,
+             "projection_cons_energy": float(cons_energy.item()),
+             "projection_removed_energy": float(removed_energy.item()),
+             "projection_removed_energy_fraction": float(removed_fraction.item())}
+    return projected, stats
+
+
+def projection_early_stop(step, cumulative_removed_energy, cumulative_cons_energy):
+    return step == 50 and cumulative_removed_energy / max(cumulative_cons_energy, 1e-30) < 0.01
+
+
+def accumulate_dense_gradients_(buffers, grads, objective):
+    """Accumulate one dense objective or fail before zero grads change optimizer semantics."""
+    if len(buffers) != len(grads) or any(grad is None for grad in grads):
+        missing = sum(grad is None for grad in grads)
+        raise RuntimeError(f"{objective} did not reach {missing} trainable parameters")
+    for buffer, grad in zip(buffers, grads):
+        buffer.add_(grad.detach().float())
+
+
 def render(example, order=None):
     order = list(range(len(example["items"]))) if order is None else list(order)
     state = example["state"]
@@ -222,7 +278,8 @@ def encode(example, tokenizer, max_length, shuffle, include_labels=False):
 
 def loss_for_examples(model, examples, tokenizer, groups, max_length, device, shuffle,
                       pair_consistency_weight=0.0, pair_consistency_min_gold_probability=0.80,
-                      pair_consistency_clip=4.0, pair_consistency_beta=1.0):
+                      pair_consistency_clip=4.0, pair_consistency_beta=1.0,
+                      return_components=False):
     logical_views = [example.get("paired_views", [example]) for example in examples]
     flat_examples = [view for views in logical_views for view in views]
     encoded = [encode(example, tokenizer, max_length, shuffle, include_labels=True)
@@ -252,6 +309,8 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
         gold_index = labels.index(example["gold_label"])
         view_gold_probabilities.append(F.softmax(option_scores.detach(), dim=0)[gold_index])
     slot_losses = []
+    guard_slot_losses = []
+    consistency_slot_losses = []
     slot_correct = []
     consistency_seen = 0
     consistency_active = 0
@@ -259,7 +318,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     for logical_example, views in zip(examples, logical_views):
         end = cursor + len(views)
         slot_view_losses = view_losses[cursor:end]
-        if len(views) == 2 and pair_consistency_weight > 0:
+        if len(views) == 2 and (pair_consistency_weight > 0 or return_components):
             if logical_example.get("paired_view_arms") != ["A", "B"]:
                 raise ValueError(f"{logical_example['id']}: paired views must be ordered A then B")
             polarity = logical_example["paired_polarity"]
@@ -275,15 +334,31 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                 consistency_active += 1
             else:
                 consistency = None
-            slot_losses.append([pair_slot_loss(slot_view_losses, consistency,
-                                               pair_consistency_weight)])
+            if return_components:
+                slot_losses.append(slot_view_losses)
+                guard_slot_losses.append(slot_view_losses)
+                consistency_slot_losses.append(
+                    consistency if consistency is not None else slot_view_losses[0].new_zeros(())
+                )
+            else:
+                slot_losses.append([pair_slot_loss(slot_view_losses, consistency,
+                                                   pair_consistency_weight)])
         else:
             # Preserve the existing CE graph and exact aggregation when disabled.
             slot_losses.append(slot_view_losses)
+            if return_components:
+                guard_slot_losses.append(slot_view_losses)
+                consistency_slot_losses.append(slot_view_losses[0].new_zeros(()))
         slot_correct.append(sum(view_correct[cursor:end]) / len(views))
         cursor = end
     stats = pair_consistency_stats(consistency_active, consistency_seen)
-    return mean_logical_slot_loss(slot_losses), sum(slot_correct), stats
+    loss = mean_logical_slot_loss(slot_losses)
+    if return_components:
+        components = {"d_loss": loss,
+                      "guard_loss": guard_logical_slot_loss(guard_slot_losses),
+                      "consistency_loss": torch.stack(consistency_slot_losses).mean()}
+        return loss, sum(slot_correct), stats, components
+    return loss, sum(slot_correct), stats
 
 
 @torch.no_grad()
@@ -321,6 +396,8 @@ def main():
         raise ValueError("pair consistency minimum gold probability must be in [0, 1]")
     if args.pair_consistency_clip <= 0 or args.pair_consistency_beta <= 0:
         raise ValueError("pair consistency clip and beta must be positive")
+    if args.project_consistency_against_guard and args.pair_consistency_weight <= 0:
+        raise ValueError("guard projection requires a positive pair consistency weight")
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     train = load_examples(args.train)
@@ -380,25 +457,95 @@ def main():
     }}
     metrics.write_text(json.dumps(baseline) + "\n")
     print(json.dumps(baseline), flush=True)
+    params = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    projection_conflicts = 0
+    projection_active_steps = 0
+    cumulative_removed_energy = 0.0
+    cumulative_cons_energy = 0.0
     for step in range(1, args.steps + 1):
         accumulated = 0.0
         pair_active = pair_seen = 0
-        for _ in range(args.grad_accum):
-            if cursor + args.microbatch > len(order):
-                random.shuffle(order)
-                cursor = 0
-            batch = [train[index] for index in order[cursor:cursor + args.microbatch]]
-            cursor += args.microbatch
-            loss, _, pair_stats = loss_for_examples(
-                model, batch, tokenizer, groups, args.max_length, device, shuffle=True,
-                pair_consistency_weight=args.pair_consistency_weight,
-                pair_consistency_min_gold_probability=args.pair_consistency_min_gold_probability,
-                pair_consistency_clip=args.pair_consistency_clip,
-                pair_consistency_beta=args.pair_consistency_beta)
-            pair_active += pair_stats["pair_consistency_active"]
-            pair_seen += pair_stats["pair_consistency_seen"]
-            (loss / args.grad_accum).backward()
-            accumulated += loss.item()
+        if args.project_consistency_against_guard:
+            grad_d = [torch.zeros_like(p, dtype=torch.float32) for p in params]
+            grad_guard = [torch.zeros_like(p, dtype=torch.float32) for p in params]
+            grad_cons = [torch.zeros_like(p, dtype=torch.float32) for p in params]
+            for _ in range(args.grad_accum):
+                if cursor + args.microbatch > len(order):
+                    random.shuffle(order)
+                    cursor = 0
+                batch = [train[index] for index in order[cursor:cursor + args.microbatch]]
+                cursor += args.microbatch
+                _, _, pair_stats, components = loss_for_examples(
+                    model, batch, tokenizer, groups, args.max_length, device, shuffle=True,
+                    pair_consistency_weight=args.pair_consistency_weight,
+                    pair_consistency_min_gold_probability=args.pair_consistency_min_gold_probability,
+                    pair_consistency_clip=args.pair_consistency_clip,
+                    pair_consistency_beta=args.pair_consistency_beta,
+                    return_components=True)
+                pair_active += pair_stats["pair_consistency_active"]
+                pair_seen += pair_stats["pair_consistency_seen"]
+                scale = 1.0 / args.grad_accum
+                d_grads = torch.autograd.grad(components["d_loss"] * scale, params,
+                                              retain_graph=True, allow_unused=True)
+                guard_grads = torch.autograd.grad(components["guard_loss"] * scale, params,
+                                                  retain_graph=components["consistency_loss"].requires_grad,
+                                                  allow_unused=True)
+                if components["consistency_loss"].requires_grad:
+                    cons_grads = torch.autograd.grad(components["consistency_loss"] * scale,
+                                                     params, allow_unused=True)
+                else:
+                    cons_grads = None
+                accumulate_dense_gradients_(grad_d, d_grads, "D loss")
+                accumulate_dense_gradients_(grad_guard, guard_grads, "guard loss")
+                if cons_grads is not None:
+                    accumulate_dense_gradients_(grad_cons, cons_grads, "consistency loss")
+                accumulated += (components["d_loss"].item() +
+                                args.pair_consistency_weight * components["consistency_loss"].item())
+            if pair_active:
+                projected_cons, projection_stats = project_conflicting_gradient(
+                    grad_cons, grad_guard, params=params)
+            else:
+                projected_cons = grad_cons
+                projection_stats = {
+                    "projection_guard_cons_dot": 0.0,
+                    "projection_guard_cons_cosine": 0.0,
+                    "projection_conflict": False,
+                    "projection_cons_energy": 0.0,
+                    "projection_removed_energy": 0.0,
+                    "projection_removed_energy_fraction": 0.0,
+                }
+            for parameter, d_grad, cons_grad in zip(params, grad_d, projected_cons):
+                if pair_active:
+                    parameter.grad = (d_grad + args.pair_consistency_weight * cons_grad).to(parameter.dtype)
+                else:
+                    parameter.grad = d_grad.to(parameter.dtype)
+            if projection_stats["projection_cons_energy"] > 0:
+                projection_active_steps += 1
+                projection_conflicts += int(projection_stats["projection_conflict"])
+                cumulative_cons_energy += projection_stats["projection_cons_energy"]
+                cumulative_removed_energy += projection_stats["projection_removed_energy"]
+            projection_stats["projection_cumulative_conflict_fraction"] = (
+                projection_conflicts / projection_active_steps if projection_active_steps else 0.0)
+            projection_stats["projection_cumulative_removed_energy_fraction"] = (
+                cumulative_removed_energy / cumulative_cons_energy if cumulative_cons_energy else 0.0)
+        else:
+            projection_stats = None
+            for _ in range(args.grad_accum):
+                if cursor + args.microbatch > len(order):
+                    random.shuffle(order)
+                    cursor = 0
+                batch = [train[index] for index in order[cursor:cursor + args.microbatch]]
+                cursor += args.microbatch
+                loss, _, pair_stats = loss_for_examples(
+                    model, batch, tokenizer, groups, args.max_length, device, shuffle=True,
+                    pair_consistency_weight=args.pair_consistency_weight,
+                    pair_consistency_min_gold_probability=args.pair_consistency_min_gold_probability,
+                    pair_consistency_clip=args.pair_consistency_clip,
+                    pair_consistency_beta=args.pair_consistency_beta)
+                pair_active += pair_stats["pair_consistency_active"]
+                pair_seen += pair_stats["pair_consistency_seen"]
+                (loss / args.grad_accum).backward()
+                accumulated += loss.item()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         scheduler.step()
@@ -409,6 +556,13 @@ def main():
                   "pair_consistency_active": pair_active,
                   "pair_consistency_seen": pair_seen,
                   "pair_consistency_rate": pair_active / pair_seen if pair_seen else 0.0}
+        early_stop = False
+        if projection_stats is not None:
+            metric.update(projection_stats)
+            early_stop = projection_early_stop(
+                step, cumulative_removed_energy, cumulative_cons_energy)
+            if early_stop:
+                metric["early_stop"] = "projection_removed_energy_fraction_below_0.01_at_step_50"
         if step == 1 or step % args.eval_every == 0 or step == args.steps:
             metric["validation"] = {
                 name: evaluate(model, rows, args, tokenizer, groups, device)
@@ -417,8 +571,10 @@ def main():
         with metrics.open("a") as target:
             target.write(json.dumps(metric) + "\n")
         print(json.dumps(metric), flush=True)
-        if step % args.save_every == 0 or step == args.steps:
+        if step % args.save_every == 0 or step == args.steps or early_stop:
             save(model, optimizer, scheduler, step, out)
+        if early_stop:
+            return
 
 
 if __name__ == "__main__":
