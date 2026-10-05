@@ -153,6 +153,9 @@ def main():
     suites.update({name: _read(Path(args.mm_dir) / filename, multimodal=True) for name, filename in MM_FILES.items()})
     if [case["id"] for case in suites["he"]] != [case["id"] for case in suites["en"]]:
         raise ValueError("Hebrew/English rows are not aligned")
+    for name in ("shuffled", "noimage", "mismatch", "gold_dropped"):
+        if [case["id"] for case in suites["real"]] != [case["id"] for case in suites[name]]:
+            raise ValueError(f"real/{name} rows are not aligned")
     processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
     groups = letter_token_groups(processor.tokenizer)
     if any(len(cases) != 128 for cases in suites.values()):
@@ -178,6 +181,7 @@ def main():
                            "answerability_auroc_at_least_.75": comparison["answerability_auroc"] >= .75,
                            "mismatch_null_recall_lost_at_most_one": comparison["mismatch_null_recall_lost"] <= 1 / 128,
                            "gold_dropped_null_recall_lost_at_most_one": comparison["gold_dropped_null_recall_lost"] <= 1 / 128}
+    comparison["promotion_pass"] = all(comparison["gates"].values())
     report = {"inputs": {"he_left_sha256": hashlib.sha256(Path(args.he_left).read_bytes()).hexdigest(),
                          "he_right_sha256": hashlib.sha256(Path(args.he_right).read_bytes()).hexdigest(),
                          "mm": {name: hashlib.sha256((Path(args.mm_dir) / filename).read_bytes()).hexdigest()

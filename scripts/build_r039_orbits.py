@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import random
 from collections import Counter
 from pathlib import Path
 
@@ -39,17 +40,15 @@ EVAL_CLAIM = (
 )
 
 
-def _facts(source_id, split):
+def _facts(facts, source_id, split, world):
     offset = source_id + (31 if split == "eval" else 0)
     topic, unit = TOPICS[offset % len(TOPICS)]
-    value = 100 + ((source_id * 73 + (29 if split == "eval" else 0)) % 800)
-    gap = 7 + ((source_id * 19 + (11 if split == "eval" else 0)) % 41)
-    return topic, unit, value, gap
+    value, limit = facts[(split, source_id, world)]
+    return topic, unit, value, limit
 
 
-def _row(source_id, split, world, state_variant, claim_variant, yes_first, copy_index, arm):
-    topic, unit, value, gap = _facts(source_id, split)
-    limit = value + gap if world == 0 else value - gap
+def _row(facts, source_id, split, world, state_variant, claim_variant, yes_first, copy_index, arm):
+    topic, unit, value, limit = _facts(facts, source_id, split, world)
     state_templates = EVAL_STATE if split == "eval" else TRAIN_STATE
     claim_templates = EVAL_CLAIM if split == "eval" else TRAIN_CLAIM
     criteria = {"yes": "Yes", "no": "No"}
@@ -66,7 +65,8 @@ def _row(source_id, split, world, state_variant, claim_variant, yes_first, copy_
         "meta": {"source": "r039_programmatic", "source_id": f"{split}-{source_id:03d}",
                  "world": world, "polarity": "positive", "wording": f"claim-{claim_variant}",
                  "criteria_style": f"state-{state_variant}", "yes_first": yes_first,
-                 "fixed_option_order": True, "arm": arm, "copy_index": copy_index},
+                 "fixed_option_order": True, "numeric_value": value, "numeric_limit": limit,
+                 "arm": arm, "copy_index": copy_index},
     }
 
 
@@ -75,7 +75,7 @@ def _selected_pairs():
     return {(state, claim) for state in range(4) for claim in (state, (state + 1) % 4)}
 
 
-def _rows_for_source(source_id, split, arm):
+def _rows_for_source(facts, source_id, split, arm):
     selected = _selected_pairs()
     rows = []
     for world in (0, 1):
@@ -85,18 +85,60 @@ def _rows_for_source(source_id, split, arm):
                     copies = (1 if arm in {"complete", "eval"} else
                               2 if (state_variant, claim_variant) in selected else 0)
                     for copy_index in range(copies):
-                        rows.append(_row(source_id, split, world, state_variant, claim_variant,
+                        rows.append(_row(facts, source_id, split, world, state_variant, claim_variant,
                                          yes_first, copy_index, arm))
     return rows
 
 
-def build(train_sources=32, eval_sources=8, seed=42):
+def _operand_shortcut_accuracy(train, evaluation):
+    """Worst held-out accuracy of fixed one-operand threshold or residue rules."""
+    results = []
+    for field in (0, 1):
+        values = sorted({row[field] for row in train})
+        candidates = [values[0] - 1, *values, values[-1] + 1]
+        rules = [(cutoff, upward) for cutoff in candidates for upward in (False, True)]
+        rule = max(rules, key=lambda item: sum(((row[field] >= item[0]) == item[1]) == row[2]
+                                               for row in train))
+        results.append(sum(((row[field] >= rule[0]) == rule[1]) == row[2]
+                           for row in evaluation) / len(evaluation))
+        for modulus in range(2, 18):
+            default = sum(row[2] for row in train) * 2 >= len(train)
+            lookup = {}
+            for residue in range(modulus):
+                labels = [row[2] for row in train if row[field] % modulus == residue]
+                lookup[residue] = sum(labels) * 2 >= len(labels) if labels else default
+            results.append(sum(lookup[row[field] % modulus] == row[2] for row in evaluation) / len(evaluation))
+    return max(results)
+
+
+def _fact_table(train_sources, eval_sources, seed):
+    for attempt in range(10_000):
+        rng = random.Random(f"r039:{seed}:{attempt}")
+        facts, train, evaluation = {}, [], []
+        for split, count, target in (("train", train_sources, train), ("eval", eval_sources, evaluation)):
+            for source_id in range(count):
+                for world in (0, 1):
+                    while True:
+                        value, limit = rng.randrange(100, 900), rng.randrange(100, 900)
+                        if value != limit and (value < limit) == (world == 0):
+                            facts[(split, source_id, world)] = (value, limit)
+                            target.append((value, limit, world == 0))
+                            break
+        if _operand_shortcut_accuracy(train, evaluation) <= .75:
+            return facts
+    raise ValueError("could not construct an operand-balanced fact table")
+
+
+def build(train_sources=32, eval_sources=32, seed=42):
+    if eval_sources < 32:
+        raise ValueError("R039 needs at least 32 evaluation sources for a stable shortcut audit")
+    facts = _fact_table(train_sources, eval_sources, seed)
     complete, partial, evaluation = [], [], []
     for source_id in range(train_sources):
-        complete.extend(_rows_for_source(source_id, "train", "complete"))
-        partial.extend(_rows_for_source(source_id, "train", "partial"))
+        complete.extend(_rows_for_source(facts, source_id, "train", "complete"))
+        partial.extend(_rows_for_source(facts, source_id, "train", "partial"))
     for source_id in range(eval_sources):
-        evaluation.extend(_rows_for_source(source_id, "eval", "eval"))
+        evaluation.extend(_rows_for_source(facts, source_id, "eval", "eval"))
     validate(complete, partial, evaluation)
     return complete, partial, evaluation
 
@@ -115,6 +157,16 @@ def rendered_signature(row):
             row["targets"]["decision"]["label"])
 
 
+def operand_shortcut_accuracy(train, evaluation):
+    """Worst held-out accuracy of simple one-operand threshold or residue rules."""
+    canonical = lambda rows: [row for row in rows if row["meta"]["criteria_style"] == "state-0"
+                              and row["meta"]["wording"] == "claim-0" and not row["meta"]["yes_first"]
+                              and row["meta"]["copy_index"] == 0]
+    as_pairs = lambda rows: [(row["meta"]["numeric_value"], row["meta"]["numeric_limit"],
+                              row["targets"]["decision"]["label"] == "yes") for row in canonical(rows)]
+    return _operand_shortcut_accuracy(as_pairs(train), as_pairs(evaluation))
+
+
 def validate(complete, partial, evaluation):
     if len(complete) != len(partial) or len(complete) != 64 * len(_by_source(complete)):
         raise ValueError("arms must have equal physical rows and complete 64-view source orbits")
@@ -122,6 +174,8 @@ def validate(complete, partial, evaluation):
         raise ValueError("source overlap between training and evaluation")
     if set(map(rendered_signature, complete)) & set(map(rendered_signature, evaluation)):
         raise ValueError("rendered train/eval overlap")
+    if operand_shortcut_accuracy(complete, evaluation) > .75:
+        raise ValueError("operand-only preflight exceeds chance tolerance")
     full_by_source, partial_by_source = _by_source(complete), _by_source(partial)
     if set(full_by_source) != set(partial_by_source):
         raise ValueError("arm source mismatch")
@@ -170,7 +224,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default=".context/r039-orbits")
     parser.add_argument("--train-sources", type=int, default=32)
-    parser.add_argument("--eval-sources", type=int, default=8)
+    parser.add_argument("--eval-sources", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--replay")
     parser.add_argument("--replay-count", type=int, default=0)

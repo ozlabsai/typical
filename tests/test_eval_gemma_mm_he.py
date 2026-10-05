@@ -9,3 +9,4 @@ def test_locked_hebrew_and_image_panels_adapt_without_dropping_nulls():
     assert len(real) == len(mismatch) == 128
     assert all(case["candidates"][-1] == NULL_OPTION for case in real + mismatch)
     assert all(case["label"] == len(case["candidates"]) - 1 for case in mismatch)
+    assert [case["id"] for case in real] == [case["id"] for case in mismatch]
