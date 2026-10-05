@@ -27,7 +27,7 @@ Observed effect: public JevBench moved from `164/231` to `159/231`; the exact-ro
 
 | System / recipe | Strongest relevant evidence | Lesson for Typical |
 |---|---|---|
-| [JevBench v1.5.6](https://www.benchmarkheaven.com/jev-models) | Jev: official score 72.1, Intelligence 72.0. Cygnet: 73.7 / 71.1. Winnow Q8: 73.2 / 74.4. Winnow is the open system that clears both Jev's composite and intelligence. | Require both official score and Intelligence parity; do not win only through speed/cost. |
+| [JevBench v1.5.4](https://benchmarkheaven.com/api/jevbench/v1.5.4) | Jev: official score 72.13293, Intelligence 71.99975. Cygnet: 73.70127 / 71.09242. Winnow Q8: 73.23310 / 74.43469. Winnow is the open system that clears both Jev's composite and intelligence. | Require both official score and Intelligence parity; do not win only through speed/cost. |
 | [Cygnet](https://github.com/blockbrain-ai/cygnet-recipe) | Frozen Gemma-4-12B-it, one constrained letter, temperature 3.4; `203/231` public and official rank #1. | The fastest evidence-backed baseline is stock 12B + correct prompt/readout, before training. |
 | [Winnow-12B](https://huggingface.co/EldanRing/Winnow-12B) | Gemma-4-12B-it, rank-32 LoRA across attention and MLP, about 26k curated/refined decisions, teacher loss only on teacher/gold agreement, replay; official Intelligence 74.4. | This is the primary text-quality recipe to reproduce or build from. |
 | [Intern-Decision-4B](https://huggingface.co/internlm/Intern-Decision-4B) | Qwen3.5-4B, native multimodality, final LM logits at JSON decision markers; self-reported `201/231`, typed decisions 80.55%, 44 ms on 4090. | Best fast/MM candidate; evaluate untouched before modifying our older layer-23 head. |
@@ -37,7 +37,7 @@ Observed effect: public JevBench moved from `164/231` to `159/231`; the exact-ro
 | [autotrust/JEV-27B](https://huggingface.co/autotrust/JEV-27B) | Frozen 27B + rank-16 LoRA + fp32 head, KL to soft distributions, Score RPS, option permutations, per-kind temperatures; reported six-benchmark mean 84.07 vs Jev 83.85. | Copy the loss and batching details, while labeling this as Jev distillation rather than independent intelligence. |
 | [CLM](https://github.com/Contrastive-LM/CLM) | Staged hard negatives, contrastive learning, replay, and cached actions. | Add hard-negative contrastive refinement only after the plain decision objective passes. |
 | [Bandits](https://github.com/bandr-ai/bandits) | Outcome-grounded agent trace labels, lineage-preserving splits, quarantine of ambiguous cases. | Use post-action evidence for workflow data; do not force uncertain trace labels. |
-| [Official WorkflowEvals](https://github.com/typesafe-ai/WorkflowEvals) | 705 public cases; exact final action sets after workflow code. Jev scores 61.7 security, 71.6 agent trace, 61.8 invoice, 76.0 customer, mean 67.8. | This is now the primary workflow benchmark, not our old row-wise proxy. |
+| [Official WorkflowEvals](https://github.com/typesafe-ai/WorkflowEvals) | 705 public cases / 1,524 policy decisions. Jev scores 61.7 security, 71.6 agent trace, 61.8 invoice, 76.0 customer, mean 67.8. Security/invoice/customer use exact action sets; agent trace publishes primary-action agreement. | This is now the primary workflow benchmark, not our old row-wise proxy. |
 | [LocalLLaMA typed-decisions](https://huggingface.co/datasets/LocalLLaMA/typed-decisions) | Full five-question cases; Jev `.727` accuracy. Request grouping affects results. | Our first-1,500 row-wise `.515` number is not leaderboard-comparable. Re-evaluate grouped cases. |
 | [Tasksource typed decisions](https://huggingface.co/datasets/tasksource/tasksource-jev-typed-decisions), [Open-Jev v1.1](https://huggingface.co/datasets/ZefanCai/Open-Jev-v1.1), [Sarge v3](https://huggingface.co/datasets/SargeDev/jev-distill-corpus-v3) | Broad grouped supervision, programmatic counterfactuals, and full teacher distributions. | These are the training pool after licensing, overlap, quality, and placeholder audits. |
 
@@ -45,9 +45,9 @@ Observed effect: public JevBench moved from `164/231` to `159/231`; the exact-ro
 
 The goal is not complete until a frozen submitted checkpoint meets every primary gate.
 
-1. **Official JevBench v1.5.x:** score `≥72.1` and Intelligence `≥72.0`; additionally target Winnow's `74.4` Intelligence. Report open/sealed and Choice/Noul/Score separately.
-2. **Public JevBench diagnostic:** report total, family breakdown, paired deltas, and uncertainty, with no promotion threshold. Winnow demonstrates why: `199/231` public but `74.4` official Intelligence, above Jev's `72.0`.
-3. **Official WorkflowEvals:** equal-weight exact-actions mean `≥67.8`, with no workflow more than two points below Jev's published row.
+1. **Official JevBench v1.5.4:** full 1,624-item evaluator run with zero missing/invalid outputs, score `≥72.13293` and Intelligence `≥71.99975`; additionally target Winnow's `74.43469` Intelligence. Report open/sealed and Choice/Noul/Score separately. A defensible win needs the official paired-bootstrap lower bound above zero; equality needs a preregistered ±1-point equivalence interval on both score and Intelligence.
+2. **Public JevBench diagnostic:** the legacy 231-item v1.2 subset and `scripts/jevbench_score.py` are diagnostics only, not v1.5 parity evidence. Report family breakdown, paired deltas, and uncertainty, with no promotion threshold or checkpoint selection.
+3. **Official WorkflowEvals:** all 705 cases / 1,524 policy decisions with `questions=all`, full status/coverage accounting, equal-workflow published-metric mean `≥67.8`, and no workflow below Jev's published row. Use exact action sets for security/invoice/customer and primary-action agreement for agent trace.
 4. **Typed-decisions:** grouped five-question protocol; accuracy `≥.727` plus KL, Brier, and ECE no worse than Jev.
 5. **Multimodal:** submit to Image JevBench or run its pinned public protocol; meanwhile require real-image accuracy, shuffled/no-image counterfactuals, and mismatch abstention. ScienceQA alone is not the final MM claim.
 6. **Hebrew:** locked paired Hebrew/English set; Hebrew improves over the selected base, English loses at most one point, and probability JSD/calibration are reported.
@@ -82,7 +82,7 @@ This changes the optimization target: public JevBench is not predictive enough t
 
 Only if an untouched baseline does not already clear the full target:
 
-- Base: Gemma-4-12B-it, or Winnow as an explicitly attributed initialization.
+- Base: a fresh pinned Gemma-4-12B-it. Winnow is a reference/teacher only; Typical does not initialize from another decision model.
 - Readout: constrained final-token candidate symbols first; the current Typical head and a Strands-style pointer are ablations.
 - Adaptation: rank-32 LoRA on `q/k/v/o` and MLP projections; native vision path stays frozen initially.
 - Context: train/evaluate length buckets through at least 16k; official agent-trace inputs reach 44k characters.

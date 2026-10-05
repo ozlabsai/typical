@@ -275,9 +275,9 @@ Rows 1–5 are complete. Rows 6–7 are the next causal block; rows 8–11 run o
 
 A frozen final candidate must satisfy all of the following:
 
-1. Official JevBench score `≥72.1` and Intelligence `≥72.0`; target Winnow Intelligence `74.4`.
+1. Official JevBench v1.5.4 score `≥72.13293` and Intelligence `≥71.99975`; target Winnow Intelligence `74.43469`; zero missing/invalid outputs.
 2. Public diagnostic is reported with paired uncertainty and family breakdown, but has no pass/fail threshold and never selects a checkpoint.
-3. WorkflowEvals equal-weight exact-action mean `≥67.8%`, no workflow more than two points below Jev.
+3. WorkflowEvals full-coverage equal-workflow published-metric mean `≥67.8%`, with no workflow below Jev (exact action sets except agent trace's published primary-action metric).
 4. Grouped typed-decisions accuracy `≥.727`, with non-inferior NLL/Brier/ECE.
 5. Option permutation delta `≤1 point` and grouped/single disagreement `≤1%`.
 6. Image causal controls and Hebrew paired gates above.
