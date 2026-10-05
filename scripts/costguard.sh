@@ -31,7 +31,12 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 
 print -r -- $$ > "$PID_FILE"
-trap 'rm -f "$PID_FILE"; rmdir "$LOCK_DIR" 2>/dev/null' EXIT INT TERM
+cleanup() {
+  rm -f "$PID_FILE"
+  rmdir "$LOCK_DIR" 2>/dev/null
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM
 
 check_pod() {
   local pod_json pod_status ip port remote metrics util memory active artifacts processes stopped_status local_transfer
@@ -120,9 +125,19 @@ check_pod() {
   fi
 }
 
+wait_for_next_check() {
+  local deadline remaining
+  deadline=$(( $(date +%s) + INTERVAL_SECONDS ))
+  while (( (remaining = deadline - $(date +%s)) > 0 )); do
+    (( remaining > 60 )) && remaining=60
+    sleep "$remaining"
+  done
+}
+
 log "guard started pid=$$ pod=$POD_ID interval=${INTERVAL_SECONDS}s"
 while true; do
   check_pod
   [[ ${COSTGUARD_ONCE:-0} == 1 ]] && break
-  sleep "$INTERVAL_SECONDS"
+  # Short sleeps make a suspended Mac catch up immediately after waking.
+  wait_for_next_check
 done
