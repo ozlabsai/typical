@@ -7,6 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import torch
+from peft import PeftModel
 from transformers import AutoModelForImageTextToText, AutoTokenizer
 
 from scripts.score_action_panel import score_group
@@ -70,6 +71,7 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--data", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--adapter")
     parser.add_argument("--per-label", type=int, default=65)
     parser.add_argument("--max-length", type=int, default=8192)
     args = parser.parse_args()
@@ -81,7 +83,10 @@ def main():
     groups = letter_token_groups(tokenizer)
     model = AutoModelForImageTextToText.from_pretrained(
         args.model, dtype=torch.bfloat16, local_files_only=True, attn_implementation="sdpa"
-    ).to(device).eval()
+    )
+    if args.adapter:
+        model = PeftModel.from_pretrained(model, args.adapter, local_files_only=True)
+    model.to(device).eval()
     records = []
     with torch.no_grad():
         for row in rows:
@@ -99,6 +104,9 @@ def main():
     canonical_no = report["canonical_no_both_orders"]
     bare_yes, canonical_yes = report["bare_yes_both_orders"], report["canonical_yes_both_orders"]
     report["gates"] = {
+        "bare_negative_recovery": report["bare_no_both_orders"] >= 0.90,
+        "bare_positive_retention": report["bare_yes_both_orders"] >= 0.95,
+        "bare_order_delta_at_most_.05": report["bare_mean_order_delta"] <= 0.05,
         "negative_recovery": canonical_no >= 0.8,
         "positive_loss_at_most_2": (bare_yes - canonical_yes) * args.per_label <= 2,
         "canonical_order_delta_at_most_.05": report["canonical_mean_order_delta"] <= 0.05,
