@@ -69,3 +69,12 @@ def test_action_panel_limit_is_balanced_across_cells():
              for row in sample]
     assert len(sample) == 16
     assert all(cells.count(cell) == 2 for cell in set(cells))
+
+
+def test_action_panel_exercises_every_available_field_polarity():
+    rows, _ = build(42, split="eval", cases_per_cell=100)
+    labels = {name: set() for name in ("safe", "approved", "within_limit", "timely", "evidence", "covered")}
+    for row in rows:
+        for index, name in enumerate(row["meta"]["field_order"]):
+            labels[name].add(row["targets"][f"q{index:02d}"]["label"])
+    assert all(values == {"no", "yes"} for values in labels.values())

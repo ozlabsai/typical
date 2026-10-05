@@ -94,14 +94,15 @@ def _state(family, value_limit, age_limit, fields, rng):
     return "\n".join(facts)
 
 
-def _truths(size, requested_action):
+def _truths(size, requested_action, cell_index):
     names = ("safe", "approved", "within_limit", "timely", "evidence", "covered")[:size]
     action = requested_action if requested_action != "escalate" or size >= 3 else "allow"
     fields = {name: True for name in names}
     if action == "deny":
         fields["safe"] = False
     elif action == "review":
-        fields["approved"] = False
+        reviewable = [name for name in fields if name not in {"safe", "within_limit"}]
+        fields[reviewable[(cell_index // 4) % len(reviewable)]] = False
     elif action == "escalate":
         fields["within_limit"] = False
     assert action_for(fields) == action
@@ -121,7 +122,7 @@ def build(seed, *, split, cases_per_cell):
                 for cell_index in range(cases_per_cell):
                     identifier += 1
                     size = 2 + cell_index % 5
-                    fields = _truths(size, ("allow", "review", "escalate", "deny")[cell_index % 4])
+                    fields = _truths(size, ("allow", "review", "escalate", "deny")[cell_index % 4], cell_index)
                     questions, targets = {}, {}
                     for question_index, (name, truth) in enumerate(fields.items()):
                         question = _question(template, name, value_limit, age_limit, truth)
