@@ -34,3 +34,6 @@ def test_r042_replay_is_identical_in_both_arms_and_rejects_forbidden_or_duplicat
     list_criteria = {"id": "typed-replay", "state": "independent", "questions": {
         "decision": {"criteria": ["a", "b"]}}, "targets": {}, "meta": {}}
     assert add_replay([list_criteria], card, prose)[0][0] == list_criteria
+    dict_criteria = {"id": "nested-replay", "state": "independent", "questions": {
+        "decision": {"criteria": {"a": {"nested": True}}}}, "targets": {}, "meta": {}}
+    assert add_replay([dict_criteria], card, prose)[0][0] == dict_criteria
