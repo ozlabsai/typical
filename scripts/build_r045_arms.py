@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 COUNTS = {"hebrew": 100, "visual": 200, "prose": 44, "replay": 45,
-          "wh": 272, "compositional": 128}
+          "wh": 300, "compositional": 100}
 DEFECTIVE_REPLAY_IDS = {f"r044-replay-{index:04d}" for index in
                         (10, 25, 72, 79, 85, 86, 108, 137, 147, 161, 180)}
 EXPECTED_ARM_ROWS = 789
@@ -25,7 +25,7 @@ def _sha(data):
 
 
 def _jsonl(rows):
-    return "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows).encode()
+    return "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode()
 
 
 def _read(path):
@@ -144,7 +144,17 @@ def _r044_categories(rows):
 def _wh_valid(rows):
     if any(not _valid_view(row) or row.get("image") or row.get("images") for row in rows):
         raise ValueError("WH input must contain clean grouped text rows")
-    return rows
+    flattened = []
+    for row in rows:
+        for qid, question in row["questions"].items():
+            item = copy.deepcopy(row)
+            item["id"] = f"{row['id']}::{qid}"
+            item["questions"] = {qid: question}
+            item["targets"] = {qid: row["targets"][qid]}
+            if "soft_targets" in row:
+                item["soft_targets"] = {qid: row["soft_targets"][qid]}
+            flattened.append(item)
+    return flattened
 
 
 def _compositional_valid(rows):
@@ -156,10 +166,13 @@ def _compositional_valid(rows):
             raise ValueError(f"R045 source/split provenance mismatch: {row['id']}")
         if meta.get("twin_id") != meta.get("source_id"):
             raise ValueError(f"R045 twin provenance mismatch: {row['id']}")
+        if not isinstance(meta.get("scenario_id"), str) or not meta["scenario_id"]:
+            raise ValueError(f"R045 scenario provenance missing: {row['id']}")
         if any((view.get("meta") or {}).get("source") != "r045_generated"
                or (view.get("meta") or {}).get("split") != "train"
                or (view.get("meta") or {}).get("language") != meta["language"]
                or (view.get("meta") or {}).get("twin_id") != meta["twin_id"]
+               or (view.get("meta") or {}).get("scenario_id") != meta["scenario_id"]
                for view in row["paired_views"]):
             raise ValueError(f"R045 view provenance mismatch: {row['id']}")
         if row.get("image") or row.get("images"):
@@ -169,7 +182,35 @@ def _compositional_valid(rows):
         twins[row["meta"]["twin_id"]].append(row["meta"]["language"])
     if any(Counter(languages) != {"en": 1, "he": 1} for languages in twins.values()):
         raise ValueError("R045 English/Hebrew twins must be selected together")
+    scenarios = defaultdict(list)
+    for row in rows:
+        scenarios[row["meta"]["scenario_id"]].append(row)
+    for scenario_rows in scenarios.values():
+        composition = set(scenario_rows[0]["meta"]["composition"])
+        if (len(scenario_rows) != 2 * len(composition)
+                or {row["meta"]["decisive_kind"] for row in scenario_rows} != composition
+                or Counter(row["meta"]["language"] for row in scenario_rows)
+                   != {language: len(composition) for language in ("en", "he")}):
+            raise ValueError("R045 scenarios must keep every pivot and language together")
     return rows
+
+
+def _sample_compositional(rows, count, seed):
+    scenarios = defaultdict(list)
+    for row in rows:
+        scenarios[row["meta"]["scenario_id"]].append(row)
+    multi = [group for group in scenarios.values() if len(group[0]["meta"]["composition"]) > 1]
+    atomic = [group for group in scenarios.values() if len(group[0]["meta"]["composition"]) == 1]
+    selected = [row for group in multi for row in group]
+    remaining = count - len(selected)
+    if remaining < 0 or remaining % 2:
+        raise ValueError("R045 compositional count cannot preserve complete scenarios")
+    atomic.sort(key=lambda group: group[0]["meta"]["scenario_id"])
+    random.Random(f"r045-arm:{seed}:compositional-scenarios").shuffle(atomic)
+    selected.extend(row for group in atomic[:remaining // 2] for row in group)
+    if len(selected) != count:
+        raise ValueError(f"need {count} complete R045 rows; found {len(selected)}")
+    return selected
 
 
 def _sample(rows, count, seed, stratum):
@@ -263,6 +304,13 @@ def _tree_hash(out, image_manifest):
     return _sha(payload), len(entries)
 
 
+def _exposure(rows):
+    states = [view["state"] for row in rows for view in row.get("paired_views", [])]
+    states.extend(row["state"] for row in rows if "paired_views" not in row)
+    return {"slots": len(rows), "presentations": len(states),
+            "state_characters": sum(map(len, states))}
+
+
 def build(r044_path, wh_path, compositional_path, out, seed=45):
     inputs = {}
     r044, inputs["r044_arm_b"] = _read(r044_path)
@@ -270,17 +318,21 @@ def build(r044_path, wh_path, compositional_path, out, seed=45):
     compositional, inputs["compositional_train"] = _read(compositional_path)
     for name, rows in (("r044", r044), ("wh", wh), ("compositional", compositional)):
         _require_ids(rows, name)
-    all_ids = [row["id"] for rows in (r044, wh, compositional) for row in rows]
-    if len(set(all_ids)) != len(all_ids):
+    source_ids = [row["id"] for rows in (r044, wh, compositional) for row in rows]
+    if len(set(source_ids)) != len(source_ids):
         raise ValueError("source ID overlap across R044, WH, and R045 inputs")
 
     categories, clean_r044 = _r044_categories(r044)
-    _wh_valid(wh)
+    wh = _wh_valid(wh)
+    _require_ids(wh, "flattened WH")
     _compositional_valid(compositional)
+    all_ids = [row["id"] for rows in (r044, wh, compositional) for row in rows]
+    if len(set(all_ids)) != len(all_ids):
+        raise ValueError("source ID overlap across R044, WH, and R045 inputs")
     if len(wh) < COUNTS["wh"]:
         raise ValueError(f"WH pool needs at least {COUNTS['wh']} rows; found {len(wh)}")
-    if len(compositional) != COUNTS["compositional"]:
-        raise ValueError(f"R045 input needs exactly {COUNTS['compositional']} rows; found {len(compositional)}")
+    if len(compositional) < COUNTS["compositional"]:
+        raise ValueError(f"R045 input needs at least {COUNTS['compositional']} rows; found {len(compositional)}")
 
     common = []
     selections = {}
@@ -292,7 +344,7 @@ def build(r044_path, wh_path, compositional_path, out, seed=45):
     wh_rows = _sample(wh, COUNTS["wh"], seed,
                       lambda row: ("wh", len(row.get("questions", {}))))
     selections["wh"] = [row["id"] for row in wh_rows]
-    r045_rows = copy.deepcopy(compositional)
+    r045_rows = copy.deepcopy(_sample_compositional(compositional, COUNTS["compositional"], seed))
     selections["compositional"] = [row["id"] for row in r045_rows]
 
     arm_a = copy.deepcopy(clean_r044)
@@ -321,6 +373,9 @@ def build(r044_path, wh_path, compositional_path, out, seed=45):
     for name, payload in payloads.items():
         (out / f"{name}.jsonl").write_bytes(payload)
     image_tree_hash, image_count = _tree_hash(out, image_manifest)
+    exposure = {"arm-a": _exposure(arm_a), "arm-b": _exposure(arm_b)}
+    if exposure["arm-a"]["presentations"] != exposure["arm-b"]["presentations"]:
+        raise AssertionError("arm presentation count mismatch")
     manifest = {
         "experiment": "r045_matched_arms", "seed": seed,
         "logical_rows": {name: len(rows) for name, rows in (("arm-a", arm_a), ("arm-b", arm_b))},
@@ -333,6 +388,10 @@ def build(r044_path, wh_path, compositional_path, out, seed=45):
                            "common_image_presence_equal": True,
                            "extra_arm_ids_disjoint": True,
                            "benchmark_sources_rejected": True},
+        "compute_contract": {"matched_optimizer_slots": True, "matched_presentations": True,
+                             "matched_state_characters": False,
+                             "estimand": "equal-update curriculum; not equal-token compute",
+                             "exposure": exposure},
         "images": {"files": image_count, "tree_sha256": image_tree_hash,
                    "files_by_sha256": image_manifest},
         "outputs": {name: {"rows": len(rows), "sha256": _sha(payloads[name])}

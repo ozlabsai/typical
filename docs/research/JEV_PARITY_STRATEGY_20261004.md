@@ -160,3 +160,24 @@ The text-only arm did not explain the visual improvement: B beat A by 20 real-im
 The frozen promoted adapter completed all 231 legacy public JevBench items with 231 strict-valid native probability vectors and `196/231` correct (`84.85%`), ECE `.0632`, p50 `.119 s`, and p95 `.674 s` on an A100. On the same item IDs, Jev 1.13 scored `200/231`. This is a net four-answer difference: Jev alone was correct on ten disagreements and Typical alone on six; exact paired McNemar `p=.4545`. It is not evidence of a reliable difference or official v1.5.4 equality.
 
 The errors localize the next independent-data experiment. Temporal/numeric accounts for 12 of 35 misses, followed by long-policy (six), probability (four), and multi-hop (four). R044's apparent temporal/numeric coverage was shallow: its pair generator reused fixed dates, thresholds, and operators, so the strong internal pair score mainly demonstrates nuisance-record transfer rather than new calculation or rule composition. R045 therefore tests held-out values, thresholds, program compositions, entity vocabularies, and renderer grammars with executable gold. JevBench and WorkflowEvals remain excluded from data generation, calibration, checkpoint selection, and model selection.
+
+### R044 official WorkflowEvals result
+
+R044-B completed the pinned official workflow protocol with all 705 cases and 1,524 decisions, zero request errors, and complete consensus scoring. Its published-metric results were security exact actions `33.75%`, agent-trace primary action `54.95%`, invoice exact actions `51.78%`, and customer-service exact actions `70.75%`; the equal-workflow mean was `52.81%`, versus Jev's `67.8%`. All four preregistered workflow floors failed. The copied manifests, results, scores, and run log under `.context/r044-workflows` match the remote SHA-256 receipts.
+
+This confirms that public JevBench proximity (`196/231` versus Jev's `200/231`) does not imply workflow parity. The gap is largest where an exact action set depends on several predicates distributed across the state. R044's internal action panel had short states and direct fields, while its training mixture contained almost entirely singleton questions. The next treatment therefore targets evidence binding and rule composition rather than attention replacement or RL.
+
+### R045 compositional transfer preregistration
+
+The first R045 generator was rejected before model exposure. It omitted model-visible operators, contained label shortcuts, coupled renderer to the decisive clause, used disjoint numeric ranges across splits, and did not make every clause causal. The repaired v3 corpus states the full rule in English and Hebrew, independently verifies English labels from rendered text, crosses option order and nuisance fields, uses real decimal/ledger/conditional/timezone/precedence calculations, and groups every clause pivot into one scenario. Benchmark source paths/content are rejected.
+
+Frozen v3 hashes:
+
+- builder: `079609abefc1367fdde2a6d7193e2061a29f0368e15ea81fe5d54d1b01741a04`
+- train, 192 rows / 96 pivot sources: `47e5939607097854b5923d45080f4c7cbc766699455ccdcb04b9dd940e26e331`
+- calibration, 48 rows / 24 pivot sources: `1690edcc41ca6a7f24b7499edf2f0f1446b47ec441f19edc0dc570205cfa14e7`
+- test, 144 rows / 72 pivot sources / 32 complete scenarios: `d9a1f3d2e5eeab456faba5bcf87eb06b297912185f1c2ef2f648d98ca2392acd`
+
+The primary metric is complete-scenario accuracy: every pivot, both languages, and both counterfactual outcomes must be correct. A continuation must gain at least four of 32 scenarios and 18 of 288 presentations over both its matched control and frozen R044, with a one-sided exact paired scenario test at `p ≤ .05`. It may not regress complete pivot sources, correct pairs, either language, or any composition by more than one scenario. R045 test NLL and Brier must remain within 105% of R044. If frozen R044 already reaches 28/32 scenarios or 271/288 presentations, this panel lacks enough headroom and cannot justify training by itself.
+
+The training arms each contain 789 optimizer slots and 889 presentations. They share 389 retention rows; control A uses 400 clean R044 rows, while treatment B uses 300 repaired WH singletons and 100 complete-scenario R045 pair rows. They are deliberately labeled an equal-update curriculum comparison, not equal-token compute: A contains 294,589 state characters and B 548,755. A win must therefore be described as evidence for the whole curriculum package, not an isolated composition-loss or compute-efficiency claim. Existing R044 multimodal, Hebrew, English, action, renderer, pair, and retention floors remain mandatory.

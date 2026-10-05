@@ -47,7 +47,7 @@ def audit(rows, predictions):
     if set(ids) != set(prediction_ids) or len(predictions) != len(views):
         raise ValueError("predictions must cover every presentation exactly once")
     by_id = {item["id"]: item for item in predictions}
-    scored, pair_scores, sources = [], {}, defaultdict(list)
+    scored, pair_scores, sources, scenarios = [], {}, defaultdict(list), defaultdict(list)
     for row in rows:
         if row.get("pair_mode") != "counterfactual" or len(row.get("paired_views", [])) != 2:
             raise ValueError(f"{row.get('id')}: expected one two-view counterfactual pair")
@@ -62,6 +62,7 @@ def audit(rows, predictions):
             predicted = "yes" if yes >= no else "no"
             probability = yes if gold == "yes" else no
             item = {"id": view["id"], "source_id": meta["source_id"],
+                    "scenario_id": meta["scenario_id"], "decisive_kind": meta["decisive_kind"],
                     "language": meta["language"], "composition": "+".join(meta["composition"]),
                     "yes_first": next(iter(view["questions"]["decision"]["criteria"])) == "yes",
                     "correct": predicted == gold, "nll": -math.log(max(probability, 1e-12)),
@@ -69,11 +70,16 @@ def audit(rows, predictions):
             scored.append(item)
             pair.append(item)
             sources[item["source_id"]].append(item)
+            scenarios[item["scenario_id"]].append(item)
         if {view["targets"]["decision"]["label"] for view in row["paired_views"]} != {"no", "yes"}:
             raise ValueError(f"{row['id']}: counterfactual labels must flip")
         pair_scores[row["id"]] = all(item["correct"] for item in pair)
     if any(len(items) != 4 for items in sources.values()):
         raise ValueError("each logical source must contain English and Hebrew counterfactual pairs")
+    if any(len(items) != 4 * len(set(items[0]["composition"].split("+")))
+           or {item["decisive_kind"] for item in items} != set(items[0]["composition"].split("+"))
+           for items in scenarios.values()):
+        raise ValueError("each scenario must contain one complete bilingual pair per clause")
 
     def slices(key):
         grouped = defaultdict(list)
@@ -88,6 +94,9 @@ def audit(rows, predictions):
         "logical_sources": len(sources),
         "source_all_four_correct": sum(all(item["correct"] for item in items)
                                        for items in sources.values()) / len(sources),
+        "scenarios": len(scenarios),
+        "scenario_all_pivots_correct": sum(all(item["correct"] for item in items)
+                                           for items in scenarios.values()) / len(scenarios),
         "language": slices("language"),
         "composition": slices("composition"),
         "option_order": slices("yes_first"),

@@ -10,6 +10,7 @@ from scripts.build_r045_arms import (
     RETENTION_ROWS,
     build,
 )
+from scripts.build_r045_compositional_transfer import build as build_compositional
 
 
 def _write(path, rows):
@@ -49,7 +50,7 @@ def _single(identifier, category, source, extra_meta=None, image=None):
     return row
 
 
-def _fixture(tmp_path, wh_count=280):
+def _fixture(tmp_path, wh_count=320):
     r044_dir = tmp_path / "r044"
     image_dir = r044_dir / "images"
     image_dir.mkdir(parents=True)
@@ -80,18 +81,9 @@ def _fixture(tmp_path, wh_count=280):
                         "targets": {"q000": {"label": "a"}}})
     wh_path = _write(tmp_path / "wh.jsonl", wh_rows)
 
-    compositional = []
-    for index in range(64):
-        twin = f"r045-twin-{index:04d}"
-        for language in ("en", "he"):
-            row = _pair(f"r045-{index:04d}-{language}", language=language, twin=twin)
-            row["meta"]["source_id"] = twin
-            for view in row["paired_views"]:
-                view["meta"].update({"source_id": twin, "source": "r045_generated",
-                                     "split": "train", "language": language, "twin_id": twin})
-            row["source_ids"] = [twin, twin]
-            compositional.append(row)
-    compositional_path = _write(tmp_path / "compositional.jsonl", compositional)
+    compositional_dir = tmp_path / "compositional"
+    build_compositional(compositional_dir, seed=45)
+    compositional_path = compositional_dir / "train.jsonl"
     return r044_path, wh_path, compositional_path, set(row["id"] for row in r044)
 
 
@@ -121,12 +113,21 @@ def test_builds_matched_789_row_arms_with_clean_common_rows_and_assets(tmp_path)
         "hebrew": 100, "visual": 200, "prose": 44, "replay": 45}
     assert Counter((row.get("meta") or {}).get("source") for row in arm_b
                    if (row.get("meta") or {}).get("source") == "r045_generated") == {
-        "r045_generated": 128}
-    assert sum(not row.get("meta", {}).get("r044_category") and row.get("id", "").startswith("wh-")
-               for row in arm_b) == COUNTS["wh"]
+        "r045_generated": 100}
+    wh_selected = [row for row in arm_b
+                   if not row.get("meta", {}).get("r044_category") and row.get("id", "").startswith("wh-")]
+    assert len(wh_selected) == COUNTS["wh"]
+    assert all(len(row["questions"]) == 1 and "::" in row["id"] for row in wh_selected)
+    selected_scenarios = Counter(row["meta"]["scenario_id"] for row in arm_b
+                                 if row.get("meta", {}).get("source") == "r045_generated")
+    assert set(selected_scenarios.values()) <= {2, 4}
     assert not ({row["id"] for row in arm_b} & DEFECTIVE_REPLAY_IDS)
     assert manifest["logical_rows"] == {"arm-a": 789, "arm-b": 789}
     assert manifest["composition"]["common_retention"] == 389
+    assert manifest["compute_contract"]["matched_presentations"]
+    assert not manifest["compute_contract"]["matched_state_characters"]
+    assert {arm: values["presentations"] for arm, values in
+            manifest["compute_contract"]["exposure"].items()} == {"arm-a": 889, "arm-b": 889}
     assert manifest["inputs"]["r044_arm_b"]["sha256"]
     assert manifest["outputs"]["arm-a"]["sha256"]
     assert manifest["images"]["files"] == 200

@@ -8,7 +8,7 @@ from scripts.eval_r045_transfer import audit
 
 def _panel():
     return (_pair("test", ("decimal", "ledger"), 80, 45)
-            + _pair("test", ("datetime", "policy"), 81, 45))
+            + _pair("test", ("decimal", "ledger"), 81, 45))
 
 
 def _predictions(rows, flip=()):
@@ -29,8 +29,9 @@ def test_audit_reports_full_pair_language_and_source_metrics():
     assert report["presentations"] == 8 and report["accuracy"] == 1
     assert report["pairs"] == 4 and report["pair_both_correct"] == 1
     assert report["logical_sources"] == 2 and report["source_all_four_correct"] == 1
+    assert report["scenarios"] == 1 and report["scenario_all_pivots_correct"] == 1
     assert set(report["language"]) == {"en", "he"}
-    assert set(report["composition"]) == {"datetime+policy", "decimal+ledger"}
+    assert set(report["composition"]) == {"decimal+ledger"}
     assert set(report["option_order"]) == {"False", "True"}
 
 
@@ -41,6 +42,7 @@ def test_one_error_lowers_the_right_full_denominators():
     assert report["accuracy"] == 7 / 8
     assert report["pair_both_correct"] == 3 / 4
     assert report["source_all_four_correct"] == 1 / 2
+    assert report["scenario_all_pivots_correct"] == 0
 
 
 @pytest.mark.parametrize("mutation,match", [
