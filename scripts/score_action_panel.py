@@ -16,6 +16,7 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoModelForImageTextToText, AutoTokenizer
 
 from scripts.build_action_panel import action_for
+from scripts.fit_internal_calibration import _scaled, fit
 from scripts.train_gemma_decision_lora import encode, flatten_row, letter_token_groups
 
 
@@ -59,6 +60,28 @@ def summarize(rows, prediction_rows):
             "error_categories": counts}
 
 
+def calibration_records(rows, prediction_rows):
+    by_id = {item["id"]: item for item in prediction_rows}
+    records = []
+    for row in rows:
+        probabilities = by_id[row["id"]]["probabilities"]
+        for qid, target in row["targets"].items():
+            records.append({"qtype": "noul", "target": target["label"],
+                            "probabilities": probabilities[qid]})
+    return records
+
+
+def calibrate(prediction_rows, calibration):
+    result = []
+    temperature = calibration["noul"]["temperature"]
+    intercept = calibration["noul"]["logit_intercept_true"]
+    for item in prediction_rows:
+        probabilities = {qid: _scaled(values, temperature, intercept)
+                         for qid, values in item["probabilities"].items()}
+        result.append({"id": item["id"], "probabilities": probabilities})
+    return result
+
+
 @torch.no_grad()
 def score_group(model, tokenizer, groups, row, device, max_length):
     examples = flatten_row(row)
@@ -89,9 +112,13 @@ def main():
     parser.add_argument("--data", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--adapter")
+    parser.add_argument("--calibration-data")
+    parser.add_argument("--calibration-predictions")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--max-length", type=int, default=8192)
     args = parser.parse_args()
+    if bool(args.calibration_data) != bool(args.calibration_predictions):
+        raise ValueError("calibration data and predictions must be supplied together")
     rows = [json.loads(line) for line in Path(args.data).read_text().splitlines() if line.strip()]
     rows = rows[:args.limit] if args.limit else rows
     device = torch.device("cuda")
@@ -111,7 +138,15 @@ def main():
         predictions.append({"id": row["id"], "probabilities": probabilities,
                             "predicted_action": predicted, "gold_action": gold,
                             "error_category": category})
-    report = summarize(rows, predictions)
+    report = {"raw": summarize(rows, predictions)}
+    if args.calibration_data:
+        calibration_rows = [json.loads(line) for line in Path(args.calibration_data).read_text().splitlines()
+                            if line.strip()]
+        calibration_predictions = [json.loads(line) for line in
+                                   Path(args.calibration_predictions).read_text().splitlines() if line.strip()]
+        calibration = fit(calibration_records(calibration_rows, calibration_predictions), noul_intercept=True)
+        report["calibration"] = calibration
+        report["calibrated"] = summarize(rows, calibrate(predictions, calibration))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     with (out / "predictions.jsonl").open("w") as target:

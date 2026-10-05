@@ -1,7 +1,7 @@
 import json
 
 from scripts.build_action_panel import SPLITS, action_for, build, main
-from scripts.score_action_panel import summarize
+from scripts.score_action_panel import calibrate, calibration_records, summarize
 
 
 def test_action_panel_is_deterministic_and_split_disjoint(tmp_path, monkeypatch):
@@ -46,3 +46,12 @@ def test_action_report_separates_ranking_and_threshold_errors():
                     for qid, values in good.items()}
     report = summarize([row], [{"id": row["id"], "probabilities": ranked_wrong}])
     assert report["error_categories"]["ranking"] == 1
+
+    records = calibration_records([row], [{"id": row["id"], "probabilities": good}])
+    recalibrated = calibrate([{"id": row["id"], "probabilities": good}], {
+        "noul": {"temperature": 1.0, "logit_intercept_true": 0.0},
+    })
+    assert len(records) == len(row["questions"])
+    for qid, values in good.items():
+        for label, value in values.items():
+            assert abs(recalibrated[0]["probabilities"][qid][label] - value) < 1e-12
