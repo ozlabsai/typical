@@ -3,6 +3,7 @@ import json
 import random
 import re
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -237,6 +238,16 @@ def test_llm_spend_is_charged_from_usage():
     assert all(m < 16000 for m in llm.max_tokens)   # sized to the call, not the old 16000
 
 
+def test_build_from_plan_reports_enrichment_progress():
+    recs, seen = company(), []
+    build_from_plan(recs, company_plan(recs), {**ENRICH, "synthetic": True, "languages": ["es"]}, SETTINGS, random.Random(0), FakeLLM(),
+                    lambda *a: seen.append(a))
+    assert {k for k, _, _ in seen} == {"synthetic", "translate_es"}
+    for kind in ("synthetic", "translate_es"):
+        done = [(d, t) for k, d, t in seen if k == kind]
+        assert [d for d, _ in done] == sorted(d for d, _ in done) and done[-1][0] == done[-1][1] > 0   # counts up to its total, in cases
+
+
 def test_build_from_plan_bad_language():
     llm = FakeLLM()
     with pytest.raises(ValueError, match="language"):
@@ -283,3 +294,40 @@ def test_reveal_baseline_and_catch():
     d = {x["key"]: x for x in reveal(rows, run)["decisions"]}
     assert d["reply"]["majority"] == "no" and d["reply"]["baseline"] == 0.8 and d["reply"]["catch"] == {"standard": 0.5, "yours": 1.0}
     assert d["folder"]["majority"] == "a" and d["folder"]["baseline"] == 2 / 3 and "catch" not in d["folder"]
+
+
+def test_teach_endpoint_prepares_the_examples_inside_the_job(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "site"))
+    import server
+    import typically_analyze
+    import typically_job as tj
+    from fastapi.testclient import TestClient
+    recs = company()
+    for m in (server, tj):
+        monkeypatch.setattr(m, "TYPICALLY", tmp_path)
+    monkeypatch.setattr(typically_analyze, "_records", {"a" * 32: recs})
+    ran = []
+    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps, prepared=False: ran.append((slug, base, steps, prepared)))
+    body = {"records_token": "a" * 32, "plan": company_plan(recs), "name": "Acme Co", "base": "medium", "settings": {"steps": 200}}
+    c = TestClient(server.app)
+
+    def settle():
+        for _ in range(200):
+            if not server._jobs:
+                return
+            time.sleep(0.02)
+    r = c.post("/api/typically/teach", json=body)
+    assert r.status_code == 200 and r.json()["job"] == "acme_co" and r.json()["code"] == "preparing"
+    settle()
+    st = tj.read_status("acme_co")
+    rows = len((tmp_path / "jobs/acme_co/train.jsonl").read_text().splitlines())
+    assert ran == [("acme_co", "medium", 200, True)] and st["events"][0]["key"] == "prepare" and st["events"][0]["n"] == rows
+    assert json.loads((tmp_path / "jobs/acme_co/job.json").read_text())["name"] == "Acme Co"
+    bad = copy.deepcopy(body)
+    bad["plan"]["decisions"][0]["mapping"]["nope"] = "yes"
+    assert c.post("/api/typically/teach", json=bad).status_code == 400   # the fast checks answer the request itself
+    monkeypatch.setattr(server, "build_from_plan", lambda *a: (_ for _ in ()).throw(ValueError("no rows left")))
+    assert c.post("/api/typically/teach", json=body).status_code == 200
+    settle()
+    st = tj.read_status("acme_co")
+    assert st["phase"] == "failed" and st["code"] == "failed_build" and "no rows left" in st["message"] and len(ran) == 1

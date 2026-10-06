@@ -104,6 +104,7 @@ step 75 bucket C loss nan step_time 0.80s tok/s 1 lr_tower 1e-4 lr_lora 1e-5
 step 100 bucket W,C loss 0.3429 step_time 0.85s tok/s 11452 lr_tower 1.88e-04 lr_lora 6.28e-05
 step 100 val_nll 0.3735
 step 100 best_on_nll 0.7992 (data_co_acme_val=0.7992)
+step 100 best_on_acc 0.7500
 runs/co_acme best step 100
 """
 
@@ -114,7 +115,7 @@ def test_log_series(tmp_path):
     assert tj.log_series(f)["step"] == [10, 50, 100]
     s = tj.log_series(f, tail=len(POD_LOG) - 10)   # the read starts inside the "step 10" line: it is dropped, not misread
     assert s == {"step": [50, 100], "loss": [0.3697, 0.3429], "val": [0.3536, 0.3735], "best_on": [0.8272, 0.7992],
-                 "step_time": pytest.approx((0.97 + 0.80 + 0.85) / 3)}   # step 75's nan loss is dropped, its step_time kept
+                 "acc": [None, 0.75], "step_time": pytest.approx((0.97 + 0.80 + 0.85) / 3)}   # step 75's nan loss is dropped, its step_time kept
     assert tj.log_series(f, limit=1)["step"] == [100]
     assert tj.log_series(tmp_path / "missing.log")["step"] == []
 

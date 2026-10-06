@@ -6,7 +6,8 @@ import { StatusDot } from "@/components/app-sidebar"
 import { ShareButton } from "@/components/share-dialog"
 import { Page, PageHeader, SectionHeader, Stat } from "@/components/layout"
 import { CodeBlock, msg, StatusCopy } from "@/components/shared"
-import { TrainingCurve, useTrainStatus } from "@/components/training-curve"
+import { useTrainStatus } from "@/components/training-curve"
+import { TrainingProgress } from "@/components/training-progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -219,15 +220,20 @@ function Corrections({ m }: { m: LibraryModel }) {
   )
 }
 
+/** The live card while it trains; after a failure, the same milestones show where it stopped. */
 function TrainingCard({ m }: { m: LibraryModel }) {
   const { t } = useI18n()
-  const st = useTrainStatus(m.id, true)
+  const status = useTrainStatus(m.id, true)
+  const failed = m.status === "failed"
+  if (failed && !status?.events?.length) return null   // failed before this card existed: the alert says it all
   return (
     <Card>
-      <CardHeader><CardTitle>{t("models.training")}</CardTitle><CardDescription>{m.code || m.message ? <StatusCopy code={m.code} message={m.message} /> : t("models.notReady")}</CardDescription></CardHeader>
-      <CardContent className="grid gap-5">
-        <Progress value={(m.progress ?? 0) * 100} className="h-1.5" aria-label={t("tr.progress")} />
-        {st?.series && <TrainingCurve status={st} />}
+      <CardHeader>
+        <CardTitle>{t(failed ? "tr.stopped" : "models.training")}</CardTitle>
+        {!failed && <CardDescription>{m.code || m.message ? <StatusCopy code={m.code} message={m.message} /> : t("models.notReady")}</CardDescription>}
+      </CardHeader>
+      <CardContent>
+        {status ? <TrainingProgress status={status} /> : <Progress value={(m.progress ?? 0) * 100} className="h-1.5" aria-label={t("tr.progress")} />}
       </CardContent>
     </Card>
   )
@@ -270,10 +276,10 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
         </>}
       />
 
-      {m.status === "training" && <TrainingCard m={m} />}
       {m.status === "failed" && (
         <Alert variant="destructive"><AlertCircle /><AlertTitle>{t("models.failed")}</AlertTitle><AlertDescription><p><StatusCopy code={m.code} message={m.message} /></p></AlertDescription></Alert>
       )}
+      {(m.status === "training" || m.status === "failed") && <TrainingCard key={m.id} m={m} />}
 
       <Tabs value={ready ? tab ?? "overview" : "overview"} onValueChange={(v) => go({ name: "model", id, tab: v === "overview" ? undefined : v })}>
         <TabsList className="mb-2">

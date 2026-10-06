@@ -10,6 +10,17 @@ if [ "${1:-2}" = job ]; then BASE=${3:-small}; STEPS=${4:-400}; else BASE=small;
 cd /workspace/pcdm
 { set +x; } 2>/dev/null; set -a; . /workspace/.env; set +a
 export UV_PROJECT_ENVIRONMENT=/workspace/venv
+mark() { echo "[typically] $1 $(date -u +%FT%TZ) ${2:-}"; }   # milestones for the UI's live card (typically_job.pod_events); same key again = new detail
+if [ "${1:-2}" = job ]; then
+  mark gpu_assigned "$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits -i 0 | awk -F', ' '{printf "%s · %.0f GB", $1, $2 / 1024}' || true)"
+  # GPU panel: one sample every 10 s. A subshell loop, not `nvidia-smi -l | sed` (no pipe to SIGPIPE under pipefail); it stops when
+  # this script exits (trap) or dies (kill -0 $$)
+  ( while kill -0 $$ 2>/dev/null; do
+      echo "[gpu] $(nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits -i 0 2>/dev/null)"; sleep 10
+    done ) &
+  GPU_LOOP=$!
+  trap 'kill $GPU_LOOP 2>/dev/null' EXIT
+fi
 uv sync
 if [[ "$(nvidia-smi)" == *"CUDA Version: 12.8"* ]]; then   # docs/plan/PROJECT.md torch/driver rule (no grep -q pipe: pipefail + SIGPIPE)
   uv pip install --python /workspace/venv/bin/python "torch==2.11.0" --index-url https://download.pytorch.org/whl/cu128
@@ -20,11 +31,17 @@ if [ "$BASE" = medium ]; then   # Qwen3.5 hybrid: without these two the Gated-De
   uv pip install --python /workspace/venv/bin/python --no-build-isolation causal-conv1d || echo "WARN: causal-conv1d build failed; the conv stays on the reference path"
   uv run --no-sync python -c "import fla" || echo "WARN: fla missing; continuing on the slower reference path"
 fi
+mark model_download
 for d in v5 wf wh u; do   # one call per dir: --include takes ONE pattern, extra ones become filenames (and disable it)
   uv run --no-sync hf download guychuk/pcdm-data --repo-type dataset --include "$d/*" --local-dir data
 done
 for d in v5 wf wh u; do ln -sfn data/$d data_$d; done
 uv run --no-sync hf download "OzLabs/typical-$BASE" best.pt --local-dir runs/base
+if [ "${1:-2}" = job ]; then   # the backbone up front (train.py would fetch it silently) so the card can show the size; not fatal
+  BB=$(uv run --no-sync python -c "import sys; sys.path.insert(0, 'scripts'); from typically_job import RELEASED_ARGS; print(RELEASED_ARGS['$BASE']['backbone'])")
+  BB_DIR=$(uv run --no-sync hf download "$BB" --quiet | tail -n 1) || echo "WARN: backbone prefetch failed; train.py fetches it"
+  mark model_download "$(du -scbL "${BB_DIR:-runs/base}" runs/base | tail -n 1 | awk '{printf "%.1f GB", $1 / 1e9}' || true)"
+fi
 
 EV="uv run --no-sync python scripts/eval_wf.py --mode native"
 REG="data_wf/eval/wf_heldout_noul.jsonl data_wf/eval/wf_heldout_choice.jsonl data_wf/eval/wf_heldout_score.jsonl data_wf/eval/wf_rubric_flip.jsonl data_wh/eval/wh_heldout_family.jsonl"
@@ -43,6 +60,7 @@ train() {  # $1 company, $2 steps, $3 run name
   uv run --no-sync python -c "import sys,torch; b=torch.load(sys.argv[1]+'/best.pt',weights_only=False); print(sys.argv[1],'best step',b['step']); \
 l=torch.load(sys.argv[1]+'/last.pt',weights_only=False); torch.save({k:l[k] for k in ('tower','lora','step','best_val','args')},sys.argv[1]+'_last/best.pt'); \
 print(sys.argv[1],'last step',l['step'])" "runs/$3"
+  [ -z "$JOB" ] || mark testing "$(wc -l < "data_co_$1/eval/import_oneliner.jsonl")"   # the held-out cases the results page reports
   evals "runs/$3" "data_co_$1/eval/*.jsonl"
   [ -n "$JOB" ] || evals "runs/$3_last" "data_co_$1/eval/*.jsonl"   # ponytail: job mode skips the _last eval too (best.pt only)
 }
@@ -50,7 +68,9 @@ if [ "${1:-2}" = job ]; then   # $2 = slug; the UI's "Teach it" (eval + train on
   [[ "${2:-}" =~ ^[a-z0-9_]{1,40}$ ]] || { echo "job: bad slug '${2:-}'" >&2; exit 2; }   # same rule as typically_job.SLUG_RE
   [ -f "data_co_$2/train.jsonl" ] || { echo "job: data_co_$2/train.jsonl missing" >&2; exit 2; }
   JOB=1
+  mark model_load "$(wc -l < "data_co_$2/eval/import_oneliner.jsonl")"   # loading it onto the GPU + measuring the starting model on them
   evals runs/base "data_co_$2/eval/*.jsonl"
+  mark train
   train "$2" "$STEPS" "co_$2"
   # the results page's base-vs-yours scores, while both models are on this GPU (else the server downloads + scores them itself)
   uv run --no-sync python scripts/typically_reveal.py --job "$2" "$BASE" || echo "WARN: reveal failed; the server will score it"

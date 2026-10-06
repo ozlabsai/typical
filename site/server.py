@@ -7,6 +7,7 @@ Run: uv run uvicorn --app-dir site server:app --port 8787
 Bind to 127.0.0.1 only (the uvicorn default) unless TYPICALLY_AUTH=1: /api/typically/train rents GPUs. With TYPICALLY_AUTH=1
 (site/typically_auth.py: invite sign-in, ownership, quotas) it can be hosted for a small invited audience; see deploy/README.md.
 """
+import contextvars
 import csv
 import io
 import json
@@ -264,29 +265,49 @@ def _train_command(slug: str, steps: int, base: str) -> str:
     return "uv run --no-sync python pcdm/train.py " + " ".join(typically_job.train_flags(slug, steps, f"co_{slug}", typically_job.RELEASED_ARGS[base], base))
 
 
-@app.post("/api/typically/build")
-def build(req: BuildPlanRequest | BuildRequest):
-    slug = _slug(req.name)
+def _check_name(slug: str) -> None:
     if slug in auth.SHARED_MODELS or f"co_{slug}" in typically_deploy.ALIASES.values():   # "Northwind" / "f" would write over the shared sample
         raise HTTPException(409, "that name is reserved; pick another")
     if slug in _jobs:   # ponytail: check-then-write race is a few ms wide; a per-slug lock if builds ever run concurrently
         raise HTTPException(409, "that model is being taught right now; wait for it to finish before rebuilding its data")
     if slug and (TYPICALLY / "jobs" / slug).exists() and not auth.visible(slug):
         raise HTTPException(409, "that name is taken; pick another")
+
+
+@app.post("/api/typically/build")
+def build(req: BuildPlanRequest | BuildRequest):
+    slug = _slug(req.name)
+    _check_name(slug)
     if auth.enabled() and isinstance(req, BuildRequest):
         raise HTTPException(400, "this server takes the app's import (records_token + plan) only")
     return _build_plan(req, slug) if isinstance(req, BuildPlanRequest) else _build_csv(req, slug)
 
 
-def _build_plan(req: BuildPlanRequest, slug: str) -> dict:
+def _plan_records(req: BuildPlanRequest, slug: str) -> list[dict]:
+    """The fast checks of a plan build (name, upload, plan vs data), before any enrichment call."""
     if not typically_job.SLUG_RE.fullmatch(slug):
         raise HTTPException(400, "need a model name (letters and digits, up to 40 characters)")
-    records, plan = typically_analyze.load_upload(req.records_token), req.plan
+    records = typically_analyze.load_upload(req.records_token)
+    try:
+        if errs := typically_plan.validate_plan(req.plan, typically_plan.profile(records)):
+            raise HTTPException(400, "the plan does not match the data: " + "; ".join(errs[:5]))
+    except (KeyError, TypeError, AttributeError) as e:
+        raise HTTPException(400, f"the plan is malformed: {e!r}")
+    return records
+
+
+def _save_meta(req: BuildPlanRequest, out: Path) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    for name, body in (("plan", req.plan), ("enrich", req.enrich.model_dump()), ("settings", req.settings.model_dump()),
+                       ("job", {"name": req.name, "base": req.base, "steps": req.settings.steps, "records_token": req.records_token, **auth.stamp()})):   # /train defaults from job.json; the token links the model to its dataset
+        (out / f"{name}.json").write_text(json.dumps(body, indent=1))
+
+
+def _build_plan(req: BuildPlanRequest, slug: str, records: list[dict] | None = None, progress=None) -> dict:
+    records, plan = records or _plan_records(req, slug), req.plan
     llm = typically_llm.complete_json if typically_llm.available() and (req.enrich.synthetic or req.enrich.languages) else None   # the operator's key only
     try:
-        if errs := typically_plan.validate_plan(plan, typically_plan.profile(records)):
-            raise HTTPException(400, "the plan does not match the data: " + "; ".join(errs[:5]))
-        split, stats = build_from_plan(records, plan, req.enrich.model_dump(), req.settings.model_dump(), random.Random(req.settings.seed), llm)
+        split, stats = build_from_plan(records, plan, req.enrich.model_dump(), req.settings.model_dump(), random.Random(req.settings.seed), llm, progress)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except (KeyError, TypeError, AttributeError) as e:
@@ -294,9 +315,7 @@ def _build_plan(req: BuildPlanRequest, slug: str) -> dict:
     out = TYPICALLY / "jobs" / slug
     shutil.rmtree(out / "eval", ignore_errors=True)   # a rebuild must not keep the previous build's eval files (e.g. an old language)
     write(out, split)
-    for name, body in (("plan", plan), ("enrich", req.enrich.model_dump()), ("settings", req.settings.model_dump()),
-                       ("job", {"name": req.name, "base": req.base, "steps": req.settings.steps, "records_token": req.records_token, **auth.stamp()})):   # /train defaults from job.json; the token links the model to its dataset
-        (out / f"{name}.json").write_text(json.dumps(body, indent=1))
+    _save_meta(req, out)
     return {"job": slug, "data_dir": f"data_co_{slug}", "splits": stats["rows"], "balance": stats["labels"],
             "command": _train_command(slug, req.settings.steps, req.base), "plan_saved": str(out / "plan.json"), "stats": stats}
 
@@ -317,9 +336,10 @@ def _build_csv(req: BuildRequest, slug: str) -> dict:
             "balance": {"before": _dist(raw["train"]), "after": _dist(split["train"])}, "command": _train_command(slug, req.steps, req.base)}
 
 
-def start_job(slug: str, base: str = "small", steps: int = 400) -> dict:
+def start_job(slug: str, base: str = "small", steps: int = 400, prepare=None) -> dict:
     """409/429 unless auth.admit lets it start (this slug not running, TYPICALLY_MAX_JOBS, the user's quotas), else start
-    `typically_job.run` in a daemon thread and return the queued status."""
+    `typically_job.run` in a daemon thread and return the queued status. prepare(): builds the dataset first, in the same
+    thread (its failure fails the job with code failed_build)."""
     with _jobs_lock:
         auth.admit(slug, _jobs)
         _jobs[slug] = auth.stamp().get("owner")
@@ -330,12 +350,21 @@ def start_job(slug: str, base: str = "small", steps: int = 400) -> dict:
 
     def work():
         try:
-            typically_job.run(slug, typically_job.file_log(slug), base, steps)
+            if prepare:
+                try:
+                    prepare()
+                except Exception as e:   # HTTPException (bad plan / data) or anything else: the card says why, nothing was rented
+                    why = e.detail if isinstance(e, HTTPException) else f"{type(e).__name__}: {e}"
+                    typically_job.write_status(slug, "failed", f"Preparing your examples failed: {why}", "failed_build",
+                                               events=[typically_job.event("failed")])
+                    return
+            typically_job.run(slug, typically_job.file_log(slug), base, steps, **({"prepared": True} if prepare else {}))
         finally:
             end()
-    try:
-        status = typically_job.write_status(slug, "queued", "Waiting to start.")
-        threading.Thread(target=work, daemon=True).start()
+    try:   # the thread keeps the request's context (auth.stamp() in prepare's job.json)
+        status = typically_job.write_status(slug, "queued", "Preparing your examples." if prepare else "Waiting to start.",
+                                            "preparing" if prepare else None, events=[typically_job.event("prepare")] if prepare else ())
+        threading.Thread(target=contextvars.copy_context().run, args=(work,), daemon=True).start()
     except BaseException:
         end()
         raise
@@ -361,6 +390,24 @@ def train(req: TrainRequest):
     return train_slug(_slug(req.name), req.base, req.steps)
 
 
+@app.post("/api/typically/teach")
+def teach(req: BuildPlanRequest):
+    """/build + /train in one call that returns at once: the job's first milestone builds the dataset (AI enrichment included),
+    with progress on the same live card. /build and /train stay for older clients."""
+    slug = _slug(req.name)
+    _check_name(slug)
+    records = _plan_records(req, slug)
+
+    def progress(kind: str, done: int, total: int):
+        typically_job.add_events(slug, typically_job.event(kind, n=done, of=total))
+
+    def prepare():
+        _save_meta(req, TYPICALLY / "jobs" / slug)   # first: the model page has its name and decisions while the examples are prepared
+        built = _build_plan(req, slug, records, progress)
+        typically_job.add_events(slug, typically_job.event("prepare", n=built["splits"]["train"]))
+    return {**start_job(slug, req.base, req.settings.steps, prepare), "job": slug}
+
+
 def _held_out(path: Path) -> tuple[float, int, dict]:
     """eval_wf.py output -> (overall acc pooled over eval sets, rows, {decision: (acc, rows)})."""
     ev = [s for k, s in json.loads(path.read_text())["eval"].items() if k == "import_oneliner"]   # not the translated import_<lang> sets
@@ -381,7 +428,7 @@ def train_status(slug: str):
     st = typically_job.read_status(slug) if typically_job.SLUG_RE.fullmatch(slug) and auth.visible(slug) else None
     if st is None:
         raise HTTPException(404, "no such job")
-    if st["phase"] in ("training", "evaluating"):
+    if st["phase"] not in ("queued", "starting_gpu", "uploading"):   # the curves stay on the card once training is over
         st["series"] = typically_job.log_series(typically_job.job_dir(slug) / "pod.log")
     return {**st, "run": f"co_{slug}", "agreement": agreement(slug)} if st["phase"] == "done" else st
 

@@ -28,7 +28,7 @@ KEY = Path.home() / ".runpod" / "ssh" / "RunPod-Key-Go"
 IMAGE = "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
 SSH_OPTS = ["-i", str(KEY), "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20"]
 NOT_SHIPPED = ("site/", "figures/", "paper/", "blog/", "docs/", "vendor/")   # ponytail: nothing the training chain reads
-POLL_S, READY_S, DEADLINE_S, STALE_S = 60, 300, 75 * 60, 90 * 60   # DEADLINE_S / STALE_S are the small base's; x BASES[base]["scale"]
+POLL_S, READY_S, DEADLINE_S, STALE_S = 20, 300, 75 * 60, 90 * 60   # DEADLINE_S / STALE_S are the small base's; x BASES[base]["scale"]
 WAIT_CAP_S = 3 * READY_S   # readiness wait incl. time lost to a failing RunPod API (which does not count against READY_S of boot)
 RETRY_S = (5, 15, 30)   # backoff between the attempts of one RunPod API call (4 attempts)
 PROVIDER_DOWN = "The GPU provider isn't responding; nothing is running or billing."
@@ -95,13 +95,52 @@ def read_status(slug: str) -> dict | None:
 CODES = {"starting_gpu": "gpu_starting"}   # phase -> code when they differ; `code` is the stable key the frontend localises, `message` stays English for logs
 
 
-def write_status(slug: str, phase: str, message: str, code: str | None = None, **extra) -> dict:
+def event(key: str, detail: str | None = None, t: str | None = None, **counts) -> dict:
+    """One milestone of the UI's live card: {t, key, detail?, n?, of?}. The frontend localises `key`; detail is data (a GPU name, a size)."""
+    return {"t": t or _now(), "key": key, **({"detail": detail} if detail else {}), **counts}
+
+
+def merge_events(events: list[dict], new) -> list[dict]:
+    """Upsert by key: a repeated key updates its detail / counts but keeps its first time (progress, the pod's real GPU name)."""
+    out = {e["key"]: e for e in events}
+    for e in new:
+        out[e["key"]] = {**e, **out[e["key"]], **{k: v for k, v in e.items() if k != "t"}} if e["key"] in out else e
+    return list(out.values())
+
+
+def write_status(slug: str, phase: str, message: str, code: str | None = None, events=(), reset: bool | None = None, **extra) -> dict:
+    """reset (default: phase == "queued") starts a new run's status; else started_at, pod_id, events and gpu carry over."""
     assert phase in PHASES
-    prev = (read_status(slug) or {}) if phase != "queued" else {}
+    prev = {} if (phase == "queued" if reset is None else reset) else (read_status(slug) or {})
     st = {"phase": phase, "started_at": prev.get("started_at", _now()), "updated_at": _now(), "message": message,
-          "code": code or CODES.get(phase, phase), "pod_id": prev.get("pod_id"), **extra}
+          "code": code or CODES.get(phase, phase), "pod_id": prev.get("pod_id"), "events": merge_events(prev.get("events", []), events),
+          **({"gpu": prev["gpu"]} if "gpu" in prev else {}), **extra}
+    job_dir(slug).mkdir(parents=True, exist_ok=True)
     (job_dir(slug) / "status.json").write_text(json.dumps(st))
     return st
+
+
+def add_events(slug: str, *events: dict) -> None:
+    """Milestones without a phase change (dataset preparation progress, the GPU shut down after done/failed)."""
+    if st := read_status(slug):
+        st["events"] = merge_events(st.get("events", []), events)
+        (job_dir(slug) / "status.json").write_text(json.dumps(st))
+
+
+MARK = re.compile(r"^\[typically\] (\w+) (\S+) ?(.*)$", re.M)   # scripts/typically_spike_pod.sh mark(): key, pod time, detail
+GPU = re.compile(r"^\[gpu\] (\d+), (\d+), (\d+)\s*$", re.M)   # its nvidia-smi loop: utilization %, memory used / total MiB
+
+
+def pod_events(log: str) -> list[dict]:
+    return [event(k, d.strip() or None, t) for k, t, d in MARK.findall(log)]
+
+
+def gpu_stats(log: str) -> dict | None:
+    """The last nvidia-smi sample + the last logged training throughput (tok/s), for the UI's GPU panel."""
+    if not (g := GPU.findall(log)):
+        return None
+    tok = re.findall(r"^step \d+ .*?\btok/s (\d+)", log, re.M)
+    return {"util": int(g[-1][0]), "mem_used": int(g[-1][1]), "mem_total": int(g[-1][2]), "tok_s": int(tok[-1]) if tok else None}
 
 
 def _run(argv: list[str], timeout: int, out: Path | None = None) -> str:
@@ -151,7 +190,7 @@ class Job:
             raise ValueError(f"bad base/steps {base!r}/{steps!r}: need one of {list(BASES)} and {list(STEPS)}")
         self.slug, self.log, self.tmp, self.id, self.base, self.steps = slug, log, tmp, secrets.token_hex(4), base, steps
         self.name = f"{POD_PREFIX}{slug}-{self.id}"   # unique per job: nothing else can ever match it
-        self.dir, self.pod_id, self.host, self.lost = job_dir(slug), None, None, 0.0   # lost: seconds spent on failed API calls
+        self.dir, self.pod_id, self.host, self.lost, self.gpu = job_dir(slug), None, None, 0.0, None   # lost: seconds spent on failed API calls
         self.deadline = time.monotonic() + DEADLINE_S * BASES[base]["scale"]
         self.tar = tmp / "repo.tar.gz"
 
@@ -163,7 +202,7 @@ class Job:
         return _run(argv, min(cap, left), out)
 
     def to(self, phase: str, message: str, code: str | None = None, **extra):
-        self.log(f"[{phase}] {message}")
+        self.log(f"[{phase}] {message}" + "".join(f" <{e['key']}>" for e in extra.get("events", ())))
         write_status(self.slug, phase, message, code, pod_id=self.pod_id, job_id=self.id, base=self.base, steps=self.steps, **extra)
 
     def api(self, argv: list[str], cap: float = 60) -> dict:
@@ -197,9 +236,11 @@ class Job:
                 return ids[0]
             tries.append(1)
             try:
-                return json.loads(self.call(["runpodctl", "pod", "create", "--name", self.name, "--image", IMAGE, "--gpu-id", "NVIDIA H100 80GB HBM3",
+                pod = json.loads(self.call(["runpodctl", "pod", "create", "--name", self.name, "--image", IMAGE, "--gpu-id", "NVIDIA H100 80GB HBM3",
                                              "--cloud-type", "SECURE", "--container-disk-in-gb", "150", "--ports", "22/tcp",
-                                             "--env", json.dumps({"PUBLIC_KEY": pub})], 180, out))["id"]
+                                             "--env", json.dumps({"PUBLIC_KEY": pub})], 180, out))
+                self.gpu = (pod.get("machine") or {}).get("gpuDisplayName")   # e.g. "H100 SXM"; the pod's nvidia-smi names it exactly later
+                return pod["id"]
             except (RuntimeError, ValueError, KeyError, TypeError) as e:
                 said = out.read_text().strip() if out.exists() else ""
                 if NO_GPU.search(f"{e} {said}"):
@@ -287,7 +328,8 @@ class Job:
             time.sleep(POLL_S)
             try:   # order matters: job.exit is written before the pid dies, so check it only once the pid is gone
                 out = self.ssh('if kill -0 "$(cat /workspace/job.pid)" 2>/dev/null; then echo ALIVE; elif [ -f /workspace/job.exit ]; '
-                               'then echo EXIT $(cat /workspace/job.exit); else echo DEAD; fi; tail -n 300 /workspace/job.log', 90)
+                               'then echo EXIT $(cat /workspace/job.exit); else echo DEAD; fi; '
+                               "grep -aE '^(\\[typically\\]|\\[gpu\\]|step [0-9])' /workspace/job.log | tail -n 3000; tail -n 100 /workspace/job.log", 90)
                 bad = 0
             except (RuntimeError, subprocess.SubprocessError) as e:   # a dropped ssh must not kill a 20 minute run
                 bad += 1
@@ -304,17 +346,26 @@ class Job:
                     return
                 hint = " (Python traceback in the log)" if "Traceback" in out else ""
                 raise TrainingFailed(f"the training run failed (exit {code or 'unknown'}){hint}; see job.log")
-            if "best step" in out:
-                self.to("evaluating", "Training finished. Scoring your model on held-out examples.", progress=1.0)
+            seen = {e["key"]: e for e in (read_status(self.slug) or {}).get("events", [])}
+            new = [e for e in pod_events(out) if e["key"] not in seen or e.get("detail") not in (None, seen[e["key"]].get("detail"))]
+            gpu = {"gpu": g} if (g := gpu_stats(out)) else {}
+            if "best step" in out or "testing" in seen or any(e["key"] == "testing" for e in new):
+                self.to("evaluating", "Training finished. Scoring your model on held-out examples.", events=new, progress=1.0, **gpu)
             else:
                 p = min(max(steps, default=0) / self.steps, 1.0)
                 self.to("training", f"Learning from your examples ({p:.0%} done)." if steps else
-                        "Setting up and measuring the starting model.", None if steps else "baseline", progress=p)
+                        "Setting up and measuring the starting model.", None if steps else "baseline", events=new, progress=p, **gpu)
 
     def download(self):
         dest = TYPICALLY / "results" / f"co_{self.slug}"
         dest.mkdir(parents=True, exist_ok=True)
         get = lambda remote, name: self.call(["scp", *SSH_OPTS, "-P", self.host[1], f"root@{self.host[0]}:{REMOTE}/{remote}", str(dest / name)], 600)
+        try:   # the UI shows what is coming back
+            size = int(self.ssh(f"stat -c %s {REMOTE}/runs/co_{self.slug}/best.pt").strip() or 0)
+            if size:
+                add_events(self.slug, event("fetch", f"{size / 1e6:.0f} MB"))
+        except (RuntimeError, ValueError) as e:
+            self.log(f"best.pt size unknown: {e}")
         get(f"runs/co_{self.slug}/eval_co.json", "eval_co.json")
         get("runs/base/eval_co.json", "base_eval_co.json")
         reveal = dest / "reveal.json"   # scored on the pod (typically_reveal --job); optional: the server scores locally without it
@@ -367,8 +418,9 @@ def reconcile(log=print) -> list[str]:
     return gone
 
 
-def run(slug: str, log=None, base: str = "small", steps: int = 400) -> None:
-    """Raises ValueError on a bad slug/base/steps; otherwise never raises: the outcome is in status.json (done / failed)."""
+def run(slug: str, log=None, base: str = "small", steps: int = 400, prepared: bool = False) -> None:
+    """Raises ValueError on a bad slug/base/steps; otherwise never raises: the outcome is in status.json (done / failed).
+    prepared: the server just built the dataset under this status (its "prepare" events stay on the card)."""
     job_dir(slug).mkdir(parents=True, exist_ok=True)   # validates the slug
     (job_dir(slug) / "pod.log").unlink(missing_ok=True)   # a retrain must not chart the previous run's log
     log = log or file_log(slug)
@@ -377,28 +429,32 @@ def run(slug: str, log=None, base: str = "small", steps: int = 400) -> None:
         _ACTIVE.add(j.id)
         failed = ""
         try:
-            j.to("queued", "Waiting to start.")
+            j.to("queued", "Waiting to start.", reset=not prepared)
             j.snapshot()
             reconcile(log)
-            j.to("starting_gpu", "Getting a GPU ready (about 3 minutes).")
+            j.to("starting_gpu", "Getting a GPU ready (about 3 minutes).", events=[event("gpu_request")])
             j.create()
-            j.to("starting_gpu", "Getting a GPU ready (about 3 minutes).")   # records the pod id
+            j.to("starting_gpu", "Getting a GPU ready (about 3 minutes).", events=[event("gpu_assigned", j.gpu)])   # records the pod id
             j.wait_ssh()
-            j.to("uploading", "Sending your examples to the GPU.")
+            n = (j.dir / "train.jsonl").read_text().count("\n")
+            j.to("uploading", "Sending your examples to the GPU.", events=[event("upload", f"{j.tar.stat().st_size / 1e6:.1f} MB", n=n)])
             j.upload()
             j.launch()
-            j.to("training", "Setting up and measuring the starting model.", "baseline", progress=0.0)
+            j.to("training", "Setting up and measuring the starting model.", "baseline", events=[event("env")], progress=0.0)
             j.poll()
-            j.to("downloading", "Bringing your model back.")
+            j.to("downloading", "Bringing your model back.", events=[event("fetch")])
             j.download()
-            j.to("done", "Your model is ready.", progress=1.0)
+            j.to("done", "Your model is ready.", events=[event("done")], progress=1.0)
         except BaseException as e:   # incl. KeyboardInterrupt from the CLI; the pod must still go
             log(f"FAILED: {type(e).__name__}: {e}")
             failed = PROVIDER_DOWN if isinstance(e, ProviderDown) else f"Training did not finish: {e}"
             j.to("failed", failed, "failed_timeout" if isinstance(e, Deadline) else "failed_training" if isinstance(e, TrainingFailed)
-                 else "failed_provider" if isinstance(e, ProviderDown) else "failed_infra")
+                 else "failed_provider" if isinstance(e, ProviderDown) else "failed_infra", events=[event("failed")])
         finally:
-            if not j.delete() and (read_status(slug) or {}).get("phase") == "failed":   # the message must not claim nothing is billing
+            gone = j.delete()
+            if gone and j.pod_id:
+                add_events(slug, event("gpu_off"))
+            if not gone and (read_status(slug) or {}).get("phase") == "failed":   # the message must not claim nothing is billing
                 j.to("failed", failed.removesuffix("; nothing is running or billing.").rstrip(".") + ". We could not confirm the GPU machine was shut "
                      "down; it is removed automatically the next time the server starts or a model is taught.")   # code "failed": the UI shows this text
             _ACTIVE.discard(j.id)
@@ -412,13 +468,13 @@ def train_flags(company: str, steps: int, run: str, base_args: dict, base: str =
     return ["--name", run, "--init_from", "runs/base/best.pt", "--readout", "native", *arch, "--zscore", "--ordinal_smooth", "0.7",
             "--max_state", "1024", *BASES[base]["mem"], "--data", "data_v5", "--extra_data", f"data_wf,data_wh,data_u,{d}",
             "--bucket_map", f"data_wh=W,data_u=U,{d}=C", "--family_weights", "C:0.5,W:0.3,E:0.15,U:0.05", "--null_aug", "W:0.20",
-            "--steps", str(steps), "--bs", "64", "--val_every", "50", "--ckpt_every", "100", "--eval_every", str(steps),
+            "--steps", str(steps), "--bs", "64", "--val_every", "50", "--log_every", "10", "--ckpt_every", "100", "--eval_every", str(steps),
             "--eval_limit", "200", "--eval_bs", "8", "--best_on", f"{d}_val", "--no_final_eval"]
 
 
-def log_series(path: Path, limit: int = 200, tail: int = 64_000) -> dict:
-    """The last `limit` logged steps of a pod.log (only its last `tail` bytes are read): train loss, val_nll and the
-    company-val nll best.pt is chosen on, aligned on `step` (None where a step has no value), and the mean recent step_time."""
+def log_series(path: Path, limit: int = 200, tail: int = 256_000) -> dict:
+    """The last `limit` logged steps of a pod.log (only its last `tail` bytes are read): train loss, val_nll, the company-val
+    nll best.pt is chosen on and the company-val accuracy, aligned on `step` (None where a step has no value), and the mean recent step_time."""
     try:
         with path.open("rb") as f:
             size = f.seek(0, 2)
@@ -426,19 +482,19 @@ def log_series(path: Path, limit: int = 200, tail: int = 64_000) -> dict:
             lines = f.read().decode("utf-8", "replace").splitlines()[1 if size > tail else 0:]   # drop the cut first line
     except FileNotFoundError:
         lines = []
-    cols: dict[str, dict[int, float]] = {"loss": {}, "val": {}, "best_on": {}}
+    cols: dict[str, dict[int, float]] = {"loss": {}, "val": {}, "best_on": {}, "acc": {}}
     times = []
     for line in lines:
-        if not (m := re.match(r"step (\d+) (?:val_nll (\S+)|best_on_nll (\S+)|.*?\bloss (\S+)(?:.*?\bstep_time ([\d.]+)s)?)", line)):
+        if not (m := re.match(r"step (\d+) (?:val_nll (\S+)|best_on_nll (\S+)|best_on_acc (\S+)|.*?\bloss (\S+)(?:.*?\bstep_time ([\d.]+)s)?)", line)):
             continue
-        for col, v in zip(cols, (m[4], m[2], m[3])):
+        for col, v in zip(cols, (m[5], m[2], m[3], m[4])):
             try:
                 if v is not None and math.isfinite(x := float(v)):   # a nan loss is dropped: JSON has no NaN
                     cols[col][int(m[1])] = x
             except ValueError:
                 pass
-        if m[5]:
-            times.append(float(m[5]))
+        if m[6]:
+            times.append(float(m[6]))
     steps = sorted({s for c in cols.values() for s in c})[-limit:]
     return {"step": steps, **{k: [c.get(s) for s in steps] for k, c in cols.items()},
             "step_time": sum(times[-5:]) / len(times[-5:]) if times else None}

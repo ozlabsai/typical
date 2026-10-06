@@ -438,7 +438,7 @@ def _copy(rows, text, lang):   # a translated case keeps its labels; ms_group mu
 
 
 def _synthetic_tasks(d, pairs, budget, rng, emit):
-    """LLM tasks (prompt, estimated output chars, apply(texts)) that write new cases for the decision's rare labels
+    """LLM tasks (prompt, estimated output chars, apply(texts), kind, cases) that write new cases for the decision's rare labels
     (< max(10, 1% of its train rows)): 5 real cases of the label + 5 of a confusable one; then as many for the majority label
     (style balance). Capped at 1x the real count per label; budget = [rows left of the 15%-of-train cap]."""
     labels, by = d["labels"], {}
@@ -462,7 +462,7 @@ def _synthetic_tasks(d, pairs, budget, rng, emit):
                       + f'\n\nWrite {n} NEW, different cases that this company would label "{target}". Match the format, length, language '
                         f'and tone of the real cases; do not copy them and do not mention the label. Return {{"texts": [...]}} with exactly {n} strings.')
             avg = sum(len(s) for _, ss in ex for s in ss) / sum(len(ss) for _, ss in ex)
-            tasks.append((prompt, n * avg, lambda texts, t=target, n=n: emit(d, t, texts[:n])))
+            tasks.append((prompt, n * avg, lambda texts, t=target, n=n: emit(d, t, texts[:n]), "synthetic", n))
     return tasks
 
 
@@ -486,12 +486,13 @@ def _translate_tasks(states, lang, emit):
     return [(f"Translate each case into the language with ISO 639-1 code '{lang}'. Keep names, numbers, ids, product codes and line "
              "breaks unchanged. Translate recurring field labels and category words (plan names, tiers, regions) the same way "
              f'every time, in every batch, or keep them in the original language. Return {{"texts": [...]}} with exactly {len(c)} strings in the same order.\n\n'
-             + json.dumps(c, ensure_ascii=False), 1.5 * sum(map(len, c)), lambda texts, c=c: apply(texts, c)) for c in chunks]
+             + json.dumps(c, ensure_ascii=False), 1.5 * sum(map(len, c)), lambda texts, c=c: apply(texts, c), f"translate_{lang}", len(c)) for c in chunks]
 
 
-def build_from_plan(records, plan, enrich, settings, rng, llm=None):
+def build_from_plan(records, plan, enrich, settings, rng, llm=None, progress=None):
     """records + a confirmed DatasetPlan -> (split dict for write(), stats). enrich = {balance, dedupe_soft, policy: {column: text},
     synthetic, languages: [code]}, settings = {holdout %, seed}; llm = tllm.complete_json (or a stand-in), needed only for synthetic / languages.
+    progress(kind, done, total): AI enrichment progress in cases, kind "synthetic" | "translate_<lang>" (the live training card).
     Eval and val are never enriched (except the separate translated eval files import_<lang>). Rule flips are always on (10%, paired).
     ponytail: split is by case hash only; a time split (newest held out) for a timestamp column is not implemented."""
     decisions = [d for d in plan["decisions"] if d["include"]]
@@ -560,14 +561,20 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None):
             tasks += _translate_tasks(tr_states, lang, lambda l, s, t: tr.extend(_copy(base["train"][s], t, l)))
             tasks += _translate_tasks(ev_states, lang, lambda l, s, t: ev.setdefault(l, []).extend(_copy(base["import_oneliner"][s], t, l)))
         def call(task):   # no spend cap: the operator pays (llm_cost_usd is still reported)
-            prompt, out_chars, _ = task
+            prompt, out_chars, *_ = task
             try:
                 return llm("Return only the JSON requested.", prompt, TEXTS, max_tokens=min(16000, int(out_chars / 2) + 500))
             except Exception as e:   # experimental: one failed call skips its cases; never echo the message (may hold the key)
                 return e
         # calls run in parallel; results are applied in task order on this thread (apply mutates shared lists; reproducible)
+        total, done = Counter(), Counter()
+        for *_, kind, n in tasks:
+            total[kind] += n
         with ThreadPoolExecutor(LLM_WORKERS) as pool:
-            for (_, _, apply), res in zip(tasks, pool.map(call, tasks)):
+            for (_, _, apply, kind, n), res in zip(tasks, pool.map(call, tasks)):
+                done[kind] += n
+                if progress:
+                    progress(kind, done[kind], total[kind])
                 if isinstance(res, Exception):
                     warnings.append(f"An AI enrichment call failed ({type(res).__name__}); its cases were skipped.")
                     continue

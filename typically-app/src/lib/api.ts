@@ -64,8 +64,15 @@ export interface Agreement {
   decisions: Record<string, { base: number; yours: number; n: number }>
 }
 
-/** Training curves aligned on `step` (null where that step logged no value); step_time = recent seconds per step. */
-export interface Series { step: number[]; loss: (number | null)[]; val: (number | null)[]; best_on: (number | null)[]; step_time: number | null }
+/** Training curves aligned on `step` (null where that step logged no value); step_time = recent seconds per step.
+ *  best_on: error on the company's own validation examples (best.pt is picked on it); acc: agreement with them (0-1). */
+export interface Series { step: number[]; loss: (number | null)[]; val: (number | null)[]; best_on: (number | null)[]; acc?: (number | null)[]; step_time: number | null }
+
+/** A milestone of a job (scripts/typically_job.event): `key` is localised by the UI; detail is data (a GPU name, a size); n / of count progress. */
+export interface JobEvent { t: string; key: string; detail?: string; n?: number; of?: number }
+
+/** The pod's last nvidia-smi sample (MiB) + training throughput. */
+export interface GpuStats { util: number; mem_used: number; mem_total: number; tok_s: number | null }
 
 export interface TrainStatus {
   phase: Phase
@@ -76,7 +83,9 @@ export interface TrainStatus {
   job_id?: string
   steps?: number
   agreement?: Agreement // present when phase === "done"
-  series?: Series // present while training / evaluating: parsed from the pod log
+  series?: Series // present from training on: parsed from the pod log
+  events?: JobEvent[]
+  gpu?: GpuStats
   [extra: string]: unknown
 }
 
@@ -131,6 +140,7 @@ export const api = {
   capabilities: () => call<{ ai: boolean; hf_namespace: string | null; languages: string[] }>("capabilities"),
   buildPlan: (req: BuildV2) => call<Build>("build", req),
   trainV2: (req: { name: string; base: "small" | "medium"; steps: number }) => call<TrainStatus>("train", req),
+  teach: (req: BuildV2) => call<TrainStatus & { job: string }>("teach", req), // build + train in one job; returns at once
   createKey: (model_id: string) => call<{ key: string; prefix: string }>("keys", { model_id }),
   snippets: (model_id: string) => call<Snippets>(`snippets/${encodeURIComponent(model_id)}`),
   push: (req: { run: string; repo?: string; private: boolean }) => call<{ url: string; files: string[] }>("push", req),

@@ -1,24 +1,19 @@
 import { useEffect, useState } from "react"
-import { AlertCircle, ArrowRight, Check, ChevronDown, Circle, Loader2, X } from "lucide-react"
+import { AlertCircle, ArrowRight, ChevronDown, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { msg, OptionCard, PageHead, StatusCopy } from "@/components/shared"
-import { TrainingCurve } from "@/components/training-curve"
+import { TrainingProgress } from "@/components/training-progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { api, type TrainStatus } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { BASES, included, PRESETS, type Preset, type Project } from "@/lib/project"
-import { cn } from "@/lib/utils"
-
-const PHASES = ["starting_gpu", "uploading", "training", "evaluating", "downloading"] as const
-const ORDER = ["queued", "starting_gpu", "uploading", "training", "evaluating", "downloading", "done"]
 
 function useElapsed(since?: string) {
   const [now, setNow] = useState(Date.now())
@@ -64,12 +59,13 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
     setStarting(true)
     setError(null)
     try {
-      const built = await api.buildPlan({
+      // one call that returns at once: preparing the examples (incl. AI enrichment) is the job's first milestone on the card
+      const st = await api.teach({
         records_token: project.analysis.records_token, plan: project.plan, name: project.name, base: project.base, enrich: project.enrich,
         settings: { steps: PRESETS[s.preset].steps, holdout: s.holdout, seed: s.seed },
       })
-      update({ slug: built.job, run: undefined })
-      setStatus(await api.trainV2({ name: project.name, base: project.base, steps: PRESETS[s.preset].steps }))
+      update({ slug: st.job, run: undefined })
+      setStatus(st)
     } catch (e) {
       setError(msg(e))
     } finally {
@@ -94,7 +90,6 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
       </>
     )
 
-  const at = status ? ORDER.indexOf(status.phase) : -1
   return (
     <>
       <PageHead title={t("tr.title")}>{t("tr.lede", { base: base.label, n: included(project).length })}</PageHead>
@@ -144,28 +139,7 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
               <CardDescription><StatusCopy code={status.code} message={status.message} /></CardDescription>
               {elapsed && <CardAction><span className="font-mono text-sm text-muted-foreground tabular">{elapsed}</span></CardAction>}
             </CardHeader>
-            <CardContent>
-              <ol className="space-y-4">
-                {PHASES.map((phase) => {
-                  const idx = ORDER.indexOf(phase)
-                  const state = status.phase === "failed" && idx === Math.max(at, 1) ? "failed" : idx < at || status.phase === "done" ? "done" : idx === at ? "current" : "pending"
-                  return (
-                    <li key={phase} className="flex gap-3">
-                      <span className="mt-0.5">
-                        {state === "done" ? <Check className="size-4 text-primary" /> : state === "current" ? <Loader2 className="size-4 animate-spin" /> : state === "failed" ? <X className="size-4 text-destructive" /> : <Circle className="size-4 text-muted-foreground/50" />}
-                      </span>
-                      <div className="flex-1">
-                        <p className={cn("text-sm", state === "pending" && "text-muted-foreground")}>{t(`phase.${phase}`)}</p>
-                        {phase === "training" && state === "current" && typeof status.progress === "number" && (
-                          <Progress value={(status.progress as number) * 100} className="mt-2 h-1.5" aria-label={t("tr.progress")} />
-                        )}
-                        {phase === "training" && status.series && <div className="mt-4"><TrainingCurve status={status} /></div>}
-                      </div>
-                    </li>
-                  )
-                })}
-              </ol>
-            </CardContent>
+            <CardContent><TrainingProgress status={status} /></CardContent>
             <CardFooter className="justify-end">
               {status.phase === "done" && <Button onClick={next}>{t("tr.see")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></Button>}
               {status.phase === "failed" && <Button onClick={start}>{t("tr.retry")}</Button>}

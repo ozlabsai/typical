@@ -34,7 +34,7 @@ class FakeCli:
             raise RuntimeError("boom")
         if prog == "runpodctl" and sub == "create":
             self.pods.append({"id": "pod1", "name": argv[argv.index("--name") + 1]})
-            return json.dumps({"id": "pod1"})
+            return json.dumps({"id": "pod1", "machine": {"gpuDisplayName": "H100 SXM"}})
         if prog == "runpodctl" and sub == "list":
             return json.dumps(self.pods)
         if prog == "runpodctl" and sub == "get":
@@ -537,3 +537,55 @@ def test_hosted_prefix_never_touches_local_pods(env, monkeypatch):
     cli = use(monkeypatch, FakeCli(pods=[{"id": "local", "name": "typically-job-ghost-dddd4444"},
                                          {"id": "hosted", "name": "typically-hosted-job-ghost-eeee5555"}]))
     assert tj.reconcile(lambda m: None) == ["hosted"] and cli.deleted_ids() == {"hosted"}
+
+
+# -- the live card: milestones (status.json events), the GPU panel, denser curves
+def test_pod_milestones_become_events_and_gpu_stats(env, monkeypatch):
+    mark = lambda k, d="": f"[typically] {k} 2026-10-06T08:0{len(k) % 10}:00Z {d}\n"
+    polls = [ALIVE + mark("gpu_assigned", "NVIDIA H100 80GB HBM3 · 80 GB") + "[gpu] 0, 1, 81559\n" + mark("model_download"),
+             ALIVE + mark("model_download", "3.4 GB") + mark("model_load", "28") + "[gpu] \n" + mark("train")
+             + "step 10 bucket C loss 0.5 step_time 0.6s tok/s 12000 lr_tower 1e-4 lr_lora 1e-5\n[gpu] 87, 30000, 81559\n",
+             ALIVE + mark("testing", "28"), "EXIT 0\n"]
+    use(monkeypatch, FakeCli(polls))
+    tj.run(SLUG, lambda m: None)
+    phases = [p for i, p in enumerate(env) if i == 0 or p != env[i - 1]]
+    assert phases == ["queued", "starting_gpu", "uploading", "training", "evaluating", "downloading", "done"]   # "testing" alone moves to evaluating
+    st = tj.read_status(SLUG)
+    ev = {e["key"]: e for e in st["events"]}
+    assert list(ev) == ["gpu_request", "gpu_assigned", "upload", "env", "model_download", "model_load", "train", "testing", "fetch", "done", "gpu_off"]
+    assert ev["gpu_assigned"]["detail"] == "NVIDIA H100 80GB HBM3 · 80 GB" and "2026-10-06T08:0" not in ev["gpu_assigned"]["t"]   # pod's name, local time kept
+    assert ev["model_download"] == {"t": "2026-10-06T08:04:00Z", "key": "model_download", "detail": "3.4 GB"}   # upserted, first time kept
+    assert ev["upload"]["n"] == 1 and ev["upload"]["detail"].endswith("MB") and ev["testing"]["detail"] == "28"
+    assert st["gpu"] == {"util": 87, "mem_used": 30000, "mem_total": 81559, "tok_s": 12000}   # the last well-formed sample
+
+
+def test_a_failure_is_an_event_after_the_last_milestone_and_the_gpu_off_follows(env, monkeypatch):
+    use(monkeypatch, FakeCli([ALIVE + "[typically] model_download 2026-10-06T08:00:00Z\n", "EXIT 1\n"]))
+    tj.run(SLUG, lambda m: None)
+    st = tj.read_status(SLUG)
+    assert st["phase"] == "failed" and st["code"] == "failed_training"
+    assert [e["key"] for e in st["events"]][-3:] == ["model_download", "failed", "gpu_off"]
+
+
+def test_queued_resets_events_unless_prepared(env, monkeypatch):
+    tj.write_status(SLUG, "queued", "Preparing", "preparing", events=[tj.event("prepare")])
+    tj.add_events(SLUG, tj.event("synthetic", n=3, of=10), tj.event("synthetic", n=10, of=10))
+    st = tj.read_status(SLUG)
+    assert [(e["key"], e.get("n")) for e in st["events"]] == [("prepare", None), ("synthetic", 10)]
+    use(monkeypatch, FakeCli(["EXIT 0\n"]))
+    tj.run(SLUG, lambda m: None, prepared=True)
+    assert [e["key"] for e in tj.read_status(SLUG)["events"]][:3] == ["prepare", "synthetic", "gpu_request"]
+    tj.run(SLUG, lambda m: None)   # a plain retrain starts a clean card
+    assert tj.read_status(SLUG)["events"][0]["key"] == "gpu_request"
+
+
+def test_dense_loss_and_val_agreement_series(tmp_path):
+    lines = [f"step {s} bucket C loss {1 / s:.4f} step_time 0.5s tok/s 9000 lr_tower 1e-4 lr_lora 1e-5" for s in range(10, 101, 10)]
+    lines += ["step 50 val_nll 0.4", "step 50 best_on_nll 0.3 (x=0.3)", "step 50 best_on_acc 0.6400", "[gpu] 50, 1, 2", "[typically] train 2026-10-06T08:00:00Z"]
+    f = tmp_path / "pod.log"
+    f.write_text("ALIVE\n" + "\n".join(lines) + "\n")
+    s = tj.log_series(f)
+    assert s["step"] == list(range(10, 101, 10)) and None not in s["loss"]
+    assert s["acc"][s["step"].index(50)] == 0.64 and s["val"].count(None) == 9
+    flags = tj.train_flags("acme", 400, "co_acme", tj.RELEASED_ARGS["small"])
+    assert flags[flags.index("--log_every") + 1] == "10" and flags[flags.index("--val_every") + 1] == "50"
