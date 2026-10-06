@@ -44,6 +44,31 @@ metrics without closing the workflow gap.
 A mechanism pass without the inherited multimodal/Hebrew receipt is research evidence only, not a
 product initializer.
 
+## R048 audit amendment
+
+The first `action_v1.1` panel candidate was rejected before any model score or training run.  Its
+declared held-out AST wrappers were removed before rendering and therefore could not measure model
+behavior; its split fingerprints retained split-specific renderer and regime identifiers, making
+zero overlap nearly automatic; primitive, renderer, and regime were confounded; and several
+operators reduced to identity expressions.  A split-neutral latent audit found every evaluation
+signature already represented in training.  Mechanically correct labels are not sufficient
+evidence when the intervention is supposed to generalize.
+
+The replacement first pilot therefore uses the generic exact-policy contract immediately rather
+than treating it as a later scale-up:
+
+- priority and collect programs with genuinely different rule graphs;
+- singleton, multi-action, and empty action sets, with present or null primary actions;
+- mixed, non-degenerate predicate programs within each group;
+- balanced independent causal clusters rather than counts inflated by language/order views;
+- split-neutral latent fingerprints, an explicit fuzzy model-input audit, and crossed factors;
+- exact full-outcome likelihood through the compiled program.
+
+Policy topology is external executable structure in the TypeSafe architecture.  It is not described
+as model-visible reasoning unless the actual policy text is rendered into the model input.  The
+held-out gate measures transfer of field competence and outcome-aligned training to unseen external
+programs; it does not claim that the model parsed an unseen program.
+
 ## Matched pilot
 
 Use at least 1,600 executable workflow groups plus an equal number of protected replay slots. Each
@@ -67,19 +92,17 @@ freeze the inherited adapter and add a fresh named residual, and it does **not**
 parent-logit KL. Those are separate prospective factors with their own parity and ablation gates;
 they must not be claimed as part of the minimal pilot until implemented and verified.
 
-Compile each deterministic policy to a training-only relaxation:
-
-- thresholds -> temperature-controlled sigmoids;
-- AND/OR/NOT -> stable differentiable t-norm operations;
-- priority/fallback -> normalized gated routing;
-- each action -> a soft activation probability.
+Compile each deterministic policy to an exact truth table over its 2--12 Boolean fields.  Convert
+semantic yes/no margins to temperature-controlled truth logits, enumerate assignments, execute the
+hard policy for every assignment, and log-sum-exp the assignment probabilities that produce the
+same canonical outcome.  This avoids choosing an arbitrary fuzzy AND/OR algebra and exactly matches
+the serving program under the independent-Bernoulli field model.
 
 For a workflow group:
 
 ```text
 L_field  = hard-label CE/KL + 0.5 * RPS for ordinal fields
-L_action = BCE(soft action indicators, gold action set)
-           + CE(soft primary action, gold primary action)
+L_action = -log P(gold canonical {primary action, exact action set})
 
 L_total  = L_field
            + I[R047 validated] * lambda_process * L_clause/coherence
@@ -150,10 +173,10 @@ Both arms enable grouped loading; control uses `action_weight=0` and treatment u
 Semantic `yes`/`no` scores are resolved by labels, never by option position. Serving remains
 unchanged.
 
-The existing action-panel oracle is sufficient for a first fixed-policy causal pilot, but not for
-the full objective: it has one topology and one primary action. Scaling requires a serializable
-Boolean/action program with `primary_action` and `action_set`, held-out topologies, and
-priority/fallback behavior.
+The legacy action-panel oracle is retention evidence only.  The first causal pilot now requires a
+serializable Boolean/action program with nullable `primary_action`, an exact `action_set`, held-out
+policy graphs, and priority/collect/fallback behavior.  Empty action sets are first-class because
+they occur in the official customer-service workflow when a human already owns the case.
 
 ## Advancement gates
 
@@ -206,6 +229,10 @@ hybrid backbone only after the quality objective is frozen.
   [PROF](https://arxiv.org/abs/2509.03403), and
   [ThinkPRM](https://arxiv.org/abs/2504.16828): deterministic process truth and
   process/outcome-consistency filtering are preferable to directly optimizing a noisy learned PRM.
+- [Correct Answers from Sound Reasoning](https://arxiv.org/abs/2605.12519): accuracy-only RLVR can
+  improve final answers while degrading verified intermediate reasoning; joint verifiable process
+  and outcome supervision with adaptive emphasis on remaining errors supports R047/R048's dense
+  field-plus-outcome route before outcome-only RL.
 - [QRPO](https://arxiv.org/abs/2507.08068) and
   [A*-PO](https://arxiv.org/abs/2505.20686): closed-form or advantage-regression views support exact
   reward-tilted targets when the legal action set is enumerable.
