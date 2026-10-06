@@ -218,10 +218,15 @@ cosine floor `2e-6`, batch `1×8`, and checkpoints at 20/50/100/200 steps. This 
 overfit run, not a candidate.
 
 **Go gate:** by or before step 200, executable auxiliary balanced accuracy and final counterfactual
-direction are each at least `98%` overall and for decimal, ledger, policy, and conditional. Metrics
-must be finite and every clause target must independently reproduce from the AST. If it fails, do
-not run the matched arms: inspect objective/readout gradients, then permit exactly one preregistered
-capacity retry at rank 64 with all other settings fixed. No holdout result chooses the retry.
+direction are each at least `98%` overall and for decimal, ledger, policy, and conditional. Final
+balanced accuracy and pair-both correctness must also each reach `98%`; direction alone is
+insufficient because both states can be ranked correctly while receiving the same wrong class.
+Metrics must be finite, every clause target must independently reproduce from the AST, and logs must
+account separately for canonical/auxiliary views and CE. Select the earliest passing checkpoint only
+from steps 20/50/100/200. If it fails, do not run the matched arms. Inspect objective/readout
+gradients and separately preregister any capacity change: the current trainer's `--rank` is ignored
+when `--init-adapter` loads R044-R, so a valid higher-rank test requires an explicit merge-and-attach
+or second-adapter procedure with a new parent hash. No holdout result may choose that retry.
 
 ### M1 — matched causal screen
 
