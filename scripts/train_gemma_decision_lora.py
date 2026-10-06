@@ -48,6 +48,8 @@ def parse_args():
     parser.add_argument("--rank", type=int, default=32)
     parser.add_argument("--alpha", type=int, default=64)
     parser.add_argument("--save-every", type=int, default=250)
+    parser.add_argument("--save-steps", default="",
+                        help="Comma-separated additional checkpoint steps")
     parser.add_argument("--eval-every", type=int, default=250)
     parser.add_argument("--eval-samples", type=int, default=128)
     parser.add_argument("--seed", type=int, default=42)
@@ -61,6 +63,18 @@ def parse_args():
     parser.add_argument("--pair-flip-start-step", type=int, default=0)
     parser.add_argument("--stage-counterfactual-pairs", action="store_true")
     return parser.parse_args()
+
+
+def parse_save_steps(value, total_steps):
+    if not value:
+        return set()
+    try:
+        steps = {int(item) for item in value.split(",") if item}
+    except ValueError as error:
+        raise ValueError("save steps must be comma-separated integers") from error
+    if any(step < 1 or step > total_steps for step in steps):
+        raise ValueError("save steps must fall within the training schedule")
+    return steps
 
 
 def flatten_row(row, source_dir=None):
@@ -727,6 +741,7 @@ def validate_trainable_path(model):
 
 def main():
     args = parse_args()
+    explicit_save_steps = parse_save_steps(args.save_steps, args.steps)
     if args.pair_consistency_weight < 0:
         raise ValueError("pair consistency weight must be nonnegative")
     if not 0 <= args.pair_consistency_min_gold_probability <= 1:
@@ -974,7 +989,8 @@ def main():
         with metrics.open("a") as target:
             target.write(json.dumps(metric) + "\n")
         print(json.dumps(metric), flush=True)
-        if step % args.save_every == 0 or step == args.steps or early_stop:
+        if (step % args.save_every == 0 or step in explicit_save_steps
+                or step == args.steps or early_stop):
             save(model, optimizer, scheduler, step, out)
         if early_stop:
             return

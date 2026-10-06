@@ -16,6 +16,7 @@ from scripts.train_gemma_decision_lora import (
     pair_slot_loss,
     pair_flip_term,
     pair_flip_weight_at_step,
+    parse_save_steps,
     encode,
     loss_for_examples,
     load_examples,
@@ -28,6 +29,15 @@ from scripts.train_gemma_decision_lora import (
     staged_counterfactual_order,
     validate_pair_objectives,
 )
+
+
+def test_explicit_checkpoint_steps_are_strict_and_deduplicated():
+    assert parse_save_steps("20,50,100,200", 200) == {20, 50, 100, 200}
+    assert parse_save_steps("", 200) == set()
+    with pytest.raises(ValueError, match="within"):
+        parse_save_steps("0,20", 200)
+    with pytest.raises(ValueError, match="integers"):
+        parse_save_steps("twenty", 200)
 
 
 def test_semantic_margin_is_option_order_invariant_and_polarity_signed():
