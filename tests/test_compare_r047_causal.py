@@ -15,9 +15,9 @@ from scripts.eval_r047_executor import (
 
 
 SHA = {name: hashlib.sha256(name.encode()).hexdigest() for name in (
-    "control-train", "treatment-train", "reference-train", "control-adapter",
+    "control-train", "treatment-train", "control-adapter",
     "treatment-adapter", "parent-adapter", "recipe", "base-inventory",
-    "config", "metrics", "log")}
+    "config", "metrics", "log", "reference-provenance")}
 MODEL_REVISION = "revision-707f0a3"
 
 
@@ -64,7 +64,7 @@ def _assignment(panel, manifest):
         "control_slot": "slot_b", "treatment_slot": "slot_a",
         "control_train_sha256": SHA["control-train"],
         "treatment_train_sha256": SHA["treatment-train"],
-        "reference_train_sha256": SHA["reference-train"],
+        "reference_provenance_sha256": SHA["reference-provenance"],
         "reference_adapter_sha256": SHA["parent-adapter"],
         "parent_adapter_sha256": SHA["parent-adapter"],
         "model_revision": MODEL_REVISION, "recipe_sha256": SHA["recipe"],
@@ -87,8 +87,8 @@ def _receipt(slot, train, adapter):
     return (json.dumps(value, sort_keys=True) + "\n").encode()
 
 
-def _report(predictions, panel, manifest, receipt, rows):
-    run = json.loads(receipt)
+def _report(predictions, panel, manifest, rows, receipt=None):
+    run = json.loads(receipt) if receipt is not None else None
     records = [json.loads(line) for line in predictions.decode().splitlines()]
     report = causal_coverage_report(records)
     parity = causal_parity_subset(rows)
@@ -96,10 +96,8 @@ def _report(predictions, panel, manifest, receipt, rows):
         "predictions_sha256": hashlib.sha256(predictions).hexdigest(),
         "input_sha256": hashlib.sha256(panel).hexdigest(),
         "panel_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
-        "adapter_sha256": run["adapter_sha256"], "model_revision": MODEL_REVISION,
-        "train_sha256": run["train_sha256"], "recipe_sha256": SHA["recipe"],
-        "parent_adapter_sha256": SHA["parent-adapter"], "panel_rows": len(rows),
-        "run_receipt_sha256": hashlib.sha256(receipt).hexdigest(),
+        "adapter_sha256": (run["adapter_sha256"] if run else SHA["parent-adapter"]),
+        "model_revision": MODEL_REVISION, "panel_rows": len(rows),
         "model_inventory_sha256": SHA["base-inventory"],
         "model_tree_sha256": hashlib.sha256(b"model-tree").hexdigest(),
         "model_tree_files": 17,
@@ -111,6 +109,18 @@ def _report(predictions, panel, manifest, receipt, rows):
             "tolerance": 1e-5,
             "selection": "first_frozen_row_per_arity_language_order_role_family_primitive"},
     })
+    if run:
+        report.update({
+            "provenance_role": "candidate", "train_sha256": run["train_sha256"],
+            "recipe_sha256": SHA["recipe"],
+            "parent_adapter_sha256": SHA["parent-adapter"],
+            "run_receipt_sha256": hashlib.sha256(receipt).hexdigest(),
+        })
+    else:
+        report.update({
+            "provenance_role": "reference",
+            "reference_provenance_sha256": SHA["reference-provenance"],
+        })
     return (json.dumps(report, sort_keys=True) + "\n").encode()
 
 
@@ -124,11 +134,14 @@ def _artifacts(control=None, treatment=None):
     manifest = _manifest(panel, rows)
     receipts = {
         "slot_a": _receipt("slot_a", SHA["treatment-train"], SHA["treatment-adapter"]),
-        "slot_b": _receipt("slot_b", SHA["control-train"], SHA["control-adapter"]),
-        "reference": _receipt("reference", SHA["reference-train"], SHA["parent-adapter"])}
+        "slot_b": _receipt("slot_b", SHA["control-train"], SHA["control-adapter"])}
     reports = {
-        name: _report(predictions[name], panel, manifest, receipts[name], rows)
-        for name in ("slot_a", "slot_b", "reference")}
+        "slot_a": _report(predictions["slot_a"], panel, manifest, rows,
+                          receipts["slot_a"]),
+        "slot_b": _report(predictions["slot_b"], panel, manifest, rows,
+                          receipts["slot_b"]),
+        "reference": _report(predictions["reference"], panel, manifest, rows),
+    }
     assignment = (json.dumps(_assignment(panel, manifest), sort_keys=True) + "\n").encode()
     return {"rows": rows, "panel": panel, "manifest": manifest,
             "predictions": predictions, "reports": reports, "receipts": receipts,
@@ -149,7 +162,6 @@ def _compare(artifacts=None, replicates=MIN_BOOTSTRAP_REPLICATES,
         "assignment_payload": value["assignment"],
         "slot_a_run_receipt": value["receipts"]["slot_a"],
         "slot_b_run_receipt": value["receipts"]["slot_b"],
-        "reference_run_receipt": value["receipts"]["reference"],
         "slot_a_report_sha256": hashlib.sha256(value["reports"]["slot_a"]).hexdigest(),
         "slot_b_report_sha256": hashlib.sha256(value["reports"]["slot_b"]).hexdigest(),
         "reference_report_sha256": hashlib.sha256(
@@ -158,8 +170,6 @@ def _compare(artifacts=None, replicates=MIN_BOOTSTRAP_REPLICATES,
             value["receipts"]["slot_a"]).hexdigest(),
         "slot_b_run_receipt_sha256": hashlib.sha256(
             value["receipts"]["slot_b"]).hexdigest(),
-        "reference_run_receipt_sha256": hashlib.sha256(
-            value["receipts"]["reference"]).hexdigest(),
         "panel_manifest_sha256": hashlib.sha256(value["manifest"]).hexdigest(),
         "assignment_sha256": hashlib.sha256(value["assignment"]).hexdigest(),
         "replicates": replicates, "seed": 17,
@@ -287,6 +297,19 @@ def test_evaluator_report_provenance_tampering_fails(field):
     with pytest.raises(ValueError, match="provenance/count mismatch"):
         _compare(value, slot_a_report=payload,
                  slot_a_report_sha256=hashlib.sha256(payload).hexdigest())
+
+
+@pytest.mark.parametrize("field", [
+    "adapter_sha256", "model_revision", "model_inventory_sha256",
+    "reference_provenance_sha256", "provenance_role"])
+def test_reference_report_provenance_tampering_fails(field):
+    value = _artifacts()
+    report = json.loads(value["reports"]["reference"])
+    report[field] = "tampered"
+    payload = (json.dumps(report, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="provenance/count mismatch"):
+        _compare(value, reference_report=payload,
+                 reference_report_sha256=hashlib.sha256(payload).hexdigest())
 
 
 @pytest.mark.parametrize("field,value", [

@@ -232,6 +232,10 @@ def test_run_receipt_and_batch_scalar_parity_contracts():
                "adapter_sha256": sha, "checkpoint_payload_sha256": sha,
                "config_sha256": sha, "metrics_sha256": sha, "log_sha256": sha}
     assert validate_causal_run_receipt(json.dumps(receipt).encode(), sha)["slot"] == "slot_a"
+    receipt["slot"] = "reference"
+    with pytest.raises(ValueError, match="schema/status"):
+        validate_causal_run_receipt(json.dumps(receipt).encode(), sha)
+    receipt["slot"] = "slot_a"
     receipt["checkpoint_payload_sha256"] = "bad"
     with pytest.raises(ValueError, match="invalid SHA-256"):
         validate_causal_run_receipt(json.dumps(receipt).encode(), sha)

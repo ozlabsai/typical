@@ -51,7 +51,7 @@ def validate_causal_run_receipt(payload, adapter_sha256=None):
         raise ValueError("invalid causal run receipt") from error
     if (set(receipt) != RUN_RECEIPT_FIELDS
             or receipt.get("schema_version") != "r047-causal-run-receipt-v1"
-            or receipt.get("slot") not in {"slot_a", "slot_b", "reference"}
+            or receipt.get("slot") not in {"slot_a", "slot_b"}
             or receipt.get("status") != "complete"
             or not isinstance(receipt.get("checkpoint_step"), int)
             or isinstance(receipt.get("checkpoint_step"), bool)
@@ -744,6 +744,7 @@ def main(argv=None):
     parser.add_argument("--causal-standalone", action="store_true")
     parser.add_argument("--panel-manifest")
     parser.add_argument("--run-receipt")
+    parser.add_argument("--reference-provenance")
     parser.add_argument("--base-model-inventory")
     parser.add_argument("--max-batch-tokens", type=int, default=32768)
     parser.add_argument("--max-batch-rows", type=int, default=64)
@@ -760,12 +761,17 @@ def main(argv=None):
                 [row for row in rows if len((row.get("meta") or {}).get("composition", []))
                  >= args.min_clauses])
     if args.causal_standalone:
-        if (not args.panel_manifest or not args.run_receipt
+        if (not args.panel_manifest or bool(args.run_receipt) == bool(args.reference_provenance)
                 or not args.base_model_inventory or not args.adapter):
             raise ValueError(
-                "causal evaluation requires panel/run/base-inventory provenance and adapter")
+                "causal evaluation requires panel/base inventory, adapter, and exactly one "
+                "candidate receipt or reference provenance")
         manifest_payload = Path(args.panel_manifest).read_bytes()
-        run_receipt_payload = Path(args.run_receipt).read_bytes()
+        run_receipt_payload = Path(args.run_receipt).read_bytes() if args.run_receipt else None
+        reference_provenance_payload = (Path(args.reference_provenance).read_bytes()
+                                        if args.reference_provenance else None)
+        if reference_provenance_payload == b"":
+            raise ValueError("reference provenance artifact must not be empty")
         base_inventory_payload = Path(args.base_model_inventory).read_bytes()
         model_inventory = validate_causal_model_inventory(
             args.model, base_inventory_payload, args.model_revision)
@@ -824,12 +830,13 @@ def main(argv=None):
     adapter_path = Path(args.adapter) / "adapter_model.safetensors" if args.adapter else None
     adapter_sha256 = hashlib.sha256(adapter_path.read_bytes()).hexdigest() if adapter_path else None
     if args.causal_standalone:
-        run_receipt = validate_causal_run_receipt(run_receipt_payload, adapter_sha256)
-        if run_receipt["model_revision"] != args.model_revision:
-            raise ValueError("run receipt model revision differs from evaluator revision")
         model_inventory_sha256 = hashlib.sha256(base_inventory_payload).hexdigest()
-        if run_receipt["model_inventory_sha256"] != model_inventory_sha256:
-            raise ValueError("run receipt model inventory differs from supplied inventory")
+        if run_receipt_payload is not None:
+            run_receipt = validate_causal_run_receipt(run_receipt_payload, adapter_sha256)
+            if run_receipt["model_revision"] != args.model_revision:
+                raise ValueError("run receipt model revision differs from evaluator revision")
+            if run_receipt["model_inventory_sha256"] != model_inventory_sha256:
+                raise ValueError("run receipt model inventory differs from supplied inventory")
     report.update({"input_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
                    "predictions_sha256": hashlib.sha256(prediction_payload.encode()).hexdigest(),
                    "adapter_sha256": adapter_sha256,
@@ -837,16 +844,26 @@ def main(argv=None):
     if args.causal_standalone:
         report.update({
             "panel_manifest_sha256": hashlib.sha256(manifest_payload).hexdigest(),
-            "run_receipt_sha256": hashlib.sha256(run_receipt_payload).hexdigest(),
-            "train_sha256": run_receipt["train_sha256"],
-            "recipe_sha256": run_receipt["recipe_sha256"],
-            "parent_adapter_sha256": run_receipt["parent_adapter_sha256"],
             "model_inventory_sha256": model_inventory_sha256,
             "model_tree_sha256": model_inventory["tree_sha256"],
             "model_tree_files": model_inventory["files"],
             "panel_rows": len(rows),
             "batch_scalar_parity": parity_report,
         })
+        if run_receipt_payload is not None:
+            report.update({
+                "provenance_role": "candidate",
+                "run_receipt_sha256": hashlib.sha256(run_receipt_payload).hexdigest(),
+                "train_sha256": run_receipt["train_sha256"],
+                "recipe_sha256": run_receipt["recipe_sha256"],
+                "parent_adapter_sha256": run_receipt["parent_adapter_sha256"],
+            })
+        else:
+            report.update({
+                "provenance_role": "reference",
+                "reference_provenance_sha256": hashlib.sha256(
+                    reference_provenance_payload).hexdigest(),
+            })
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=False)
     (out / "predictions.jsonl").write_text(prediction_payload)

@@ -545,7 +545,7 @@ def _gate(control, treatment, reference, bootstrap):
 
 ASSIGNMENT_FIELDS = {
     "schema_version", "control_slot", "treatment_slot", "control_train_sha256",
-    "treatment_train_sha256", "reference_train_sha256", "reference_adapter_sha256",
+    "treatment_train_sha256", "reference_provenance_sha256", "reference_adapter_sha256",
     "parent_adapter_sha256", "model_revision", "model_inventory_sha256",
     "recipe_sha256", "panel_sha256", "panel_manifest_sha256",
 }
@@ -577,18 +577,12 @@ def _load_evaluator_report(payload, expected_sha256, name, predictions_payload,
         "predictions_sha256": _sha(predictions_payload),
         "input_sha256": panel_sha256,
         "panel_manifest_sha256": manifest_sha256,
-        "adapter_sha256": expected["adapter_sha256"],
-        "model_revision": expected["model_revision"],
-        "train_sha256": expected["train_sha256"],
-        "recipe_sha256": expected["recipe_sha256"],
-        "parent_adapter_sha256": expected["parent_adapter_sha256"],
-        "run_receipt_sha256": expected["run_receipt_sha256"],
-        "model_inventory_sha256": expected["model_inventory_sha256"],
-        "records": expected["rows"],
-        "panel_rows": expected["rows"],
-        "semantic_clusters": expected["clusters"],
-        "scenarios": expected["clusters"],
+        "records": expected["rows"], "panel_rows": expected["rows"],
+        "semantic_clusters": expected["clusters"], "scenarios": expected["clusters"],
     }
+    checks.update({key: value for key, value in expected.items()
+                   if key not in {"rows", "clusters", "parity_rows",
+                                  "parity_subset_ids_sha256"}})
     failures = [key for key, value in checks.items() if report.get(key) != value]
     if failures:
         raise ValueError(f"{name} evaluator report provenance/count mismatch: {failures}")
@@ -635,10 +629,10 @@ def _load_run_receipt(payload, expected_sha256, expected_slot, expected):
 def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predictions,
                      slot_a_report, slot_b_report, reference_report, panel_payload,
                      panel_manifest_payload, assignment_payload, slot_a_run_receipt,
-                     slot_b_run_receipt, reference_run_receipt, slot_a_report_sha256,
+                     slot_b_run_receipt, slot_a_report_sha256,
                      slot_b_report_sha256, reference_report_sha256,
                      slot_a_run_receipt_sha256, slot_b_run_receipt_sha256,
-                     reference_run_receipt_sha256, panel_manifest_sha256, assignment_sha256,
+                     panel_manifest_sha256, assignment_sha256,
                      replicates=MIN_BOOTSTRAP_REPLICATES, seed=470047,
                      _require_frozen_panel=True):
     """Compare preassigned slots only after binding panel, manifests, reports, and provenance."""
@@ -686,8 +680,6 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
     _assert_matching_structure(slot_records["slot_a"], reference)
 
     common = {"model_revision": assignment["model_revision"],
-              "recipe_sha256": assignment["recipe_sha256"],
-              "parent_adapter_sha256": assignment["parent_adapter_sha256"],
               "model_inventory_sha256": assignment["model_inventory_sha256"],
               "parity_rows": len(parity_rows),
               "parity_subset_ids_sha256": parity_subset_ids_sha256,
@@ -696,7 +688,10 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
     for role in ("control", "treatment"):
         slot = assignment[f"{role}_slot"]
         slot_expectations[slot] = {
-            **common, "train_sha256": assignment[f"{role}_train_sha256"]}
+            **common, "provenance_role": "candidate",
+            "train_sha256": assignment[f"{role}_train_sha256"],
+            "recipe_sha256": assignment["recipe_sha256"],
+            "parent_adapter_sha256": assignment["parent_adapter_sha256"]}
     receipt_inputs = {"slot_a": (slot_a_run_receipt, slot_a_run_receipt_sha256),
                       "slot_b": (slot_b_run_receipt, slot_b_run_receipt_sha256)}
     receipts = {}
@@ -707,15 +702,9 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
             adapter_sha256=receipts[slot]["adapter_sha256"],
             run_receipt_sha256=receipt_inputs[slot][1])
     reference_expectation = {
-        **common, "train_sha256": assignment["reference_train_sha256"]}
-    receipts["reference"] = _load_run_receipt(
-        reference_run_receipt, reference_run_receipt_sha256, "reference",
-        reference_expectation)
-    if receipts["reference"]["adapter_sha256"] != assignment["reference_adapter_sha256"]:
-        raise ValueError("reference run receipt adapter differs from frozen parent")
-    reference_expectation.update(
-        adapter_sha256=receipts["reference"]["adapter_sha256"],
-        run_receipt_sha256=reference_run_receipt_sha256)
+        **common, "provenance_role": "reference",
+        "adapter_sha256": assignment["reference_adapter_sha256"],
+        "reference_provenance_sha256": assignment["reference_provenance_sha256"]}
     reports = {
         "slot_a": _load_evaluator_report(
             slot_a_report, slot_a_report_sha256, "slot_a", slot_a_predictions,
@@ -764,8 +753,9 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
                            "reference": reference_report_sha256},
                        "run_receipt_sha256": {
                            "slot_a": slot_a_run_receipt_sha256,
-                           "slot_b": slot_b_run_receipt_sha256,
-                           "reference": reference_run_receipt_sha256},
+                           "slot_b": slot_b_run_receipt_sha256},
+                       "reference_provenance_sha256": assignment[
+                           "reference_provenance_sha256"],
                        "prediction_sha256": {
                            "slot_a": reports["slot_a"]["predictions_sha256"],
                            "slot_b": reports["slot_b"]["predictions_sha256"],
@@ -796,10 +786,8 @@ def main(argv=None):
     parser.add_argument("--reference-report-sha256", required=True)
     parser.add_argument("--slot-a-run-receipt", required=True)
     parser.add_argument("--slot-b-run-receipt", required=True)
-    parser.add_argument("--reference-run-receipt", required=True)
     parser.add_argument("--slot-a-run-receipt-sha256", required=True)
     parser.add_argument("--slot-b-run-receipt-sha256", required=True)
-    parser.add_argument("--reference-run-receipt-sha256", required=True)
     parser.add_argument("--panel", required=True)
     parser.add_argument("--panel-manifest", required=True)
     parser.add_argument("--panel-manifest-sha256", required=True)
@@ -821,13 +809,11 @@ def main(argv=None):
         assignment_payload=Path(args.assignment).read_bytes(),
         slot_a_run_receipt=Path(args.slot_a_run_receipt).read_bytes(),
         slot_b_run_receipt=Path(args.slot_b_run_receipt).read_bytes(),
-        reference_run_receipt=Path(args.reference_run_receipt).read_bytes(),
         slot_a_report_sha256=args.slot_a_report_sha256,
         slot_b_report_sha256=args.slot_b_report_sha256,
         reference_report_sha256=args.reference_report_sha256,
         slot_a_run_receipt_sha256=args.slot_a_run_receipt_sha256,
         slot_b_run_receipt_sha256=args.slot_b_run_receipt_sha256,
-        reference_run_receipt_sha256=args.reference_run_receipt_sha256,
         panel_manifest_sha256=args.panel_manifest_sha256,
         assignment_sha256=args.assignment_sha256,
         replicates=args.bootstrap_replicates, seed=args.bootstrap_seed)
