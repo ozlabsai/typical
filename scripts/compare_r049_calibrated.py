@@ -1,9 +1,9 @@
 """Fail-closed paired comparison for R049 calibrated-decision Stage-1 arms.
 
 The comparator recomputes exact-policy outcomes and proper losses from field
-probabilities.  Rendered rows are descriptive; inference resamples and weights
-``semantic_group_id`` clusters so translated, reordered, and counterfactual
-views are not treated as independent observations.
+probabilities. Rendered rows are descriptive; inference resamples canonical
+``semantic_signature`` units so translated, reordered, counterfactual, and
+repeated latent-case views are not treated as independent observations.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ SLICE_KEYS = (
     "policy_topology",
 )
 FAMILY_KEYS = ("program_family", "action_family")
+INFERENCE_KEY = "semantic_signature"
 
 
 def _mean(values: Iterable[float]) -> float:
@@ -123,7 +124,12 @@ def _validate_panel(rows: list[dict[str, Any]]) -> list[str]:
         cluster = meta.get("semantic_group_id") if isinstance(meta, dict) else None
         if not isinstance(cluster, str) or not cluster:
             raise ValueError(
-                f"{row['id']}: a nonempty semantic_group_id is required for inference"
+                f"{row['id']}: a nonempty semantic_group_id is required"
+            )
+        signature = meta.get(INFERENCE_KEY)
+        if not isinstance(signature, str) or not signature:
+            raise ValueError(
+                f"{row['id']}: a nonempty {INFERENCE_KEY} is required for inference"
             )
         if ("counterfactual_side" not in meta
                 or isinstance(meta["counterfactual_side"], bool)
@@ -132,6 +138,9 @@ def _validate_panel(rows: list[dict[str, Any]]) -> list[str]:
                 f"{row['id']}: an integer counterfactual_side is required"
             )
         for key in ("policy_topology", "topology_slice"):
+            if not isinstance(meta.get(key), str) or not meta[key]:
+                raise ValueError(f"{row['id']}: a nonempty {key} is required")
+        for key in FAMILY_KEYS:
             if not isinstance(meta.get(key), str) or not meta[key]:
                 raise ValueError(f"{row['id']}: a nonempty {key} is required")
         try:
@@ -205,6 +214,12 @@ def _score_arm(
             "row": row,
             "valid": True,
             "invalid_reason": None,
+            "predicted_outcome_key": json.dumps(
+                result["predicted_outcome"].as_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             "complete_outcome_accuracy": float(
                 result["predicted_outcome"] == result["gold_outcome"]
             ),
@@ -224,7 +239,7 @@ def _metric_means(records: list[dict[str, Any]]) -> dict[str, float]:
 def _by_cluster(records: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
-        grouped[record["row"]["meta"]["semantic_group_id"]].append(record)
+        grouped[record["row"]["meta"][INFERENCE_KEY]].append(record)
     return {
         cluster: _metric_means(items) for cluster, items in sorted(grouped.items())
     }
@@ -337,7 +352,7 @@ def _bootstrap(
             "replicates": replicates,
             "valid_replicates": len(values),
             "seed": seed,
-            "resampling_unit": "semantic_group_id",
+            "resampling_unit": INFERENCE_KEY,
             "cluster_weighting": "equal",
             "interval": "paired percentile 95%",
         }
@@ -463,10 +478,77 @@ def _family_nonregression(slices: dict[str, Any]) -> dict[str, Any]:
     return report
 
 
+def _option_order_robustness(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Measure semantic agreement across option-order twins, fail closed."""
+    grouped: dict[tuple[str, int, str], dict[str, str | None]] = defaultdict(dict)
+    for record in records:
+        meta = record["row"]["meta"]
+        key = (meta["semantic_group_id"], meta["counterfactual_side"], meta["language"])
+        grouped[key][str(meta["option_order"])] = record.get("predicted_outcome_key")
+    complete = [values for values in grouped.values()
+                if set(values) == {"no_yes", "yes_no"}
+                and all(value is not None for value in values.values())]
+    agreement = (
+        sum(values["no_yes"] == values["yes_no"] for values in complete) / len(complete)
+        if complete else None
+    )
+    by_order: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        by_order[str(record["row"]["meta"]["option_order"])].append(record)
+    accuracies = {
+        order: _cluster_means(_by_cluster(items))["complete_outcome_accuracy"]
+        for order, items in sorted(by_order.items())
+    }
+    spread = (
+        max(accuracies.values()) - min(accuracies.values())
+        if len(accuracies) >= 2 else None
+    )
+    return {
+        "expected_pairs": len(grouped),
+        "complete_pairs": len(complete),
+        "semantic_agreement": agreement,
+        "order_accuracy": accuracies,
+        "order_accuracy_spread": spread,
+    }
+
+
+def _heldout_topology_gate(slices: dict[str, Any]) -> dict[str, Any]:
+    heldout = {
+        name: report for name, report in slices["topology_slice"].items()
+        if name.casefold().startswith("heldout")
+    }
+    if not heldout:
+        return {
+            "passed": False,
+            "reason": "no held-out topology slice was evaluated",
+            "slices": {},
+        }
+    checks = {}
+    for name, report in heldout.items():
+        delta = report["paired_delta"]["equal_semantic_cluster"][
+            "complete_outcome_accuracy"
+        ]
+        lower = report["paired_cluster_bootstrap"][
+            "complete_outcome_accuracy"
+        ]["lower_95"]
+        checks[name] = {
+            "accuracy_delta": delta,
+            "accuracy_lower_95": lower,
+            "passed": delta >= 0.03 and lower is not None and lower > 0,
+        }
+    return {
+        "passed": all(item["passed"] for item in checks.values()),
+        "requirements": "accuracy delta >= 0.03 and paired 95% lower bound > 0",
+        "slices": checks,
+    }
+
+
 def _internal_gate(
     overall: dict[str, Any],
     coverage: dict[str, Any],
     families: dict[str, Any],
+    slices: dict[str, Any],
+    option_order: dict[str, Any],
 ) -> dict[str, Any]:
     delta = overall["paired_delta"]["equal_semantic_cluster"]
     bootstrap = overall["paired_cluster_bootstrap"]
@@ -477,7 +559,11 @@ def _internal_gate(
 
     family_evaluated = [item for item in families.values()
                         if item["status"] == "evaluated"]
-    family_passed = all(item["passed"] for item in family_evaluated)
+    family_passed = (
+        len(family_evaluated) == len(FAMILY_KEYS)
+        and all(item["passed"] for item in family_evaluated)
+    )
+    heldout = _heldout_topology_gate(slices)
     zero_invalid = all(
         coverage[arm]["invalid"] == 0 and coverage[arm]["exact_id_coverage"]
         for arm in ("control", "candidate")
@@ -533,6 +619,25 @@ def _internal_gate(
                 key for key, value in families.items()
                 if value["status"] == "not_evaluated"
             ],
+        },
+        "heldout_topology_transfer": {
+            "passed": heldout["passed"],
+            "observed": heldout,
+            "operator": "all held-out slices pass",
+            "threshold": {"accuracy_delta": 0.03, "accuracy_lower_95": 0.0},
+        },
+        "option_permutation_agreement": {
+            "passed": option_order["semantic_agreement"] is not None
+            and option_order["complete_pairs"] == option_order["expected_pairs"]
+            and option_order["semantic_agreement"] >= 0.99,
+            "observed": option_order,
+            "operator": ">= with complete pairs", "threshold": 0.99,
+        },
+        "option_order_accuracy_spread": {
+            "passed": option_order["order_accuracy_spread"] is not None
+            and option_order["order_accuracy_spread"] <= 0.01,
+            "observed": option_order["order_accuracy_spread"],
+            "operator": "<=", "threshold": 0.01,
         },
         "zero_invalid_predictions": {
             "passed": zero_invalid,
@@ -597,7 +702,8 @@ def compare_rows(
         for key in (*SLICE_KEYS, *FAMILY_KEYS)
     }
     families = _family_nonregression(slices)
-    gate = _internal_gate(overall, coverage, families)
+    option_order = _option_order_robustness(candidate)
+    gate = _internal_gate(overall, coverage, families, slices, option_order)
     return {
         "schema": SCHEMA,
         "provenance": provenance or {},
@@ -606,7 +712,7 @@ def compare_rows(
                 "zero outcome/field accuracy, categorical Brier 2, and gold "
                 "outcome probability floored at 1e-12 for NLL"
             ),
-            "point_estimate_unit": "equal-weight semantic_group_id",
+            "point_estimate_unit": f"equal-weight {INFERENCE_KEY}",
             "rendered_metrics_role": "descriptive_only",
             "brier_improvement_direction": "control_minus_candidate",
             "nll_degradation_direction": "candidate_minus_control",
@@ -620,6 +726,7 @@ def compare_rows(
         "overall": overall,
         "slices": slices,
         "family_nonregression": families,
+        "option_order_robustness": option_order,
         "internal_stage1_gate": gate,
         "external_gates": {
             "retention": {

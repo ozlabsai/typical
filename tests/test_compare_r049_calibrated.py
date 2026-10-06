@@ -18,7 +18,8 @@ def _action(name):
     return {"name": name, "payload": {"queue": name}}
 
 
-def _row(row_id, cluster, *, family="standard", language="en", order="no_yes"):
+def _row(row_id, cluster, *, family="standard", language="en", order="no_yes",
+         topology_slice="heldout_topology"):
     policy = {
         "fields": ["risk", "evidence"],
         "mode": "priority",
@@ -51,11 +52,12 @@ def _row(row_id, cluster, *, family="standard", language="en", order="no_yes"):
             "panel": "exact_policy_v1",
             "split": "eval",
             "semantic_group_id": cluster,
+            "semantic_signature": cluster,
             "counterfactual_side": 0,
             "language": language,
             "option_order": order,
             "policy_mode": "priority",
-            "topology_slice": "heldout_topology",
+            "topology_slice": topology_slice,
             "policy_topology": "priority_grouped_partition",
             "program_family": family,
             "action_family": family,
@@ -92,7 +94,10 @@ def _compare(rows, control, candidate, *, replicates=400):
 
 
 def test_perfect_gain_passes_internal_stage1_gate():
-    rows = [_row(f"r{index}", f"c{index}") for index in range(6)]
+    rows = [
+        _row(f"r{index}-{order}", f"c{index}", order=order)
+        for index in range(6) for order in ("no_yes", "yes_no")
+    ]
     control = [_prediction(row, False) for row in rows]
     candidate = [_prediction(row, True) for row in rows]
 
@@ -143,7 +148,7 @@ def test_cluster_estimate_and_bootstrap_do_not_treat_views_as_independent():
     interval = report["overall"]["paired_cluster_bootstrap"]["complete_outcome_accuracy"]
     assert interval["lower_95"] == -1.0
     assert interval["upper_95"] == 1.0
-    assert interval["resampling_unit"] == "semantic_group_id"
+    assert interval["resampling_unit"] == "semantic_signature"
 
 
 def test_worse_soft_predictions_fail_brier_and_nll_gates():
@@ -270,22 +275,38 @@ def test_canonical_v13_cluster_and_topology_keys_are_required():
         _compare([row], [prediction], [prediction])
 
 
-def test_absent_optional_families_are_not_invented_or_blocking():
+def test_absent_required_families_fail_closed():
     rows = [_row(f"r{index}", f"c{index}") for index in range(4)]
     for row in rows:
         row["meta"].pop("program_family")
         row["meta"].pop("action_family")
-    report = _compare(
-        rows,
-        [_prediction(row, False) for row in rows],
-        [_prediction(row, True) for row in rows],
-    )
+    with pytest.raises(ValueError, match="program_family is required"):
+        _compare(
+            rows,
+            [_prediction(row, False) for row in rows],
+            [_prediction(row, True) for row in rows],
+        )
 
-    assert report["family_nonregression"]["program_family"]["status"] == "not_evaluated"
-    assert report["family_nonregression"]["action_family"]["status"] == "not_evaluated"
-    assert report["internal_stage1_gate"]["requirements"]["family_nonregression"][
-        "passed"
-    ] is True
+
+def test_heldout_topology_regression_blocks_overall_gain():
+    rows = [
+        *[_row(f"same-{index}", f"same-{index}", topology_slice="same")
+          for index in range(6)],
+        *[_row(f"heldout-{index}", f"heldout-{index}") for index in range(2)],
+    ]
+    control = [_prediction(row, row["meta"]["topology_slice"] != "same") for row in rows]
+    candidate = [_prediction(row, row["meta"]["topology_slice"] == "same") for row in rows]
+
+    report = _compare(rows, control, candidate)
+
+    assert report["overall"]["paired_delta"]["equal_semantic_cluster"][
+        "complete_outcome_accuracy"
+    ] == 0.5
+    requirement = report["internal_stage1_gate"]["requirements"][
+        "heldout_topology_transfer"
+    ]
+    assert requirement["passed"] is False
+    assert report["internal_stage1_gate"]["passed"] is False
 
 
 def test_hash_mismatch_fails_before_comparison(tmp_path):
