@@ -207,9 +207,16 @@ effect in this classifier setting; R047 is the causal test. See Lightman et al.
 - Tokenizer preflight must show equal view counts and aggregate non-padding tokens within `0.5%`;
   report wall time and peak VRAM. Config differences are limited to arm path/mode and output path.
 - Full-clause treatment targets are 75% yes while repeated-final control targets are 50% yes. This
-  is part of the semantic intervention, must be disclosed, and requires balanced-accuracy and
-  per-class reporting. A decisive-only target is rejected because it duplicates the final label and
-  adds no intermediate information.
+  is part of the intervention package, must be disclosed, and requires balanced-accuracy,
+  per-class reporting, and no treatment regression in either class recall. A decisive-only target
+  is rejected because it duplicates the final label and adds no intermediate information.
+
+The causal estimand is the complete **indexed-local process-supervision package**: distinct
+clause-local questions, executable intermediate targets, their greater query/gradient diversity,
+and their 75/25 auxiliary class prior, against repeated whole-case supervision. It does not isolate
+executable labels alone. A clean pass licenses that package for M2; it does not by itself establish
+latent decomposition, sequential workflow execution, typed payload generation, benchmark parity,
+or multimodal/Hebrew retention.
 
 ### M0 — can-fit sanity before causal training
 
@@ -244,7 +251,11 @@ Use the frozen 800-slot R045-B mixture in both arms. The 700 non-compositional s
 canonical counterfactual pair rows are byte-identical; only the 48 K=2 rows receive matched
 training-only bundles. Train four deterministic epochs (`400` steps × accumulation `8`) from the
 same R044-R parent with the M0-passing capacity. Control runs first, then treatment. Seed, order,
-optimizer, scheduler, base revision, images, and every retention row are identical.
+optimizer, scheduler, base revision, images, and every retention row are identical. Slot roles are
+preassigned and hash-frozen before training; execution is not described as blinded. Both trainer
+configs use `val=[]`, so neither candidate process can inspect the causal panel, smoke panel,
+retention gates, or public benchmarks at step 0/1/400. Retention is evaluated separately from sealed
+step-400 checkpoints after both runs.
 
 Before candidate exposure, freeze two panels. The existing seed-47/domain-offset-2 panel is retained
 only as a 32-scenario **near-transfer smoke diagnostic**: despite 144 language rows, it has only 24
@@ -263,24 +274,34 @@ R045; it does not claim full generator-family or fuzzy near-duplicate disjointne
 - new entity, renderer, numeric-margin, ledger-order/length, date/timezone, fraction, conditional,
   and policy regimes, with independently executed gold and explicit generator-family provenance.
 
-Freeze builder, evaluator, comparison, bootstrap RNG, arm, panel, manifest, and threshold hashes.
+Freeze builder, evaluator, comparison, bootstrap RNG, arm, panel, manifest, preflight, inventory,
+recipe, reference provenance, and threshold hashes.
 Reject exact or normalized overlap in states, questions, instructions, clause JSON, numeric
 signatures, decisive pairs, complete AST/multisets, composition hyperedges, scenario/template/
 generator lineage, and all quarantined benchmarks. The preflight proves these exact normalized
 overlap classes only; it does not prove fuzzy near-duplicate absence. Language/order twins and the
 complete truth cube remain in one semantic cluster. Resample whole clusters within K×composition
-for at least 20,000 fixed paired-bootstrap replicates; never row-bootstrap or pool K=2 with K=3.
+for exactly 20,000 paired-bootstrap replicates with seed `470047`; never row-bootstrap or pool K=2
+with K=3.
 
 **Mechanism gate:** treatment minus control must pass separately on both unseen K=2 and K=3
 co-primary strata (an intersection-union decision), satisfying all of:
 
 - clause balanced accuracy `+5` points with scenario-clustered 95% bootstrap lower bound above 0;
-- exact clause-vector accuracy `+8` points;
-- final/clauses coherence (`final == AND(predicted clauses)`) `+10` points;
+- no regression in either clause-class recall;
+- exact clause-vector accuracy `+8` points when control is at or below `.92`;
+- final/clauses coherence (`final == AND(predicted clauses)`) `+10` points when control is at or
+  below `.90`;
 - counterfactual direction gains for both decimal and ledger, with no primitive or language losing
   more than 2 points;
-- final presentation accuracy `+5` points, no regression in correct pairs/sources, and NLL/Brier at
-  most 105% of control and the best frozen R044/R046 reference.
+- final presentation accuracy `+5` points when control is at or below `.95`, no regression in
+  correct pairs/sources, and NLL/Brier at most 105% of control and exact frozen R044-R.
+
+For a secondary metric whose control exceeds its stated superiority boundary, use the predeclared
+ceiling branch instead: treatment must be at least `.98`, its point delta must be nonnegative, and
+the paired cluster-bootstrap 95% lower bound must exceed `-1` point. If control clause macro-BA is
+above `.95`, the primary panel is uninformative and the experiment fails closed pending a harder
+panel; primary noninferiority can never substitute for the `+5`-point mechanism gate.
 
 Report per primitive×language×K class confusion, truth-Hamming-weight and seen-edge slices, both
 answer orders, semantic order agreement, probability delta/JSD, and treatment×order interaction.
@@ -290,7 +311,10 @@ paired training seed is required in M2 before calling the mechanism replicated.
 
 A final-only gain without clause gains is a shortcut and fails. Complete scenarios are reported but
 are not the mechanism gate. Promotion-scale expectations require at least `.81` final presentation
-accuracy before treating five complete scenarios as plausible.
+accuracy before treating five complete scenarios as plausible. Before either arm can be promoted or
+used to initialize M2, both sealed checkpoints must also pass the inherited WF/WH/replay, renderer,
+action, real-image, mismatch/null, Hebrew, and English retention suite. An M1 mechanism pass without
+those retention receipts is research evidence only, not a usable Typical checkpoint.
 
 The initial intervention reaches only `48/800` logical slots (`6%`). If M1 produces no clause
 improvement, that result rejects this dose, not the mechanism family. One preregistered dose-response
