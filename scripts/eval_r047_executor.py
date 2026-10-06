@@ -375,12 +375,16 @@ def main(argv=None):
     report = audit(rows, predictions, args.min_clauses)
     if args.required_kind:
         report["m0_gate"] = m0_gate(report, args.required_kind, args.m0_threshold)
+    prediction_payload = "".join(json.dumps(item, sort_keys=True) + "\n" for item in predictions)
+    adapter_path = Path(args.adapter) / "adapter_model.safetensors" if args.adapter else None
     report.update({"input_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
+                   "predictions_sha256": hashlib.sha256(prediction_payload.encode()).hexdigest(),
+                   "adapter_sha256": (hashlib.sha256(adapter_path.read_bytes()).hexdigest()
+                                      if adapter_path else None),
                    "model_revision": args.model_revision})
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=False)
-    (out / "predictions.jsonl").write_text("".join(
-        json.dumps(item, sort_keys=True) + "\n" for item in predictions))
+    (out / "predictions.jsonl").write_text(prediction_payload)
     (out / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
