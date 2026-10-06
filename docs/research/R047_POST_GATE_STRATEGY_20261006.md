@@ -61,6 +61,12 @@ Matched arms:
 - **B:** exact same groups, views, replay, seed, optimizer slots, and updates, with an additional
   `0.1 * action-set loss` routed through the soft executor.
 
+For this first causal A/B, both arms use the trainer's existing continued-adapter path and identical
+hard-label protected replay. This isolates the executor loss. The current trainer does **not**
+freeze the inherited adapter and add a fresh named residual, and it does **not** implement cached
+parent-logit KL. Those are separate prospective factors with their own parity and ablation gates;
+they must not be claimed as part of the minimal pilot until implemented and verified.
+
 Compile each deterministic policy to a training-only relaxation:
 
 - thresholds -> temperature-controlled sigmoids;
@@ -80,8 +86,11 @@ L_total  = L_field
            + 0.1 * L_action
            + lambda_cf * L_counterfactual-margin
            + 0.05 * JS(aligned option permutations and HE/EN twins)
-           + 0.05 * KL(parent || student) on protected replay
 ```
+
+The last two terms are enabled only in experiments that explicitly isolate them. Cached
+`KL(parent || student)` on protected replay is a later candidate, not part of the first executor
+A/B, because the current trainer has no parent-logit cache/path.
 
 For finite action sets with executable rewards, exact reward-tilted targets are preferable to
 sampling-based GRPO/PPO:
@@ -111,9 +120,31 @@ Each Hebrew group includes HE state/HE options, HE state/EN options, and its Eng
 Align distributions by semantic option ID rather than surface position. Keep complete groups in one
 split and one optimizer slot.
 
-Freeze the vision tower/projector initially. Use a fresh zero-initialized workflow residual adapter
-from the accepted parent, with protected parent-logit replay. Select checkpoints by hard per-suite
-floors; never average workflow, Hebrew, English, and image losses into one selector.
+Freeze the vision tower/projector initially. The minimal executor A/B continues the same accepted
+adapter in both arms and uses hard-label protected replay. If action loss wins, test a fresh
+zero-initialized workflow residual from a frozen/merged accepted parent as a separate matched
+factor. Require numerical prediction parity before the fresh residual is trained. Parent-logit
+replay likewise requires a separately validated cache and ablation. Select checkpoints by hard
+per-suite floors; never average workflow, Hebrew, English, and image losses into one selector.
+
+## Minimal implementation seam
+
+The existing `logical_slot_views` abstraction in `scripts/train_gemma_decision_lora.py` already
+represents one optimizer slot with related decisions. Preserve grouped workflow rows through that
+seam instead of flattening them. Immediately after semantic option scores are available, compute:
+
+```text
+slot loss = mean(field CE) + action_weight * action CE
+```
+
+Both arms enable grouped loading; control uses `action_weight=0` and treatment uses `0.1`.
+Semantic `yes`/`no` scores are resolved by labels, never by option position. Serving remains
+unchanged.
+
+The existing action-panel oracle is sufficient for a first fixed-policy causal pilot, but not for
+the full objective: it has one topology and one primary action. Scaling requires a serializable
+Boolean/action program with `primary_action` and `action_set`, held-out topologies, and
+priority/fallback behavior.
 
 ## Advancement gates
 
@@ -175,4 +206,3 @@ hybrid backbone only after the quality objective is frozen.
 - [Kimi Linear](https://arxiv.org/abs/2510.26692): native hybrid attention can materially improve
   long-context efficiency, but does not support low-cost post-hoc attention surgery as a workflow
   quality fix.
-
