@@ -28,7 +28,39 @@ def _payload(value):
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
 
 
+def _preparation_payload(artifacts):
+    assignment = json.loads(artifacts["assignment"])
+    provenance = json.loads(artifacts["reference_provenance"])
+    recipe = json.loads(fixtures.RECIPE_PAYLOAD)
+    value = {
+        "schema_version": "r047-m1-preparation-receipt-v1",
+        "status": "complete",
+        "recipe_sha256": assignment["recipe_sha256"],
+        "reference_provenance_sha256": assignment["reference_provenance_sha256"],
+        "assignment_sha256": _sha(artifacts["assignment"]),
+        "model_revision": assignment["model_revision"],
+        "model_inventory_sha256": assignment["model_inventory_sha256"],
+        "parent_adapter_sha256": assignment["parent_adapter_sha256"],
+        "control_train_sha256": assignment["control_train_sha256"],
+        "treatment_train_sha256": assignment["treatment_train_sha256"],
+        "source_checkpoint_provenance_sha256": provenance[
+            "source_checkpoint_provenance_sha256"],
+        "panel_sha256": assignment["panel_sha256"],
+        "arm_preflight_sha256": assignment["arm_preflight_sha256"],
+        "trainer_sha256": recipe["trainer_sha256"],
+        "evaluator_sha256": assignment["evaluator_sha256"],
+        "comparator_sha256": assignment["comparator_sha256"],
+        "precheck_sha256": assignment["precheck_sha256"],
+        "preparer_sha256": _sha(
+            Path(precheck.__file__).with_name("prepare_r047_m1.py").read_bytes()),
+        "finalizer_sha256": _sha(
+            Path(precheck.__file__).with_name("finalize_r047_m1.py").read_bytes()),
+    }
+    return _payload(value)
+
+
 def _reference_args(artifacts):
+    preparation = _preparation_payload(artifacts)
     return {
         "assignment_payload": artifacts["assignment"],
         "assignment_sha256": _sha(artifacts["assignment"]),
@@ -36,6 +68,9 @@ def _reference_args(artifacts):
         "reference_report": artifacts["reports"]["reference"],
         "reference_report_sha256": _sha(artifacts["reports"]["reference"]),
         "reference_provenance_payload": artifacts["reference_provenance"],
+        "recipe_payload": fixtures.RECIPE_PAYLOAD,
+        "preparation_receipt_payload": preparation,
+        "preparation_receipt_sha256": _sha(preparation),
         "panel_payload": artifacts["panel"],
         "panel_manifest_payload": artifacts["manifest"],
         "panel_manifest_sha256": _sha(artifacts["manifest"]),
@@ -93,6 +128,13 @@ def test_reference_rejects_tampering_and_fully_rehashed_role_train_swap():
             "panel_payload": artifacts["panel"] + b"\n",
         })
 
+    with pytest.raises(ValueError, match="preparation receipt"):
+        precheck_reference(**{
+            **_reference_args(artifacts),
+            "preparation_receipt_payload": b"{}\n",
+            "preparation_receipt_sha256": _sha(b"{}\n"),
+        })
+
     assignment = json.loads(artifacts["assignment"])
     assignment["control_slot"], assignment["treatment_slot"] = (
         assignment["treatment_slot"], assignment["control_slot"])
@@ -146,27 +188,18 @@ def test_production_assignment_pins_frozen_parent_and_source(monkeypatch):
         })
 
 
-def test_assignment_precheck_source_hash_is_forward_compatible(monkeypatch):
+def test_assignment_precheck_source_hash_is_bound():
     artifacts = fixtures._artifacts()
     assignment = json.loads(artifacts["assignment"])
-    assignment["precheck_sha256"] = _sha(Path(precheck.__file__).read_bytes())
-    monkeypatch.setattr(
-        comparator, "ASSIGNMENT_FIELDS",
-        comparator.ASSIGNMENT_FIELDS | {"precheck_sha256"})
-    payload = _payload(assignment)
-    args = {
-        **_reference_args(artifacts),
-        "assignment_payload": payload,
-        "assignment_sha256": _sha(payload),
-    }
-    receipt = precheck_reference(**args)
+    assert assignment["precheck_sha256"] == _sha(Path(precheck.__file__).read_bytes())
+    receipt = precheck_reference(**_reference_args(artifacts))
     assert receipt["artifacts"]["precheck_sha256"] == assignment["precheck_sha256"]
 
     assignment["precheck_sha256"] = "f" * 64
     payload = _payload(assignment)
     with pytest.raises(ValueError, match="running precheck"):
         precheck_reference(**{
-            **args,
+            **_reference_args(artifacts),
             "assignment_payload": payload,
             "assignment_sha256": _sha(payload),
         })

@@ -23,6 +23,11 @@ SHA = {name: hashlib.sha256(name.encode()).hexdigest() for name in (
     "config", "metrics", "log", "reference-provenance", "arm-preflight")}
 SHA["control-train"] = comparator_module.FROZEN_CONTROL_TRAIN_SHA256
 SHA["treatment-train"] = comparator_module.FROZEN_TREATMENT_TRAIN_SHA256
+RECIPE_PAYLOAD = (json.dumps({
+    "schema_version": "r047-m1-recipe-v1",
+    "trainer_sha256": hashlib.sha256(b"trainer").hexdigest(),
+}, sort_keys=True) + "\n").encode()
+SHA["recipe"] = hashlib.sha256(RECIPE_PAYLOAD).hexdigest()
 MODEL_REVISION = "revision-707f0a3"
 
 
@@ -83,6 +88,9 @@ def _assignment(panel, manifest, preflight, inventory, reference_provenance):
             Path(evaluator_module.__file__).read_bytes()).hexdigest(),
         "comparator_sha256": hashlib.sha256(
             Path(comparator_module.__file__).read_bytes()).hexdigest(),
+        "precheck_sha256": hashlib.sha256(
+            Path(comparator_module.__file__).with_name(
+                "precheck_r047_causal.py").read_bytes()).hexdigest(),
         "bootstrap_seed": 470047, "bootstrap_replicates": 20_000,
     }
 
@@ -391,6 +399,7 @@ def test_supporting_provenance_payload_tampering_fails(payload, match):
 @pytest.mark.parametrize("field,value,match", [
     ("comparator_sha256", "0" * 64, "running comparator differs"),
     ("evaluator_sha256", "0" * 64, "running evaluator differs"),
+    ("precheck_sha256", "0" * 64, "running precheck differs"),
     ("bootstrap_seed", 17, "bootstrap differs"),
     ("bootstrap_replicates", 20001, "bootstrap differs"),
 ])

@@ -37,6 +37,7 @@ def _fixture(tmp_path, monkeypatch):
         "inventory_manifest_sha256": inventory_hash,
         "evaluator_sha256": hashlib.sha256(b"evaluator").hexdigest(),
         "comparator_sha256": hashlib.sha256(b"comparator").hexdigest(),
+        "precheck_sha256": hashlib.sha256(b"precheck").hexdigest(),
     }
     control = _write(tmp_path / "control.jsonl", "control\n")
     treatment = _write(tmp_path / "treatment.jsonl", "treatment\n")
@@ -87,6 +88,7 @@ def _fixture(tmp_path, monkeypatch):
         "inventory_manifest_path": tmp_path / "inventory.json",
         "evaluator_path": tmp_path / "evaluator.py",
         "comparator_path": tmp_path / "comparator.py",
+        "precheck_path": tmp_path / "precheck.py",
         "arm_preflight_path": tmp_path / "arm-preflight.json",
         "source_checkpoint_provenance": source,
     }, checked
@@ -100,6 +102,7 @@ def test_prepare_emits_exact_pretraining_consumer_artifacts(tmp_path, monkeypatc
     recipe = json.loads((args["out"] / preparer.RECIPE_NAME).read_text())
     reference = json.loads((args["out"] / preparer.REFERENCE_NAME).read_text())
     assignment = json.loads((args["out"] / preparer.ASSIGNMENT_NAME).read_text())
+    preparation = json.loads((args["out"] / preparer.PREPARATION_NAME).read_text())
     assert checked
     assert set(recipe) == finalizer.RECIPE_FIELDS
     assert recipe["trainer_config"] == finalizer.FROZEN_TRAINING_INVARIANTS
@@ -111,6 +114,14 @@ def test_prepare_emits_exact_pretraining_consumer_artifacts(tmp_path, monkeypatc
     assert assignment["recipe_sha256"] == result["recipe_sha256"]
     assert assignment["reference_provenance_sha256"] == result["reference_provenance_sha256"]
     assert recipe["arm_preflight_sha256"] == assignment["arm_preflight_sha256"]
+    assert preparation["status"] == "complete"
+    assert preparation["recipe_sha256"] == result["recipe_sha256"]
+    assert preparation["reference_provenance_sha256"] == result[
+        "reference_provenance_sha256"]
+    assert preparation["assignment_sha256"] == result["assignment_sha256"]
+    assert preparation["precheck_sha256"] == assignment["precheck_sha256"]
+    assert result["preparation_receipt_sha256"] == hashlib.sha256(
+        (args["out"] / preparer.PREPARATION_NAME).read_bytes()).hexdigest()
 
 
 def test_prepare_fails_before_writing_when_reference_receipt_is_wrong(tmp_path, monkeypatch):

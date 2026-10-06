@@ -179,6 +179,7 @@ def _fixture(tmp_path, monkeypatch):
     trainer = _write(tmp_path / "train_gemma_decision_lora.py", "# frozen trainer\n")
     evaluator = _write(tmp_path / "eval_r047_executor.py", "# frozen evaluator\n")
     comparator = _write(tmp_path / "compare_r047_causal.py", "# frozen comparator\n")
+    precheck = _write(tmp_path / "precheck_r047_causal.py", "# frozen precheck\n")
     evaluation_binding = {
         "panel_sha256": panel_hash,
         "panel_manifest_sha256": panel_manifest_hash,
@@ -186,6 +187,7 @@ def _fixture(tmp_path, monkeypatch):
         "inventory_manifest_sha256": inventory_manifest_hash,
         "evaluator_sha256": hashlib.sha256(evaluator.read_bytes()).hexdigest(),
         "comparator_sha256": hashlib.sha256(comparator.read_bytes()).hexdigest(),
+        "precheck_sha256": hashlib.sha256(precheck.read_bytes()).hexdigest(),
     }
     recipe = _write(tmp_path / "recipe.json", {
         "schema_version": finalizer.RECIPE_SCHEMA_VERSION,
@@ -233,6 +235,7 @@ def _fixture(tmp_path, monkeypatch):
         "panel_manifest_path": panel_manifest, "panel_preflight_path": panel_preflight,
         "inventory_manifest_path": inventory_manifest, "evaluator_path": evaluator,
         "comparator_path": comparator,
+        "precheck_path": precheck,
         "arm_preflight_path": arm_preflight,
     }
     return values, adapter

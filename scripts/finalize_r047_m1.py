@@ -68,6 +68,7 @@ RECIPE_FIELDS = {
     "arm_preflight_sha256",
     "panel_sha256", "panel_manifest_sha256", "panel_preflight_sha256",
     "inventory_manifest_sha256", "evaluator_sha256", "comparator_sha256",
+    "precheck_sha256",
     "bootstrap_replicates", "bootstrap_seed", "trainer_config",
 }
 FROZEN_TRAINING_INVARIANTS = {
@@ -233,7 +234,8 @@ def _validate_train(train_path, manifest_path, image_root):
 
 
 def _evaluation_bindings(panel_path, panel_manifest_path, panel_preflight_path,
-                         inventory_manifest_path, evaluator_path, comparator_path):
+                         inventory_manifest_path, evaluator_path, comparator_path,
+                         precheck_path):
     hashes = {
         "panel_sha256": _nonempty_file_hash(panel_path, "causal panel"),
         "panel_manifest_sha256": _nonempty_file_hash(
@@ -244,6 +246,7 @@ def _evaluation_bindings(panel_path, panel_manifest_path, panel_preflight_path,
             inventory_manifest_path, "causal inventory manifest"),
         "evaluator_sha256": _nonempty_file_hash(evaluator_path, "causal evaluator"),
         "comparator_sha256": _nonempty_file_hash(comparator_path, "causal comparator"),
+        "precheck_sha256": _nonempty_file_hash(precheck_path, "causal precheck"),
     }
     manifest = _json(panel_manifest_path, "causal panel manifest")
     preflight = _json(panel_preflight_path, "causal panel preflight")
@@ -414,7 +417,7 @@ def finalize(*, slot, train_path, arm_manifest_path, recipe_path, config_path, m
              log_path, checkpoint_path, parent_adapter, image_root, model_inventory_path,
              trainer_path, panel_path, panel_manifest_path, panel_preflight_path,
              inventory_manifest_path, evaluator_path, comparator_path,
-             arm_preflight_path, base_revision, model_path):
+             precheck_path, arm_preflight_path, base_revision, model_path):
     if slot not in SLOTS:
         raise ValueError("R047-M1 slot must be slot_a or slot_b")
     if base_revision != FROZEN_BASE_REVISION:
@@ -424,7 +427,7 @@ def finalize(*, slot, train_path, arm_manifest_path, recipe_path, config_path, m
     train_hash, image_binding = _validate_train(train_path, arm_manifest_path, image_root)
     evaluation_binding = _evaluation_bindings(
         panel_path, panel_manifest_path, panel_preflight_path, inventory_manifest_path,
-        evaluator_path, comparator_path)
+        evaluator_path, comparator_path, precheck_path)
     arm_preflight_sha256 = _validate_arm_preflight(arm_preflight_path)
     recipe, recipe_hash = _validate_recipe(
         recipe_path, inventory_hash, trainer_path, parent_binding, image_binding,
@@ -472,6 +475,7 @@ def main(argv=None):
     parser.add_argument("--inventory-manifest", required=True)
     parser.add_argument("--evaluator", required=True)
     parser.add_argument("--comparator", required=True)
+    parser.add_argument("--precheck", required=True)
     parser.add_argument("--arm-preflight", required=True)
     parser.add_argument("--base-revision", required=True)
     parser.add_argument("--model-path", required=True)
@@ -486,7 +490,8 @@ def main(argv=None):
         panel_path=args.panel, panel_manifest_path=args.panel_manifest,
         panel_preflight_path=args.panel_preflight,
         inventory_manifest_path=args.inventory_manifest, evaluator_path=args.evaluator,
-        comparator_path=args.comparator, arm_preflight_path=args.arm_preflight,
+        comparator_path=args.comparator, precheck_path=args.precheck,
+        arm_preflight_path=args.arm_preflight,
         base_revision=args.base_revision,
         model_path=args.model_path)
     output = Path(args.out)

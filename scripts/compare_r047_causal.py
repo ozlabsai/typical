@@ -574,8 +574,8 @@ ASSIGNMENT_FIELDS = {
     "parent_adapter_sha256", "model_revision", "model_inventory_sha256",
     "recipe_sha256", "panel_sha256", "panel_manifest_sha256",
     "panel_preflight_sha256", "inventory_manifest_sha256",
-    "arm_preflight_sha256", "evaluator_sha256", "comparator_sha256", "bootstrap_seed",
-    "bootstrap_replicates",
+    "arm_preflight_sha256", "evaluator_sha256", "comparator_sha256",
+    "precheck_sha256", "bootstrap_seed", "bootstrap_replicates",
 }
 
 
@@ -696,6 +696,8 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
     comparator_sha256 = _sha(Path(__file__).read_bytes())
     evaluator_sha256 = _sha(
         Path(__file__).with_name("eval_r047_executor.py").read_bytes())
+    precheck_sha256 = _sha(
+        Path(__file__).with_name("precheck_r047_causal.py").read_bytes())
     if (assignment["bootstrap_seed"] != FROZEN_BOOTSTRAP_SEED
             or assignment["bootstrap_replicates"] != MIN_BOOTSTRAP_REPLICATES
             or seed != assignment["bootstrap_seed"]
@@ -705,6 +707,8 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
         raise ValueError("running comparator differs from frozen preassignment")
     if assignment["evaluator_sha256"] != evaluator_sha256:
         raise ValueError("running evaluator differs from frozen preassignment")
+    if assignment["precheck_sha256"] != precheck_sha256:
+        raise ValueError("running precheck differs from frozen preassignment")
     if _require_frozen_panel and (
             assignment["panel_preflight_sha256"] != FROZEN_PANEL_PREFLIGHT_SHA256
             or assignment["inventory_manifest_sha256"]
@@ -832,6 +836,7 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
                           "pre_frozen_slot_assignment": True,
                           "evaluator_sha256": assignment["evaluator_sha256"],
                           "comparator_sha256": comparator_sha256,
+                          "precheck_sha256": precheck_sha256,
                           "bootstrap_seed": seed,
                           "bootstrap_replicates": replicates},
         "provenance": {"assignment": assignment,

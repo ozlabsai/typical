@@ -14,6 +14,15 @@ from scripts import eval_r047_executor as evaluator
 REFERENCE_SCHEMA = "r047-causal-reference-precheck-v1"
 CONTROL_SCHEMA = "r047-causal-control-precheck-v1"
 CONTROL_CEILING = .95
+PREPARATION_FIELDS = {
+    "schema_version", "status", "recipe_sha256", "reference_provenance_sha256",
+    "assignment_sha256", "model_revision", "model_inventory_sha256",
+    "parent_adapter_sha256", "control_train_sha256", "treatment_train_sha256",
+    "source_checkpoint_provenance_sha256", "panel_sha256",
+    "arm_preflight_sha256", "trainer_sha256", "evaluator_sha256",
+    "comparator_sha256", "precheck_sha256", "preparer_sha256",
+    "finalizer_sha256",
+}
 
 
 def _sha(payload):
@@ -33,6 +42,8 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
                         panel_manifest_payload, panel_manifest_sha256,
                         panel_preflight_payload, inventory_manifest_payload,
                         arm_preflight_payload, reference_provenance_payload,
+                        recipe_payload, preparation_receipt_payload,
+                        preparation_receipt_sha256,
                         _require_frozen_panel=True, _require_frozen_assignment=True):
     if (not comparator._valid_sha(assignment_sha256)
             or _sha(assignment_payload) != assignment_sha256):
@@ -129,6 +140,48 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
             or reference_provenance["model_inventory_sha256"]
             != assignment["model_inventory_sha256"]):
         raise ValueError("reference provenance differs from frozen model/adapter assignment")
+
+    if _sha(recipe_payload) != assignment["recipe_sha256"]:
+        raise ValueError("recipe hash differs from frozen assignment")
+    try:
+        recipe = json.loads(recipe_payload)
+        preparation = json.loads(preparation_receipt_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid recipe or preparation receipt JSON") from error
+    if (not isinstance(recipe, dict)
+            or recipe.get("schema_version") != "r047-m1-recipe-v1"):
+        raise ValueError("recipe schema differs from the frozen R047-M1 contract")
+    if (not comparator._valid_sha(preparation_receipt_sha256)
+            or _sha(preparation_receipt_payload) != preparation_receipt_sha256):
+        raise ValueError("preparation receipt hash mismatch")
+    expected_preparation = {
+        "schema_version": "r047-m1-preparation-receipt-v1",
+        "status": "complete",
+        "recipe_sha256": assignment["recipe_sha256"],
+        "reference_provenance_sha256": assignment["reference_provenance_sha256"],
+        "assignment_sha256": assignment_sha256,
+        "model_revision": assignment["model_revision"],
+        "model_inventory_sha256": assignment["model_inventory_sha256"],
+        "parent_adapter_sha256": assignment["parent_adapter_sha256"],
+        "control_train_sha256": assignment["control_train_sha256"],
+        "treatment_train_sha256": assignment["treatment_train_sha256"],
+        "source_checkpoint_provenance_sha256": reference_provenance[
+            "source_checkpoint_provenance_sha256"],
+        "panel_sha256": assignment["panel_sha256"],
+        "arm_preflight_sha256": assignment["arm_preflight_sha256"],
+        "trainer_sha256": recipe.get("trainer_sha256"),
+        "evaluator_sha256": evaluator_sha256,
+        "comparator_sha256": comparator_sha256,
+        "precheck_sha256": precheck_sha256,
+        "preparer_sha256": _sha(
+            Path(__file__).with_name("prepare_r047_m1.py").read_bytes()),
+        "finalizer_sha256": _sha(
+            Path(__file__).with_name("finalize_r047_m1.py").read_bytes()),
+    }
+    if (not isinstance(preparation, dict)
+            or set(preparation) != PREPARATION_FIELDS
+            or preparation != expected_preparation):
+        raise ValueError("preparation receipt differs from frozen launch inputs")
     if (frozen_reference is not None
             and any(reference_provenance[field] != expected
                     for field, expected in frozen_reference.items())):
@@ -155,6 +208,7 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
         "comparator_sha256": comparator_sha256,
         "evaluator_sha256": evaluator_sha256,
         "precheck_sha256": precheck_sha256,
+        "preparation_receipt_sha256": preparation_receipt_sha256,
         "panel_rows": panel_rows,
         "panel_manifest_sha256": panel_manifest_sha256,
         "reference_provenance": reference_provenance,
@@ -216,6 +270,8 @@ def _reference_precheck(*, reference_predictions, reference_report,
             "treatment_train_sha256": assignment["treatment_train_sha256"],
             "parent_adapter_sha256": assignment["parent_adapter_sha256"],
             "recipe_sha256": assignment["recipe_sha256"],
+            "preparation_receipt_sha256": context[
+                "preparation_receipt_sha256"],
             "evaluator_sha256": context["evaluator_sha256"],
             "comparator_sha256": context["comparator_sha256"],
             "precheck_sha256": context["precheck_sha256"],
@@ -230,6 +286,8 @@ def precheck_reference(*, reference_predictions, reference_report,
                        panel_payload, panel_manifest_payload, panel_manifest_sha256,
                        panel_preflight_payload, inventory_manifest_payload,
                        arm_preflight_payload, reference_provenance_payload,
+                       recipe_payload, preparation_receipt_payload,
+                       preparation_receipt_sha256,
                        _require_frozen_panel=True, _require_frozen_assignment=True):
     """Validate and bind the frozen reference before any candidate comparison."""
     return _reference_precheck(
@@ -243,6 +301,9 @@ def precheck_reference(*, reference_predictions, reference_report,
         inventory_manifest_payload=inventory_manifest_payload,
         arm_preflight_payload=arm_preflight_payload,
         reference_provenance_payload=reference_provenance_payload,
+        recipe_payload=recipe_payload,
+        preparation_receipt_payload=preparation_receipt_payload,
+        preparation_receipt_sha256=preparation_receipt_sha256,
         _require_frozen_panel=_require_frozen_panel,
         _require_frozen_assignment=_require_frozen_assignment)[0]
 
@@ -380,6 +441,9 @@ def _add_reference_inputs(parser):
     parser.add_argument("--reference-report", required=True)
     parser.add_argument("--reference-report-sha256", required=True)
     parser.add_argument("--reference-provenance", required=True)
+    parser.add_argument("--recipe", required=True)
+    parser.add_argument("--preparation-receipt", required=True)
+    parser.add_argument("--preparation-receipt-sha256", required=True)
     parser.add_argument("--panel", required=True)
     parser.add_argument("--panel-manifest", required=True)
     parser.add_argument("--panel-manifest-sha256", required=True)
@@ -396,6 +460,9 @@ def _reference_cli_inputs(args):
         "reference_report": Path(args.reference_report).read_bytes(),
         "reference_report_sha256": args.reference_report_sha256,
         "reference_provenance_payload": Path(args.reference_provenance).read_bytes(),
+        "recipe_payload": Path(args.recipe).read_bytes(),
+        "preparation_receipt_payload": Path(args.preparation_receipt).read_bytes(),
+        "preparation_receipt_sha256": args.preparation_receipt_sha256,
         "panel_payload": Path(args.panel).read_bytes(),
         "panel_manifest_payload": Path(args.panel_manifest).read_bytes(),
         "panel_manifest_sha256": args.panel_manifest_sha256,
