@@ -3,7 +3,14 @@ import copy
 import pytest
 
 from scripts.build_r045_compositional_transfer import _pair
-from scripts.eval_r047_executor import audit, clause_view, execute_clause, execute_program, m0_gate
+from scripts.eval_r047_executor import (
+    audit,
+    clause_view,
+    execute_clause,
+    execute_program,
+    m0_gate,
+    row_clause_views,
+)
 
 
 KINDS = ("decimal", "ledger")
@@ -17,9 +24,9 @@ def _rows():
 def _predictions(rows, flip=()):
     result = []
     for row in rows:
+        projected_by_parent = row_clause_views(row)
         for view in row["paired_views"]:
-            projected = [view] + [clause_view(view, index)
-                                  for index in range(len(view["meta"]["clauses"]))]
+            projected = [view] + projected_by_parent[view["id"]]
             for item in projected:
                 gold = item["targets"]["decision"]["label"]
                 if item["id"] in flip:
@@ -61,6 +68,25 @@ def test_clause_error_lowers_vector_balanced_accuracy_and_coherence():
     assert report["clauses"]["accuracy"] == 15 / 16
     assert report["clauses"]["vector_accuracy"] == 7 / 8
     assert report["coherence"]["accuracy"] == 7 / 8
+
+
+def test_audit_scores_exact_training_auxiliary_views_when_present():
+    rows = _rows()
+    for row in rows:
+        row["auxiliary_views"] = []
+        for view in row["paired_views"]:
+            for index, projected in enumerate(
+                    [clause_view(view, i) for i in range(len(view["meta"]["clauses"]))]):
+                projected["id"] = f"{view['id']}::training-aux-{index}"
+                projected["meta"]["r047_auxiliary"] = {
+                    "parent_view_id": view["id"], "clause_index": index,
+                    "clause_kind": view["meta"]["clauses"][index]["kind"],
+                    "role": "auxiliary"}
+                row["auxiliary_views"].append(projected)
+    assert all("training-aux" in item["id"] for row in rows
+               for items in row_clause_views(row).values() for item in items)
+    report = audit(rows, _predictions(rows), min_clauses=2)
+    assert report["clauses"]["balanced_accuracy"] == 1
 
 
 def test_m0_gate_checks_every_required_operator():

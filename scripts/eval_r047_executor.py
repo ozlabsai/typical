@@ -92,9 +92,52 @@ def clause_view(view, index):
     return result
 
 
+def row_clause_views(row):
+    """Return exact training auxiliaries when present; otherwise project evaluation views."""
+    canonical = row.get("paired_views") or []
+    auxiliaries = row.get("auxiliary_views")
+    if auxiliaries is None:
+        return {view["id"]: [clause_view(view, index)
+                              for index in range(len(view["meta"]["clauses"]))]
+                for view in canonical}
+    if not isinstance(auxiliaries, list):
+        raise ValueError(f"{row.get('id')}: auxiliary_views must be a list")
+    by_parent = defaultdict(dict)
+    canonical_by_id = {view["id"]: view for view in canonical}
+    for auxiliary in auxiliaries:
+        provenance = (auxiliary.get("meta") or {}).get("r047_auxiliary") or {}
+        parent_id = provenance.get("parent_view_id")
+        index = provenance.get("clause_index")
+        if parent_id not in canonical_by_id or not isinstance(index, int):
+            raise ValueError(f"{auxiliary.get('id')}: invalid auxiliary parent/index")
+        parent = canonical_by_id[parent_id]
+        clauses = parent["meta"]["clauses"]
+        if not 0 <= index < len(clauses) or index in by_parent[parent_id]:
+            raise ValueError(f"{auxiliary.get('id')}: duplicate or out-of-range clause index")
+        if auxiliary.get("state") != parent.get("state"):
+            raise ValueError(f"{auxiliary.get('id')}: auxiliary state differs from parent")
+        if provenance.get("role") != "auxiliary" or provenance.get("clause_kind") != clauses[index]["kind"]:
+            raise ValueError(f"{auxiliary.get('id')}: invalid auxiliary provenance")
+        question = auxiliary.get("questions", {}).get("decision")
+        parent_question = parent.get("questions", {}).get("decision")
+        if not question or not parent_question or question.get("criteria") != parent_question.get("criteria"):
+            raise ValueError(f"{auxiliary.get('id')}: auxiliary options differ from parent")
+        expected = "yes" if execute_clause(clauses[index]) else "no"
+        if auxiliary.get("targets", {}).get("decision", {}).get("label") != expected:
+            raise ValueError(f"{auxiliary.get('id')}: auxiliary target disagrees with executable gold")
+        by_parent[parent_id][index] = auxiliary
+    result = {}
+    for parent in canonical:
+        expected = len(parent["meta"]["clauses"])
+        if set(by_parent[parent["id"]]) != set(range(expected)):
+            raise ValueError(f"{parent['id']}: auxiliary coverage is incomplete")
+        result[parent["id"]] = [by_parent[parent["id"]][index] for index in range(expected)]
+    return result
+
+
 def _score(item, gold, row_id):
     no, yes = _probabilities(item, row_id)
-    predicted = "yes" if yes >= no else "no"
+    predicted = "yes" if yes > no else "no" if no > yes else "tie"
     probability = yes if gold == "yes" else no
     return {"gold": gold, "predicted": predicted, "correct": predicted == gold,
             "yes_logit": math.log(max(yes, 1e-12) / max(no, 1e-12)),
@@ -141,10 +184,10 @@ def audit(rows, predictions, min_clauses=1):
         views = row.get("paired_views")
         if row.get("pair_mode") != "counterfactual" or not isinstance(views, list) or len(views) != 2:
             raise ValueError(f"{row.get('id')}: expected one two-view counterfactual pair")
+        projected = row_clause_views(row)
         for view in views:
-            clauses = (view.get("meta") or {}).get("clauses", [])
             expected.append(view["id"])
-            expected.extend(clause_view(view, index)["id"] for index in range(len(clauses)))
+            expected.extend(item["id"] for item in projected[view["id"]])
     prediction_ids = [item.get("id") for item in predictions]
     if None in prediction_ids or len(prediction_ids) != len(set(prediction_ids)):
         raise ValueError("prediction IDs must be present and unique")
@@ -155,6 +198,7 @@ def audit(rows, predictions, min_clauses=1):
     finals, clauses, pairs, vectors, coherences = [], [], [], [], []
     for row in selected:
         pair = []
+        projected_by_parent = row_clause_views(row)
         for view in row["paired_views"]:
             meta = view["meta"]
             final_value = execute_program(meta["program"], meta["clauses"])
@@ -167,8 +211,8 @@ def audit(rows, predictions, min_clauses=1):
             finals.append(final)
             pair.append(final)
             view_clauses = []
-            for index, clause in enumerate(meta["clauses"]):
-                projected = clause_view(view, index)
+            for index, (clause, projected) in enumerate(zip(
+                    meta["clauses"], projected_by_parent[view["id"]])):
                 clause_gold = projected["targets"]["decision"]["label"]
                 item = _score(by_id[projected["id"]], clause_gold, projected["id"])
                 item.update({"id": projected["id"], "parent_id": view["id"],
@@ -268,9 +312,9 @@ def main(argv=None):
     predictions = []
     with torch.no_grad():
         for row in selected:
+            projected_by_parent = row_clause_views(row)
             for view in row["paired_views"]:
-                to_score = [view] + [clause_view(view, index)
-                                     for index in range(len(view["meta"]["clauses"]))]
+                to_score = [view] + projected_by_parent[view["id"]]
                 for projected in to_score:
                     predictions.append({"id": projected["id"], "probabilities":
                                         score_group(model, tokenizer, groups, projected,
