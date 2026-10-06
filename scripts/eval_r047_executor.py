@@ -365,9 +365,13 @@ def main(argv=None):
             for view in row["paired_views"]:
                 to_score = [view] + projected_by_parent[view["id"]]
                 for projected in to_score:
-                    predictions.append({"id": projected["id"], "probabilities":
-                                        score_group(model, tokenizer, groups, projected,
-                                                    torch.device("cuda"), args.max_length)["q00"]})
+                    probabilities = score_group(
+                        model, tokenizer, groups, projected, torch.device("cuda"),
+                        args.max_length)["q00"]
+                    predictions.append({"id": projected["id"], "probabilities": probabilities,
+                                        "semantic_margin": math.log(
+                                            max(probabilities["yes"], 1e-12)
+                                            / max(probabilities["no"], 1e-12))})
     report = audit(rows, predictions, args.min_clauses)
     if args.required_kind:
         report["m0_gate"] = m0_gate(report, args.required_kind, args.m0_threshold)
