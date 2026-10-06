@@ -219,3 +219,13 @@ Weight `1.0` advances only if all conditions hold:
 - Any candidate passing these screens must still pass the inherited R044 retention, renderer, action, multimodal, and Hebrew gates before fresh JevBench and WorkflowEvals evaluation.
 
 If weight `1.0` fits the seen pairs but fails the unused or prospective gates, weight tuning stops. The next matched experiment adds executable clause questions plus the final action; it does not add free-form chain-of-thought, RL, DPO, or a new attention mechanism.
+
+### R046 result — stronger pair weight is insufficient
+
+Both same-environment arms completed with 101 finite metric rows, exactly 100 pair exposures, and configuration differences limited to output path and pair weight. The `.25` control hash was `da90e6a45d7125b61ef4eec4c2121ca854a81aed795b6b0bcd22a360978bc954`, not archived R045-B's `9e0930…`; all comparisons therefore retain both the matched and archived references. The weight-`1.0` hash was `9c6da10cab9239ebcc626e610e0b287b42fbde68a06da562709a853d7f69ed42`.
+
+Weight `1.0` improved seen counterfactual direction from `64/100` to `69/100`, margin satisfaction from `15/100` to `20/100`, and hinge from `1.4425` to `1.33125` versus its matched control. It did not pass the mechanistic gate: hinge fell only 7.7% rather than 50%, margin gained five rather than 15, and complete pairs fell from `27/100` to `26/100`. Seen accuracy was unchanged at `125/200`. Unused atomic accuracy/pairs rose from `114/184`, `22/92` to `116/184`, `24/92`; calibration rose from `56/96`, `8/48` to `57/96`, `9/48`.
+
+On the clean prospective panel, weight `1.0` scored `177/288` presentations, `35/144` pairs, `7/72` sources, `0/32` scenarios, EN/HE `90/87`, NLL `.684056`, and Brier `.241662`. This is +11 presentations and +9 pairs over the same-environment control, but only +6 presentations over archived R045-B and no scenario gain over any reference. It therefore fails the frozen +18-presentation and five-scenario gates. The old diagnostic test likewise had zero complete scenarios and did not support promotion.
+
+R046 is useful causal evidence, but not a promoted checkpoint: making the existing rank loss four times stronger modestly improves atomic transfer and the fresh panel while leaving multi-clause completion unsolved. Weight tuning stops. R047 should test executable clause-level auxiliary decisions against a matched repeated-final-decision control, preserving the same base, retention mixture, presentation budget, and final serving interface.
