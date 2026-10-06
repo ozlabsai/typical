@@ -27,6 +27,11 @@ RUN_RECEIPT_FIELDS = {
     "metrics_sha256", "log_sha256", "model_inventory_sha256",
     "checkpoint_payload_sha256", "checkpoint_step", "status",
 }
+REFERENCE_PROVENANCE_FIELDS = {
+    "schema_version", "adapter_weights_sha256", "adapter_config_sha256",
+    "adapter_tree_sha256", "adapter_tree_files", "model_revision",
+    "model_inventory_sha256", "source_checkpoint_provenance_sha256",
+}
 CAUSAL_META_FIELDS = (
     "semantic_cluster_id", "semantic_view_id", "scenario_id", "composition", "arity",
     "language", "option_order", "prompt_family", "prediction_role", "primitive",
@@ -88,6 +93,125 @@ def validate_causal_model_inventory(model_path, payload, model_revision):
             or inventory["files"] != observed_files):
         raise ValueError("loaded base-model tree differs from sealed inventory")
     return inventory
+
+
+def validate_reference_provenance(payload):
+    """Parse the exact frozen-reference provenance schema."""
+    try:
+        provenance = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise ValueError("invalid R047 reference provenance") from error
+    if (not isinstance(provenance, dict)
+            or set(provenance) != REFERENCE_PROVENANCE_FIELDS
+            or provenance.get("schema_version") != "r047-reference-provenance-v1"
+            or not isinstance(provenance.get("adapter_tree_files"), int)
+            or isinstance(provenance.get("adapter_tree_files"), bool)
+            or provenance["adapter_tree_files"] <= 0
+            or not isinstance(provenance.get("model_revision"), str)
+            or not provenance["model_revision"]):
+        raise ValueError("R047 reference provenance schema is invalid")
+    hash_fields = REFERENCE_PROVENANCE_FIELDS - {
+        "schema_version", "adapter_tree_files", "model_revision"}
+    if any(not _valid_sha256(provenance[field]) for field in hash_fields):
+        raise ValueError("R047 reference provenance contains an invalid SHA-256")
+    return provenance
+
+
+def validate_causal_supporting_provenance(panel_payload, manifest_payload,
+                                          preflight_payload, inventory_payload):
+    """Bind the overlap preflight and its source inventory to this exact panel."""
+    try:
+        preflight = json.loads(preflight_payload)
+        inventory = json.loads(inventory_payload)
+    except json.JSONDecodeError as error:
+        raise ValueError("invalid panel preflight or inventory manifest") from error
+    panel_sha = hashlib.sha256(panel_payload).hexdigest()
+    manifest_sha = hashlib.sha256(manifest_payload).hexdigest()
+    inventory_sha = hashlib.sha256(inventory_payload).hexdigest()
+    if not isinstance(preflight, dict) or not isinstance(inventory, dict):
+        raise ValueError("panel preflight or inventory manifest is not an object")
+    primary = (preflight.get("outputs") or {}).get("primary") or {}
+    causal_primary = (preflight.get("causal") or {}).get("primary") or {}
+    if (preflight.get("experiment") != "r047_primary_panel_preflight"
+            or preflight.get("status") != "pass"
+            or preflight.get("panel_manifest_sha256") != manifest_sha
+            or preflight.get("inventory_manifest_sha256") != inventory_sha
+            or primary.get("sha256") != panel_sha
+            or primary.get("rows") != causal_primary.get("rows")
+            or not isinstance(primary.get("rows"), int)
+            or primary["rows"] <= 0):
+        raise ValueError("panel preflight does not bind the supplied panel provenance")
+    if (set(inventory) != {"version", "training", "benchmarks"}
+            or inventory.get("version") != 1
+            or not all(isinstance(inventory.get(key), list) and inventory[key]
+                       for key in ("training", "benchmarks"))):
+        raise ValueError("panel inventory manifest schema is invalid")
+    for group in ("training", "benchmarks"):
+        for item in inventory[group]:
+            if (not isinstance(item, dict) or not isinstance(item.get("path"), str)
+                    or not item["path"] or not _valid_sha256(item.get("sha256"))):
+                raise ValueError("panel inventory manifest entry is invalid")
+    return preflight, inventory
+
+
+def validate_loaded_adapter_tree(adapter_path, expected_tree_sha256,
+                                 expected_tree_files=None):
+    """Hash the exact adapter directory actually passed to PEFT."""
+    from scripts.preflight_r043_assets import tree_hash
+    adapter_path = Path(adapter_path)
+    if any(item.is_symlink() for item in adapter_path.rglob("*")):
+        raise ValueError("loaded adapter tree must not contain symbolic links")
+    observed_hash, observed_files = tree_hash(adapter_path)
+    if observed_hash != expected_tree_sha256:
+        raise ValueError("loaded adapter tree differs from sealed provenance")
+    if expected_tree_files is not None and observed_files != expected_tree_files:
+        raise ValueError("loaded adapter file count differs from sealed provenance")
+    return observed_hash, observed_files
+
+
+def _adapter_file_hashes(adapter_path):
+    from scripts.preflight_r043_assets import file_hash
+    adapter_path = Path(adapter_path)
+    weights = adapter_path / "adapter_model.safetensors"
+    config = adapter_path / "adapter_config.json"
+    if (not weights.is_file() or not config.is_file() or weights.stat().st_size <= 0
+            or config.stat().st_size <= 0):
+        raise ValueError("causal adapter lacks nonempty weights/config payloads")
+    return file_hash(weights), file_hash(config)
+
+
+def validate_loaded_candidate_adapter(adapter_path, receipt_payload, model_revision,
+                                      model_inventory_sha256):
+    """Verify the full candidate checkpoint before loading it into the model."""
+    weights_sha, config_sha = _adapter_file_hashes(adapter_path)
+    receipt = validate_causal_run_receipt(receipt_payload, weights_sha)
+    if receipt["model_revision"] != model_revision:
+        raise ValueError("run receipt model revision differs from evaluator revision")
+    if receipt["model_inventory_sha256"] != model_inventory_sha256:
+        raise ValueError("run receipt model inventory differs from supplied inventory")
+    tree_sha, tree_files = validate_loaded_adapter_tree(
+        adapter_path, receipt["checkpoint_payload_sha256"])
+    return receipt, weights_sha, config_sha, tree_sha, tree_files
+
+
+def validate_loaded_reference_adapter(adapter_path, provenance_payload, source_payload,
+                                      model_revision, model_inventory_sha256):
+    """Verify every frozen reference artifact before loading it into the model."""
+    provenance = validate_reference_provenance(provenance_payload)
+    weights_sha, config_sha = _adapter_file_hashes(adapter_path)
+    if (provenance["model_revision"] != model_revision
+            or provenance["model_inventory_sha256"] != model_inventory_sha256):
+        raise ValueError("reference provenance model binding differs from evaluation")
+    if (provenance["adapter_weights_sha256"] != weights_sha
+            or provenance["adapter_config_sha256"] != config_sha):
+        raise ValueError("loaded reference adapter files differ from sealed provenance")
+    if (hashlib.sha256(source_payload).hexdigest()
+            != provenance["source_checkpoint_provenance_sha256"]):
+        raise ValueError("reference source-checkpoint provenance hash mismatch")
+    tree_sha, tree_files = validate_loaded_adapter_tree(
+        adapter_path, provenance["adapter_tree_sha256"],
+        provenance["adapter_tree_files"])
+    return provenance, weights_sha, config_sha, tree_sha, tree_files
 
 
 def validate_causal_panel_payload(panel_payload, manifest_payload, require_frozen=True):
@@ -743,8 +867,11 @@ def main(argv=None):
     parser.add_argument("--required-kind", action="append", default=[])
     parser.add_argument("--causal-standalone", action="store_true")
     parser.add_argument("--panel-manifest")
+    parser.add_argument("--panel-preflight")
+    parser.add_argument("--inventory-manifest")
     parser.add_argument("--run-receipt")
     parser.add_argument("--reference-provenance")
+    parser.add_argument("--reference-source-provenance")
     parser.add_argument("--base-model-inventory")
     parser.add_argument("--max-batch-tokens", type=int, default=32768)
     parser.add_argument("--max-batch-rows", type=int, default=64)
@@ -762,23 +889,44 @@ def main(argv=None):
                  >= args.min_clauses])
     if args.causal_standalone:
         if (not args.panel_manifest or bool(args.run_receipt) == bool(args.reference_provenance)
-                or not args.base_model_inventory or not args.adapter):
+                or not args.panel_preflight or not args.inventory_manifest
+                or not args.base_model_inventory or not args.adapter
+                or (args.reference_provenance and not args.reference_source_provenance)
+                or (args.run_receipt and args.reference_source_provenance)):
             raise ValueError(
-                "causal evaluation requires panel/base inventory, adapter, and exactly one "
-                "candidate receipt or reference provenance")
+                "causal evaluation requires panel/preflight/inventory provenance, adapter, "
+                "and exactly one candidate receipt or reference provenance package")
+        panel_payload = Path(args.data).read_bytes()
         manifest_payload = Path(args.panel_manifest).read_bytes()
+        panel_preflight_payload = Path(args.panel_preflight).read_bytes()
+        inventory_manifest_payload = Path(args.inventory_manifest).read_bytes()
         run_receipt_payload = Path(args.run_receipt).read_bytes() if args.run_receipt else None
         reference_provenance_payload = (Path(args.reference_provenance).read_bytes()
                                         if args.reference_provenance else None)
-        if reference_provenance_payload == b"":
-            raise ValueError("reference provenance artifact must not be empty")
+        reference_source_payload = (Path(args.reference_source_provenance).read_bytes()
+                                    if args.reference_source_provenance else None)
         base_inventory_payload = Path(args.base_model_inventory).read_bytes()
         model_inventory = validate_causal_model_inventory(
             args.model, base_inventory_payload, args.model_revision)
         checked_rows, _ = validate_causal_panel_payload(
-            Path(args.data).read_bytes(), manifest_payload, require_frozen=True)
+            panel_payload, manifest_payload, require_frozen=True)
         if checked_rows != rows:
             raise AssertionError("causal panel parser disagreement")
+        validate_causal_supporting_provenance(
+            panel_payload, manifest_payload, panel_preflight_payload,
+            inventory_manifest_payload)
+        adapter_path = Path(args.adapter)
+        model_inventory_sha256 = hashlib.sha256(base_inventory_payload).hexdigest()
+        if run_receipt_payload is not None:
+            (run_receipt, adapter_sha256, adapter_config_sha256,
+             adapter_tree_sha256, adapter_tree_files) = validate_loaded_candidate_adapter(
+                 adapter_path, run_receipt_payload, args.model_revision,
+                 model_inventory_sha256)
+        else:
+            (reference_provenance, adapter_sha256, adapter_config_sha256,
+             adapter_tree_sha256, adapter_tree_files) = validate_loaded_reference_adapter(
+                 adapter_path, reference_provenance_payload, reference_source_payload,
+                 args.model_revision, model_inventory_sha256)
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
     groups = letter_token_groups(tokenizer)
     model = AutoModelForImageTextToText.from_pretrained(
@@ -827,16 +975,11 @@ def main(argv=None):
         if args.required_kind:
             report["m0_gate"] = m0_gate(report, args.required_kind, args.m0_threshold)
         prediction_payload = "".join(json.dumps(item, sort_keys=True) + "\n" for item in predictions)
-    adapter_path = Path(args.adapter) / "adapter_model.safetensors" if args.adapter else None
-    adapter_sha256 = hashlib.sha256(adapter_path.read_bytes()).hexdigest() if adapter_path else None
-    if args.causal_standalone:
-        model_inventory_sha256 = hashlib.sha256(base_inventory_payload).hexdigest()
-        if run_receipt_payload is not None:
-            run_receipt = validate_causal_run_receipt(run_receipt_payload, adapter_sha256)
-            if run_receipt["model_revision"] != args.model_revision:
-                raise ValueError("run receipt model revision differs from evaluator revision")
-            if run_receipt["model_inventory_sha256"] != model_inventory_sha256:
-                raise ValueError("run receipt model inventory differs from supplied inventory")
+    if not args.causal_standalone:
+        adapter_weights_path = (Path(args.adapter) / "adapter_model.safetensors"
+                                if args.adapter else None)
+        adapter_sha256 = (hashlib.sha256(adapter_weights_path.read_bytes()).hexdigest()
+                          if adapter_weights_path else None)
     report.update({"input_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
                    "predictions_sha256": hashlib.sha256(prediction_payload.encode()).hexdigest(),
                    "adapter_sha256": adapter_sha256,
@@ -844,10 +987,17 @@ def main(argv=None):
     if args.causal_standalone:
         report.update({
             "panel_manifest_sha256": hashlib.sha256(manifest_payload).hexdigest(),
+            "panel_preflight_sha256": hashlib.sha256(
+                panel_preflight_payload).hexdigest(),
+            "inventory_manifest_sha256": hashlib.sha256(
+                inventory_manifest_payload).hexdigest(),
             "model_inventory_sha256": model_inventory_sha256,
             "model_tree_sha256": model_inventory["tree_sha256"],
             "model_tree_files": model_inventory["files"],
             "panel_rows": len(rows),
+            "evaluator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "adapter_tree_sha256": adapter_tree_sha256,
+            "adapter_tree_files": adapter_tree_files,
             "batch_scalar_parity": parity_report,
         })
         if run_receipt_payload is not None:
@@ -857,12 +1007,17 @@ def main(argv=None):
                 "train_sha256": run_receipt["train_sha256"],
                 "recipe_sha256": run_receipt["recipe_sha256"],
                 "parent_adapter_sha256": run_receipt["parent_adapter_sha256"],
+                "checkpoint_payload_sha256": run_receipt[
+                    "checkpoint_payload_sha256"],
             })
         else:
             report.update({
                 "provenance_role": "reference",
                 "reference_provenance_sha256": hashlib.sha256(
                     reference_provenance_payload).hexdigest(),
+                "adapter_config_sha256": adapter_config_sha256,
+                "source_checkpoint_provenance_sha256": reference_provenance[
+                    "source_checkpoint_provenance_sha256"],
             })
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=False)

@@ -23,6 +23,11 @@ from scripts.eval_r047_executor import (
     validate_causal_panel_payload,
     validate_causal_model_inventory,
     validate_causal_run_receipt,
+    validate_causal_supporting_provenance,
+    validate_loaded_adapter_tree,
+    validate_loaded_candidate_adapter,
+    validate_loaded_reference_adapter,
+    validate_reference_provenance,
 )
 from scripts.build_r047_panel import build as build_r047_panel
 
@@ -272,3 +277,90 @@ def test_model_inventory_verifies_actual_tree_and_revision(tmp_path):
         validate_causal_model_inventory(model, payload, "revision")
     with pytest.raises(ValueError, match="schema/revision"):
         validate_causal_model_inventory(model, payload, "other")
+
+
+def test_loaded_adapter_tree_and_reference_provenance_are_exact(tmp_path):
+    from scripts.preflight_r043_assets import file_hash, tree_hash
+    adapter = tmp_path / "adapter"
+    adapter.mkdir()
+    weights = adapter / "adapter_model.safetensors"
+    config = adapter / "adapter_config.json"
+    weights.write_bytes(b"weights")
+    config.write_text("{}\n")
+    tree_sha, files = tree_hash(adapter)
+    source = b"archived checkpoint provenance\n"
+    inventory_sha = hashlib.sha256(b"inventory").hexdigest()
+    provenance = {
+        "schema_version": "r047-reference-provenance-v1",
+        "adapter_weights_sha256": file_hash(weights),
+        "adapter_config_sha256": file_hash(config),
+        "adapter_tree_sha256": tree_sha, "adapter_tree_files": files,
+        "model_revision": "revision", "model_inventory_sha256": inventory_sha,
+        "source_checkpoint_provenance_sha256": hashlib.sha256(source).hexdigest(),
+    }
+    payload = json.dumps(provenance).encode()
+    assert validate_reference_provenance(payload) == provenance
+    assert validate_loaded_adapter_tree(adapter, tree_sha, files) == (tree_sha, files)
+    verified = validate_loaded_reference_adapter(
+        adapter, payload, source, "revision", inventory_sha)
+    assert verified[1:3] == (file_hash(weights), file_hash(config))
+    with pytest.raises(ValueError, match="source-checkpoint"):
+        validate_loaded_reference_adapter(
+            adapter, payload, b"tampered", "revision", inventory_sha)
+    config.write_text('{"tampered": true}\n')
+    with pytest.raises(ValueError, match="tree differs"):
+        validate_loaded_adapter_tree(adapter, tree_sha, files)
+    provenance["unexpected"] = True
+    with pytest.raises(ValueError, match="schema"):
+        validate_reference_provenance(json.dumps(provenance).encode())
+
+
+def test_candidate_adapter_verifies_complete_checkpoint_tree(tmp_path):
+    from scripts.preflight_r043_assets import file_hash, tree_hash
+    adapter = tmp_path / "step-000400"
+    adapter.mkdir()
+    (adapter / "adapter_model.safetensors").write_bytes(b"weights")
+    (adapter / "adapter_config.json").write_text("{}\n")
+    (adapter / "trainer.pt").write_bytes(b"trainer")
+    tree_sha, _ = tree_hash(adapter)
+    inventory_sha = hashlib.sha256(b"inventory").hexdigest()
+    filler = hashlib.sha256(b"filler").hexdigest()
+    receipt = {
+        "schema_version": "r047-causal-run-receipt-v1", "slot": "slot_a",
+        "status": "complete", "checkpoint_step": 400,
+        "train_sha256": filler, "recipe_sha256": filler,
+        "parent_adapter_sha256": filler, "model_revision": "revision",
+        "model_inventory_sha256": inventory_sha,
+        "adapter_sha256": file_hash(adapter / "adapter_model.safetensors"),
+        "checkpoint_payload_sha256": tree_sha, "config_sha256": filler,
+        "metrics_sha256": filler, "log_sha256": filler,
+    }
+    payload = json.dumps(receipt).encode()
+    assert validate_loaded_candidate_adapter(
+        adapter, payload, "revision", inventory_sha)[3] == tree_sha
+    (adapter / "trainer.pt").write_bytes(b"tampered trainer")
+    with pytest.raises(ValueError, match="tree differs"):
+        validate_loaded_candidate_adapter(adapter, payload, "revision", inventory_sha)
+
+
+def test_panel_preflight_and_inventory_payloads_are_bound():
+    panel = b'{"id":"row"}\n'
+    manifest = b'{"manifest":1}\n'
+    inventory = json.dumps({
+        "version": 1,
+        "training": [{"path": "train", "sha256": hashlib.sha256(b"t").hexdigest()}],
+        "benchmarks": [{"path": "bench", "sha256": hashlib.sha256(b"b").hexdigest()}],
+    }).encode()
+    preflight = json.dumps({
+        "experiment": "r047_primary_panel_preflight", "status": "pass",
+        "panel_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
+        "inventory_manifest_sha256": hashlib.sha256(inventory).hexdigest(),
+        "outputs": {"primary": {"sha256": hashlib.sha256(panel).hexdigest(), "rows": 1}},
+        "causal": {"primary": {"rows": 1}},
+    }).encode()
+    validate_causal_supporting_provenance(panel, manifest, preflight, inventory)
+    changed = json.loads(preflight)
+    changed["status"] = "fail"
+    with pytest.raises(ValueError, match="does not bind"):
+        validate_causal_supporting_provenance(
+            panel, manifest, json.dumps(changed).encode(), inventory)

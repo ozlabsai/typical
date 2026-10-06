@@ -1,9 +1,12 @@
 import copy
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
+import scripts.compare_r047_causal as comparator_module
+import scripts.eval_r047_executor as evaluator_module
 from scripts.build_r047_panel import _cluster_rows, _jsonl
 from scripts.compare_r047_causal import (
     MIN_BOOTSTRAP_REPLICATES, _gate, causal_metrics, compare_payloads,
@@ -58,20 +61,57 @@ def _manifest(panel, rows):
     return (json.dumps(value, sort_keys=True) + "\n").encode()
 
 
-def _assignment(panel, manifest):
+def _assignment(panel, manifest, preflight, inventory, reference_provenance):
     return {
         "schema_version": "r047-causal-slot-assignment-v1",
         "control_slot": "slot_b", "treatment_slot": "slot_a",
         "control_train_sha256": SHA["control-train"],
         "treatment_train_sha256": SHA["treatment-train"],
-        "reference_provenance_sha256": SHA["reference-provenance"],
+        "reference_provenance_sha256": hashlib.sha256(reference_provenance).hexdigest(),
         "reference_adapter_sha256": SHA["parent-adapter"],
         "parent_adapter_sha256": SHA["parent-adapter"],
         "model_revision": MODEL_REVISION, "recipe_sha256": SHA["recipe"],
         "model_inventory_sha256": SHA["base-inventory"],
         "panel_sha256": hashlib.sha256(panel).hexdigest(),
         "panel_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
+        "panel_preflight_sha256": hashlib.sha256(preflight).hexdigest(),
+        "inventory_manifest_sha256": hashlib.sha256(inventory).hexdigest(),
+        "evaluator_sha256": hashlib.sha256(
+            Path(evaluator_module.__file__).read_bytes()).hexdigest(),
+        "comparator_sha256": hashlib.sha256(
+            Path(comparator_module.__file__).read_bytes()).hexdigest(),
+        "bootstrap_seed": 470047, "bootstrap_replicates": 20_000,
     }
+
+
+def _supporting_provenance(panel, manifest, rows):
+    inventory = (json.dumps({
+        "version": 1,
+        "training": [{"path": "train.jsonl", "sha256": SHA["control-train"]}],
+        "benchmarks": [{"path": "benchmark.jsonl", "sha256": SHA["metrics"]}],
+    }, sort_keys=True) + "\n").encode()
+    preflight = (json.dumps({
+        "experiment": "r047_primary_panel_preflight", "status": "pass",
+        "panel_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
+        "inventory_manifest_sha256": hashlib.sha256(inventory).hexdigest(),
+        "outputs": {"primary": {"sha256": hashlib.sha256(panel).hexdigest(),
+                                  "rows": len(rows)}},
+        "causal": {"primary": {"rows": len(rows)}},
+    }, sort_keys=True) + "\n").encode()
+    return preflight, inventory
+
+
+def _reference_provenance():
+    value = {
+        "schema_version": "r047-reference-provenance-v1",
+        "adapter_weights_sha256": SHA["parent-adapter"],
+        "adapter_config_sha256": SHA["config"],
+        "adapter_tree_sha256": hashlib.sha256(b"reference-tree").hexdigest(),
+        "adapter_tree_files": 3, "model_revision": MODEL_REVISION,
+        "model_inventory_sha256": SHA["base-inventory"],
+        "source_checkpoint_provenance_sha256": SHA["reference-provenance"],
+    }
+    return (json.dumps(value, sort_keys=True) + "\n").encode()
 
 
 def _receipt(slot, train, adapter):
@@ -87,7 +127,8 @@ def _receipt(slot, train, adapter):
     return (json.dumps(value, sort_keys=True) + "\n").encode()
 
 
-def _report(predictions, panel, manifest, rows, receipt=None):
+def _report(predictions, panel, manifest, preflight, inventory, rows,
+            reference_provenance, receipt=None):
     run = json.loads(receipt) if receipt is not None else None
     records = [json.loads(line) for line in predictions.decode().splitlines()]
     report = causal_coverage_report(records)
@@ -96,11 +137,19 @@ def _report(predictions, panel, manifest, rows, receipt=None):
         "predictions_sha256": hashlib.sha256(predictions).hexdigest(),
         "input_sha256": hashlib.sha256(panel).hexdigest(),
         "panel_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
+        "panel_preflight_sha256": hashlib.sha256(preflight).hexdigest(),
+        "inventory_manifest_sha256": hashlib.sha256(inventory).hexdigest(),
+        "evaluator_sha256": hashlib.sha256(
+            Path(evaluator_module.__file__).read_bytes()).hexdigest(),
         "adapter_sha256": (run["adapter_sha256"] if run else SHA["parent-adapter"]),
         "model_revision": MODEL_REVISION, "panel_rows": len(rows),
         "model_inventory_sha256": SHA["base-inventory"],
         "model_tree_sha256": hashlib.sha256(b"model-tree").hexdigest(),
         "model_tree_files": 17,
+        "adapter_tree_sha256": (run["checkpoint_payload_sha256"] if run else
+                                json.loads(reference_provenance)["adapter_tree_sha256"]),
+        "adapter_tree_files": (4 if run else
+                               json.loads(reference_provenance)["adapter_tree_files"]),
         "batch_scalar_parity": {
             "status": "pass", "rows": len(parity),
             "subset_ids_sha256": hashlib.sha256(
@@ -115,11 +164,15 @@ def _report(predictions, panel, manifest, rows, receipt=None):
             "recipe_sha256": SHA["recipe"],
             "parent_adapter_sha256": SHA["parent-adapter"],
             "run_receipt_sha256": hashlib.sha256(receipt).hexdigest(),
+            "checkpoint_payload_sha256": run["checkpoint_payload_sha256"],
         })
     else:
         report.update({
             "provenance_role": "reference",
-            "reference_provenance_sha256": SHA["reference-provenance"],
+            "reference_provenance_sha256": hashlib.sha256(
+                reference_provenance).hexdigest(),
+            "adapter_config_sha256": SHA["config"],
+            "source_checkpoint_provenance_sha256": SHA["reference-provenance"],
         })
     return (json.dumps(report, sort_keys=True) + "\n").encode()
 
@@ -132,18 +185,25 @@ def _artifacts(control=None, treatment=None):
         "slot_a": _payload(treatment), "slot_b": _payload(control),
         "reference": _payload(control)}
     manifest = _manifest(panel, rows)
+    preflight, inventory = _supporting_provenance(panel, manifest, rows)
+    reference_provenance = _reference_provenance()
     receipts = {
         "slot_a": _receipt("slot_a", SHA["treatment-train"], SHA["treatment-adapter"]),
         "slot_b": _receipt("slot_b", SHA["control-train"], SHA["control-adapter"])}
     reports = {
-        "slot_a": _report(predictions["slot_a"], panel, manifest, rows,
-                          receipts["slot_a"]),
-        "slot_b": _report(predictions["slot_b"], panel, manifest, rows,
-                          receipts["slot_b"]),
-        "reference": _report(predictions["reference"], panel, manifest, rows),
+        "slot_a": _report(predictions["slot_a"], panel, manifest, preflight,
+                          inventory, rows, reference_provenance, receipts["slot_a"]),
+        "slot_b": _report(predictions["slot_b"], panel, manifest, preflight,
+                          inventory, rows, reference_provenance, receipts["slot_b"]),
+        "reference": _report(predictions["reference"], panel, manifest, preflight,
+                             inventory, rows, reference_provenance),
     }
-    assignment = (json.dumps(_assignment(panel, manifest), sort_keys=True) + "\n").encode()
+    assignment = (json.dumps(_assignment(
+        panel, manifest, preflight, inventory, reference_provenance),
+        sort_keys=True) + "\n").encode()
     return {"rows": rows, "panel": panel, "manifest": manifest,
+            "preflight": preflight, "inventory": inventory,
+            "reference_provenance": reference_provenance,
             "predictions": predictions, "reports": reports, "receipts": receipts,
             "assignment": assignment}
 
@@ -159,6 +219,9 @@ def _compare(artifacts=None, replicates=MIN_BOOTSTRAP_REPLICATES,
         "slot_b_report": value["reports"]["slot_b"],
         "reference_report": value["reports"]["reference"],
         "panel_payload": value["panel"], "panel_manifest_payload": value["manifest"],
+        "panel_preflight_payload": value["preflight"],
+        "inventory_manifest_payload": value["inventory"],
+        "reference_provenance_payload": value["reference_provenance"],
         "assignment_payload": value["assignment"],
         "slot_a_run_receipt": value["receipts"]["slot_a"],
         "slot_b_run_receipt": value["receipts"]["slot_b"],
@@ -172,7 +235,7 @@ def _compare(artifacts=None, replicates=MIN_BOOTSTRAP_REPLICATES,
             value["receipts"]["slot_b"]).hexdigest(),
         "panel_manifest_sha256": hashlib.sha256(value["manifest"]).hexdigest(),
         "assignment_sha256": hashlib.sha256(value["assignment"]).hexdigest(),
-        "replicates": replicates, "seed": 17,
+        "replicates": replicates, "seed": 470047,
         "_require_frozen_panel": require_frozen}
     args.update(overrides)
     return compare_payloads(**args)
@@ -186,7 +249,7 @@ def _reseal(record):
 def test_comparator_recomputes_separate_k2_k3_gates_and_slices():
     result = _compare()
     assert result["co_primary_gate"]["passed"]
-    assert result["blinding"]["pre_frozen_slot_assignment"] is True
+    assert result["preassignment"]["pre_frozen_slot_assignment"] is True
     for name in ("K2", "K3"):
         stratum = result["strata"][name]
         assert stratum["gate"]["deltas"]["clause_macro_ba"] == .5
@@ -242,6 +305,23 @@ def test_gate_rejects_cluster_hamming1_and_direction_cell_regression():
     assert any("direction primitive_language_order cell" in item for item in gate["failures"])
 
 
+def test_gate_rejects_either_clause_label_recall_regression():
+    records = _artifacts()["predictions"]
+    control = causal_metrics(
+        [json.loads(line) for line in records["slot_b"].decode().splitlines()], 2)
+    treatment = causal_metrics(
+        [json.loads(line) for line in records["slot_a"].decode().splitlines()], 2)
+    treatment["clauses"]["tpr"] = control["clauses"]["tpr"] - .01
+    treatment["clauses"]["tnr"] = control["clauses"]["tnr"] - .01
+    gate = _gate(control, treatment, control,
+                 {name: {"delta_lcb_95": .1} for name in (
+                     "clause_macro_ba", "vector_accuracy", "coherence",
+                     "final_accuracy")})
+    assert "clause yes_tpr recall regressed" in gate["failures"]
+    assert "clause no_tnr recall regressed" in gate["failures"]
+    assert "equal prior weight" in gate["label_prior_contract"]["primary"]
+
+
 def test_secondary_ceiling_rule_is_fixed_noninferiority_and_primary_ceiling_fails():
     records = _artifacts()["predictions"]
     perfect = causal_metrics(
@@ -262,15 +342,21 @@ def test_metrics_report_confusions_order_stability_and_direction_cells():
 
 
 def test_partial_or_substitute_panel_fails():
-    with pytest.raises(ValueError, match="exact frozen production contract"):
+    with pytest.raises(ValueError, match="panel provenance differs from frozen preassignment"):
         _compare(require_frozen=True)
     value = _artifacts()
     changed = copy.deepcopy(value["rows"])
     changed[0]["state"] += " tampered"
     panel, manifest = _jsonl(changed), _manifest(_jsonl(changed), changed)
-    assignment = (json.dumps(_assignment(panel, manifest), sort_keys=True) + "\n").encode()
+    preflight, inventory = _supporting_provenance(panel, manifest, changed)
+    reference_provenance = value["reference_provenance"]
+    assignment = (json.dumps(_assignment(
+        panel, manifest, preflight, inventory, reference_provenance),
+        sort_keys=True) + "\n").encode()
     with pytest.raises(ValueError, match="sealed row hash differs"):
         _compare(value, panel_payload=panel, panel_manifest_payload=manifest,
+                 panel_preflight_payload=preflight,
+                 inventory_manifest_payload=inventory,
                  panel_manifest_sha256=hashlib.sha256(manifest).hexdigest(),
                  assignment_payload=assignment,
                  assignment_sha256=hashlib.sha256(assignment).hexdigest())
@@ -284,6 +370,51 @@ def test_partial_or_substitute_panel_fails():
 def test_external_hash_tampering_fails(target, match):
     with pytest.raises(ValueError, match=match):
         _compare(**{target: "0" * 64})
+
+
+@pytest.mark.parametrize("payload,match", [
+    ("panel_preflight_payload", "preflight/inventory hash"),
+    ("inventory_manifest_payload", "preflight/inventory hash"),
+    ("reference_provenance_payload", "reference provenance hash"),
+])
+def test_supporting_provenance_payload_tampering_fails(payload, match):
+    with pytest.raises(ValueError, match=match):
+        _compare(**{payload: b"{}\n"})
+
+
+@pytest.mark.parametrize("field,value,match", [
+    ("comparator_sha256", "0" * 64, "running comparator differs"),
+    ("evaluator_sha256", "0" * 64, "running evaluator differs"),
+    ("bootstrap_seed", 17, "bootstrap differs"),
+    ("bootstrap_replicates", 20001, "bootstrap differs"),
+])
+def test_frozen_code_and_bootstrap_assignment_tampering_fails(field, value, match):
+    artifacts = _artifacts()
+    assignment = json.loads(artifacts["assignment"])
+    assignment[field] = value
+    payload = (json.dumps(assignment, sort_keys=True) + "\n").encode()
+    kwargs = {"assignment_payload": payload,
+              "assignment_sha256": hashlib.sha256(payload).hexdigest()}
+    if field == "bootstrap_seed":
+        kwargs["seed"] = value
+    if field == "bootstrap_replicates":
+        kwargs["replicates"] = value
+    with pytest.raises(ValueError, match=match):
+        _compare(artifacts, **kwargs)
+
+
+def test_reference_provenance_schema_tampering_fails_even_when_rehashed():
+    artifacts = _artifacts()
+    provenance = json.loads(artifacts["reference_provenance"])
+    provenance["unexpected"] = True
+    payload = (json.dumps(provenance, sort_keys=True) + "\n").encode()
+    assignment = json.loads(artifacts["assignment"])
+    assignment["reference_provenance_sha256"] = hashlib.sha256(payload).hexdigest()
+    assignment_payload = (json.dumps(assignment, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="reference provenance schema"):
+        _compare(artifacts, reference_provenance_payload=payload,
+                 assignment_payload=assignment_payload,
+                 assignment_sha256=hashlib.sha256(assignment_payload).hexdigest())
 
 
 @pytest.mark.parametrize("field", [
@@ -361,5 +492,5 @@ def test_prediction_tampering_coverage_and_bootstrap_fail_closed():
     records.pop()
     with pytest.raises(ValueError, match="incomplete truth-cube|lacks one final"):
         validate_panel_coverage(records)
-    with pytest.raises(ValueError, match="at least 20000"):
+    with pytest.raises(ValueError, match="bootstrap differs from frozen preassignment"):
         _compare(replicates=19_999)

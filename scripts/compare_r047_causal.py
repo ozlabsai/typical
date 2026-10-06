@@ -14,13 +14,20 @@ from scripts.eval_r047_executor import (
     causal_parity_subset,
     causal_coverage_report,
     validate_causal_run_receipt,
+    validate_causal_supporting_provenance,
     validate_causal_panel_payload,
+    validate_reference_provenance,
     validate_sealed_causal_predictions,
 )
 
 
 PRIMITIVES = ("conditional", "datetime", "decimal", "fraction", "ledger", "policy")
 MIN_BOOTSTRAP_REPLICATES = 20_000
+FROZEN_BOOTSTRAP_SEED = 470047
+FROZEN_PANEL_PREFLIGHT_SHA256 = (
+    "75e4b259ddb47913ff89adc8e877dbef61809283f59bee763227e23699bf2102")
+FROZEN_INVENTORY_MANIFEST_SHA256 = (
+    "736aceff4c61e55f6cf43fc9996553be411c2df159d05f66624935f6be69395d")
 
 
 def _sha(payload):
@@ -433,6 +440,13 @@ def _gate(control, treatment, reference, bootstrap):
         failures.append("uninformative_primary_ceiling: harder panel required")
     if bootstrap["clause_macro_ba"]["delta_lcb_95"] <= 0:
         failures.append("clause macro balanced-accuracy bootstrap LCB is not above zero")
+    clause_recall_deltas = {
+        "yes_tpr": treatment["clauses"]["tpr"] - control["clauses"]["tpr"],
+        "no_tnr": treatment["clauses"]["tnr"] - control["clauses"]["tnr"],
+    }
+    for label, effect in clause_recall_deltas.items():
+        if effect < 0:
+            failures.append(f"clause {label} recall regressed")
     secondary_gate_contract = {}
     for name, (baseline, candidate, target) in secondary_values.items():
         if baseline <= 1 - target:
@@ -535,6 +549,11 @@ def _gate(control, treatment, reference, bootstrap):
             "secondary_ceiling_rule": (
                 "superiority below ceiling; otherwise treatment>=.98, delta>=0, "
                 "paired cluster-bootstrap LCB95>-.01"),
+            "label_prior_contract": {
+                "primary": "macro balanced accuracy gives yes/no equal prior weight",
+                "safety": "neither clause yes recall nor clause no recall may regress",
+                "clause_recall_deltas": clause_recall_deltas,
+            },
             "direction_cell_deltas": direction_cell_deltas,
             "dimension_deltas": dimension_deltas,
             "treatment_x_order_interaction": order_interaction,
@@ -548,6 +567,9 @@ ASSIGNMENT_FIELDS = {
     "treatment_train_sha256", "reference_provenance_sha256", "reference_adapter_sha256",
     "parent_adapter_sha256", "model_revision", "model_inventory_sha256",
     "recipe_sha256", "panel_sha256", "panel_manifest_sha256",
+    "panel_preflight_sha256", "inventory_manifest_sha256",
+    "evaluator_sha256", "comparator_sha256", "bootstrap_seed",
+    "bootstrap_replicates",
 }
 
 
@@ -591,6 +613,11 @@ def _load_evaluator_report(payload, expected_sha256, name, predictions_payload,
             or isinstance(report.get("model_tree_files"), bool)
             or report["model_tree_files"] <= 0):
         raise ValueError(f"{name} evaluator model-tree receipt is invalid")
+    if (not _valid_sha(report.get("adapter_tree_sha256"))
+            or not isinstance(report.get("adapter_tree_files"), int)
+            or isinstance(report.get("adapter_tree_files"), bool)
+            or report["adapter_tree_files"] <= 0):
+        raise ValueError(f"{name} evaluator adapter-tree receipt is invalid")
     parity = report.get("batch_scalar_parity")
     parity_fields = {"status", "rows", "subset_ids_sha256", "exact_discrete_outputs",
                      "max_abs_probability_delta", "tolerance", "selection"}
@@ -628,12 +655,14 @@ def _load_run_receipt(payload, expected_sha256, expected_slot, expected):
 
 def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predictions,
                      slot_a_report, slot_b_report, reference_report, panel_payload,
-                     panel_manifest_payload, assignment_payload, slot_a_run_receipt,
-                     slot_b_run_receipt, slot_a_report_sha256,
+                     panel_manifest_payload, panel_preflight_payload,
+                     inventory_manifest_payload, reference_provenance_payload,
+                     assignment_payload, slot_a_run_receipt, slot_b_run_receipt,
+                     slot_a_report_sha256,
                      slot_b_report_sha256, reference_report_sha256,
                      slot_a_run_receipt_sha256, slot_b_run_receipt_sha256,
                      panel_manifest_sha256, assignment_sha256,
-                     replicates=MIN_BOOTSTRAP_REPLICATES, seed=470047,
+                     replicates=MIN_BOOTSTRAP_REPLICATES, seed=FROZEN_BOOTSTRAP_SEED,
                      _require_frozen_panel=True):
     """Compare preassigned slots only after binding panel, manifests, reports, and provenance."""
     if _sha(assignment_payload) != assignment_sha256:
@@ -649,11 +678,29 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
             != {"slot_a", "slot_b"}):
         raise ValueError("invalid pre-frozen control/treatment slot assignment")
     hash_fields = ASSIGNMENT_FIELDS - {
-        "schema_version", "control_slot", "treatment_slot", "model_revision"}
+        "schema_version", "control_slot", "treatment_slot", "model_revision",
+        "bootstrap_seed", "bootstrap_replicates"}
     if any(not _valid_sha(assignment[field]) for field in hash_fields):
         raise ValueError("slot assignment contains an invalid SHA-256")
     if not isinstance(assignment["model_revision"], str) or not assignment["model_revision"]:
         raise ValueError("slot assignment model revision is invalid")
+    comparator_sha256 = _sha(Path(__file__).read_bytes())
+    evaluator_sha256 = _sha(
+        Path(__file__).with_name("eval_r047_executor.py").read_bytes())
+    if (assignment["bootstrap_seed"] != FROZEN_BOOTSTRAP_SEED
+            or assignment["bootstrap_replicates"] != MIN_BOOTSTRAP_REPLICATES
+            or seed != assignment["bootstrap_seed"]
+            or replicates != assignment["bootstrap_replicates"]):
+        raise ValueError("comparison bootstrap differs from frozen preassignment")
+    if assignment["comparator_sha256"] != comparator_sha256:
+        raise ValueError("running comparator differs from frozen preassignment")
+    if assignment["evaluator_sha256"] != evaluator_sha256:
+        raise ValueError("running evaluator differs from frozen preassignment")
+    if _require_frozen_panel and (
+            assignment["panel_preflight_sha256"] != FROZEN_PANEL_PREFLIGHT_SHA256
+            or assignment["inventory_manifest_sha256"]
+            != FROZEN_INVENTORY_MANIFEST_SHA256):
+        raise ValueError("panel provenance differs from frozen preassignment")
     if assignment["reference_adapter_sha256"] != assignment["parent_adapter_sha256"]:
         raise ValueError("frozen reference adapter must be the exact parent adapter")
 
@@ -662,6 +709,22 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
         raise ValueError("frozen panel-manifest hash mismatch")
     if _sha(panel_payload) != assignment["panel_sha256"]:
         raise ValueError("raw panel hash differs from frozen slot assignment")
+    if (_sha(panel_preflight_payload) != assignment["panel_preflight_sha256"]
+            or _sha(inventory_manifest_payload)
+            != assignment["inventory_manifest_sha256"]):
+        raise ValueError("panel preflight/inventory hash differs from frozen assignment")
+    validate_causal_supporting_provenance(
+        panel_payload, panel_manifest_payload, panel_preflight_payload,
+        inventory_manifest_payload)
+    if _sha(reference_provenance_payload) != assignment["reference_provenance_sha256"]:
+        raise ValueError("reference provenance hash differs from frozen assignment")
+    reference_provenance = validate_reference_provenance(reference_provenance_payload)
+    if (reference_provenance["adapter_weights_sha256"]
+            != assignment["reference_adapter_sha256"]
+            or reference_provenance["model_revision"] != assignment["model_revision"]
+            or reference_provenance["model_inventory_sha256"]
+            != assignment["model_inventory_sha256"]):
+        raise ValueError("reference provenance differs from frozen model/adapter assignment")
     panel_rows, panel_manifest = validate_causal_panel_payload(
         panel_payload, panel_manifest_payload, require_frozen=_require_frozen_panel)
     expected_clusters = panel_manifest["clusters"]["causal_primary"]
@@ -681,6 +744,9 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
 
     common = {"model_revision": assignment["model_revision"],
               "model_inventory_sha256": assignment["model_inventory_sha256"],
+              "panel_preflight_sha256": assignment["panel_preflight_sha256"],
+              "inventory_manifest_sha256": assignment["inventory_manifest_sha256"],
+              "evaluator_sha256": assignment["evaluator_sha256"],
               "parity_rows": len(parity_rows),
               "parity_subset_ids_sha256": parity_subset_ids_sha256,
               "rows": expected_rows, "clusters": expected_clusters}
@@ -700,11 +766,18 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
             *receipt_inputs[slot], slot, slot_expectations[slot])
         slot_expectations[slot].update(
             adapter_sha256=receipts[slot]["adapter_sha256"],
-            run_receipt_sha256=receipt_inputs[slot][1])
+            run_receipt_sha256=receipt_inputs[slot][1],
+            checkpoint_payload_sha256=receipts[slot]["checkpoint_payload_sha256"],
+            adapter_tree_sha256=receipts[slot]["checkpoint_payload_sha256"])
     reference_expectation = {
         **common, "provenance_role": "reference",
         "adapter_sha256": assignment["reference_adapter_sha256"],
-        "reference_provenance_sha256": assignment["reference_provenance_sha256"]}
+        "reference_provenance_sha256": assignment["reference_provenance_sha256"],
+        "adapter_config_sha256": reference_provenance["adapter_config_sha256"],
+        "adapter_tree_sha256": reference_provenance["adapter_tree_sha256"],
+        "adapter_tree_files": reference_provenance["adapter_tree_files"],
+        "source_checkpoint_provenance_sha256": reference_provenance[
+            "source_checkpoint_provenance_sha256"]}
     reports = {
         "slot_a": _load_evaluator_report(
             slot_a_report, slot_a_report_sha256, "slot_a", slot_a_predictions,
@@ -742,12 +815,20 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
         gates[f"K{arity}"] = gate["passed"]
     return {
         "schema_version": "r047-causal-comparison-v2",
-        "blinding": {"assignment_sha256": assignment_sha256,
-                     "control_slot": assignment["control_slot"],
-                     "treatment_slot": assignment["treatment_slot"],
-                     "pre_frozen_slot_assignment": True},
+        "preassignment": {"assignment_sha256": assignment_sha256,
+                          "control_slot": assignment["control_slot"],
+                          "treatment_slot": assignment["treatment_slot"],
+                          "pre_frozen_slot_assignment": True,
+                          "evaluator_sha256": assignment["evaluator_sha256"],
+                          "comparator_sha256": comparator_sha256,
+                          "bootstrap_seed": seed,
+                          "bootstrap_replicates": replicates},
         "provenance": {"assignment": assignment,
                        "panel_manifest_sha256": panel_manifest_sha256,
+                       "panel_preflight_sha256": assignment[
+                           "panel_preflight_sha256"],
+                       "inventory_manifest_sha256": assignment[
+                           "inventory_manifest_sha256"],
                        "evaluator_report_sha256": {
                            "slot_a": slot_a_report_sha256, "slot_b": slot_b_report_sha256,
                            "reference": reference_report_sha256},
@@ -790,6 +871,9 @@ def main(argv=None):
     parser.add_argument("--slot-b-run-receipt-sha256", required=True)
     parser.add_argument("--panel", required=True)
     parser.add_argument("--panel-manifest", required=True)
+    parser.add_argument("--panel-preflight", required=True)
+    parser.add_argument("--inventory-manifest", required=True)
+    parser.add_argument("--reference-provenance", required=True)
     parser.add_argument("--panel-manifest-sha256", required=True)
     parser.add_argument("--assignment", required=True)
     parser.add_argument("--assignment-sha256", required=True)
@@ -806,6 +890,9 @@ def main(argv=None):
         reference_report=Path(args.reference_report).read_bytes(),
         panel_payload=Path(args.panel).read_bytes(),
         panel_manifest_payload=Path(args.panel_manifest).read_bytes(),
+        panel_preflight_payload=Path(args.panel_preflight).read_bytes(),
+        inventory_manifest_payload=Path(args.inventory_manifest).read_bytes(),
+        reference_provenance_payload=Path(args.reference_provenance).read_bytes(),
         assignment_payload=Path(args.assignment).read_bytes(),
         slot_a_run_receipt=Path(args.slot_a_run_receipt).read_bytes(),
         slot_b_run_receipt=Path(args.slot_b_run_receipt).read_bytes(),
