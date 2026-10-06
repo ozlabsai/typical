@@ -2,9 +2,10 @@
 
 Policies operate on two to twelve semantic Boolean fields.  They either choose
 the first matching rule (``priority``) or collect every matching rule
-(``collect``).  The latter assigns an explicit rank to every action so its
-primary action remains deterministic even though the action set is canonical
-and order-independent.
+(``collect``).  Collect rules may assign an explicit rank to an action.  The
+lowest-ranked matching action is primary; when no ranked rule matches the
+primary is null.  A null collect fallback explicitly represents an empty
+action set with no primary action.
 
 The probabilistic executor enumerates every truth assignment and marginalizes
 their probability in log space.  It is intended for training and evaluation of
@@ -26,7 +27,35 @@ import torch.nn.functional as F
 
 MIN_FIELDS = 2
 MAX_FIELDS = 12
+MAX_RULES = 128
+MAX_CONDITION_DEPTH = 32
+MAX_CONDITION_ARITY = 64
+MAX_POLICY_CONDITION_NODES = 4096
+MAX_ACTION_NAME_CHARS = 256
+MAX_FIELD_NAME_CHARS = 256
+MAX_JSON_DEPTH = 32
+MAX_JSON_NODES = 4096
+MAX_JSON_STRING_CHARS = 65_536
+MAX_JSON_INTEGER_BITS = 4096
+MAX_PAYLOAD_BYTES = 262_144
+MAX_POLICY_PAYLOAD_BYTES = 1_048_576
 _CONDITION_KEYS = frozenset(("field", "all", "any", "not", "const"))
+
+
+def _validate_text(value: Any, label: str, max_chars: int) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string")
+    if len(value) > max_chars:
+        raise ValueError(f"{label} exceeds the {max_chars}-character limit")
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        raise ValueError(f"{label} contains an unpaired Unicode surrogate")
+
+
+def _utf8_size(value: str, label: str) -> int:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise ValueError(f"{label} contains an unpaired Unicode surrogate") from error
 
 
 @dataclass(frozen=True, order=True)
@@ -40,8 +69,11 @@ class CanonicalAction:
         if (not isinstance(self.name, str) or not self.name.strip()
                 or self.name != self.name.strip()):
             raise ValueError("action name must be a nonempty trimmed string")
+        _validate_text(self.name, "action name", MAX_ACTION_NAME_CHARS)
         if not isinstance(self.payload_json, str):
             raise ValueError("canonical action payload must be JSON text")
+        if _utf8_size(self.payload_json, "canonical action payload") > MAX_PAYLOAD_BYTES:
+            raise ValueError(f"canonical action payload exceeds {MAX_PAYLOAD_BYTES} bytes")
         try:
             payload = json.loads(
                 self.payload_json,
@@ -49,12 +81,16 @@ class CanonicalAction:
                     ValueError(f"non-finite JSON constant {value}")
                 ),
             )
-        except (TypeError, json.JSONDecodeError, ValueError) as error:
+        except (TypeError, json.JSONDecodeError, ValueError, RecursionError) as error:
             raise ValueError("canonical action payload must be valid finite JSON") from error
         _validate_json(payload)
-        canonical = json.dumps(
-            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
-        )
+        try:
+            canonical = json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError, RecursionError) as error:
+            raise ValueError("canonical action payload must be bounded JSON") from error
         if canonical != self.payload_json:
             raise ValueError("canonical action payload JSON is not canonical")
 
@@ -66,31 +102,41 @@ class CanonicalAction:
         return {"name": self.name, "payload": self.payload}
 
 
-@dataclass(frozen=True, order=True)
+@dataclass(frozen=True)
 class CanonicalOutcome:
-    """A deterministic primary action and an order-independent action set."""
+    """An optional primary action and an order-independent action set."""
 
-    primary: CanonicalAction
+    primary: CanonicalAction | None
     actions: tuple[CanonicalAction, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.primary, CanonicalAction):
-            raise ValueError("outcome primary must be a CanonicalAction")
+        if self.primary is not None and not isinstance(self.primary, CanonicalAction):
+            raise ValueError("outcome primary must be a CanonicalAction or null")
         if (not isinstance(self.actions, tuple)
                 or any(not isinstance(action, CanonicalAction) for action in self.actions)):
             raise ValueError("outcome actions must be a tuple of CanonicalAction values")
-        if not self.actions:
-            raise ValueError("an outcome must contain at least one action")
+        if len(self.actions) > MAX_RULES:
+            raise ValueError(f"outcome actions exceed the {MAX_RULES}-action limit")
         if tuple(sorted(self.actions)) != self.actions:
             raise ValueError("outcome actions must be in canonical order")
         if len(set(self.actions)) != len(self.actions):
             raise ValueError("outcome actions must be unique")
-        if self.primary not in self.actions:
+        if self.primary is not None and self.primary not in self.actions:
             raise ValueError("the primary action must belong to the action set")
+
+    def _sort_key(self) -> tuple[Any, ...]:
+        primary_key = ((0, "", "") if self.primary is None else
+                       (1, self.primary.name, self.primary.payload_json))
+        return primary_key, self.actions
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, CanonicalOutcome):
+            return NotImplemented
+        return self._sort_key() < other._sort_key()
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "primary": self.primary.as_dict(),
+            "primary": None if self.primary is None else self.primary.as_dict(),
             "actions": [action.as_dict() for action in self.actions],
         }
 
@@ -124,9 +170,29 @@ def _require_mapping(value: Any, label: str) -> Mapping[str, Any]:
     return value
 
 
-def _validate_json(value: Any, path: str = "payload", active: set[int] | None = None) -> None:
+def _validate_json(
+    value: Any,
+    path: str = "payload",
+    active: set[int] | None = None,
+    *,
+    depth: int = 0,
+    nodes: list[int] | None = None,
+) -> None:
     """Reject values that are not unambiguous finite JSON data."""
-    if value is None or isinstance(value, (str, bool, int)):
+    if depth > MAX_JSON_DEPTH:
+        raise ValueError(f"{path} exceeds the JSON depth limit")
+    nodes = [0] if nodes is None else nodes
+    nodes[0] += 1
+    if nodes[0] > MAX_JSON_NODES:
+        raise ValueError(f"{path} exceeds the JSON node limit")
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, str):
+        _validate_text(value, path, MAX_JSON_STRING_CHARS)
+        return
+    if isinstance(value, int):
+        if value.bit_length() > MAX_JSON_INTEGER_BITS:
+            raise ValueError(f"{path} integer exceeds the bit-length limit")
         return
     if isinstance(value, float):
         if not math.isfinite(value):
@@ -141,12 +207,17 @@ def _validate_json(value: Any, path: str = "payload", active: set[int] | None = 
         try:
             if isinstance(value, list):
                 for index, item in enumerate(value):
-                    _validate_json(item, f"{path}[{index}]", active)
+                    _validate_json(
+                        item, f"{path}[{index}]", active, depth=depth + 1, nodes=nodes
+                    )
             else:
                 for key, item in value.items():
                     if not isinstance(key, str):
                         raise ValueError(f"{path} object keys must be strings")
-                    _validate_json(item, f"{path}.{key}", active)
+                    _validate_text(key, f"{path} object key", MAX_JSON_STRING_CHARS)
+                    _validate_json(
+                        item, f"{path}.{key}", active, depth=depth + 1, nodes=nodes
+                    )
         finally:
             active.remove(identity)
         return
@@ -162,11 +233,18 @@ def canonicalize_action(value: Any) -> CanonicalAction:
     name = action["name"]
     if not isinstance(name, str) or not name.strip() or name != name.strip():
         raise ValueError("action name must be a nonempty trimmed string")
+    _validate_text(name, "action name", MAX_ACTION_NAME_CHARS)
     payload = action["payload"]
     _validate_json(payload)
-    payload_json = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
-    )
+    try:
+        payload_json = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, RecursionError) as error:
+        raise ValueError("action payload must be bounded JSON") from error
+    if _utf8_size(payload_json, "action payload") > MAX_PAYLOAD_BYTES:
+        raise ValueError(f"action payload exceeds {MAX_PAYLOAD_BYTES} bytes")
     return CanonicalAction(name=name, payload_json=payload_json)
 
 
@@ -178,19 +256,33 @@ def canonicalize_outcome(value: Any) -> CanonicalOutcome:
         raise ValueError("an outcome must contain exactly primary and actions")
     raw_actions = outcome["actions"]
     if (not isinstance(raw_actions, Sequence)
-            or isinstance(raw_actions, (str, bytes)) or not raw_actions):
-        raise ValueError("outcome actions must be a nonempty array")
+            or isinstance(raw_actions, (str, bytes))):
+        raise ValueError("outcome actions must be an array")
+    if len(raw_actions) > MAX_RULES:
+        raise ValueError(f"outcome actions exceed the {MAX_RULES}-action limit")
     actions = tuple(canonicalize_action(action) for action in raw_actions)
     if len(set(actions)) != len(actions):
         raise ValueError("duplicate actions are not allowed")
     return CanonicalOutcome(
-        primary=canonicalize_action(outcome["primary"]),
+        primary=(None if outcome["primary"] is None
+                 else canonicalize_action(outcome["primary"])),
         actions=tuple(sorted(actions)),
     )
 
 
-def _compile_condition(value: Any, declared_fields: frozenset[str],
-                       referenced: set[str], active: set[int]) -> Condition:
+def _compile_condition(
+    value: Any,
+    declared_fields: frozenset[str],
+    referenced: set[str],
+    active: set[int],
+    budget: list[int],
+    depth: int = 0,
+) -> Condition:
+    if depth > MAX_CONDITION_DEPTH:
+        raise ValueError("condition exceeds the depth limit")
+    budget[0] += 1
+    if budget[0] > MAX_POLICY_CONDITION_NODES:
+        raise ValueError("policy conditions exceed the node limit")
     condition = _require_mapping(value, "condition")
     identity = id(condition)
     if identity in active:
@@ -210,13 +302,21 @@ def _compile_condition(value: Any, declared_fields: frozenset[str],
                 raise ValueError("const condition must be Boolean")
             return ("const", operand)
         if operator == "not":
-            return ("not", _compile_condition(operand, declared_fields, referenced, active))
+            return (
+                "not",
+                _compile_condition(
+                    operand, declared_fields, referenced, active, budget, depth + 1
+                ),
+            )
         if (not isinstance(operand, Sequence) or isinstance(operand, (str, bytes))
                 or not operand):
             raise ValueError(f"{operator} condition needs a nonempty array")
+        if len(operand) > MAX_CONDITION_ARITY:
+            raise ValueError(f"{operator} condition exceeds the arity limit")
         return (
             operator,
-            tuple(_compile_condition(item, declared_fields, referenced, active)
+            tuple(_compile_condition(item, declared_fields, referenced, active,
+                                     budget, depth + 1)
                   for item in operand),
         )
     finally:
@@ -235,7 +335,7 @@ def _condition_value(condition: Condition, assignment: Mapping[str, bool]) -> bo
     return all(values) if operator == "all" else any(values)
 
 
-def _canonical_outcome(primary: CanonicalAction,
+def _canonical_outcome(primary: CanonicalAction | None,
                        actions: Sequence[CanonicalAction]) -> CanonicalOutcome:
     canonical = tuple(sorted(actions))
     if len(set(canonical)) != len(canonical):
@@ -254,9 +354,11 @@ def _execute_compiled(policy: CompiledPolicy, assignment: Mapping[str, bool]) ->
     matched = [rule for rule in policy.rules if _condition_value(rule.condition, assignment)]
     if not matched:
         if policy.fallback is None:
-            raise ValueError("collect policy has no action for this assignment")
+            return _canonical_outcome(None, ())
         return _canonical_outcome(policy.fallback, (policy.fallback,))
-    primary = min(matched, key=lambda rule: rule.primary_rank).action
+    ranked = [rule for rule in matched if rule.primary_rank is not None]
+    primary = (min(ranked, key=lambda rule: rule.primary_rank).action
+               if ranked else None)
     return _canonical_outcome(primary, tuple(rule.action for rule in matched))
 
 
@@ -269,6 +371,8 @@ def compile_policy(program: Mapping[str, Any]) -> CompiledPolicy:
     if (not isinstance(fields, Sequence) or isinstance(fields, (str, bytes))
             or not MIN_FIELDS <= len(fields) <= MAX_FIELDS
             or any(not isinstance(name, str) or not name.strip() or name != name.strip()
+                   or len(name) > MAX_FIELD_NAME_CHARS
+                   or any(0xD800 <= ord(character) <= 0xDFFF for character in name)
                    for name in fields)
             or len(set(fields)) != len(fields)):
         raise ValueError(f"policy fields must be {MIN_FIELDS}-{MAX_FIELDS} unique names")
@@ -279,27 +383,33 @@ def compile_policy(program: Mapping[str, Any]) -> CompiledPolicy:
         raise ValueError("policy mode must be priority or collect")
     raw_rules = program["rules"]
     if (not isinstance(raw_rules, Sequence) or isinstance(raw_rules, (str, bytes))
-            or not raw_rules):
-        raise ValueError("policy rules must be a nonempty array")
+            or not raw_rules or len(raw_rules) > MAX_RULES):
+        raise ValueError(f"policy rules must be a nonempty array of at most {MAX_RULES} rules")
 
     referenced: set[str] = set()
     rules = []
     actions = []
     ranks = []
+    condition_budget = [0]
     expected_rule_keys = ({"when", "action"} if mode == "priority"
                           else {"when", "action", "primary_rank"})
     for index, raw_rule in enumerate(raw_rules):
         rule = _require_mapping(raw_rule, f"rule {index}")
         if set(rule) != expected_rule_keys:
             raise ValueError(f"rule {index} has invalid keys")
-        condition = _compile_condition(rule["when"], declared_fields, referenced, set())
+        condition = _compile_condition(
+            rule["when"], declared_fields, referenced, set(), condition_budget
+        )
         action = canonicalize_action(rule["action"])
         rank = None
         if mode == "collect":
             rank = rule["primary_rank"]
-            if isinstance(rank, bool) or not isinstance(rank, int) or rank < 0:
-                raise ValueError("collect primary ranks must be nonnegative integers")
-            ranks.append(rank)
+            if rank is not None:
+                if isinstance(rank, bool) or not isinstance(rank, int) or rank < 0:
+                    raise ValueError(
+                        "collect primary ranks must be null or nonnegative integers"
+                    )
+                ranks.append(rank)
         rules.append(_Rule(condition=condition, action=action, primary_rank=rank))
         actions.append(action)
     if referenced != declared_fields:
@@ -315,9 +425,16 @@ def compile_policy(program: Mapping[str, Any]) -> CompiledPolicy:
     fallback = None if raw_fallback is None else canonicalize_action(raw_fallback)
     if fallback is not None and fallback in actions:
         raise ValueError("fallback action duplicates a rule action")
+    payload_bytes = sum(
+        _utf8_size(action.payload_json, "action payload") for action in actions
+    )
+    if fallback is not None:
+        payload_bytes += _utf8_size(fallback.payload_json, "fallback payload")
+    if payload_bytes > MAX_POLICY_PAYLOAD_BYTES:
+        raise ValueError(f"policy action payloads exceed {MAX_POLICY_PAYLOAD_BYTES} bytes")
 
-    # Build and validate every outcome once.  This catches uncovered collect
-    # assignments and makes later differentiable marginalization deterministic.
+    # Build and validate every outcome once, including explicit empty collect
+    # outcomes, so later differentiable marginalization is deterministic.
     provisional = CompiledPolicy(fields, mode, tuple(rules), fallback, ())
     outcomes = []
     reachable = [False] * len(rules)
@@ -351,8 +468,18 @@ def compile_policy(program: Mapping[str, Any]) -> CompiledPolicy:
     return CompiledPolicy(fields, mode, tuple(rules), fallback, tuple(outcomes))
 
 
-def _validate_compiled_condition(condition: Any, fields: frozenset[str],
-                                 referenced: set[str]) -> None:
+def _validate_compiled_condition(
+    condition: Any,
+    fields: frozenset[str],
+    referenced: set[str],
+    budget: list[int],
+    depth: int = 0,
+) -> None:
+    if depth > MAX_CONDITION_DEPTH:
+        raise ValueError("compiled policy condition exceeds the depth limit")
+    budget[0] += 1
+    if budget[0] > MAX_POLICY_CONDITION_NODES:
+        raise ValueError("compiled policy conditions exceed the node limit")
     if not isinstance(condition, tuple) or len(condition) != 2:
         raise ValueError("compiled policy contains a malformed condition")
     operator, operand = condition
@@ -366,12 +493,14 @@ def _validate_compiled_condition(condition: Any, fields: frozenset[str],
             raise ValueError("compiled policy const condition must be Boolean")
         return
     if operator == "not":
-        _validate_compiled_condition(operand, fields, referenced)
+        _validate_compiled_condition(operand, fields, referenced, budget, depth + 1)
         return
     if operator not in {"all", "any"} or not isinstance(operand, tuple) or not operand:
         raise ValueError("compiled policy contains an unsupported condition")
+    if len(operand) > MAX_CONDITION_ARITY:
+        raise ValueError("compiled policy condition exceeds the arity limit")
     for item in operand:
-        _validate_compiled_condition(item, fields, referenced)
+        _validate_compiled_condition(item, fields, referenced, budget, depth + 1)
 
 
 def _validate_compiled_policy(policy: CompiledPolicy) -> None:
@@ -379,12 +508,15 @@ def _validate_compiled_policy(policy: CompiledPolicy) -> None:
     fields = policy.fields
     if (not isinstance(fields, tuple) or not MIN_FIELDS <= len(fields) <= MAX_FIELDS
             or any(not isinstance(name, str) or not name.strip() or name != name.strip()
+                   or len(name) > MAX_FIELD_NAME_CHARS
+                   or any(0xD800 <= ord(character) <= 0xDFFF for character in name)
                    for name in fields)
             or len(set(fields)) != len(fields)):
         raise ValueError("compiled policy has invalid fields")
     if not isinstance(policy.mode, str) or policy.mode not in {"priority", "collect"}:
         raise ValueError("compiled policy has an invalid mode")
-    if not isinstance(policy.rules, tuple) or not policy.rules:
+    if (not isinstance(policy.rules, tuple) or not policy.rules
+            or len(policy.rules) > MAX_RULES):
         raise ValueError("compiled policy has invalid rules")
     if (policy.fallback is not None and
             not isinstance(policy.fallback, CanonicalAction)):
@@ -402,18 +534,23 @@ def _validate_compiled_policy(policy: CompiledPolicy) -> None:
     referenced: set[str] = set()
     actions = []
     ranks = []
+    condition_budget = [0]
     for rule in policy.rules:
         if not isinstance(rule, _Rule) or not isinstance(rule.action, CanonicalAction):
             raise ValueError("compiled policy has an invalid rule")
-        _validate_compiled_condition(rule.condition, declared, referenced)
+        _validate_compiled_condition(
+            rule.condition, declared, referenced, condition_budget
+        )
         if policy.mode == "priority":
             if rule.primary_rank is not None:
                 raise ValueError("compiled priority rule cannot have a primary rank")
         else:
             rank = rule.primary_rank
-            if isinstance(rank, bool) or not isinstance(rank, int) or rank < 0:
+            if (rank is not None and
+                    (isinstance(rank, bool) or not isinstance(rank, int) or rank < 0)):
                 raise ValueError("compiled collect rule has an invalid primary rank")
-            ranks.append(rank)
+            if rank is not None:
+                ranks.append(rank)
         actions.append(rule.action)
     if referenced != declared:
         raise ValueError("compiled policy has unused fields")
@@ -423,6 +560,15 @@ def _validate_compiled_policy(policy: CompiledPolicy) -> None:
         raise ValueError("compiled policy has duplicate primary ranks")
     if policy.fallback is not None and policy.fallback in actions:
         raise ValueError("compiled policy fallback duplicates a rule action")
+    payload_bytes = sum(
+        _utf8_size(action.payload_json, "compiled action payload") for action in actions
+    )
+    if policy.fallback is not None:
+        payload_bytes += _utf8_size(
+            policy.fallback.payload_json, "compiled fallback payload"
+        )
+    if payload_bytes > MAX_POLICY_PAYLOAD_BYTES:
+        raise ValueError("compiled policy action payloads exceed the byte limit")
 
     reachable = [False] * len(policy.rules)
     fallback_reachable = False
@@ -441,8 +587,6 @@ def _validate_compiled_policy(policy: CompiledPolicy) -> None:
                 reachable[index] |= matches_rule
             if not any(matches):
                 fallback_reachable = True
-                if policy.fallback is None:
-                    raise ValueError("compiled collect policy has an uncovered assignment")
         recomputed.append(_execute_compiled(policy, assignment))
     if not all(reachable):
         raise ValueError("compiled policy has unreachable rules")
@@ -481,7 +625,7 @@ def _validate_truth_logits(policy: CompiledPolicy,
                            truth_logits: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     if not isinstance(truth_logits, Mapping) or set(truth_logits) != set(policy.fields):
         raise ValueError("truth logits must exactly match policy fields")
-    result = {}
+    raw = {}
     device = None
     for name in policy.fields:
         value = truth_logits[name]
@@ -494,7 +638,20 @@ def _validate_truth_logits(policy: CompiledPolicy,
             device = value.device
         elif value.device != device:
             raise ValueError("all truth logits must use the same device")
-        result[name] = value.float()
+        raw[name] = value
+    # Preserve float64 inputs, and promote extreme lower-precision values when
+    # summing up to one term per field could overflow float32.  Normal-sized
+    # training logits retain the established float32 output contract.
+    float32_safe = torch.finfo(torch.float32).max / len(policy.fields)
+    use_float64 = any(
+        value.dtype == torch.float64
+        or float(value.detach().abs().cpu().item()) > float32_safe
+        for value in raw.values()
+    )
+    compute_dtype = torch.float64 if use_float64 else torch.float32
+    result = {name: value.to(dtype=compute_dtype) for name, value in raw.items()}
+    if any(not bool(torch.isfinite(value.detach()).item()) for value in result.values()):
+        raise ValueError("truth logits must remain finite in the compute dtype")
     return result
 
 
@@ -506,8 +663,9 @@ def exact_outcome_log_distribution(
 
     ``truth_logits`` are semantic true-vs-false logits keyed by field name, so
     option positions never enter this interface.  Returned values are scalar
-    float32 log probabilities and remain differentiable with respect to every
-    input logit.
+    float32 log probabilities for ordinary training logits (float64 when input
+    precision or magnitude requires it) and remain differentiable with respect
+    to every input logit.
     """
     policy = _as_compiled(policy)
     logits = _validate_truth_logits(policy, truth_logits)
@@ -528,6 +686,8 @@ def exact_outcome_log_distribution(
         result[outcome] = torch.logsumexp(
             assignment_log_probabilities.index_select(0, indices), dim=0
         )
+    if any(not bool(torch.isfinite(value.detach()).item()) for value in result.values()):
+        raise ValueError("outcome log probabilities are not finite in the compute dtype")
     log_total = torch.logsumexp(torch.stack(tuple(result.values())), dim=0)
     if not bool(torch.isfinite(log_total.detach()).item()):
         raise ValueError("outcome log distribution is not finite")
@@ -579,11 +739,13 @@ def outcome_nll(log_distribution: Mapping[CanonicalOutcome, torch.Tensor],
     return -distribution[gold]
 
 
-def primary_action_nll(log_distribution: Mapping[CanonicalOutcome, torch.Tensor],
-                       gold_action: CanonicalAction | Mapping[str, Any]) -> torch.Tensor:
+def primary_action_nll(
+    log_distribution: Mapping[CanonicalOutcome, torch.Tensor],
+    gold_action: CanonicalAction | Mapping[str, Any] | None,
+) -> torch.Tensor:
     """NLL after marginalizing all outcomes with the same primary action."""
     distribution = _validate_log_distribution(log_distribution)
-    gold = canonicalize_action(gold_action)
+    gold = None if gold_action is None else canonicalize_action(gold_action)
     matches = [value for outcome, value in distribution.items() if outcome.primary == gold]
     if not matches:
         raise ValueError("gold primary action is structurally impossible under the policy")
@@ -594,9 +756,11 @@ def action_set_nll(log_distribution: Mapping[CanonicalOutcome, torch.Tensor],
                    gold_actions: Sequence[CanonicalAction | Mapping[str, Any]]) -> torch.Tensor:
     """NLL of an exact action set, marginalizing over its possible primaries."""
     distribution = _validate_log_distribution(log_distribution)
-    if (not isinstance(gold_actions, Sequence) or isinstance(gold_actions, (str, bytes))
-            or not gold_actions):
-        raise ValueError("gold actions must be a nonempty array")
+    if (not isinstance(gold_actions, Sequence)
+            or isinstance(gold_actions, (str, bytes))):
+        raise ValueError("gold actions must be an array")
+    if len(gold_actions) > MAX_RULES:
+        raise ValueError(f"gold actions exceed the {MAX_RULES}-action limit")
     actions = tuple(sorted(canonicalize_action(action) for action in gold_actions))
     if len(set(actions)) != len(actions):
         raise ValueError("duplicate gold actions are not allowed")

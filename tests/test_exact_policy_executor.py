@@ -134,6 +134,20 @@ def test_action_and_outcome_canonicalization_preserve_json_types_and_ignore_orde
     assert canonical.as_dict()["actions"][1]["payload"] == {"z": [1, 1.0, False], "a": None}
 
 
+def test_empty_and_null_primary_outcomes_are_canonical_and_round_trip():
+    empty = canonicalize_outcome({"primary": None, "actions": []})
+    assert empty == CanonicalOutcome(primary=None, actions=())
+    assert empty.as_dict() == {"primary": None, "actions": []}
+
+    audit = canonicalize_action(action("audit"))
+    no_primary = canonicalize_outcome({"primary": None, "actions": [audit.as_dict()]})
+    assert no_primary == CanonicalOutcome(primary=None, actions=(audit,))
+    assert sorted((no_primary, empty)) == [empty, no_primary]
+
+    with pytest.raises(ValueError, match="belong"):
+        CanonicalOutcome(primary=audit, actions=())
+
+
 @pytest.mark.parametrize(
     "primary,actions,match",
     [
@@ -176,6 +190,51 @@ def test_gold_nll_helpers_marginalize_complete_primary_and_action_set_targets():
         -distribution[both].item())
 
 
+def test_collect_null_fallback_and_unranked_rules_cover_typesafe_outcomes_and_nlls():
+    program = {
+        "fields": ["handoff", "notify"],
+        "mode": "collect",
+        "rules": [
+            {"when": {"field": "handoff"}, "action": action("handoff"),
+             "primary_rank": None},
+            {"when": {"field": "notify"}, "action": action("notify"),
+             "primary_rank": None},
+        ],
+        "fallback": None,
+    }
+    policy = compile_policy(program)
+    empty = execute_policy(policy, {"handoff": False, "notify": False})
+    both = execute_policy(policy, {"handoff": True, "notify": True})
+    assert empty == CanonicalOutcome(primary=None, actions=())
+    assert both.primary is None
+    assert [item.name for item in both.actions] == ["handoff", "notify"]
+
+    distribution = exact_outcome_log_distribution(
+        policy, {"handoff": torch.tensor(-0.2), "notify": torch.tensor(0.7)}
+    )
+    null_primary_values = [value for outcome, value in distribution.items()
+                           if outcome.primary is None]
+    assert primary_action_nll(distribution, None).item() == pytest.approx(
+        -torch.logsumexp(torch.stack(null_primary_values), 0).item()
+    )
+    assert action_set_nll(distribution, []).item() == pytest.approx(
+        -distribution[empty].item()
+    )
+    assert outcome_nll(
+        distribution, {"primary": None, "actions": []}
+    ).item() == pytest.approx(-distribution[empty].item())
+
+
+def test_collect_uses_only_ranked_matches_to_choose_optional_primary():
+    program = collect_policy()
+    program["rules"][0]["primary_rank"] = None
+    policy = compile_policy(program)
+    only_unranked = execute_policy(policy, {"a": True, "b": False})
+    mixed = execute_policy(policy, {"a": True, "b": True})
+    assert only_unranked.primary is None
+    assert mixed.primary is not None and mixed.primary.name == "block"
+
+
 def test_confident_logits_have_finite_exact_nll_and_gradients():
     policy = compile_policy(collect_policy())
     logits = {"a": torch.tensor(100.0, requires_grad=True),
@@ -188,6 +247,23 @@ def test_confident_logits_have_finite_exact_nll_and_gradients():
     for value in logits.values():
         assert value.grad is not None
         assert torch.isfinite(value.grad)
+
+
+@pytest.mark.parametrize(
+    "dtype,magnitude",
+    [(torch.float32, torch.finfo(torch.float32).max), (torch.float64, 1e300)],
+)
+def test_extreme_finite_logits_are_promoted_or_preserved(dtype, magnitude):
+    policy = compile_policy(collect_policy())
+    logits = {"a": torch.tensor(magnitude, dtype=dtype, requires_grad=True),
+              "b": torch.tensor(-magnitude, dtype=dtype, requires_grad=True)}
+    distribution = exact_outcome_log_distribution(policy, logits)
+    assert all(torch.isfinite(value) for value in distribution.values())
+    loss = outcome_nll(distribution, execute_policy(policy, {"a": False, "b": True}))
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert all(value.grad is not None and torch.isfinite(value.grad)
+               for value in logits.values())
 
 
 def test_action_v1_truth_table_matches_existing_hard_executor():
@@ -260,11 +336,68 @@ def test_invalid_payloads_are_rejected(payload, match):
         canonicalize_action(action("bad", payload))
 
 
+@pytest.mark.parametrize(
+    "value,match",
+    [
+        (action("bad\ud800"), "surrogate"),
+        (action("bad", "\ud800"), "surrogate"),
+        (action("bad", {"\ud800": "value"}), "surrogate"),
+        (action("bad", "x" * 65_537), "character limit"),
+        (action("bad", 1 << 4096), "bit-length"),
+    ],
+)
+def test_payload_and_action_resource_limits_reject_adversarial_values(value, match):
+    with pytest.raises(ValueError, match=match):
+        canonicalize_action(value)
+
+
 def test_cyclic_payload_is_rejected():
     payload = []
     payload.append(payload)
     with pytest.raises(ValueError, match="cycle"):
         canonicalize_action(action("bad", payload))
+
+
+def test_policy_rule_and_condition_resource_limits_are_enforced():
+    too_many_rules = collect_policy()
+    too_many_rules["rules"] = [
+        {"when": {"field": "a"}, "action": action(f"a{index}"),
+         "primary_rank": index}
+        for index in range(129)
+    ]
+    with pytest.raises(ValueError, match="at most 128"):
+        compile_policy(too_many_rules)
+
+    too_wide = priority_policy()
+    too_wide["rules"][0]["when"] = {
+        "all": [{"field": "a"} for _ in range(65)]
+    }
+    with pytest.raises(ValueError, match="arity limit"):
+        compile_policy(too_wide)
+
+    nested = {"field": "a"}
+    for _ in range(33):
+        nested = {"not": nested}
+    too_deep = priority_policy()
+    too_deep["rules"][0]["when"] = nested
+    with pytest.raises(ValueError, match="depth limit"):
+        compile_policy(too_deep)
+
+
+def test_policy_total_payload_bytes_are_bounded():
+    program = {
+        "fields": ["a", "b"],
+        "mode": "collect",
+        "rules": [
+            {"when": {"field": "a" if index % 2 else "b"},
+             "action": action(f"action-{index}", "x" * 65_536),
+             "primary_rank": index}
+            for index in range(17)
+        ],
+        "fallback": None,
+    }
+    with pytest.raises(ValueError, match="policy action payloads exceed"):
+        compile_policy(program)
 
 
 def test_direct_canonical_action_construction_still_validates_canonical_json():
@@ -330,11 +463,6 @@ def test_ambiguous_or_incomplete_programs_are_rejected():
     no_fallback["fallback"] = None
     with pytest.raises(ValueError, match="requires a fallback"):
         compile_policy(no_fallback)
-
-    uncovered_collect = collect_policy()
-    uncovered_collect["fallback"] = None
-    with pytest.raises(ValueError, match="no action"):
-        compile_policy(uncovered_collect)
 
     unused = priority_policy()
     unused["rules"] = [{"when": {"field": "a"}, "action": action("only_a")}]
