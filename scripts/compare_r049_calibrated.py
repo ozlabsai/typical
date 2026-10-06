@@ -26,7 +26,7 @@ if __package__ in {None, ""}:
 from scripts.score_exact_policy_panel import NLL_PROBABILITY_FLOOR, classify
 
 
-SCHEMA = "r049_calibrated_comparison_v1"
+SCHEMA = "r049_calibrated_comparison_v2"
 DEFAULT_BOOTSTRAP_SEED = 490_049
 DEFAULT_BOOTSTRAP_REPLICATES = 20_000
 MIN_BOOTSTRAP_REPLICATES = 100
