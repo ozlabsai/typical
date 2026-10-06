@@ -51,6 +51,6 @@
 
 ## Active resource
 
-- Pod `e9msxa6ocjth2k` completed R047-P and is transferring the selected step-200 adapter plus receipts to `.context/r047-run/`; the GPU is idle only during this active archival transfer and will be stopped after local hash verification. R046 remains archived at `.context/r046-run/ARCHIVE_RECEIPT.json`.
+- Pod `e9msxa6ocjth2k` is stopped (`EXITED`) after local byte-for-byte verification of the selected step-200 adapter, all four prediction/report sets, metrics, preflight, and logs. R047-P is archived at `.context/r047-run/ARCHIVE_RECEIPT.json`; R046 remains archived at `.context/r046-run/ARCHIVE_RECEIPT.json`.
 - Next job: freeze and audit the seed-47/domain-offset-2 prospective mechanism/final panel, then launch the matched R047-C control and treatment from exact R044-R. R047-S remains gated on a causal mechanism pass.
 - The 30-minute cost guard remains loaded. Any new ephemeral pod must receive a fresh archive receipt before shutdown.
