@@ -7,6 +7,7 @@ import pytest
 import scripts.finalize_r047_m1 as finalizer
 from scripts.build_r047_model_inventory import FROZEN_BASE_REVISION, build_inventory
 from scripts.eval_r047_executor import RUN_RECEIPT_FIELDS, validate_causal_run_receipt
+from scripts.preflight_r043_assets import tree_hash
 
 
 def _write(path, value):
@@ -98,9 +99,18 @@ def _fixture(tmp_path, monkeypatch):
     inventory = _write(tmp_path / "model-inventory.json", build_inventory(model))
     inventory_hash = hashlib.sha256(inventory.read_bytes()).hexdigest()
 
-    parent = _write(tmp_path / "parent" / "adapter_model.safetensors", b"parent")
+    parent_root = tmp_path / "parent" / "step-000100"
+    parent = _write(parent_root / "adapter_model.safetensors", b"parent")
+    parent_config = _write(parent_root / "adapter_config.json", {})
+    _write(parent_root / "README.md", "parent checkpoint\n")
+    _write(parent_root / "trainer.pt", b"parent trainer state")
     parent_hash = hashlib.sha256(parent.read_bytes()).hexdigest()
+    parent_config_hash = hashlib.sha256(parent_config.read_bytes()).hexdigest()
+    parent_tree_hash, parent_tree_files = tree_hash(parent_root)
     monkeypatch.setattr(finalizer, "FROZEN_PARENT_SHA256", parent_hash)
+    monkeypatch.setattr(finalizer, "FROZEN_PARENT_CONFIG_SHA256", parent_config_hash)
+    monkeypatch.setattr(finalizer, "FROZEN_PARENT_TREE_SHA256", parent_tree_hash)
+    monkeypatch.setattr(finalizer, "FROZEN_PARENT_TREE_FILES", parent_tree_files)
 
     rows = _rows()
     train = _write(
@@ -112,23 +122,68 @@ def _fixture(tmp_path, monkeypatch):
     arm_hashes = {"control": control_hash, "treatment": train_hash}
     monkeypatch.setattr(finalizer, "KNOWN_ARM_SHA256", arm_hashes)
     summary = finalizer._summary(rows)
+    image_root = tmp_path / "images"
+    image_entries = {}
+    for payload in (b"image-one", b"image-two"):
+        digest = hashlib.sha256(payload).hexdigest()
+        relative = f"images/{digest}.png"
+        _write(tmp_path / relative, payload)
+        image_entries[digest] = {"path": relative, "sha256": digest}
+    image_tree_hash, image_tree_files = finalizer._arm_image_tree_hash(
+        tmp_path, image_entries)
+    monkeypatch.setattr(finalizer, "FROZEN_IMAGE_TREE_SHA256", image_tree_hash)
+    monkeypatch.setattr(finalizer, "FROZEN_IMAGE_TREE_FILES", image_tree_files)
     manifest = _write(tmp_path / "manifest.json", {
         "outputs": {"control": {"rows": 800, "sha256": control_hash},
                     "clause": {"rows": 800, "sha256": train_hash}},
         "arms": {"control": summary, "clause": summary},
+        "images": {"files": image_tree_files, "tree_sha256": image_tree_hash,
+                   "files_by_sha256": image_entries},
     })
     manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
     monkeypatch.setattr(finalizer, "FROZEN_ARM_MANIFEST_SHA256", manifest_hash)
 
+    panel = _write(tmp_path / "primary.jsonl", "{}\n")
+    panel_hash = hashlib.sha256(panel.read_bytes()).hexdigest()
+    panel_manifest = _write(tmp_path / "panel-manifest.json", {
+        "outputs": {"primary": {"sha256": panel_hash, "rows": 1}},
+    })
+    panel_manifest_hash = hashlib.sha256(panel_manifest.read_bytes()).hexdigest()
+    inventory_manifest = _write(tmp_path / "panel-inventory.json", {"version": 1})
+    inventory_manifest_hash = hashlib.sha256(inventory_manifest.read_bytes()).hexdigest()
+    panel_preflight = _write(tmp_path / "panel-preflight.json", {
+        "status": "pass", "benchmark_content_emitted": False,
+        "panel_manifest_sha256": panel_manifest_hash,
+        "inventory_manifest_sha256": inventory_manifest_hash,
+        "outputs": {"primary": {"sha256": panel_hash, "rows": 1}},
+    })
     trainer = _write(tmp_path / "train_gemma_decision_lora.py", "# frozen trainer\n")
+    evaluator = _write(tmp_path / "eval_r047_executor.py", "# frozen evaluator\n")
+    comparator = _write(tmp_path / "compare_r047_causal.py", "# frozen comparator\n")
+    evaluation_binding = {
+        "panel_sha256": panel_hash,
+        "panel_manifest_sha256": panel_manifest_hash,
+        "panel_preflight_sha256": hashlib.sha256(panel_preflight.read_bytes()).hexdigest(),
+        "inventory_manifest_sha256": inventory_manifest_hash,
+        "evaluator_sha256": hashlib.sha256(evaluator.read_bytes()).hexdigest(),
+        "comparator_sha256": hashlib.sha256(comparator.read_bytes()).hexdigest(),
+    }
     recipe = _write(tmp_path / "recipe.json", {
         "schema_version": finalizer.RECIPE_SCHEMA_VERSION,
         "base_revision": FROZEN_BASE_REVISION,
         "parent_adapter_sha256": parent_hash,
+        "parent_adapter_tree_sha256": parent_tree_hash,
+        "parent_adapter_tree_files": parent_tree_files,
+        "parent_adapter_config_sha256": parent_config_hash,
         "model_inventory_sha256": inventory_hash,
         "arm_manifest_sha256": manifest_hash,
         "arm_sha256": arm_hashes,
+        "image_tree_sha256": image_tree_hash,
+        "image_tree_files": image_tree_files,
         "trainer_sha256": hashlib.sha256(trainer.read_bytes()).hexdigest(),
+        **evaluation_binding,
+        "bootstrap_replicates": 20_000,
+        "bootstrap_seed": 470_047,
         "trainer_config": _trainer_config(),
     })
     checkpoint = tmp_path / "run" / "step-000400"
@@ -152,8 +207,12 @@ def _fixture(tmp_path, monkeypatch):
         "slot": "slot_a", "train_path": train, "arm_manifest_path": manifest,
         "recipe_path": recipe, "config_path": config, "metrics_path": metrics,
         "log_path": log, "checkpoint_path": checkpoint, "parent_adapter": parent,
-        "model_inventory_path": inventory, "base_revision": FROZEN_BASE_REVISION,
-        "model_path": model, "trainer_path": trainer,
+        "image_root": image_root, "model_inventory_path": inventory,
+        "base_revision": FROZEN_BASE_REVISION, "model_path": model,
+        "trainer_path": trainer, "panel_path": panel,
+        "panel_manifest_path": panel_manifest, "panel_preflight_path": panel_preflight,
+        "inventory_manifest_path": inventory_manifest, "evaluator_path": evaluator,
+        "comparator_path": comparator,
     }
     return values, adapter
 
@@ -242,6 +301,53 @@ def test_finalize_rejects_model_and_checkpoint_payload_drift(tmp_path, monkeypat
     values, _ = _fixture(tmp_path / "fresh", monkeypatch)
     (Path(values["checkpoint_path"]) / "trainer.pt").unlink()
     with pytest.raises(ValueError, match="missing a required"):
+        finalizer.finalize(**values)
+
+
+def test_finalize_rejects_parent_tree_or_config_drift(tmp_path, monkeypatch):
+    values, _ = _fixture(tmp_path, monkeypatch)
+    _write(Path(values["parent_adapter"]).parent / "adapter_config.json", {"changed": True})
+    with pytest.raises(ValueError, match="complete frozen R044-R tree"):
+        finalizer.finalize(**values)
+
+    values, _ = _fixture(tmp_path / "fresh", monkeypatch)
+    _write(Path(values["parent_adapter"]).parent / "extra.bin", b"extra")
+    with pytest.raises(ValueError, match="complete frozen R044-R tree"):
+        finalizer.finalize(**values)
+
+
+def test_finalize_rejects_missing_changed_or_extra_arm_images(tmp_path, monkeypatch):
+    values, _ = _fixture(tmp_path, monkeypatch)
+    first_image = next(Path(values["image_root"]).iterdir())
+    first_image.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="content-addressed"):
+        finalizer.finalize(**values)
+
+    values, _ = _fixture(tmp_path / "fresh", monkeypatch)
+    _write(Path(values["image_root"]) / "extra.png", b"extra")
+    with pytest.raises(ValueError, match="file count or file type"):
+        finalizer.finalize(**values)
+
+
+def test_finalize_seals_validation_channel_empty(tmp_path, monkeypatch):
+    values, _ = _fixture(tmp_path, monkeypatch)
+    holdout = _write(tmp_path / "public-panel.jsonl", "{}\n")
+    _update_json(values["config_path"],
+                 lambda item: item.__setitem__("val", [f"public={holdout}"]))
+    with pytest.raises(ValueError, match="validation channel must be exactly empty"):
+        finalizer.finalize(**values)
+
+
+def test_finalize_rejects_panel_preflight_or_evaluator_drift(tmp_path, monkeypatch):
+    values, _ = _fixture(tmp_path, monkeypatch)
+    _update_json(values["panel_preflight_path"],
+                 lambda item: item.__setitem__("status", "fail"))
+    with pytest.raises(ValueError, match="panel/preflight/inventory binding"):
+        finalizer.finalize(**values)
+
+    values, _ = _fixture(tmp_path / "fresh", monkeypatch)
+    Path(values["evaluator_path"]).write_text("# modified evaluator\n")
+    with pytest.raises(ValueError, match="recipe provenance"):
         finalizer.finalize(**values)
 
 

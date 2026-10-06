@@ -5,7 +5,7 @@ import json
 import math
 from pathlib import Path
 
-from scripts.build_r045_arms import _valid_row
+from scripts.build_r045_arms import _tree_hash as _arm_image_tree_hash, _valid_row
 from scripts.build_r047_clause_arms import _summary
 from scripts.build_r047_model_inventory import (
     FROZEN_BASE_REVISION,
@@ -18,7 +18,12 @@ SCHEMA_VERSION = "r047-causal-run-receipt-v1"
 RECIPE_SCHEMA_VERSION = "r047-m1-recipe-v1"
 SLOTS = {"slot_a", "slot_b"}
 FROZEN_PARENT_SHA256 = "3b5535de8c90156662d0b3b3f608fff12f557ddf0890722c4a584dbe93a1f8a4"
+FROZEN_PARENT_TREE_SHA256 = "44e1998efd10275a6f0ab20cc6ccbd97cb9a8ad9b8c3f620620a5f6fdcc91f99"
+FROZEN_PARENT_TREE_FILES = 4
+FROZEN_PARENT_CONFIG_SHA256 = "ba83cbbcc1e793843372bc1f080e272df8f5bb06c9580ba4998c7d03691bb98a"
 FROZEN_ARM_MANIFEST_SHA256 = "c18214db7befdfb93aa818b445bf9606a5f4333a2b7f0024cb802e8399460cef"
+FROZEN_IMAGE_TREE_SHA256 = "56adbf7b9aa3101c06f3f254a0d8f62a9c41b786d29aad71b58a5e912c5f5394"
+FROZEN_IMAGE_TREE_FILES = 200
 KNOWN_ARM_SHA256 = {
     "control": "179b6497fb6050dc5974b2545b1fed198fc0c00b200481e6e29c5bf1f8e27694",
     "treatment": "10366cc7656a89331ff85fd88e304637f5487f82b50f7ccd69be30436357a586",
@@ -51,8 +56,12 @@ TRAINER_CONFIG_KEYS = {
 }
 RECIPE_FIELDS = {
     "schema_version", "base_revision", "parent_adapter_sha256",
-    "model_inventory_sha256", "arm_manifest_sha256", "arm_sha256", "trainer_sha256",
-    "trainer_config",
+    "parent_adapter_tree_sha256", "parent_adapter_tree_files",
+    "parent_adapter_config_sha256", "model_inventory_sha256", "arm_manifest_sha256",
+    "arm_sha256", "image_tree_sha256", "image_tree_files", "trainer_sha256",
+    "panel_sha256", "panel_manifest_sha256", "panel_preflight_sha256",
+    "inventory_manifest_sha256", "evaluator_sha256", "comparator_sha256",
+    "bootstrap_replicates", "bootstrap_seed", "trainer_config",
 }
 FROZEN_TRAINING_INVARIANTS = {
     "steps": EXPECTED_STEPS,
@@ -137,13 +146,69 @@ def _nonempty_file_hash(path, label):
     return file_hash(path)
 
 
-def _validate_train(train_path, manifest_path):
+def _validate_parent(parent_adapter):
+    adapter = Path(parent_adapter)
+    if adapter.name != "adapter_model.safetensors":
+        raise ValueError("parent adapter must be the checkpoint adapter_model.safetensors")
+    checkpoint = adapter.parent
+    config = checkpoint / "adapter_config.json"
+    if not checkpoint.is_dir() or not config.is_file():
+        raise ValueError("parent checkpoint is missing adapter_config.json")
+    if any(item.is_symlink() for item in checkpoint.rglob("*")):
+        raise ValueError("parent checkpoint must not contain symbolic links")
+    weights_hash = _nonempty_file_hash(adapter, "parent adapter")
+    config_hash = _nonempty_file_hash(config, "parent adapter config")
+    tree_digest, tree_files = tree_hash(checkpoint)
+    if (weights_hash != FROZEN_PARENT_SHA256
+            or config_hash != FROZEN_PARENT_CONFIG_SHA256
+            or tree_digest != FROZEN_PARENT_TREE_SHA256
+            or tree_files != FROZEN_PARENT_TREE_FILES):
+        raise ValueError("parent checkpoint differs from the complete frozen R044-R tree")
+    return {
+        "parent_adapter_sha256": weights_hash,
+        "parent_adapter_config_sha256": config_hash,
+        "parent_adapter_tree_sha256": tree_digest,
+        "parent_adapter_tree_files": tree_files,
+    }
+
+
+def _validate_image_tree(manifest, manifest_path, image_root):
+    root = Path(image_root).resolve()
+    expected_root = (Path(manifest_path).resolve().parent / "images").resolve()
+    if root != expected_root or not root.is_dir():
+        raise ValueError("image root is not the frozen arm manifest image directory")
+    images = manifest.get("images")
+    entries = images.get("files_by_sha256") if isinstance(images, dict) else None
+    if (not isinstance(entries, dict) or images.get("files") != FROZEN_IMAGE_TREE_FILES
+            or images.get("tree_sha256") != FROZEN_IMAGE_TREE_SHA256):
+        raise ValueError("arm manifest image contract differs from the frozen R047 tree")
+    actual_files = sorted(item for item in root.rglob("*") if item.is_file())
+    if (len(actual_files) != FROZEN_IMAGE_TREE_FILES
+            or any(item.is_symlink() for item in root.rglob("*"))):
+        raise ValueError("staged image tree file count or file type is invalid")
+    expected_paths = {info.get("path") for info in entries.values()
+                      if isinstance(info, dict)}
+    actual_paths = {item.relative_to(root.parent).as_posix() for item in actual_files}
+    if len(entries) != FROZEN_IMAGE_TREE_FILES or expected_paths != actual_paths:
+        raise ValueError("staged image tree paths differ from the arm manifest")
+    for digest, info in entries.items():
+        if (info.get("sha256") != digest
+                or file_hash(root.parent / info["path"]) != digest):
+            raise ValueError("staged image payload is not content-addressed as declared")
+    image_hash, count = _arm_image_tree_hash(root.parent, entries)
+    if image_hash != FROZEN_IMAGE_TREE_SHA256 or count != FROZEN_IMAGE_TREE_FILES:
+        raise ValueError("staged image tree differs from the frozen R047 tree")
+    return {"image_tree_sha256": image_hash, "image_tree_files": count}
+
+
+def _validate_train(train_path, manifest_path, image_root):
     train_hash = _nonempty_file_hash(train_path, "train payload")
     if train_hash not in set(KNOWN_ARM_SHA256.values()):
         raise ValueError("train payload is not either frozen R047 arm")
     if file_hash(manifest_path) != FROZEN_ARM_MANIFEST_SHA256:
         raise ValueError("arm manifest differs from the frozen R047 manifest")
     manifest = _json(manifest_path, "arm manifest")
+    image_binding = _validate_image_tree(manifest, manifest_path, image_root)
     arm = next(name for name, digest in KNOWN_ARM_SHA256.items() if digest == train_hash)
     output = (manifest.get("outputs") or {}).get("clause" if arm == "treatment" else arm)
     summary = (manifest.get("arms") or {}).get("clause" if arm == "treatment" else arm)
@@ -157,18 +222,52 @@ def _validate_train(train_path, manifest_path):
             or any(not _valid_row(row) for row in rows)
             or any(_summary(rows).get(key) != value for key, value in EXPECTED_ARM.items())):
         raise ValueError("train payload does not satisfy the frozen 800-slot arm contract")
-    return train_hash
+    return train_hash, image_binding
 
 
-def _validate_recipe(recipe_path, model_inventory_sha256, trainer_path):
+def _evaluation_bindings(panel_path, panel_manifest_path, panel_preflight_path,
+                         inventory_manifest_path, evaluator_path, comparator_path):
+    hashes = {
+        "panel_sha256": _nonempty_file_hash(panel_path, "causal panel"),
+        "panel_manifest_sha256": _nonempty_file_hash(
+            panel_manifest_path, "causal panel manifest"),
+        "panel_preflight_sha256": _nonempty_file_hash(
+            panel_preflight_path, "causal panel preflight"),
+        "inventory_manifest_sha256": _nonempty_file_hash(
+            inventory_manifest_path, "causal inventory manifest"),
+        "evaluator_sha256": _nonempty_file_hash(evaluator_path, "causal evaluator"),
+        "comparator_sha256": _nonempty_file_hash(comparator_path, "causal comparator"),
+    }
+    manifest = _json(panel_manifest_path, "causal panel manifest")
+    preflight = _json(panel_preflight_path, "causal panel preflight")
+    primary = (manifest.get("outputs") or {}).get("primary")
+    preflight_primary = (preflight.get("outputs") or {}).get("primary")
+    if (not isinstance(primary, dict) or not isinstance(preflight_primary, dict)
+            or primary.get("sha256") != hashes["panel_sha256"]
+            or preflight_primary.get("sha256") != hashes["panel_sha256"]
+            or preflight.get("panel_manifest_sha256") != hashes["panel_manifest_sha256"]
+            or preflight.get("inventory_manifest_sha256") !=
+            hashes["inventory_manifest_sha256"]
+            or preflight.get("status") != "pass"
+            or preflight.get("benchmark_content_emitted") is not False):
+        raise ValueError("causal panel/preflight/inventory binding is invalid")
+    return hashes
+
+
+def _validate_recipe(recipe_path, model_inventory_sha256, trainer_path, parent_binding,
+                     image_binding, evaluation_binding):
     recipe = _json(recipe_path, "recipe")
     if (set(recipe) != RECIPE_FIELDS
             or recipe.get("schema_version") != RECIPE_SCHEMA_VERSION
             or recipe.get("base_revision") != FROZEN_BASE_REVISION
-            or recipe.get("parent_adapter_sha256") != FROZEN_PARENT_SHA256
             or recipe.get("model_inventory_sha256") != model_inventory_sha256
             or recipe.get("arm_manifest_sha256") != FROZEN_ARM_MANIFEST_SHA256
             or recipe.get("arm_sha256") != KNOWN_ARM_SHA256
+            or any(recipe.get(key) != value for key, value in parent_binding.items())
+            or any(recipe.get(key) != value for key, value in image_binding.items())
+            or any(recipe.get(key) != value for key, value in evaluation_binding.items())
+            or recipe.get("bootstrap_replicates") != 20_000
+            or recipe.get("bootstrap_seed") != 470_047
             or recipe.get("trainer_sha256") != _nonempty_file_hash(
                 trainer_path, "trainer implementation")):
         raise ValueError("recipe provenance differs from the frozen R047-M1 contract")
@@ -207,11 +306,8 @@ def _validate_config(config_path, recipe, train_path, parent_adapter, model_path
             or not _same_path(config.get("init_adapter"), Path(parent_adapter).parent)
             or not _same_path(config.get("out"), Path(checkpoint_path).parent)):
         raise ValueError("trainer config artifact paths do not match supplied artifacts")
-    validation = config.get("val")
-    if not isinstance(validation, list) or any(
-            not isinstance(item, str) or "=" not in item or not item.split("=", 1)[0]
-            or not Path(item.split("=", 1)[1]).is_file() for item in validation):
-        raise ValueError("trainer config validation inputs are invalid")
+    if config.get("val") != []:
+        raise ValueError("trainer config validation channel must be exactly empty")
     return file_hash(config_path)
 
 
@@ -258,18 +354,23 @@ def _validate_checkpoint(checkpoint_path):
 
 
 def finalize(*, slot, train_path, arm_manifest_path, recipe_path, config_path, metrics_path,
-             log_path, checkpoint_path, parent_adapter, model_inventory_path, trainer_path,
-             base_revision, model_path):
+             log_path, checkpoint_path, parent_adapter, image_root, model_inventory_path,
+             trainer_path, panel_path, panel_manifest_path, panel_preflight_path,
+             inventory_manifest_path, evaluator_path, comparator_path, base_revision,
+             model_path):
     if slot not in SLOTS:
         raise ValueError("R047-M1 slot must be slot_a or slot_b")
     if base_revision != FROZEN_BASE_REVISION:
         raise ValueError("base revision differs from the frozen R047 revision")
     _, inventory_hash = verify_inventory(model_inventory_path, model_path, base_revision)
-    parent_hash = _nonempty_file_hash(parent_adapter, "parent adapter")
-    if parent_hash != FROZEN_PARENT_SHA256:
-        raise ValueError("parent adapter differs from frozen R044-R")
-    train_hash = _validate_train(train_path, arm_manifest_path)
-    recipe, recipe_hash = _validate_recipe(recipe_path, inventory_hash, trainer_path)
+    parent_binding = _validate_parent(parent_adapter)
+    train_hash, image_binding = _validate_train(train_path, arm_manifest_path, image_root)
+    evaluation_binding = _evaluation_bindings(
+        panel_path, panel_manifest_path, panel_preflight_path, inventory_manifest_path,
+        evaluator_path, comparator_path)
+    recipe, recipe_hash = _validate_recipe(
+        recipe_path, inventory_hash, trainer_path, parent_binding, image_binding,
+        evaluation_binding)
     config_hash = _validate_config(
         config_path, recipe, train_path, parent_adapter, model_path, checkpoint_path)
     metrics_hash = _validate_metrics(metrics_path)
@@ -282,7 +383,7 @@ def finalize(*, slot, train_path, arm_manifest_path, recipe_path, config_path, m
         "checkpoint_step": EXPECTED_STEPS,
         "train_sha256": train_hash,
         "recipe_sha256": recipe_hash,
-        "parent_adapter_sha256": parent_hash,
+        "parent_adapter_sha256": parent_binding["parent_adapter_sha256"],
         "model_revision": base_revision,
         "model_inventory_sha256": inventory_hash,
         "adapter_sha256": adapter_hash,
@@ -304,8 +405,15 @@ def main(argv=None):
     parser.add_argument("--log", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--parent-adapter", required=True)
+    parser.add_argument("--image-root", required=True)
     parser.add_argument("--model-inventory", required=True)
     parser.add_argument("--trainer", required=True)
+    parser.add_argument("--panel", required=True)
+    parser.add_argument("--panel-manifest", required=True)
+    parser.add_argument("--panel-preflight", required=True)
+    parser.add_argument("--inventory-manifest", required=True)
+    parser.add_argument("--evaluator", required=True)
+    parser.add_argument("--comparator", required=True)
     parser.add_argument("--base-revision", required=True)
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--out", required=True)
@@ -314,8 +422,13 @@ def main(argv=None):
         slot=args.slot, train_path=args.train, arm_manifest_path=args.arm_manifest,
         recipe_path=args.recipe, config_path=args.config, metrics_path=args.metrics,
         log_path=args.log, checkpoint_path=args.checkpoint,
-        parent_adapter=args.parent_adapter, model_inventory_path=args.model_inventory,
-        trainer_path=args.trainer, base_revision=args.base_revision, model_path=args.model_path)
+        parent_adapter=args.parent_adapter, image_root=args.image_root,
+        model_inventory_path=args.model_inventory, trainer_path=args.trainer,
+        panel_path=args.panel, panel_manifest_path=args.panel_manifest,
+        panel_preflight_path=args.panel_preflight,
+        inventory_manifest_path=args.inventory_manifest, evaluator_path=args.evaluator,
+        comparator_path=args.comparator, base_revision=args.base_revision,
+        model_path=args.model_path)
     output = Path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
