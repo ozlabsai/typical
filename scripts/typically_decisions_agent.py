@@ -544,7 +544,7 @@ def run_pass(corpus_db: Path, workdir: Path, spend: Spend, limit: float, progres
            "rows_per_email": round((ok or 0) / max(n, 1), 4), "projected_full_usd": round((usd or 0) / max(n, 1) * len(ids), 0),
            "projected_full_rows": round((ok or 0) / max(n, 1) * len(ids))}
     reasons = Counter()
-    for (w,) in st.execute("SELECT why FROM seen WHERE bad > 0"):
+    for (w,) in st.execute("SELECT why FROM seen WHERE why != '{}'"):
         reasons.update({k.split(": ")[0] + ": " + k.split(": ")[1].split(":")[0]: v for k, v in json.loads(w).items()})
     out["invalid_reasons"] = dict(reasons.most_common())
     progress(f"Pass {'finished' if out['read'] == len(ids) else 'stopped'}: {n:,} emails read, {out['rows']:,} decisions, ${out['usd']:.2f}")
@@ -553,7 +553,7 @@ def run_pass(corpus_db: Path, workdir: Path, spend: Spend, limit: float, progres
 
 # ---------------------------------------------------------------- 3. recurring decision types (the old spike's taxonomy step)
 
-MIN_TYPE = 30   # rows a type needs to become a column; fewer = one-off rows (oneoff.jsonl), reported apart
+MIN_TYPE = 25   # rows a type needs to become a column; fewer = one-off rows (oneoff.jsonl), reported apart
 SLUG = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
 
 
@@ -571,7 +571,8 @@ counterparty's proposed contract revisions?"), not one instance. Each type gets:
 - options: a FIXED set every instance can be mapped onto: noul types use exactly ["yes", "no"] with "yes" = the action;
   choice / score 2-6 short generic options (score ordered least to most)
 - description: what belongs in it and what does not
-Aim for 8-30 types that each cover many lines; leave out questions that do not recur (they stay as one-off rows)."""
+Prefer fewer, broader types: each should cover at least ~3% of the lines (8-30 types in all); leave out questions that do not
+recur (they stay as one-off rows)."""
 TAXO_SCHEMA = obj(types={"type": "array", "items": obj(type_id=S, question=S, kind={"type": "string", "enum": list(TYPES)},
                                                          options={"type": "array", "items": S}, description=S)})
 MAP_SYS = """Map each decision onto ONE decision type of the taxonomy, or "other" when none fits well (do not force a fit), and its

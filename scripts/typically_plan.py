@@ -1,7 +1,7 @@
 """typically: read a table, profile it, and plan how to teach a model from it (the DatasetPlan of
 .context/typically/FLOW.md).
 
-    records = load_records({"kind": "sample"})            # csv | xlsx | hf | sheets | sample (name: northwind | enron) -> [dict[str, str]]
+    records = load_records({"kind": "sample"})            # csv | xlsx | hf | sheets | sample (name: northwind | enron | enron-decisions) -> [dict[str, str]]
     prof = profile(records)                               # facts about the data, no opinions
     plan, source, warnings = llm_plan(prof, sample_rows(prof, records), key, records)   # or heuristic_plan(prof, records)
     render_case(record, plan), answers(record, plan)      # what the model will see / be taught
@@ -29,8 +29,10 @@ import typically_llm as tllm
 
 REPO = Path(__file__).resolve().parent.parent
 SAMPLE_CSV = REPO / "site" / "data" / "typically_sample.csv"
-# name -> (name hint, file). enron: one executive's mailbox through typically_mail (scripts/typically_enron.py)
-SAMPLES = {"northwind": ("Northwind", SAMPLE_CSV), "enron": ("Enron inbox (Vince Kaminski)", REPO / "site" / "data" / "typically_enron.jsonl.gz")}
+# name -> (name hint, file). enron: one executive's mailbox through typically_mail (scripts/typically_enron.py);
+# enron-decisions: the company's business decisions read out of the whole archive (scripts/typically_decisions_agent.py)
+SAMPLES = {"northwind": ("Northwind", SAMPLE_CSV), "enron": ("Enron inbox (Vince Kaminski)", REPO / "site" / "data" / "typically_enron.jsonl.gz"),
+           "enron-decisions": ("Enron decisions", REPO / "site" / "data" / "typically_enron_decisions.jsonl.gz")}
 MAX_ROWS, MAX_VALUES, MAX_CANDIDATES = 20_000, 200, 12
 MAX_PROMPT_TOKENS = 30_000
 MAX_CASE_TOKENS = 1024

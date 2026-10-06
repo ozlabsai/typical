@@ -42,7 +42,7 @@ class Source(BaseModel):
     owner: str | None = None   # mail: the mailbox owner's address(es), comma-separated; None = detected
     sheet: str | None = None   # xlsx sheet; None = the first
     token: str | None = None   # upload: a records_token from an earlier /analyze
-    name: str | None = None   # csv / xlsx / mail file name; sample: "northwind" (default) | "enron"
+    name: str | None = None   # csv / xlsx / mail file name; sample: "northwind" (default) | "enron" | "enron-decisions"
     dataset: str | None = None
     config: str | None = None
     split: str | None = None
@@ -179,7 +179,7 @@ def datasets():
 
 # Data page token -> sample name, label, the models that come with it
 SAMPLE_ROWS = [("sample", "northwind", "Northwind sample", [{"id": "northwind", "name": "Northwind triage"}]),
-               ("sample-enron", "enron", "Enron email sample", [])]
+               ("sample-enron", "enron", "Enron email sample", []), ("sample-enron-decisions", "enron-decisions", "Enron decisions", [])]
 
 
 @cache

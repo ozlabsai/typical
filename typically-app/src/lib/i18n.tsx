@@ -41,6 +41,8 @@ const en = {
   "sample.body": "277 tickets and the four calls their team made on each: which team, escalate, urgency, refund. Already trained, so you can see the whole flow in a minute.",
   "sample.enronTitle": "Enron email: one executive's inbox",
   "sample.enronBody": "Public Enron email archive — how one executive triaged their inbox.",
+  "sample.decisionsTitle": "Enron decisions: the whole company",
+  "sample.decisionsBody": "Business decisions read out of the whole Enron archive: credit, contracts, trading access, hiring.",
   "create.reading": "Reading your data…",
   // understand
   "und.title": "Here's what we understood",
@@ -238,6 +240,8 @@ const he: Record<Key, string> = {
   "sample.body": "277 פניות וארבע ההחלטות שהצוות קיבל על כל אחת: איזה צוות, הסלמה, דחיפות, החזר. כבר מאומן, כך שאפשר לראות את כל התהליך בדקה.",
   "sample.enronTitle": "אימייל של Enron: תיבת הדואר של מנהל בכיר",
   "sample.enronBody": "ארכיון האימייל הציבורי של Enron: איך מנהל בכיר אחד מיין את תיבת הדואר שלו.",
+  "sample.decisionsTitle": "החלטות של Enron: כל החברה",
+  "sample.decisionsBody": "החלטות עסקיות מתוך כל ארכיון האימייל של Enron: אשראי, חוזים, הרשאות מסחר, גיוס.",
   "create.reading": "קוראים את הנתונים…",
   "und.title": "זה מה שהבנו",
   "und.lede": "בדקו איך כל מקרה מתואר ומה החלטתם. תקנו כל מה שלא מדויק; שום דבר לא נשלח לאימון לפני שלב האימון.",

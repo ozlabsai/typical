@@ -83,7 +83,7 @@ def test_datasets_upload_reuse_and_delete(env):
     (root / "jobs" / "acme").mkdir(parents=True)
     (root / "jobs" / "acme" / "job.json").write_text(json.dumps({"name": "Acme", "records_token": tok}))
     ds = c.get("/api/typically/datasets").json()["datasets"]
-    assert [d["token"] for d in ds] == [tok, legacy, "sample", "sample-enron"]
+    assert [d["token"] for d in ds] == [tok, legacy, "sample", "sample-enron", "sample-enron-decisions"]
     assert ds[0]["name"] == "northwind.csv" and ds[0]["rows"] == len(SAMPLE) and ds[0]["models"] == [{"id": "acme", "name": "Acme"}]
     assert ds[1]["rows"] == 2 and ds[1]["columns"] == ["a"] and ds[2]["sample"] and ds[2]["rows"] == len(SAMPLE)
 
@@ -91,7 +91,7 @@ def test_datasets_upload_reuse_and_delete(env):
     assert c.delete("/api/typically/datasets/sample").status_code == 400
     assert c.delete(f"/api/typically/datasets/{legacy}").status_code == 200
     assert c.delete(f"/api/typically/datasets/{legacy}").status_code == 404
-    assert [d["token"] for d in c.get("/api/typically/datasets").json()["datasets"]] == [tok, "sample", "sample-enron"]
+    assert [d["token"] for d in c.get("/api/typically/datasets").json()["datasets"]] == [tok, "sample", "sample-enron", "sample-enron-decisions"]
 
 
 POD_LOG = """ALIVE

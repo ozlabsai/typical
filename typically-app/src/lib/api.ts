@@ -107,7 +107,7 @@ export type Source =
   | { kind: "hf"; dataset: string; config?: string; split?: string; limit?: number }
   | { kind: "sheets"; url: string }
   | { kind: "mail"; data_base64: string; name?: string; owner?: string }
-  | { kind: "sample"; name?: "enron" } // no name: Northwind
+  | { kind: "sample"; name?: "enron" | "enron-decisions" } // no name: Northwind
 
 export interface BuildV2 {
   records_token: string
@@ -143,7 +143,7 @@ export const api = {
 }
 
 export interface Dataset {
-  token: string // "sample" / "sample-enron" for the samples
+  token: string // "sample" / "sample-enron" / "sample-enron-decisions" for the samples
   name: string
   kind: string | null
   rows: number

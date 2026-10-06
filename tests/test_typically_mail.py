@@ -165,5 +165,14 @@ def test_enron_sample(client):
     assert a["n_rows"] > 1000 and "email" in a["columns"] and "Enron" in a["name_hint"]
     assert any(d["column"] == "reply" for d in a["plan"]["decisions"])
     ds = client.get("/api/typically/datasets").json()["datasets"]
-    assert {d["token"] for d in ds if d["sample"]} == {"sample", "sample-enron"}
+    assert {d["token"] for d in ds if d["sample"]} == {"sample", "sample-enron", "sample-enron-decisions"}
     assert tp.load_records({"kind": "sample"})[0].keys() != a["columns"]   # Northwind is still the default sample
+
+
+def test_enron_decisions_sample(client):
+    r = client.post("/api/typically/analyze", json={"source": {"kind": "sample", "name": "enron-decisions"}})
+    assert r.status_code == 200, r.text
+    a = r.json()
+    assert a["name_hint"] == "Enron decisions" and a["columns"][0] == "case"
+    assert [q["column"] for q in a["plan"]["case"]["parts"]] == ["case"]
+    assert {d["column"] for d in a["plan"]["decisions"]} == set(a["columns"][1:]) and all(d["type"] == "noul" for d in a["plan"]["decisions"])

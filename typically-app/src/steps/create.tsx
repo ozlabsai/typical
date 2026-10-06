@@ -18,12 +18,13 @@ import { cn } from "@/lib/utils"
 
 type Tab = "upload" | "mail" | "hf" | "sheets" | "sample"
 type Picked = { name: string; text: string } | { name: string; b64: string }
-type SampleName = "northwind" | "enron"
+type SampleName = "northwind" | "enron" | "enron-decisions"
 const MAIL = /\.(mbox|eml|zip)$/i
 const MAIL_MB = 50 // site/typically_analyze.py MAX_MAIL_MB
-const SAMPLES: Record<SampleName, { title: "sample.title" | "sample.enronTitle"; body: "sample.body" | "sample.enronBody" }> = {
+const SAMPLES: Record<SampleName, { title: `sample.${"title" | "enronTitle" | "decisionsTitle"}`; body: `sample.${"body" | "enronBody" | "decisionsBody"}` }> = {
   northwind: { title: "sample.title", body: "sample.body" },
   enron: { title: "sample.enronTitle", body: "sample.enronBody" },
+  "enron-decisions": { title: "sample.decisionsTitle", body: "sample.decisionsBody" },
 }
 
 const base64 = (f: File) => new Promise<string>((ok, fail) => {
@@ -57,13 +58,13 @@ function DropZone({ picked, icon: Icon, drop, hint, accept, onPick }: {
   )
 }
 
-/** `from`: start from a dataset already uploaded (its records_token, "sample" or "sample-enron"), as opened from the Data page. */
+/** `from`: start from a dataset already uploaded (its records_token, "sample" or "sample-<name>"), as opened from the Data page. */
 export function CreateStep({ project, setProject, next, from }: { project: Project | null; setProject: (p: Project) => void; next: () => void; from?: string }) {
   const { t, lang } = useI18n()
   const [name, setName] = useState(project?.name ?? "")
   const [base, setBase] = useState<Base>(project?.base ?? "small")
   const [tab, setTab] = useState<Tab>(from?.startsWith("sample") ? "sample" : "upload")
-  const [sampleName, setSampleName] = useState<SampleName>(from === "sample-enron" ? "enron" : "northwind")
+  const [sampleName, setSampleName] = useState<SampleName>(from?.startsWith("sample-") ? from.slice(7) as SampleName : "northwind")
   const [file, setFile] = useState<Picked | null>(null)
   const [mail, setMail] = useState<{ name: string; b64: string } | null>(null)
   const [owner, setOwner] = useState("") // mail: the owner field; `asked` is the owner `book` was read as
@@ -92,9 +93,9 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
     : tab === "mail" ? (!mail ? null : { kind: "mail", data_base64: mail.b64, name: mail.name, ...(owner.trim() && owner.trim() !== asked ? { owner: owner.trim() } : {}) })
     : tab === "hf" ? (hf.dataset.includes("/") ? { kind: "hf", dataset: hf.dataset.trim(), split: hf.split || "train", limit: 5000 } : null)
     : tab === "sheets" ? (/docs\.google\.com\/spreadsheets\/d\//.test(sheet) ? { kind: "sheets", url: sheet.trim() } : null)
-    : sampleName === "enron" ? { kind: "sample", name: "enron" } : { kind: "sample" }
+    : sampleName === "northwind" ? { kind: "sample" } : { kind: "sample", name: sampleName }
   const label = dataset ? dataset.name : tab === "upload" ? (file && sheetName ? `${file.name} (${sheetName})` : file?.name) : tab === "mail" ? mail?.name
-    : tab === "hf" ? `Hugging Face: ${hf.dataset}` : tab === "sheets" ? "Google Sheet" : sampleName === "enron" ? "Enron email sample" : "Northwind sample"
+    : tab === "hf" ? `Hugging Face: ${hf.dataset}` : tab === "sheets" ? "Google Sheet" : sampleName === "enron" ? "Enron email sample" : sampleName === "enron-decisions" ? "Enron decisions" : "Northwind sample"
 
   /** A table goes to Upload, a mailbox to Email, whichever tab it was dropped on. */
   async function pick(f?: File) {
