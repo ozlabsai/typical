@@ -1,4 +1,6 @@
 import copy
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +9,8 @@ import torch
 from scripts.build_r045_compositional_transfer import _pair
 from scripts.eval_r047_executor import (
     audit,
+    audit_causal_batch_parity,
+    causal_parity_subset,
     causal_coverage_report,
     clause_view,
     execute_clause,
@@ -16,7 +20,11 @@ from scripts.eval_r047_executor import (
     score_causal_rows_batched,
     seal_causal_predictions,
     validate_sealed_causal_predictions,
+    validate_causal_panel_payload,
+    validate_causal_model_inventory,
+    validate_causal_run_receipt,
 )
+from scripts.build_r047_panel import build as build_r047_panel
 
 
 KINDS = ("decimal", "ledger")
@@ -192,3 +200,71 @@ def test_causal_batched_scorer_is_stable_across_batch_boundaries(monkeypatch):
         max_batch_tokens=10, max_batch_rows=1)
     assert together == singly
     assert [item["id"] for item in together] == [row["id"] for row in rows]
+
+
+def test_causal_panel_manifest_binding_and_frozen_contract(tmp_path):
+    panel = tmp_path / "panel"
+    build_r047_panel(panel, counts={"unseen_k2": 1, "k3": 1, "seen_k2": 1})
+    payload = (panel / "primary.jsonl").read_bytes()
+    manifest = (panel / "manifest.json").read_bytes()
+    rows, _ = validate_causal_panel_payload(payload, manifest, require_frozen=False)
+    assert len(rows) > 0
+    subset = causal_parity_subset(rows)
+    assert len(subset) == len({
+        (row["meta"]["arity"], row["meta"]["language"], row["meta"]["option_order"],
+         row["meta"]["prediction_role"], row["meta"]["prompt_family"],
+         row["meta"]["primitive"]) for row in rows})
+    with pytest.raises(ValueError, match="exact frozen production contract"):
+        validate_causal_panel_payload(payload, manifest, require_frozen=True)
+    changed = json.loads(manifest)
+    changed["outputs"]["primary"]["rows"] -= 1
+    with pytest.raises(ValueError, match="disagrees with manifest"):
+        validate_causal_panel_payload(
+            payload, json.dumps(changed).encode(), require_frozen=False)
+
+
+def test_run_receipt_and_batch_scalar_parity_contracts():
+    sha = hashlib.sha256(b"x").hexdigest()
+    receipt = {"schema_version": "r047-causal-run-receipt-v1", "slot": "slot_a",
+               "status": "complete", "checkpoint_step": 400, "train_sha256": sha,
+               "recipe_sha256": sha, "parent_adapter_sha256": sha,
+               "model_revision": "revision", "model_inventory_sha256": sha,
+               "adapter_sha256": sha, "checkpoint_payload_sha256": sha,
+               "config_sha256": sha, "metrics_sha256": sha, "log_sha256": sha}
+    assert validate_causal_run_receipt(json.dumps(receipt).encode(), sha)["slot"] == "slot_a"
+    receipt["checkpoint_payload_sha256"] = "bad"
+    with pytest.raises(ValueError, match="invalid SHA-256"):
+        validate_causal_run_receipt(json.dumps(receipt).encode(), sha)
+
+    rows = [{"id": "a"}, {"id": "b"}]
+    same = [{"id": "a", "probabilities": {"no": .1, "yes": .9}},
+            {"id": "b", "probabilities": {"no": .8, "yes": .2}}]
+    report = audit_causal_batch_parity(rows, same, copy.deepcopy(same))
+    assert report["exact_discrete_outputs"] and report["max_abs_probability_delta"] == 0
+    changed = copy.deepcopy(same)
+    changed[0]["probabilities"] = {"no": .10002, "yes": .89998}
+    with pytest.raises(ValueError, match="probability delta"):
+        audit_causal_batch_parity(rows, same, changed)
+    changed = copy.deepcopy(same)
+    changed[0]["probabilities"] = {"no": .9, "yes": .1}
+    with pytest.raises(ValueError, match="discrete prediction differs"):
+        audit_causal_batch_parity(rows, same, changed)
+
+
+def test_model_inventory_verifies_actual_tree_and_revision(tmp_path):
+    from scripts.preflight_r043_assets import tree_hash
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text("{}\n")
+    (model / "weights.bin").write_bytes(b"weights")
+    digest, files = tree_hash(model)
+    inventory = {"schema_version": "r047-model-inventory-v1",
+                 "model_id": "google/gemma-4-12B-it", "revision": "revision",
+                 "tree_sha256": digest, "files": files}
+    payload = json.dumps(inventory).encode()
+    assert validate_causal_model_inventory(model, payload, "revision") == inventory
+    (model / "weights.bin").write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="differs from sealed inventory"):
+        validate_causal_model_inventory(model, payload, "revision")
+    with pytest.raises(ValueError, match="schema/revision"):
+        validate_causal_model_inventory(model, payload, "other")

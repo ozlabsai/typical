@@ -4,217 +4,339 @@ import json
 
 import pytest
 
+from scripts.build_r047_panel import _cluster_rows, _jsonl
 from scripts.compare_r047_causal import (
-    MIN_BOOTSTRAP_REPLICATES,
-    _gate,
-    causal_metrics,
-    compare_payloads,
+    MIN_BOOTSTRAP_REPLICATES, _gate, causal_metrics, compare_payloads,
     validate_panel_coverage,
 )
-from scripts.eval_r047_executor import CAUSAL_SCHEMA_VERSION, _canonical_json
+from scripts.eval_r047_executor import (
+    _canonical_json, causal_coverage_report, causal_parity_subset, seal_causal_predictions,
+)
 
 
-def _sealed(record):
-    result = {"schema_version": CAUSAL_SCHEMA_VERSION,
-              "row_sha256": hashlib.sha256(record["id"].encode()).hexdigest(), **record}
-    result["record_sha256"] = hashlib.sha256(_canonical_json(result).encode()).hexdigest()
-    return result
+SHA = {name: hashlib.sha256(name.encode()).hexdigest() for name in (
+    "control-train", "treatment-train", "reference-train", "control-adapter",
+    "treatment-adapter", "parent-adapter", "recipe", "base-inventory",
+    "config", "metrics", "log")}
+MODEL_REVISION = "revision-707f0a3"
 
 
-def _panel(treatment):
-    result = []
-    configurations = (("k2", ["decimal", "ledger"]),
-                      ("k3", ["decimal", "ledger", "policy"]))
-    for cluster, composition in configurations:
-        k = len(composition)
-        for mask in range(2 ** k):
-            pattern = [bool(mask & (1 << index)) for index in range(k)]
-            for language in ("en", "he"):
-                for order in ("no_yes", "yes_no"):
-                    view = f"{cluster}-{mask}-{language}-{order}"
-                    common = {
-                        "semantic_cluster_id": cluster, "semantic_view_id": view,
-                        "scenario_id": f"scenario-{cluster}", "composition": composition,
-                        "arity": k, "language": language, "option_order": order,
-                        "truth_hamming_weight": sum(pattern), "truth_pattern": pattern,
-                        "seen_edge_count": sum(pattern),
-                    }
-                    final_gold = "yes" if all(pattern) else "no"
-                    if treatment:
-                        final_yes = .9 if final_gold == "yes" else .1
-                    else:
-                        final_yes = .4
-                    result.append(_sealed({
-                        "id": f"{view}-final", "gold": final_gold,
-                        "probabilities": {"no": 1 - final_yes, "yes": final_yes},
-                        **common, "prompt_family": "final-v1", "prediction_role": "final",
-                        "primitive": None, "decisive_role": "final",
-                    }))
-                    for index, primitive in enumerate(composition):
-                        gold = "yes" if pattern[index] else "no"
-                        if treatment:
-                            yes = .9 if gold == "yes" else .1
-                        else:
-                            yes = .6
-                        decisive = all(value for position, value in enumerate(pattern)
-                                       if position != index)
-                        result.append(_sealed({
-                            "id": f"{view}-{primitive}", "gold": gold,
-                            "probabilities": {"no": 1 - yes, "yes": yes},
-                            **common, "prompt_family": "clause-v1", "prediction_role": "clause",
-                            "primitive": primitive,
-                            "decisive_role": "decisive" if decisive else "non_decisive",
-                        }))
-    return result
+def _rows():
+    return (_cluster_rows("unseen_k2", ("decimal", "ledger"), 0, 0, 4701)
+            + _cluster_rows("k3", ("decimal", "ledger", "policy"), 0, 0, 4701))
+
+
+def _arm(rows, treatment):
+    predictions = []
+    for row in rows:
+        gold = row["targets"]["decision"]["label"]
+        role = row["meta"]["prediction_role"]
+        yes = ((.9 if gold == "yes" else .1) if treatment
+               else (.6 if role == "clause" else .4))
+        predictions.append({"id": row["id"],
+                            "probabilities": {"no": 1 - yes, "yes": yes}})
+    return seal_causal_predictions(rows, predictions)
 
 
 def _payload(records):
     return "".join(json.dumps(item, sort_keys=True) + "\n" for item in records).encode()
 
 
-def _comparison(control=None, treatment=None, replicates=MIN_BOOTSTRAP_REPLICATES):
-    control = _panel(False) if control is None else control
-    treatment = _panel(True) if treatment is None else treatment
-    first, second = _payload(treatment), _payload(control)
-    first_hash, second_hash = hashlib.sha256(first).hexdigest(), hashlib.sha256(second).hexdigest()
-    assignment = json.dumps({"control_sha256": second_hash,
-                             "treatment_sha256": first_hash}, sort_keys=True).encode()
-    return compare_payloads(
-        first, second, assignment, hashlib.sha256(assignment).hexdigest(),
-        first_hash, second_hash, replicates=replicates, seed=17,
-        reference_payload=_payload(control),
-        reference_sha256=hashlib.sha256(_payload(control)).hexdigest())
+def _manifest(panel, rows):
+    value = {
+        "experiment": "r047_primary_causal_panel", "version": 1,
+        "contract": {"frozen_production": False},
+        "counts_per_composition": {"unseen_k2": 1, "k3": 1, "seen_k2": 1},
+        "clusters": {"unseen_k2": 1, "k3": 1, "seen_k2_near_transfer": 0,
+                     "causal_primary": 2},
+        "compositions": {"unseen_k2": [["decimal", "ledger"]],
+                         "k3": [["decimal", "ledger", "policy"]],
+                         "seen_k2_near_transfer": []},
+        "outputs": {"primary": {"file": "primary.jsonl", "rows": len(rows),
+                                "sha256": hashlib.sha256(panel).hexdigest()}},
+    }
+    return (json.dumps(value, sort_keys=True) + "\n").encode()
 
 
-def test_causal_comparator_recomputes_separate_k2_k3_gates_and_slices():
-    result = _comparison()
-    assert result["co_primary_gate"] == {
-        "passed": True, "strata": {"K2": True, "K3": True},
-        "rule": "intersection-union; K2 and K3 must each pass"}
+def _assignment(panel, manifest):
+    return {
+        "schema_version": "r047-causal-slot-assignment-v1",
+        "control_slot": "slot_b", "treatment_slot": "slot_a",
+        "control_train_sha256": SHA["control-train"],
+        "treatment_train_sha256": SHA["treatment-train"],
+        "reference_train_sha256": SHA["reference-train"],
+        "reference_adapter_sha256": SHA["parent-adapter"],
+        "parent_adapter_sha256": SHA["parent-adapter"],
+        "model_revision": MODEL_REVISION, "recipe_sha256": SHA["recipe"],
+        "model_inventory_sha256": SHA["base-inventory"],
+        "panel_sha256": hashlib.sha256(panel).hexdigest(),
+        "panel_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
+    }
+
+
+def _receipt(slot, train, adapter):
+    value = {"schema_version": "r047-causal-run-receipt-v1", "slot": slot,
+             "train_sha256": train, "recipe_sha256": SHA["recipe"],
+             "parent_adapter_sha256": SHA["parent-adapter"],
+             "model_revision": MODEL_REVISION, "adapter_sha256": adapter,
+             "model_inventory_sha256": SHA["base-inventory"],
+             "checkpoint_payload_sha256": hashlib.sha256(
+                 f"checkpoint-{slot}".encode()).hexdigest(),
+             "config_sha256": SHA["config"], "metrics_sha256": SHA["metrics"],
+             "log_sha256": SHA["log"], "checkpoint_step": 400, "status": "complete"}
+    return (json.dumps(value, sort_keys=True) + "\n").encode()
+
+
+def _report(predictions, panel, manifest, receipt, rows):
+    run = json.loads(receipt)
+    records = [json.loads(line) for line in predictions.decode().splitlines()]
+    report = causal_coverage_report(records)
+    parity = causal_parity_subset(rows)
+    report.update({
+        "predictions_sha256": hashlib.sha256(predictions).hexdigest(),
+        "input_sha256": hashlib.sha256(panel).hexdigest(),
+        "panel_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
+        "adapter_sha256": run["adapter_sha256"], "model_revision": MODEL_REVISION,
+        "train_sha256": run["train_sha256"], "recipe_sha256": SHA["recipe"],
+        "parent_adapter_sha256": SHA["parent-adapter"], "panel_rows": len(rows),
+        "run_receipt_sha256": hashlib.sha256(receipt).hexdigest(),
+        "model_inventory_sha256": SHA["base-inventory"],
+        "model_tree_sha256": hashlib.sha256(b"model-tree").hexdigest(),
+        "model_tree_files": 17,
+        "batch_scalar_parity": {
+            "status": "pass", "rows": len(parity),
+            "subset_ids_sha256": hashlib.sha256(
+                ("\n".join(row["id"] for row in parity) + "\n").encode()).hexdigest(),
+            "exact_discrete_outputs": True, "max_abs_probability_delta": 0.0,
+            "tolerance": 1e-5,
+            "selection": "first_frozen_row_per_arity_language_order_role_family_primitive"},
+    })
+    return (json.dumps(report, sort_keys=True) + "\n").encode()
+
+
+def _artifacts(control=None, treatment=None):
+    rows = _rows()
+    control = _arm(rows, False) if control is None else control
+    treatment = _arm(rows, True) if treatment is None else treatment
+    panel, predictions = _jsonl(rows), {
+        "slot_a": _payload(treatment), "slot_b": _payload(control),
+        "reference": _payload(control)}
+    manifest = _manifest(panel, rows)
+    receipts = {
+        "slot_a": _receipt("slot_a", SHA["treatment-train"], SHA["treatment-adapter"]),
+        "slot_b": _receipt("slot_b", SHA["control-train"], SHA["control-adapter"]),
+        "reference": _receipt("reference", SHA["reference-train"], SHA["parent-adapter"])}
+    reports = {
+        name: _report(predictions[name], panel, manifest, receipts[name], rows)
+        for name in ("slot_a", "slot_b", "reference")}
+    assignment = (json.dumps(_assignment(panel, manifest), sort_keys=True) + "\n").encode()
+    return {"rows": rows, "panel": panel, "manifest": manifest,
+            "predictions": predictions, "reports": reports, "receipts": receipts,
+            "assignment": assignment}
+
+
+def _compare(artifacts=None, replicates=MIN_BOOTSTRAP_REPLICATES,
+             require_frozen=False, **overrides):
+    value = _artifacts() if artifacts is None else artifacts
+    args = {
+        "slot_a_predictions": value["predictions"]["slot_a"],
+        "slot_b_predictions": value["predictions"]["slot_b"],
+        "reference_predictions": value["predictions"]["reference"],
+        "slot_a_report": value["reports"]["slot_a"],
+        "slot_b_report": value["reports"]["slot_b"],
+        "reference_report": value["reports"]["reference"],
+        "panel_payload": value["panel"], "panel_manifest_payload": value["manifest"],
+        "assignment_payload": value["assignment"],
+        "slot_a_run_receipt": value["receipts"]["slot_a"],
+        "slot_b_run_receipt": value["receipts"]["slot_b"],
+        "reference_run_receipt": value["receipts"]["reference"],
+        "slot_a_report_sha256": hashlib.sha256(value["reports"]["slot_a"]).hexdigest(),
+        "slot_b_report_sha256": hashlib.sha256(value["reports"]["slot_b"]).hexdigest(),
+        "reference_report_sha256": hashlib.sha256(
+            value["reports"]["reference"]).hexdigest(),
+        "slot_a_run_receipt_sha256": hashlib.sha256(
+            value["receipts"]["slot_a"]).hexdigest(),
+        "slot_b_run_receipt_sha256": hashlib.sha256(
+            value["receipts"]["slot_b"]).hexdigest(),
+        "reference_run_receipt_sha256": hashlib.sha256(
+            value["receipts"]["reference"]).hexdigest(),
+        "panel_manifest_sha256": hashlib.sha256(value["manifest"]).hexdigest(),
+        "assignment_sha256": hashlib.sha256(value["assignment"]).hexdigest(),
+        "replicates": replicates, "seed": 17,
+        "_require_frozen_panel": require_frozen}
+    args.update(overrides)
+    return compare_payloads(**args)
+
+
+def _reseal(record):
+    unsigned = {key: value for key, value in record.items() if key != "record_sha256"}
+    record["record_sha256"] = hashlib.sha256(_canonical_json(unsigned).encode()).hexdigest()
+
+
+def test_comparator_recomputes_separate_k2_k3_gates_and_slices():
+    result = _compare()
+    assert result["co_primary_gate"]["passed"]
+    assert result["blinding"]["pre_frozen_slot_assignment"] is True
     for name in ("K2", "K3"):
         stratum = result["strata"][name]
         assert stratum["gate"]["deltas"]["clause_macro_ba"] == .5
-        assert stratum["gate"]["deltas"]["final_ba"] == .5
+        assert stratum["gate"]["deltas"]["final_accuracy"] >= .05
         assert stratum["paired_bootstrap"]["clause_macro_ba"]["replicates"] == 20_000
-        assert stratum["treatment"]["direction"]["decimal"]["rate"] == 1
-        assert stratum["treatment"]["direction"]["ledger"]["rate"] == 1
-        assert stratum["treatment"]["option_invariance"]["semantic_agreement"] == 1
-        assert stratum["treatment"]["clauses"]["primitive_language"]
-        assert stratum["treatment"]["clauses"]["truth_hamming_weight"]
-        assert stratum["treatment"]["clauses"]["seen_edge_count"]
-        assert stratum["treatment"]["complete_semantic_views"]["accuracy"] == 1
-        assert stratum["treatment"]["complete_semantic_clusters"]["accuracy"] == 1
-        assert all(value > 0 for value in
-                   stratum["gate"]["dimension_deltas"]["clauses"]["option_order"].values())
-        assert set(stratum["gate"]["treatment_x_order_interaction"]) == {"clauses", "final"}
-    assert result["blinding"]["revealed_only_after_both_hashes_validated"] is True
+        assert stratum["treatment"]["direction"]["primitive"]["decimal"]["rate"] == 1
+        assert stratum["treatment"]["direction"]["primitive"]["ledger"]["rate"] == 1
+        assert stratum["treatment"]["direction"]["hamming1_pairs"]["pair_both_correct"] == 1
 
 
-def test_causal_comparator_never_lets_k3_gain_rescue_failed_k2():
-    control, treatment = _panel(False), _panel(True)
-    control_by_id = {item["id"]: item for item in control}
+def test_comparator_never_pools_k2_and_k3():
+    base = _artifacts()
+    control = [json.loads(line) for line in base["predictions"]["slot_b"].decode().splitlines()]
+    treatment = [json.loads(line) for line in base["predictions"]["slot_a"].decode().splitlines()]
+    by_id = {item["id"]: item for item in control}
     for item in treatment:
         if item["arity"] == 2:
-            item["probabilities"] = copy.deepcopy(control_by_id[item["id"]]["probabilities"])
-            unsigned = {key: value for key, value in item.items() if key != "record_sha256"}
-            item["record_sha256"] = hashlib.sha256(_canonical_json(unsigned).encode()).hexdigest()
-    result = _comparison(control, treatment)
+            item["probabilities"] = copy.deepcopy(by_id[item["id"]]["probabilities"])
+            _reseal(item)
+    result = _compare(_artifacts(control, treatment))
     assert result["co_primary_gate"]["strata"] == {"K2": False, "K3": True}
-    assert result["co_primary_gate"]["passed"] is False
 
 
-def test_causal_comparator_rejects_one_order_only_gain():
-    control, treatment = _panel(False), _panel(True)
-    control_by_id = {item["id"]: item for item in control}
+def test_comparator_rejects_one_order_only_gain():
+    base = _artifacts()
+    control = [json.loads(line) for line in base["predictions"]["slot_b"].decode().splitlines()]
+    treatment = [json.loads(line) for line in base["predictions"]["slot_a"].decode().splitlines()]
+    by_id = {item["id"]: item for item in control}
     for item in treatment:
         if item["option_order"] == "no_yes":
-            item["probabilities"] = copy.deepcopy(control_by_id[item["id"]]["probabilities"])
-            unsigned = {key: value for key, value in item.items() if key != "record_sha256"}
-            item["record_sha256"] = hashlib.sha256(_canonical_json(unsigned).encode()).hexdigest()
-    result = _comparison(control, treatment)
-    for name in ("K2", "K3"):
-        failures = result["strata"][name]["gate"]["failures"]
-        assert any("mechanism gain is not positive for order no_yes" in item
-                   for item in failures)
-        assert result["strata"][name]["gate"]["passed"] is False
+            item["probabilities"] = copy.deepcopy(by_id[item["id"]]["probabilities"])
+            _reseal(item)
+    result = _compare(_artifacts(control, treatment))
+    assert all(any("mechanism gain is not positive for order no_yes" in failure
+                   for failure in result["strata"][name]["gate"]["failures"])
+               for name in ("K2", "K3"))
 
 
-def test_gate_rejects_complete_cluster_regression():
-    control = causal_metrics(_panel(False), 2)
-    treatment = causal_metrics(_panel(True), 2)
-    treatment["complete_semantic_clusters"]["correct"] = -1
-    treatment["complete_semantic_clusters"]["accuracy"] = -1
+def test_gate_rejects_cluster_hamming1_and_direction_cell_regression():
+    records = _artifacts()["predictions"]
+    control = causal_metrics([json.loads(line) for line in records["slot_b"].decode().splitlines()], 2)
+    treatment = causal_metrics([json.loads(line) for line in records["slot_a"].decode().splitlines()], 2)
+    treatment["complete_semantic_clusters"].update(correct=-1, accuracy=-1)
+    treatment["direction"]["hamming1_pairs"].update(both_correct=-1, pair_both_correct=-1)
+    treatment["direction"]["primitive_language_order"][
+        "decimal|en|no_yes"]["rate"] = 0
+    control["direction"]["primitive_language_order"][
+        "decimal|en|no_yes"]["rate"] = 1
     gate = _gate(control, treatment, control,
                  {"clause_macro_ba": {"delta_lcb_95": .1}})
-    assert not gate["passed"]
     assert "complete_semantic_clusters correctness regressed" in gate["failures"]
+    assert "Hamming-1 pair-both correctness regressed" in gate["failures"]
+    assert any("direction primitive_language_order cell" in item for item in gate["failures"])
 
 
-def test_causal_metrics_report_confusions_and_order_probability_stability():
-    metrics = causal_metrics(_panel(True), 2)
-    assert metrics["clauses"]["tp"] > 0 and metrics["clauses"]["tn"] > 0
+def test_secondary_ceiling_rule_is_fixed_noninferiority_and_primary_ceiling_fails():
+    records = _artifacts()["predictions"]
+    perfect = causal_metrics(
+        [json.loads(line) for line in records["slot_a"].decode().splitlines()], 2)
+    bootstrap = {name: {"delta_lcb_95": 0.0} for name in (
+        "clause_macro_ba", "vector_accuracy", "coherence", "final_accuracy")}
+    gate = _gate(perfect, perfect, perfect, bootstrap)
+    assert all(item["branch"] == "ceiling_noninferiority" and item["passed"]
+               for item in gate["secondary_gate_contract"].values())
+    assert "uninformative_primary_ceiling: harder panel required" in gate["failures"]
+
+
+def test_metrics_report_confusions_order_stability_and_direction_cells():
+    metrics = causal_metrics(_arm(_rows(), True), 2)
     assert metrics["clauses"]["tpr"] == metrics["clauses"]["tnr"] == 1
     assert metrics["option_invariance"]["yes_probability_abs_delta_max"] == 0
-    assert metrics["option_invariance"]["jsd_max_nats"] == 0
+    assert metrics["direction"]["primitive_language_order"]
 
 
-def test_causal_comparator_fails_closed_on_tamper_coverage_hash_and_bootstrap():
-    tampered = _panel(False)
-    tampered[0]["language"] = "he"
+def test_partial_or_substitute_panel_fails():
+    with pytest.raises(ValueError, match="exact frozen production contract"):
+        _compare(require_frozen=True)
+    value = _artifacts()
+    changed = copy.deepcopy(value["rows"])
+    changed[0]["state"] += " tampered"
+    panel, manifest = _jsonl(changed), _manifest(_jsonl(changed), changed)
+    assignment = (json.dumps(_assignment(panel, manifest), sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="sealed row hash differs"):
+        _compare(value, panel_payload=panel, panel_manifest_payload=manifest,
+                 panel_manifest_sha256=hashlib.sha256(manifest).hexdigest(),
+                 assignment_payload=assignment,
+                 assignment_sha256=hashlib.sha256(assignment).hexdigest())
+
+
+@pytest.mark.parametrize("target,match", [
+    ("assignment_sha256", "slot-assignment hash mismatch"),
+    ("slot_a_report_sha256", "slot_a evaluator-report hash mismatch"),
+    ("panel_manifest_sha256", "panel-manifest hash mismatch"),
+    ("slot_a_run_receipt_sha256", "slot_a run-receipt hash mismatch")])
+def test_external_hash_tampering_fails(target, match):
+    with pytest.raises(ValueError, match=match):
+        _compare(**{target: "0" * 64})
+
+
+@pytest.mark.parametrize("field", [
+    "predictions_sha256", "input_sha256", "panel_manifest_sha256", "adapter_sha256",
+    "model_revision", "train_sha256", "recipe_sha256", "parent_adapter_sha256", "records"])
+def test_evaluator_report_provenance_tampering_fails(field):
+    value = _artifacts()
+    report = json.loads(value["reports"]["slot_a"])
+    report[field] = 0 if field == "records" else "tampered"
+    payload = (json.dumps(report, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="provenance/count mismatch"):
+        _compare(value, slot_a_report=payload,
+                 slot_a_report_sha256=hashlib.sha256(payload).hexdigest())
+
+
+@pytest.mark.parametrize("field,value", [
+    ("status", "fail"), ("exact_discrete_outputs", False), ("tolerance", 1e-4),
+    ("max_abs_probability_delta", 1.1e-5), ("rows", 0),
+    ("subset_ids_sha256", "0" * 64)])
+def test_evaluator_parity_contract_tampering_fails(field, value):
+    artifacts = _artifacts()
+    report = json.loads(artifacts["reports"]["slot_a"])
+    report["batch_scalar_parity"][field] = value
+    payload = (json.dumps(report, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="parity contract failed|parity subset differs"):
+        _compare(artifacts, slot_a_report=payload,
+                 slot_a_report_sha256=hashlib.sha256(payload).hexdigest())
+
+
+def test_evaluator_parity_subset_must_match_across_all_models():
+    artifacts = _artifacts()
+    report = json.loads(artifacts["reports"]["slot_a"])
+    report["batch_scalar_parity"]["subset_ids_sha256"] = hashlib.sha256(b"other").hexdigest()
+    payload = (json.dumps(report, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="parity subset differs from frozen panel"):
+        _compare(artifacts, slot_a_report=payload,
+                 slot_a_report_sha256=hashlib.sha256(payload).hexdigest())
+
+
+def test_assignment_slot_and_training_provenance_tampering_fails():
+    value = _artifacts()
+    assignment = json.loads(value["assignment"])
+    assignment["control_slot"] = "slot_a"
+    payload = (json.dumps(assignment, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="control/treatment slot assignment"):
+        _compare(value, assignment_payload=payload,
+                 assignment_sha256=hashlib.sha256(payload).hexdigest())
+    assignment = json.loads(value["assignment"])
+    assignment["control_train_sha256"] = "f" * 64
+    payload = (json.dumps(assignment, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="provenance mismatch"):
+        _compare(value, assignment_payload=payload,
+                 assignment_sha256=hashlib.sha256(payload).hexdigest())
+
+
+def test_prediction_tampering_coverage_and_bootstrap_fail_closed():
+    records = _arm(_rows(), False)
+    records[0]["language"] = "he"
     with pytest.raises(ValueError, match="seal mismatch"):
-        validate_panel_coverage(tampered)
-
-    incomplete = _panel(False)
-    incomplete.pop()
+        validate_panel_coverage(records)
+    records = _arm(_rows(), False)
+    records.pop()
     with pytest.raises(ValueError, match="incomplete truth-cube|lacks one final"):
-        validate_panel_coverage(incomplete)
-
+        validate_panel_coverage(records)
     with pytest.raises(ValueError, match="at least 20000"):
-        _comparison(replicates=19_999)
-
-    control, treatment = _panel(False), _panel(True)
-    first, second = _payload(control), _payload(treatment)
-    assignment = json.dumps({"control_sha256": hashlib.sha256(first).hexdigest(),
-                             "treatment_sha256": hashlib.sha256(second).hexdigest()}).encode()
-    with pytest.raises(ValueError, match="file hash mismatch"):
-        compare_payloads(first, second, assignment, hashlib.sha256(assignment).hexdigest(),
-                         "0" * 64, hashlib.sha256(second).hexdigest())
-
-
-def test_final_gate_requires_hash_frozen_structurally_identical_reference():
-    control, treatment = _panel(False), _panel(True)
-    first, second = _payload(control), _payload(treatment)
-    hashes = hashlib.sha256(first).hexdigest(), hashlib.sha256(second).hexdigest()
-    assignment = json.dumps({"control_sha256": hashes[0],
-                             "treatment_sha256": hashes[1]}).encode()
-    assignment_hash = hashlib.sha256(assignment).hexdigest()
-    with pytest.raises(ValueError, match="requires frozen reference"):
-        compare_payloads(first, second, assignment, assignment_hash, *hashes)
-    with pytest.raises(ValueError, match="reference prediction hash mismatch"):
-        compare_payloads(first, second, assignment, assignment_hash, *hashes,
-                         reference_payload=first, reference_sha256="0" * 64)
-
-    changed = copy.deepcopy(control)
-    changed[0]["row_sha256"] = "f" * 64
-    unsigned = {key: value for key, value in changed[0].items() if key != "record_sha256"}
-    changed[0]["record_sha256"] = hashlib.sha256(_canonical_json(unsigned).encode()).hexdigest()
-    reference = _payload(changed)
-    with pytest.raises(ValueError, match="semantic metadata differs"):
-        compare_payloads(first, second, assignment, assignment_hash, *hashes,
-                         reference_payload=reference,
-                         reference_sha256=hashlib.sha256(reference).hexdigest())
-
-
-def test_causal_comparator_rejects_semantic_metadata_drift_between_arms():
-    control, treatment = _panel(False), _panel(True)
-    changed = copy.deepcopy(treatment)
-    changed[0]["scenario_id"] = "different"
-    unsigned = {key: value for key, value in changed[0].items() if key != "record_sha256"}
-    changed[0]["record_sha256"] = hashlib.sha256(_canonical_json(unsigned).encode()).hexdigest()
-    first, second = _payload(control), _payload(changed)
-    hashes = hashlib.sha256(first).hexdigest(), hashlib.sha256(second).hexdigest()
-    assignment = json.dumps({"control_sha256": hashes[0],
-                             "treatment_sha256": hashes[1]}).encode()
-    with pytest.raises(ValueError, match="semantic metadata differs"):
-        compare_payloads(first, second, assignment, hashlib.sha256(assignment).hexdigest(),
-                         *hashes)
+        _compare(replicates=19_999)

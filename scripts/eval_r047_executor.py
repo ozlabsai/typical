@@ -18,6 +18,15 @@ def _read(path):
 
 
 CAUSAL_SCHEMA_VERSION = "r047-causal-prediction-v1"
+FROZEN_CAUSAL_COUNTS = {"unseen_k2": 24, "k3": 16, "seen_k2": 24}
+FROZEN_CAUSAL_CLUSTERS = {"unseen_k2": 312, "k3": 320,
+                          "seen_k2_near_transfer": 48, "causal_primary": 632}
+RUN_RECEIPT_FIELDS = {
+    "schema_version", "slot", "train_sha256", "recipe_sha256",
+    "parent_adapter_sha256", "model_revision", "adapter_sha256", "config_sha256",
+    "metrics_sha256", "log_sha256", "model_inventory_sha256",
+    "checkpoint_payload_sha256", "checkpoint_step", "status",
+}
 CAUSAL_META_FIELDS = (
     "semantic_cluster_id", "semantic_view_id", "scenario_id", "composition", "arity",
     "language", "option_order", "prompt_family", "prediction_role", "primitive",
@@ -27,6 +36,111 @@ CAUSAL_META_FIELDS = (
 
 def _canonical_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _valid_sha256(value):
+    return (isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value))
+
+
+def validate_causal_run_receipt(payload, adapter_sha256=None):
+    """Validate a post-training receipt that binds one named slot to its output adapter."""
+    try:
+        receipt = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise ValueError("invalid causal run receipt") from error
+    if (set(receipt) != RUN_RECEIPT_FIELDS
+            or receipt.get("schema_version") != "r047-causal-run-receipt-v1"
+            or receipt.get("slot") not in {"slot_a", "slot_b", "reference"}
+            or receipt.get("status") != "complete"
+            or not isinstance(receipt.get("checkpoint_step"), int)
+            or isinstance(receipt.get("checkpoint_step"), bool)
+            or receipt["checkpoint_step"] < 0):
+        raise ValueError("causal run receipt schema/status is invalid")
+    hash_fields = RUN_RECEIPT_FIELDS - {
+        "schema_version", "slot", "model_revision", "checkpoint_step", "status"}
+    if any(not _valid_sha256(receipt[field]) for field in hash_fields):
+        raise ValueError("causal run receipt contains an invalid SHA-256")
+    if not isinstance(receipt["model_revision"], str) or not receipt["model_revision"]:
+        raise ValueError("causal run receipt model revision is invalid")
+    if adapter_sha256 is not None and receipt["adapter_sha256"] != adapter_sha256:
+        raise ValueError("causal run receipt adapter differs from loaded adapter")
+    return receipt
+
+
+def validate_causal_model_inventory(model_path, payload, model_revision):
+    """Verify the loaded base-model tree against one sealed immutable inventory."""
+    from scripts.preflight_r043_assets import tree_hash
+    try:
+        inventory = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise ValueError("invalid causal model inventory") from error
+    if (set(inventory) != {"schema_version", "model_id", "revision", "tree_sha256", "files"}
+            or inventory.get("schema_version") != "r047-model-inventory-v1"
+            or inventory.get("model_id") != "google/gemma-4-12B-it"
+            or inventory.get("revision") != model_revision
+            or not _valid_sha256(inventory.get("tree_sha256"))
+            or not isinstance(inventory.get("files"), int)
+            or isinstance(inventory.get("files"), bool) or inventory["files"] <= 0):
+        raise ValueError("causal model inventory schema/revision is invalid")
+    observed_hash, observed_files = tree_hash(model_path)
+    if (inventory["tree_sha256"] != observed_hash
+            or inventory["files"] != observed_files):
+        raise ValueError("loaded base-model tree differs from sealed inventory")
+    return inventory
+
+
+def validate_causal_panel_payload(panel_payload, manifest_payload, require_frozen=True):
+    """Bind evaluation to the declared primary panel and, by default, its frozen contract."""
+    try:
+        rows = [json.loads(line) for line in panel_payload.decode().splitlines() if line.strip()]
+        manifest = json.loads(manifest_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid causal panel or manifest JSON") from error
+    if not isinstance(manifest, dict) or manifest.get("experiment") != "r047_primary_causal_panel":
+        raise ValueError("wrong causal panel manifest")
+    output = (manifest.get("outputs") or {}).get("primary") or {}
+    panel_sha = hashlib.sha256(panel_payload).hexdigest()
+    if (output.get("file") != "primary.jsonl" or output.get("sha256") != panel_sha
+            or output.get("rows") != len(rows)):
+        raise ValueError("primary panel payload disagrees with manifest")
+    if require_frozen:
+        if (manifest.get("contract", {}).get("frozen_production") is not True
+                or manifest.get("counts_per_composition") != FROZEN_CAUSAL_COUNTS
+                or manifest.get("clusters") != FROZEN_CAUSAL_CLUSTERS
+                or len(manifest.get("compositions", {}).get("unseen_k2", [])) != 13
+                or len(manifest.get("compositions", {}).get("k3", [])) != 20):
+            raise ValueError("causal panel manifest is not the exact frozen production contract")
+    clusters = defaultdict(list)
+    for row in rows:
+        _causal_row_metadata(row)
+        meta = row["meta"]
+        if meta.get("panel_stratum") not in {"unseen_k2", "k3"}:
+            raise ValueError("primary panel contains a non-primary stratum")
+        clusters[meta["semantic_cluster_id"]].append(row)
+    by_stratum_composition = Counter()
+    for cluster_id, items in clusters.items():
+        signatures = {(item["meta"]["panel_stratum"],
+                       tuple(item["meta"]["composition"])) for item in items}
+        if len(signatures) != 1:
+            raise ValueError(f"{cluster_id}: panel cluster lineage drift")
+        by_stratum_composition[next(iter(signatures))] += 1
+    expected_compositions = {
+        stratum: {tuple(value) for value in manifest.get("compositions", {}).get(stratum, [])}
+        for stratum in ("unseen_k2", "k3")}
+    for stratum, compositions in expected_compositions.items():
+        expected_count = manifest.get("counts_per_composition", {}).get(stratum)
+        if not isinstance(expected_count, int) or expected_count <= 0:
+            raise ValueError("invalid panel composition count contract")
+        observed = {composition: count for (name, composition), count
+                    in by_stratum_composition.items() if name == stratum}
+        if set(observed) != compositions or any(count != expected_count
+                                                for count in observed.values()):
+            raise ValueError(f"{stratum}: panel composition coverage differs from manifest")
+    expected_primary = manifest.get("clusters", {}).get("causal_primary")
+    if len(clusters) != expected_primary:
+        raise ValueError("primary semantic-cluster count differs from manifest")
+    return rows, manifest
 
 
 def _causal_row_metadata(row):
@@ -576,6 +690,46 @@ def score_causal_rows_batched(model, tokenizer, groups, rows, device, max_length
     return predictions
 
 
+def causal_parity_subset(rows):
+    """Select the first frozen row in every arity/language/order/role/family/primitive cell."""
+    selected, seen = [], set()
+    for row in rows:
+        meta = row["meta"]
+        key = (meta["arity"], meta["language"], meta["option_order"],
+               meta["prediction_role"], meta["prompt_family"], meta["primitive"])
+        if key not in seen:
+            seen.add(key)
+            selected.append(row)
+    return selected
+
+
+def audit_causal_batch_parity(rows, batched, scalar, tolerance=1e-5):
+    """Require actual-model batched scoring to preserve scalar decisions and probabilities."""
+    if tolerance != 1e-5:
+        raise ValueError("causal parity tolerance is frozen at 1e-5")
+    expected_ids = [row["id"] for row in rows]
+    if ([item.get("id") for item in batched] != expected_ids
+            or [item.get("id") for item in scalar] != expected_ids):
+        raise ValueError("causal parity predictions do not preserve frozen subset order")
+    maximum = 0.0
+    for left, right in zip(batched, scalar):
+        left_no, left_yes = _probabilities(left, left["id"])
+        right_no, right_yes = _probabilities(right, right["id"])
+        left_label = "yes" if left_yes > left_no else "no" if left_no > left_yes else "tie"
+        right_label = "yes" if right_yes > right_no else "no" if right_no > right_yes else "tie"
+        if left_label != right_label:
+            raise ValueError(f"{left['id']}: batched/scalar discrete prediction differs")
+        maximum = max(maximum, abs(left_no - right_no), abs(left_yes - right_yes))
+    if maximum > tolerance:
+        raise ValueError(f"batched/scalar probability delta {maximum} exceeds {tolerance}")
+    subset_hash = hashlib.sha256(
+        ("\n".join(expected_ids) + "\n").encode()).hexdigest()
+    return {"status": "pass", "rows": len(rows), "subset_ids_sha256": subset_hash,
+            "exact_discrete_outputs": True, "max_abs_probability_delta": maximum,
+            "tolerance": tolerance,
+            "selection": "first_frozen_row_per_arity_language_order_role_family_primitive"}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
@@ -588,6 +742,9 @@ def main(argv=None):
     parser.add_argument("--m0-threshold", type=float, default=0.98)
     parser.add_argument("--required-kind", action="append", default=[])
     parser.add_argument("--causal-standalone", action="store_true")
+    parser.add_argument("--panel-manifest")
+    parser.add_argument("--run-receipt")
+    parser.add_argument("--base-model-inventory")
     parser.add_argument("--max-batch-tokens", type=int, default=32768)
     parser.add_argument("--max-batch-rows", type=int, default=64)
     args = parser.parse_args(argv)
@@ -603,8 +760,19 @@ def main(argv=None):
                 [row for row in rows if len((row.get("meta") or {}).get("composition", []))
                  >= args.min_clauses])
     if args.causal_standalone:
-        for row in rows:
-            _causal_row_metadata(row)
+        if (not args.panel_manifest or not args.run_receipt
+                or not args.base_model_inventory or not args.adapter):
+            raise ValueError(
+                "causal evaluation requires panel/run/base-inventory provenance and adapter")
+        manifest_payload = Path(args.panel_manifest).read_bytes()
+        run_receipt_payload = Path(args.run_receipt).read_bytes()
+        base_inventory_payload = Path(args.base_model_inventory).read_bytes()
+        model_inventory = validate_causal_model_inventory(
+            args.model, base_inventory_payload, args.model_revision)
+        checked_rows, _ = validate_causal_panel_payload(
+            Path(args.data).read_bytes(), manifest_payload, require_frozen=True)
+        if checked_rows != rows:
+            raise AssertionError("causal panel parser disagreement")
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
     groups = letter_token_groups(tokenizer)
     model = AutoModelForImageTextToText.from_pretrained(
@@ -613,8 +781,20 @@ def main(argv=None):
         model = PeftModel.from_pretrained(model, args.adapter, local_files_only=True)
     model.to("cuda").eval()
     predictions = []
+    parity_report = None
     with torch.no_grad():
         if args.causal_standalone:
+            parity_rows = causal_parity_subset(selected)
+            parity_batched = score_causal_rows_batched(
+                model, tokenizer, groups, parity_rows, torch.device("cuda"), args.max_length,
+                args.max_batch_tokens, args.max_batch_rows)
+            parity_scalar = []
+            for row in parity_rows:
+                probabilities = score_group(
+                    model, tokenizer, groups, row, torch.device("cuda"), args.max_length)["q00"]
+                parity_scalar.append({"id": row["id"], "probabilities": probabilities})
+            parity_report = audit_causal_batch_parity(
+                parity_rows, parity_batched, parity_scalar)
             predictions = score_causal_rows_batched(
                 model, tokenizer, groups, selected, torch.device("cuda"), args.max_length,
                 args.max_batch_tokens, args.max_batch_rows)
@@ -642,11 +822,31 @@ def main(argv=None):
             report["m0_gate"] = m0_gate(report, args.required_kind, args.m0_threshold)
         prediction_payload = "".join(json.dumps(item, sort_keys=True) + "\n" for item in predictions)
     adapter_path = Path(args.adapter) / "adapter_model.safetensors" if args.adapter else None
+    adapter_sha256 = hashlib.sha256(adapter_path.read_bytes()).hexdigest() if adapter_path else None
+    if args.causal_standalone:
+        run_receipt = validate_causal_run_receipt(run_receipt_payload, adapter_sha256)
+        if run_receipt["model_revision"] != args.model_revision:
+            raise ValueError("run receipt model revision differs from evaluator revision")
+        model_inventory_sha256 = hashlib.sha256(base_inventory_payload).hexdigest()
+        if run_receipt["model_inventory_sha256"] != model_inventory_sha256:
+            raise ValueError("run receipt model inventory differs from supplied inventory")
     report.update({"input_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
                    "predictions_sha256": hashlib.sha256(prediction_payload.encode()).hexdigest(),
-                   "adapter_sha256": (hashlib.sha256(adapter_path.read_bytes()).hexdigest()
-                                      if adapter_path else None),
+                   "adapter_sha256": adapter_sha256,
                    "model_revision": args.model_revision})
+    if args.causal_standalone:
+        report.update({
+            "panel_manifest_sha256": hashlib.sha256(manifest_payload).hexdigest(),
+            "run_receipt_sha256": hashlib.sha256(run_receipt_payload).hexdigest(),
+            "train_sha256": run_receipt["train_sha256"],
+            "recipe_sha256": run_receipt["recipe_sha256"],
+            "parent_adapter_sha256": run_receipt["parent_adapter_sha256"],
+            "model_inventory_sha256": model_inventory_sha256,
+            "model_tree_sha256": model_inventory["tree_sha256"],
+            "model_tree_files": model_inventory["files"],
+            "panel_rows": len(rows),
+            "batch_scalar_parity": parity_report,
+        })
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=False)
     (out / "predictions.jsonl").write_text(prediction_payload)

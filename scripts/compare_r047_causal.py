@@ -9,7 +9,14 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.eval_r047_executor import causal_coverage_report, validate_sealed_causal_predictions
+from scripts.eval_r047_executor import (
+    _canonical_json,
+    causal_parity_subset,
+    causal_coverage_report,
+    validate_causal_run_receipt,
+    validate_causal_panel_payload,
+    validate_sealed_causal_predictions,
+)
 
 
 PRIMITIVES = ("conditional", "datetime", "decimal", "fraction", "ledger", "policy")
@@ -146,7 +153,8 @@ def _direction_items(scored):
             negative = patterns[negative_pattern]
             directions.append({"primitive": primitive, "language": language,
                                "option_order": order,
-                               "correct": positive["yes_logit"] > negative["yes_logit"]})
+                               "correct": positive["yes_logit"] > negative["yes_logit"],
+                               "pair_both_correct": positive["correct"] and negative["correct"]})
     return directions
 
 
@@ -206,9 +214,16 @@ def causal_metrics(records, arity):
         composed = "yes" if all(item["predicted"] == "yes" for item in view_clauses) else "no"
         coherences.append(final[0]["predicted"] == composed)
     directions = _direction_items(scored)
-    direction_groups = defaultdict(list)
-    for item in directions:
-        direction_groups[item["primitive"]].append(item["correct"])
+    def direction_slices(key):
+        groups = defaultdict(list)
+        for item in directions:
+            name = key(item)
+            groups[name].append(item)
+        return {name: {"n": len(items),
+                       "rate": sum(item["correct"] for item in items) / len(items),
+                       "pair_both_correct": sum(item["pair_both_correct"] for item in items)
+                       / len(items)}
+                for name, items in sorted(groups.items())}
     crossed = defaultdict(list)
     for item in clauses:
         key = f"{item['primitive']}|{item['language']}|{item['option_order']}"
@@ -251,8 +266,18 @@ def causal_metrics(records, arity):
                   "prompt_family": _slices(finals, "prompt_family"),
                   "truth_hamming_weight": _slices(finals, "truth_hamming_weight"),
                   "seen_edge_count": _slices(finals, "seen_edge_count")},
-        "direction": {primitive: {"n": len(values), "rate": sum(values) / len(values)}
-                      for primitive, values in sorted(direction_groups.items())},
+        "direction": {
+            "primitive": direction_slices(lambda item: item["primitive"]),
+            "language": direction_slices(lambda item: item["language"]),
+            "option_order": direction_slices(lambda item: item["option_order"]),
+            "primitive_language_order": direction_slices(
+                lambda item: f"{item['primitive']}|{item['language']}|{item['option_order']}"),
+            "hamming1_pairs": {"n": len(directions),
+                               "both_correct": sum(item["pair_both_correct"]
+                                                   for item in directions),
+                               "pair_both_correct": sum(item["pair_both_correct"]
+                                                        for item in directions) / len(directions)},
+        },
         "option_invariance": _option_invariance(scored),
     }
 
@@ -316,6 +341,8 @@ def _feature_metrics(matrix):
     cursor += 4
     final_ba = ((values[:, cursor] / values[:, cursor + 1]
                  + values[:, cursor + 2] / values[:, cursor + 3]) / 2)
+    final_accuracy = ((values[:, cursor] + values[:, cursor + 2])
+                      / (values[:, cursor + 1] + values[:, cursor + 3]))
     cursor += 4
     final_nll = values[:, cursor] / values[:, cursor + 2]
     final_brier = values[:, cursor + 1] / values[:, cursor + 2]
@@ -324,6 +351,7 @@ def _feature_metrics(matrix):
     cursor += 6
     result = {"clause_macro_ba": macro_ba, "vector_accuracy": vector,
               "coherence": coherence, "final_ba": final_ba,
+              "final_accuracy": final_accuracy,
               "final_nll": final_nll, "final_brier": final_brier,
               "clause_nll": clause_nll, "clause_brier": clause_brier}
     for index, primitive in enumerate(PRIMITIVES):
@@ -388,23 +416,58 @@ def _gate(control, treatment, reference, bootstrap):
         "vector_accuracy": _delta(treatment, control, ("vectors", "accuracy")),
         "coherence": _delta(treatment, control, ("coherence", "accuracy")),
         "final_ba": _delta(treatment, control, ("final", "balanced_accuracy")),
+        "final_accuracy": _delta(treatment, control, ("final", "accuracy")),
     }
     failures = []
+    secondary_values = {
+        "vector_accuracy": (control["vectors"]["accuracy"],
+                            treatment["vectors"]["accuracy"], .08),
+        "coherence": (control["coherence"]["accuracy"],
+                      treatment["coherence"]["accuracy"], .10),
+        "final_accuracy": (control["final"]["accuracy"],
+                           treatment["final"]["accuracy"], .05),
+    }
     if deltas["clause_macro_ba"] < .05:
         failures.append("clause macro balanced-accuracy delta below +5pp")
+    if control["clauses"]["macro_balanced_accuracy"] > .95:
+        failures.append("uninformative_primary_ceiling: harder panel required")
     if bootstrap["clause_macro_ba"]["delta_lcb_95"] <= 0:
         failures.append("clause macro balanced-accuracy bootstrap LCB is not above zero")
-    if deltas["vector_accuracy"] < .08:
-        failures.append("clause-vector delta below +8pp")
-    if deltas["coherence"] < .10:
-        failures.append("coherence delta below +10pp")
-    if deltas["final_ba"] < .05:
-        failures.append("final balanced-accuracy delta below +5pp")
+    secondary_gate_contract = {}
+    for name, (baseline, candidate, target) in secondary_values.items():
+        if baseline <= 1 - target:
+            passed = deltas[name] >= target
+            secondary_gate_contract[name] = {
+                "branch": "superiority", "target_delta": target,
+                "control": baseline, "treatment": candidate, "passed": passed}
+        else:
+            lcb = bootstrap[name]["delta_lcb_95"]
+            passed = candidate >= .98 and deltas[name] >= 0 and lcb > -.01
+            secondary_gate_contract[name] = {
+                "branch": "ceiling_noninferiority", "treatment_floor": .98,
+                "delta_floor": 0, "bootstrap_lcb_floor_exclusive": -.01,
+                "observed_delta_lcb_95": lcb, "control": baseline,
+                "treatment": candidate, "passed": passed}
+        if not passed:
+            failures.append(f"{name} failed preregistered secondary {secondary_gate_contract[name]['branch']}")
     for primitive in ("decimal", "ledger"):
-        if (primitive not in control["direction"] or primitive not in treatment["direction"]
-                or treatment["direction"][primitive]["rate"]
-                <= control["direction"][primitive]["rate"]):
+        if (primitive not in control["direction"]["primitive"]
+                or primitive not in treatment["direction"]["primitive"]
+                or treatment["direction"]["primitive"][primitive]["rate"]
+                < min(1.0, control["direction"]["primitive"][primitive]["rate"] + 1e-12)):
             failures.append(f"{primitive} direction did not improve")
+    direction_cell_deltas = {}
+    for dimension in ("primitive", "language", "option_order", "primitive_language_order"):
+        direction_cell_deltas[dimension] = {}
+        if set(control["direction"][dimension]) != set(treatment["direction"][dimension]):
+            raise ValueError(f"direction {dimension} coverage differs")
+        for name in sorted(control["direction"][dimension]):
+            effect = _delta(treatment["direction"][dimension],
+                            control["direction"][dimension], (name, "rate"))
+            direction_cell_deltas[dimension][name] = effect
+            if effect < -.02:
+                failures.append(
+                    f"direction {dimension} cell {name} regressed by more than 2pp")
     dimension_deltas = {}
     for section in ("clauses", "final"):
         dimension_deltas[section] = {}
@@ -425,7 +488,8 @@ def _gate(control, treatment, reference, bootstrap):
             raise ValueError(f"{section} option-order coverage is incomplete")
         order_interaction[section] = order_effects["yes_no"] - order_effects["no_yes"]
         for order, effect in order_effects.items():
-            if effect <= 0:
+            control_value = control[section]["option_order"][order]["balanced_accuracy"]
+            if effect <= 0 and control_value < 1:
                 failures.append(f"{section} mechanism gain is not positive for order {order}")
     cell_deltas = {}
     for name in sorted(control["clauses"]["primitive_language_order"]):
@@ -445,6 +509,14 @@ def _gate(control, treatment, reference, bootstrap):
         }
         if any(value < 0 for value in complete_deltas[section].values()):
             failures.append(f"{section} correctness regressed")
+    hamming1_delta = {
+        "both_correct": (treatment["direction"]["hamming1_pairs"]["both_correct"]
+                         - control["direction"]["hamming1_pairs"]["both_correct"]),
+        "pair_both_correct": (treatment["direction"]["hamming1_pairs"]["pair_both_correct"]
+                              - control["direction"]["hamming1_pairs"]["pair_both_correct"]),
+    }
+    if any(value < 0 for value in hamming1_delta.values()):
+        failures.append("Hamming-1 pair-both correctness regressed")
     calibration_ratios = {}
     for baseline_name, baseline_report in (("control", control), ("reference", reference)):
         calibration_ratios[baseline_name] = {}
@@ -459,48 +531,214 @@ def _gate(control, treatment, reference, bootstrap):
                     failures.append(
                         f"{section} {metric} exceeds 1.05x {baseline_name}")
     return {"passed": not failures, "deltas": deltas, "cell_deltas": cell_deltas,
+            "secondary_gate_contract": secondary_gate_contract,
+            "secondary_ceiling_rule": (
+                "superiority below ceiling; otherwise treatment>=.98, delta>=0, "
+                "paired cluster-bootstrap LCB95>-.01"),
+            "direction_cell_deltas": direction_cell_deltas,
             "dimension_deltas": dimension_deltas,
             "treatment_x_order_interaction": order_interaction,
             "complete_correctness_deltas": complete_deltas,
+            "hamming1_pair_both_delta": hamming1_delta,
             "calibration_ratios": calibration_ratios, "failures": failures}
 
 
-def compare_payloads(first_payload, second_payload, assignment_payload, assignment_sha256,
-                     first_sha256, second_sha256, replicates=MIN_BOOTSTRAP_REPLICATES,
-                     seed=470047, reference_payload=None, reference_sha256=None):
-    """Hash and validate both blinded arms before revealing the frozen assignment."""
-    actual = (_sha(first_payload), _sha(second_payload))
-    if actual != (first_sha256, second_sha256):
-        raise ValueError("sealed prediction file hash mismatch")
-    if actual[0] == actual[1]:
-        raise ValueError("causal arms must have distinct sealed prediction hashes")
-    first, second = _read_payload(first_payload), _read_payload(second_payload)
-    _assert_matching_structure(first, second)
-    validate_panel_coverage(first)
-    validate_panel_coverage(second)
-    blinded = dict(zip(sorted(actual), ("arm_0", "arm_1")))
+ASSIGNMENT_FIELDS = {
+    "schema_version", "control_slot", "treatment_slot", "control_train_sha256",
+    "treatment_train_sha256", "reference_train_sha256", "reference_adapter_sha256",
+    "parent_adapter_sha256", "model_revision", "model_inventory_sha256",
+    "recipe_sha256", "panel_sha256", "panel_manifest_sha256",
+}
 
-    if reference_payload is None or reference_sha256 is None:
-        raise ValueError("final causal gate requires frozen reference predictions and hash")
-    if _sha(reference_payload) != reference_sha256:
-        raise ValueError("frozen reference prediction hash mismatch")
-    reference = _read_payload(reference_payload)
-    _assert_matching_structure(first, reference)
-    validate_panel_coverage(reference)
 
+def _valid_sha(value):
+    return (isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value))
+
+
+def _bind_predictions_to_panel(records, panel_rows):
+    if [item["id"] for item in records] != [row.get("id") for row in panel_rows]:
+        raise ValueError("sealed predictions do not exactly cover the raw panel in order")
+    for record, row in zip(records, panel_rows):
+        expected = _sha(_canonical_json(row).encode())
+        if record["row_sha256"] != expected:
+            raise ValueError(f"{record['id']}: sealed row hash differs from raw panel")
+
+
+def _load_evaluator_report(payload, expected_sha256, name, predictions_payload,
+                           panel_sha256, manifest_sha256, expected):
+    if not _valid_sha(expected_sha256) or _sha(payload) != expected_sha256:
+        raise ValueError(f"{name} evaluator-report hash mismatch")
+    try:
+        report = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid {name} evaluator report") from error
+    checks = {
+        "predictions_sha256": _sha(predictions_payload),
+        "input_sha256": panel_sha256,
+        "panel_manifest_sha256": manifest_sha256,
+        "adapter_sha256": expected["adapter_sha256"],
+        "model_revision": expected["model_revision"],
+        "train_sha256": expected["train_sha256"],
+        "recipe_sha256": expected["recipe_sha256"],
+        "parent_adapter_sha256": expected["parent_adapter_sha256"],
+        "run_receipt_sha256": expected["run_receipt_sha256"],
+        "model_inventory_sha256": expected["model_inventory_sha256"],
+        "records": expected["rows"],
+        "panel_rows": expected["rows"],
+        "semantic_clusters": expected["clusters"],
+        "scenarios": expected["clusters"],
+    }
+    failures = [key for key, value in checks.items() if report.get(key) != value]
+    if failures:
+        raise ValueError(f"{name} evaluator report provenance/count mismatch: {failures}")
+    if (not _valid_sha(report.get("model_tree_sha256"))
+            or not isinstance(report.get("model_tree_files"), int)
+            or isinstance(report.get("model_tree_files"), bool)
+            or report["model_tree_files"] <= 0):
+        raise ValueError(f"{name} evaluator model-tree receipt is invalid")
+    parity = report.get("batch_scalar_parity")
+    parity_fields = {"status", "rows", "subset_ids_sha256", "exact_discrete_outputs",
+                     "max_abs_probability_delta", "tolerance", "selection"}
+    if (not isinstance(parity, dict) or set(parity) != parity_fields
+            or parity.get("status") != "pass" or parity.get("exact_discrete_outputs") is not True
+            or not isinstance(parity.get("rows"), int) or isinstance(parity.get("rows"), bool)
+            or parity["rows"] <= 0 or not _valid_sha(parity.get("subset_ids_sha256"))
+            or parity.get("tolerance") != 1e-5
+            or not isinstance(parity.get("max_abs_probability_delta"), (int, float))
+            or not math.isfinite(parity["max_abs_probability_delta"])
+            or parity["max_abs_probability_delta"] > 1e-5):
+        raise ValueError(f"{name} evaluator batched/scalar parity contract failed")
+    if (parity["rows"] != expected["parity_rows"]
+            or parity["subset_ids_sha256"] != expected["parity_subset_ids_sha256"]):
+        raise ValueError(f"{name} evaluator parity subset differs from frozen panel")
+    return report
+
+
+def _load_run_receipt(payload, expected_sha256, expected_slot, expected):
+    if not _valid_sha(expected_sha256) or _sha(payload) != expected_sha256:
+        raise ValueError(f"{expected_slot} run-receipt hash mismatch")
+    receipt = validate_causal_run_receipt(payload)
+    if expected_slot in {"slot_a", "slot_b"} and receipt["checkpoint_step"] != 400:
+        raise ValueError(f"{expected_slot} run receipt is not the frozen step-400 checkpoint")
+    checks = {"slot": expected_slot, "train_sha256": expected["train_sha256"],
+              "recipe_sha256": expected["recipe_sha256"],
+              "parent_adapter_sha256": expected["parent_adapter_sha256"],
+              "model_revision": expected["model_revision"],
+              "model_inventory_sha256": expected["model_inventory_sha256"]}
+    failures = [key for key, value in checks.items() if receipt.get(key) != value]
+    if failures:
+        raise ValueError(f"{expected_slot} run receipt provenance mismatch: {failures}")
+    return receipt
+
+
+def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predictions,
+                     slot_a_report, slot_b_report, reference_report, panel_payload,
+                     panel_manifest_payload, assignment_payload, slot_a_run_receipt,
+                     slot_b_run_receipt, reference_run_receipt, slot_a_report_sha256,
+                     slot_b_report_sha256, reference_report_sha256,
+                     slot_a_run_receipt_sha256, slot_b_run_receipt_sha256,
+                     reference_run_receipt_sha256, panel_manifest_sha256, assignment_sha256,
+                     replicates=MIN_BOOTSTRAP_REPLICATES, seed=470047,
+                     _require_frozen_panel=True):
+    """Compare preassigned slots only after binding panel, manifests, reports, and provenance."""
     if _sha(assignment_payload) != assignment_sha256:
-        raise ValueError("frozen arm-assignment hash mismatch")
+        raise ValueError("frozen slot-assignment hash mismatch")
     try:
         assignment = json.loads(assignment_payload)
     except json.JSONDecodeError as error:
-        raise ValueError("invalid frozen arm assignment") from error
-    if set(assignment) != {"control_sha256", "treatment_sha256"}:
-        raise ValueError("arm assignment must contain exactly control/treatment hashes")
-    if {assignment["control_sha256"], assignment["treatment_sha256"]} != set(actual):
-        raise ValueError("arm assignment does not match both sealed prediction hashes")
-    by_hash = {actual[0]: first, actual[1]: second}
-    control = by_hash[assignment["control_sha256"]]
-    treatment = by_hash[assignment["treatment_sha256"]]
+        raise ValueError("invalid frozen slot assignment") from error
+    if set(assignment) != ASSIGNMENT_FIELDS:
+        raise ValueError("slot assignment schema differs from the frozen contract")
+    if (assignment["schema_version"] != "r047-causal-slot-assignment-v1"
+            or {assignment["control_slot"], assignment["treatment_slot"]}
+            != {"slot_a", "slot_b"}):
+        raise ValueError("invalid pre-frozen control/treatment slot assignment")
+    hash_fields = ASSIGNMENT_FIELDS - {
+        "schema_version", "control_slot", "treatment_slot", "model_revision"}
+    if any(not _valid_sha(assignment[field]) for field in hash_fields):
+        raise ValueError("slot assignment contains an invalid SHA-256")
+    if not isinstance(assignment["model_revision"], str) or not assignment["model_revision"]:
+        raise ValueError("slot assignment model revision is invalid")
+    if assignment["reference_adapter_sha256"] != assignment["parent_adapter_sha256"]:
+        raise ValueError("frozen reference adapter must be the exact parent adapter")
+
+    if (_sha(panel_manifest_payload) != panel_manifest_sha256
+            or assignment["panel_manifest_sha256"] != panel_manifest_sha256):
+        raise ValueError("frozen panel-manifest hash mismatch")
+    if _sha(panel_payload) != assignment["panel_sha256"]:
+        raise ValueError("raw panel hash differs from frozen slot assignment")
+    panel_rows, panel_manifest = validate_causal_panel_payload(
+        panel_payload, panel_manifest_payload, require_frozen=_require_frozen_panel)
+    expected_clusters = panel_manifest["clusters"]["causal_primary"]
+    expected_rows = panel_manifest["outputs"]["primary"]["rows"]
+    parity_rows = causal_parity_subset(panel_rows)
+    parity_subset_ids_sha256 = _sha(
+        ("\n".join(row["id"] for row in parity_rows) + "\n").encode())
+
+    slot_records = {"slot_a": _read_payload(slot_a_predictions),
+                    "slot_b": _read_payload(slot_b_predictions)}
+    reference = _read_payload(reference_predictions)
+    for records in (*slot_records.values(), reference):
+        _bind_predictions_to_panel(records, panel_rows)
+        validate_panel_coverage(records)
+    _assert_matching_structure(slot_records["slot_a"], slot_records["slot_b"])
+    _assert_matching_structure(slot_records["slot_a"], reference)
+
+    common = {"model_revision": assignment["model_revision"],
+              "recipe_sha256": assignment["recipe_sha256"],
+              "parent_adapter_sha256": assignment["parent_adapter_sha256"],
+              "model_inventory_sha256": assignment["model_inventory_sha256"],
+              "parity_rows": len(parity_rows),
+              "parity_subset_ids_sha256": parity_subset_ids_sha256,
+              "rows": expected_rows, "clusters": expected_clusters}
+    slot_expectations = {}
+    for role in ("control", "treatment"):
+        slot = assignment[f"{role}_slot"]
+        slot_expectations[slot] = {
+            **common, "train_sha256": assignment[f"{role}_train_sha256"]}
+    receipt_inputs = {"slot_a": (slot_a_run_receipt, slot_a_run_receipt_sha256),
+                      "slot_b": (slot_b_run_receipt, slot_b_run_receipt_sha256)}
+    receipts = {}
+    for slot in ("slot_a", "slot_b"):
+        receipts[slot] = _load_run_receipt(
+            *receipt_inputs[slot], slot, slot_expectations[slot])
+        slot_expectations[slot].update(
+            adapter_sha256=receipts[slot]["adapter_sha256"],
+            run_receipt_sha256=receipt_inputs[slot][1])
+    reference_expectation = {
+        **common, "train_sha256": assignment["reference_train_sha256"]}
+    receipts["reference"] = _load_run_receipt(
+        reference_run_receipt, reference_run_receipt_sha256, "reference",
+        reference_expectation)
+    if receipts["reference"]["adapter_sha256"] != assignment["reference_adapter_sha256"]:
+        raise ValueError("reference run receipt adapter differs from frozen parent")
+    reference_expectation.update(
+        adapter_sha256=receipts["reference"]["adapter_sha256"],
+        run_receipt_sha256=reference_run_receipt_sha256)
+    reports = {
+        "slot_a": _load_evaluator_report(
+            slot_a_report, slot_a_report_sha256, "slot_a", slot_a_predictions,
+            assignment["panel_sha256"], panel_manifest_sha256, slot_expectations["slot_a"]),
+        "slot_b": _load_evaluator_report(
+            slot_b_report, slot_b_report_sha256, "slot_b", slot_b_predictions,
+            assignment["panel_sha256"], panel_manifest_sha256, slot_expectations["slot_b"]),
+        "reference": _load_evaluator_report(
+            reference_report, reference_report_sha256, "reference", reference_predictions,
+            assignment["panel_sha256"], panel_manifest_sha256,
+            reference_expectation),
+    }
+    parity_signatures = {(report["batch_scalar_parity"]["rows"],
+                          report["batch_scalar_parity"]["subset_ids_sha256"])
+                         for report in reports.values()}
+    if len(parity_signatures) != 1:
+        raise ValueError("evaluator reports used different parity subsets")
+    model_tree_signatures = {(report["model_tree_sha256"], report["model_tree_files"])
+                             for report in reports.values()}
+    if len(model_tree_signatures) != 1:
+        raise ValueError("evaluator reports used different base-model trees")
+    control = slot_records[assignment["control_slot"]]
+    treatment = slot_records[assignment["treatment_slot"]]
 
     strata, gates = {}, {}
     for arity in (2, 3):
@@ -514,12 +752,24 @@ def compare_payloads(first_payload, second_payload, assignment_payload, assignme
                                "paired_bootstrap": bootstrap, "gate": gate}
         gates[f"K{arity}"] = gate["passed"]
     return {
-        "schema_version": "r047-causal-comparison-v1",
-        "blinding": {"prediction_hashes_sorted": sorted(actual), "blind_labels": blinded,
-                     "assignment_sha256": assignment_sha256,
-                     "revealed_only_after_both_hashes_validated": True},
-        "arms": assignment,
-        "reference_sha256": reference_sha256,
+        "schema_version": "r047-causal-comparison-v2",
+        "blinding": {"assignment_sha256": assignment_sha256,
+                     "control_slot": assignment["control_slot"],
+                     "treatment_slot": assignment["treatment_slot"],
+                     "pre_frozen_slot_assignment": True},
+        "provenance": {"assignment": assignment,
+                       "panel_manifest_sha256": panel_manifest_sha256,
+                       "evaluator_report_sha256": {
+                           "slot_a": slot_a_report_sha256, "slot_b": slot_b_report_sha256,
+                           "reference": reference_report_sha256},
+                       "run_receipt_sha256": {
+                           "slot_a": slot_a_run_receipt_sha256,
+                           "slot_b": slot_b_run_receipt_sha256,
+                           "reference": reference_run_receipt_sha256},
+                       "prediction_sha256": {
+                           "slot_a": reports["slot_a"]["predictions_sha256"],
+                           "slot_b": reports["slot_b"]["predictions_sha256"],
+                           "reference": reports["reference"]["predictions_sha256"]}},
         "coverage": {"control": causal_coverage_report(control),
                      "treatment": causal_coverage_report(treatment),
                      "reference": causal_coverage_report(reference)},
@@ -535,25 +785,52 @@ def compare_payloads(first_payload, second_payload, assignment_payload, assignme
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--first", required=True)
-    parser.add_argument("--second", required=True)
-    parser.add_argument("--first-sha256", required=True)
-    parser.add_argument("--second-sha256", required=True)
+    parser.add_argument("--slot-a-predictions", required=True)
+    parser.add_argument("--slot-b-predictions", required=True)
+    parser.add_argument("--reference-predictions", required=True)
+    parser.add_argument("--slot-a-report", required=True)
+    parser.add_argument("--slot-b-report", required=True)
+    parser.add_argument("--reference-report", required=True)
+    parser.add_argument("--slot-a-report-sha256", required=True)
+    parser.add_argument("--slot-b-report-sha256", required=True)
+    parser.add_argument("--reference-report-sha256", required=True)
+    parser.add_argument("--slot-a-run-receipt", required=True)
+    parser.add_argument("--slot-b-run-receipt", required=True)
+    parser.add_argument("--reference-run-receipt", required=True)
+    parser.add_argument("--slot-a-run-receipt-sha256", required=True)
+    parser.add_argument("--slot-b-run-receipt-sha256", required=True)
+    parser.add_argument("--reference-run-receipt-sha256", required=True)
+    parser.add_argument("--panel", required=True)
+    parser.add_argument("--panel-manifest", required=True)
+    parser.add_argument("--panel-manifest-sha256", required=True)
     parser.add_argument("--assignment", required=True)
     parser.add_argument("--assignment-sha256", required=True)
-    parser.add_argument("--reference", required=True)
-    parser.add_argument("--reference-sha256", required=True)
     parser.add_argument("--bootstrap-replicates", type=int, default=MIN_BOOTSTRAP_REPLICATES)
     parser.add_argument("--bootstrap-seed", type=int, default=470047)
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
-    first, second = Path(args.first).read_bytes(), Path(args.second).read_bytes()
-    assignment = Path(args.assignment).read_bytes()
-    reference = Path(args.reference).read_bytes()
     result = compare_payloads(
-        first, second, assignment, args.assignment_sha256, args.first_sha256,
-        args.second_sha256, args.bootstrap_replicates, args.bootstrap_seed,
-        reference, args.reference_sha256)
+        slot_a_predictions=Path(args.slot_a_predictions).read_bytes(),
+        slot_b_predictions=Path(args.slot_b_predictions).read_bytes(),
+        reference_predictions=Path(args.reference_predictions).read_bytes(),
+        slot_a_report=Path(args.slot_a_report).read_bytes(),
+        slot_b_report=Path(args.slot_b_report).read_bytes(),
+        reference_report=Path(args.reference_report).read_bytes(),
+        panel_payload=Path(args.panel).read_bytes(),
+        panel_manifest_payload=Path(args.panel_manifest).read_bytes(),
+        assignment_payload=Path(args.assignment).read_bytes(),
+        slot_a_run_receipt=Path(args.slot_a_run_receipt).read_bytes(),
+        slot_b_run_receipt=Path(args.slot_b_run_receipt).read_bytes(),
+        reference_run_receipt=Path(args.reference_run_receipt).read_bytes(),
+        slot_a_report_sha256=args.slot_a_report_sha256,
+        slot_b_report_sha256=args.slot_b_report_sha256,
+        reference_report_sha256=args.reference_report_sha256,
+        slot_a_run_receipt_sha256=args.slot_a_run_receipt_sha256,
+        slot_b_run_receipt_sha256=args.slot_b_run_receipt_sha256,
+        reference_run_receipt_sha256=args.reference_run_receipt_sha256,
+        panel_manifest_sha256=args.panel_manifest_sha256,
+        assignment_sha256=args.assignment_sha256,
+        replicates=args.bootstrap_replicates, seed=args.bootstrap_seed)
     output = Path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
