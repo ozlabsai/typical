@@ -7,6 +7,12 @@ R047 parent decision and R048-H headroom gate
 WorkflowEvals-style decisions beyond matched predicate supervision while preserving Hebrew and
 multimodal behavior.
 
+**Implementation status:** Stage-1 categorical Brier training, fail-closed threshold/temperature
+validation, explicit objective telemetry, and complete-outcome NLL/Brier/ECE/AURC scoring are
+implemented in commits `4058ba0`, `e729d1b`, `dc40fe4`, and `cb736e1`. Independent audits found no
+blocking defects. Rendered rows carry calibration metrics; semantic endpoint/cluster aggregation is
+explicitly a robustness summary and does not claim a joint calibrated confidence.
+
 ## Evidence boundary
 
 The acronym `RLCD` refers to different methods and must not be used without expansion:

@@ -51,7 +51,7 @@
 | R048-H | B3 | Hard action_v1.1 headroom panel | multi-failure executable counterfactual clusters; EN/HE; both orders | parent singleton exact actions, topology/value/renderer slices, leakage | BUILDING | Old action_v1 is retention-only: R044-R scores `255/256` and `1999/2000`. Training is prohibited until new parent accuracy is `55--94%` and a 32-group treatment overfit reaches `>=95%`. |
 | R048-P | B3/B4 | Exact-action loss causal pilot | identical 3,200-slot grouped+text+pixel+Hebrew mixture; weight `0` vs `.1` | exact actions, clustered CI, twins, fields, calibration, retention | BLOCKED | Generic grouped exact-policy trainer is committed and audited (`95` focused; `729` passed, `11` skipped broader); supports priority/collect, empty/multi-action outcomes, nullable primary, arbitrary 2--12 fields, and exact outcome NLL. Waits for R048-H, immutable orchestration, and R047 parent decision. |
 | R048-X | B3 | Generic exact-outcome DSL | enumerate Boolean assignments through arbitrary deterministic action programs | exact action sets/primary actions, topology transfer | CPU DONE | Generic compiler/executor, exact differentiable outcome marginalization, singleton scorer, and trainer integration are implemented. The replacement leakage-safe efficacy panel is being rebuilt incrementally before any GPU training. |
-| R049 | B3/B4 | Calibrated-decision post-training | field CE control versus exact-outcome NLL versus bounded exact-outcome Brier; optional outcome-only diagnostic | unseen-policy exact outcomes, Brier/NLL/AURC, selective risk, predicates, HE/MM retention | IMPLEMENTING | TypeSafe's RLCD recipe is undisclosed. OpenJev-RLCD supports calibrate-then-reinforce, but Typical has no sampled rationale and can differentiate its finite outcome distribution exactly. Implement Stage-1 Brier and calibrated outcome scoring now; online rationale RL is gated on `+5pp` single-rationale headroom or `>=10%` NLL reduction. Design: `docs/research/R049_CALIBRATED_DECISION_POSTTRAIN_20261006.md`. |
+| R049 | B3/B4 | Calibrated-decision post-training | field CE control versus exact-outcome NLL versus bounded exact-outcome Brier; optional outcome-only diagnostic | unseen-policy exact outcomes, Brier/NLL/AURC, selective risk, predicates, HE/MM retention | CPU READY | Stage-1 categorical Brier, fail-closed `.5/1.0` calibration contract, unambiguous telemetry, and complete-outcome NLL/Brier/ECE/AURC scoring are implemented and independently audited with no blocking findings (`4058ba0`, `e729d1b`, `dc40fe4`, `cb736e1`; latest focused audit suite `156` passed). Online rationale RL remains gated on `+5pp` single-rationale headroom or `>=10%` NLL reduction. Design: `docs/research/R049_CALIBRATED_DECISION_POSTTRAIN_20261006.md`. |
 
 ## Active resource
 
@@ -68,7 +68,7 @@
   `108afb5c1246668a4ffc49743bdc482303febdde52374deea55e6173ed039613`.
 - Current job: R047 treatment singleton evaluation is live under fail-closed controller PID `2340`;
   reference/control/training receipts are complete. In parallel, R048-H rebuilds the first
-  non-saturated exact-policy efficacy panel and R049 implements bounded proper-score training and
-  outcome calibration metrics. R047-S, R048-P, and every R049 GPU arm remain gated on causal
+  non-saturated exact-policy efficacy panel; R049 bounded proper-score training and outcome
+  calibration metrics are CPU-ready. R047-S, R048-P, and every R049 GPU arm remain gated on causal
   evidence and measured panel headroom.
 - The 30-minute cost guard remains loaded. Any new ephemeral pod must receive a fresh archive receipt before shutdown.
