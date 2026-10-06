@@ -204,7 +204,7 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
               </div>
             ) : (
             <Tabs value={tab} onValueChange={(v) => (setTab(v as Tab), setError(null))}>
-              <TabsList className="max-w-full justify-start overflow-x-auto">
+              <TabsList className="max-w-full justify-start overflow-x-auto overflow-y-hidden [scrollbar-width:none]">
                 <TabsTrigger value="upload">{t("tab.upload")}</TabsTrigger>
                 <TabsTrigger value="mail">{t("tab.mail")}</TabsTrigger>
                 <TabsTrigger value="hf">{t("tab.hf")}</TabsTrigger>
