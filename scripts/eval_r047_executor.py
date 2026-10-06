@@ -141,6 +141,7 @@ def _score(item, gold, row_id):
     probability = yes if gold == "yes" else no
     return {"gold": gold, "predicted": predicted, "correct": predicted == gold,
             "yes_logit": math.log(max(yes, 1e-12) / max(no, 1e-12)),
+            "gold_probability": probability, "confidence": max(no, yes),
             "nll": -math.log(max(probability, 1e-12)),
             "brier": (yes - float(gold == "yes")) ** 2}
 
@@ -158,11 +159,43 @@ def _balanced_accuracy(items):
     return _rate(recalls)
 
 
+def _p05(values):
+    values = sorted(values)
+    return values[max(0, math.ceil(0.05 * len(values)) - 1)] if values else None
+
+
+def _ece(items, bins=10):
+    total, error = len(items), 0.0
+    for index in range(bins):
+        lower, upper = index / bins, (index + 1) / bins
+        group = [item for item in items if lower <= item["confidence"]
+                 and (item["confidence"] < upper or index == bins - 1)]
+        if group:
+            error += len(group) / total * abs(
+                _rate([item["confidence"] for item in group])
+                - _rate([item["correct"] for item in group]))
+    return error
+
+
 def _clause_summary(items):
+    no_items = [item for item in items if item["gold"] == "no"]
+    yes_items = [item for item in items if item["gold"] == "yes"]
+    gold_probabilities = [item["gold_probability"] for item in items]
     return {"n": len(items), "accuracy": _rate([item["correct"] for item in items]),
             "balanced_accuracy": _balanced_accuracy(items),
-            "no_n": sum(item["gold"] == "no" for item in items),
-            "yes_n": sum(item["gold"] == "yes" for item in items)}
+            "no_n": len(no_items), "yes_n": len(yes_items),
+            "tn": sum(item["predicted"] == "no" for item in no_items),
+            "fp": sum(item["predicted"] != "no" for item in no_items),
+            "tp": sum(item["predicted"] == "yes" for item in yes_items),
+            "fn": sum(item["predicted"] != "yes" for item in yes_items),
+            "tnr": _rate([item["correct"] for item in no_items]),
+            "tpr": _rate([item["correct"] for item in yes_items]),
+            "nll": _rate([item["nll"] for item in items]),
+            "brier": _rate([item["brier"] for item in items]),
+            "ece_10bin": _ece(items),
+            "gold_probability_mean": _rate(gold_probabilities),
+            "gold_probability_p05": _p05(gold_probabilities),
+            "gold_probability_min": min(gold_probabilities)}
 
 
 def _final_summary(items):
@@ -170,7 +203,8 @@ def _final_summary(items):
             "accuracy": _rate([item["correct"] for item in items]),
             "balanced_accuracy": _balanced_accuracy(items),
             "nll": _rate([item["nll"] for item in items]),
-            "brier": _rate([item["brier"] for item in items])}
+            "brier": _rate([item["brier"] for item in items]),
+            "ece_10bin": _ece(items)}
 
 
 def audit(rows, predictions, min_clauses=1):
@@ -216,7 +250,9 @@ def audit(rows, predictions, min_clauses=1):
                 clause_gold = projected["targets"]["decision"]["label"]
                 item = _score(by_id[projected["id"]], clause_gold, projected["id"])
                 item.update({"id": projected["id"], "parent_id": view["id"],
-                             "language": meta["language"], "kind": clause["kind"]})
+                             "language": meta["language"], "kind": clause["kind"],
+                             "role": ("decisive" if clause["kind"] == meta["decisive_kind"]
+                                      else "non_decisive")})
                 clauses.append(item)
                 view_clauses.append(item)
             vectors.append(all(item["correct"] for item in view_clauses))
@@ -226,13 +262,15 @@ def audit(rows, predictions, min_clauses=1):
             raise ValueError(f"{row['id']}: final counterfactual labels must flip")
         positive = next(item for item in pair if item["gold"] == "yes")
         negative = next(item for item in pair if item["gold"] == "no")
-        pairs.append({"direction": positive["yes_logit"] > negative["yes_logit"],
+        delta = positive["yes_logit"] - negative["yes_logit"]
+        pairs.append({"direction": delta > 0,
                       "both_correct": all(item["correct"] for item in pair),
+                      "delta": delta,
                       "language": pair[0]["language"],
                       "decisive_kind": pair[0]["decisive_kind"]})
 
     clause_groups = {}
-    for key in ("kind", "language"):
+    for key in ("kind", "language", "role"):
         groups = defaultdict(list)
         for item in clauses:
             groups[item[key]].append(item)
@@ -244,12 +282,23 @@ def audit(rows, predictions, min_clauses=1):
             groups[item[key]].append(item)
         pair_groups[key] = {name: {"pairs": len(items),
                                   "direction_rate": _rate([item["direction"] for item in items]),
-                                  "pair_both_correct": _rate([item["both_correct"] for item in items])}
+                                  "pair_both_correct": _rate([item["both_correct"] for item in items]),
+                                  "delta_mean": _rate([item["delta"] for item in items]),
+                                  "delta_p05": _p05([item["delta"] for item in items]),
+                                  "delta_min": min(item["delta"] for item in items),
+                                  "margin_rate": _rate([item["delta"] >= 2 for item in items]),
+                                  "mean_hinge": _rate([max(0, 2 - item["delta"])
+                                                       for item in items])}
                             for name, items in sorted(groups.items())}
+    deltas = [item["delta"] for item in pairs]
     result = {"rows": len(selected), "final": _final_summary(finals),
               "final_pairs": {"pairs": len(pairs),
                               "direction_rate": _rate([item["direction"] for item in pairs]),
                               "pair_both_correct": _rate([item["both_correct"] for item in pairs]),
+                              "delta_mean": _rate(deltas), "delta_p05": _p05(deltas),
+                              "delta_min": min(deltas),
+                              "margin_rate": _rate([delta >= 2 for delta in deltas]),
+                              "mean_hinge": _rate([max(0, 2 - delta) for delta in deltas]),
                               **pair_groups},
               "clauses": {**_clause_summary(clauses), **clause_groups,
                           "vectors": len(vectors), "vector_accuracy": _rate(vectors)},
