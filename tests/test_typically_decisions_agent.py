@@ -179,3 +179,25 @@ def test_export_writes_gzip_table(tmp_path):
     (tmp_path / "table.jsonl").write_text('{"case": "x", "a": "yes"}\n{"case": "y", "a": ""}\n')
     assert da.export(tmp_path, tmp_path / "t.jsonl.gz") == 2
     assert [json.loads(l)["case"] for l in gzip.open(tmp_path / "t.jsonl.gz", "rt")] == ["x", "y"]
+
+
+def test_out_of_credit_waits_then_stops(corpus, tmp_path, fake, monkeypatch):
+    monkeypatch.setattr(da, "PAY_WAIT_S", 0)
+    monkeypatch.setattr(da, "WORKERS", 1)
+    n = {"calls": 0}
+    real = tllm.chat_tools
+
+    def flaky(*a, **k):   # two 402s (a top-up landing), then fine
+        n["calls"] += 1
+        if n["calls"] <= 2:
+            raise tllm.LLMError("HTTPStatusError 402")
+        return real(*a, **k)
+    monkeypatch.setattr(tllm, "chat_tools", flaky)
+    events = []
+    out = da.run_pass(corpus, tmp_path, da.Spend(tmp_path / "s.json", 5), 5, events.append)
+    assert out["read"] == 11 and sum("Out of LLM credit" in e for e in events) == 2
+    monkeypatch.setattr(tllm, "chat_tools", lambda *a, **k: (_ for _ in ()).throw(tllm.LLMError("HTTPStatusError 402")))
+    (tmp_path / "state.db").unlink()
+    events.clear()
+    out = da.run_pass(corpus, tmp_path, da.Spend(tmp_path / "s2.json", 5), 5, events.append)
+    assert out["read"] == 0 and "Stopping: the LLM account stayed out of credit" in events

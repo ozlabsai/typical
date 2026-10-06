@@ -207,6 +207,7 @@ def validate(d: dict, email: str, ctx: list[str], company: list[str]) -> tuple[d
 
 CHEAP, ESCALATE_TO = "anthropic/claude-haiku-4.5", None   # None: typically_llm's default (the newest opus)
 MAX_TURNS, WORKERS = 3, 32   # turn 3 must submit: at most 2 context() calls per email
+PAY_TRIES, PAY_WAIT_S = 5, 60   # HTTP 402 (no credit): retry the email after a wait, then stop the pass
 SYSTEM = """You read ONE email from a company's archive and report the BUSINESS DECISIONS made in it. The rows you report train a
 model that learns how this company decides, so precision matters more than recall: report a decision only when it is clearly
 there and every field can be filled exactly as the rules below demand. Most emails (newsletters, chatter, scheduling, FYIs,
@@ -519,13 +520,22 @@ def run_pass(corpus_db: Path, workdir: Path, spend: Spend, limit: float, progres
                 mid = next(todo, None)
             if mid is None:
                 return
-            try:
-                one(con, mid)
-            except BudgetSpent:
-                stop.set()
-            except tllm.LLMError as e:   # not marked seen: a rerun retries it
-                progress(f"LLM error on #{mid}: {e}")
-                time.sleep(5)
+            for attempt in range(PAY_TRIES + 1):
+                try:
+                    one(con, mid)
+                except BudgetSpent:
+                    stop.set()
+                except tllm.LLMError as e:   # not marked seen: a rerun retries it
+                    if "402" in str(e) and attempt < PAY_TRIES and not stop.is_set():   # out of credit: an auto top-up takes a moment
+                        progress(f"Out of LLM credit on #{mid}; waiting {PAY_WAIT_S}s ({attempt + 1}/{PAY_TRIES})")
+                        time.sleep(PAY_WAIT_S)
+                        continue
+                    progress(f"LLM error on #{mid}: {e}")
+                    if "402" in str(e):
+                        progress("Stopping: the LLM account stayed out of credit")
+                        stop.set()
+                    time.sleep(5)
+                break
 
     def ticker():
         while not stop.wait(30):
@@ -729,7 +739,7 @@ def table(st: sqlite3.Connection, types: dict) -> tuple[list[dict], list[dict], 
 
 
 def build_dataset(corpus_db: Path, *, budget_usd: float, progress=lambda event: None, workdir: Path = WORK,
-                  max_emails: int | None = None, reserve: float = 0.12) -> tuple[list[dict], list[dict], dict]:
+                  max_emails: int | None = None, reserve: float = 0.15) -> tuple[list[dict], list[dict], dict]:
     """The email archive indexed in corpus_db -> (table rows, decision types, stats). Reads emails until done or until only
     `reserve` of the budget is left for the types + audit; a rerun with the same workdir resumes. budget_usd is a hard cap on spend."""
     workdir.mkdir(parents=True, exist_ok=True)
