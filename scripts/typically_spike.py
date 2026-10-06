@@ -28,6 +28,7 @@ import random
 import re
 import sys
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -388,6 +389,7 @@ def build_import(records, text_col, decisions, rng, balance=True, flips=0.10):
 
 
 # ============================== typically UI import v2: from a confirmed DatasetPlan ==============================
+LLM_WORKERS = 8   # parallel enrichment calls (OpenRouter rate limits are far above this)
 FLIP_RATE, POLICY_RATE, SYNTH_SHARE, SYNTH_MIN, TRANSLATE_RATE, EVAL_TRANSLATE_RATE = 0.10, 0.30, 0.15, 10, 0.20, 0.10
 TEXTS = {"type": "object", "properties": {"texts": {"type": "array", "items": {"type": "string"}}}, "required": ["texts"],
          "additionalProperties": False}
@@ -557,14 +559,21 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None):
             tr_states = rng.sample(sorted(base["train"]), max(1, round(TRANSLATE_RATE * len(base["train"]))))
             tasks += _translate_tasks(tr_states, lang, lambda l, s, t: tr.extend(_copy(base["train"][s], t, l)))
             tasks += _translate_tasks(ev_states, lang, lambda l, s, t: ev.setdefault(l, []).extend(_copy(base["import_oneliner"][s], t, l)))
-        for prompt, out_chars, apply in tasks:
-            max_tokens = min(16000, int(out_chars / 2) + 500)   # no spend cap: the operator pays (llm_cost_usd is still reported)
+        def call(task):   # no spend cap: the operator pays (llm_cost_usd is still reported)
+            prompt, out_chars, _ = task
             try:
-                out, usage = llm("Return only the JSON requested.", prompt, TEXTS, max_tokens=max_tokens)
+                return llm("Return only the JSON requested.", prompt, TEXTS, max_tokens=min(16000, int(out_chars / 2) + 500))
+            except Exception as e:   # experimental: one failed call skips its cases; never echo the message (may hold the key)
+                return e
+        # calls run in parallel; results are applied in task order on this thread (apply mutates shared lists; reproducible)
+        with ThreadPoolExecutor(LLM_WORKERS) as pool:
+            for (_, _, apply), res in zip(tasks, pool.map(call, tasks)):
+                if isinstance(res, Exception):
+                    warnings.append(f"An AI enrichment call failed ({type(res).__name__}); its cases were skipped.")
+                    continue
+                out, usage = res
                 cost += tllm.usd(usage["input_tokens"], usage["output_tokens"])
                 apply(out["texts"])
-            except Exception as e:   # experimental: one failed call skips its cases; never echo the message (may hold the key)
-                warnings.append(f"An AI enrichment call failed ({type(e).__name__}); its cases were skipped.")
         # a synthetic / translated case must not share a normalised state with the other side: train side vs val + real eval + eval
         # translations, then eval translations vs the final train
         norms = lambda rows: {tp.norm(r["state"]) for r in rows}
