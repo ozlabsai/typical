@@ -419,7 +419,9 @@ def test_reference_provenance_schema_tampering_fails_even_when_rehashed():
 
 @pytest.mark.parametrize("field", [
     "predictions_sha256", "input_sha256", "panel_manifest_sha256", "adapter_sha256",
-    "model_revision", "train_sha256", "recipe_sha256", "parent_adapter_sha256", "records"])
+    "panel_preflight_sha256", "inventory_manifest_sha256", "evaluator_sha256",
+    "adapter_tree_sha256", "checkpoint_payload_sha256", "model_revision",
+    "train_sha256", "recipe_sha256", "parent_adapter_sha256", "records"])
 def test_evaluator_report_provenance_tampering_fails(field):
     value = _artifacts()
     report = json.loads(value["reports"]["slot_a"])
@@ -432,7 +434,9 @@ def test_evaluator_report_provenance_tampering_fails(field):
 
 @pytest.mark.parametrize("field", [
     "adapter_sha256", "model_revision", "model_inventory_sha256",
-    "reference_provenance_sha256", "provenance_role"])
+    "panel_preflight_sha256", "inventory_manifest_sha256", "evaluator_sha256",
+    "reference_provenance_sha256", "adapter_config_sha256", "adapter_tree_sha256",
+    "source_checkpoint_provenance_sha256", "provenance_role"])
 def test_reference_report_provenance_tampering_fails(field):
     value = _artifacts()
     report = json.loads(value["reports"]["reference"])
@@ -441,6 +445,16 @@ def test_reference_report_provenance_tampering_fails(field):
     with pytest.raises(ValueError, match="provenance/count mismatch"):
         _compare(value, reference_report=payload,
                  reference_report_sha256=hashlib.sha256(payload).hexdigest())
+
+
+def test_evaluator_adapter_tree_file_count_tampering_fails():
+    value = _artifacts()
+    report = json.loads(value["reports"]["slot_a"])
+    report["adapter_tree_files"] = 0
+    payload = (json.dumps(report, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="adapter-tree receipt is invalid"):
+        _compare(value, slot_a_report=payload,
+                 slot_a_report_sha256=hashlib.sha256(payload).hexdigest())
 
 
 @pytest.mark.parametrize("field,value", [
