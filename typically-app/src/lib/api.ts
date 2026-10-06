@@ -136,6 +136,7 @@ export const api = {
   compare: (req: { state: string; decisions: Query[]; models: string[] }) => call<Compare>("compare", req),
   train: (name: string) => call<TrainStatus>("train", { name }),
   trainStatus: (slug: string) => call<TrainStatus>(`train/${encodeURIComponent(slug)}`),
+  stopTraining: (slug: string) => call<{ stopping: string }>(`train/${encodeURIComponent(slug)}/stop`, {}),
   analyze: (source: Source, lang: "en" | "he") => call<import("@/lib/project").Analysis>("analyze", { source, lang }),
   capabilities: () => call<{ ai: boolean; hf_namespace: string | null; languages: string[] }>("capabilities"),
   buildPlan: (req: BuildV2) => call<Build>("build", req),

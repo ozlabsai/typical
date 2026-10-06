@@ -6,7 +6,7 @@ import { StatusDot } from "@/components/app-sidebar"
 import { ShareButton } from "@/components/share-dialog"
 import { Page, PageHeader, SectionHeader, Stat } from "@/components/layout"
 import { CodeBlock, msg, StatusCopy } from "@/components/shared"
-import { StatusLine, TrainingProgress, useTrainStatus } from "@/components/training-progress"
+import { StatusLine, StopButton, TrainingProgress, useTrainStatus } from "@/components/training-progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -231,6 +231,7 @@ function TrainingCard({ m }: { m: LibraryModel }) {
       <CardHeader>
         <CardTitle>{t(ready ? "models.howTrained" : failed ? "tr.stopped" : "models.training")}</CardTitle>
         {!failed && !ready && <CardDescription>{status ? <StatusLine status={status} /> : m.code || m.message ? <StatusCopy code={m.code} message={m.message} /> : t("models.notReady")}</CardDescription>}
+        {!ready && !failed && <CardAction><StopButton slug={m.id} /></CardAction>}
         {ready && <CardAction><Button variant="ghost" size="sm" aria-expanded={open} onClick={() => setOpen(!open)}>{t(open ? "models.hideRun" : "models.showRun")}</Button></CardAction>}
       </CardHeader>
       {(!ready || open) && (

@@ -3,7 +3,7 @@ import { AlertCircle, ArrowRight, ChevronDown, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { msg, OptionCard, PageHead } from "@/components/shared"
-import { settled, StatusLine, TrainingProgress } from "@/components/training-progress"
+import { settled, StatusLine, StopButton, TrainingProgress } from "@/components/training-progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -145,6 +145,7 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
             </CardHeader>
             <CardContent><TrainingProgress status={status} /></CardContent>
             <CardFooter className="justify-end">
+              {status.phase !== "done" && status.phase !== "failed" && project.slug && <StopButton slug={project.slug} />}
               {status.phase === "done" && <Button onClick={next}>{t("tr.see")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></Button>}
               {status.phase === "failed" && <Button onClick={start}>{t("tr.retry")}</Button>}
             </CardFooter>

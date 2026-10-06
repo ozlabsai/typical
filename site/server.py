@@ -347,12 +347,18 @@ def start_job(slug: str, base: str = "small", steps: int = 400, prepare=None) ->
     def end():
         with _jobs_lock:
             _jobs.pop(slug, None)
+        typically_job._STOP.discard(slug)
 
     def work():
         try:
             if prepare:
                 try:
                     prepare()
+                    typically_job.check_stop(slug)   # stopped while preparing: never rent the GPU
+                except typically_job.Stopped:
+                    typically_job.write_status(slug, "failed", "You stopped this run before it reached a GPU; nothing is running or billing.",
+                                               "stopped", events=[typically_job.event("failed")])
+                    return
                 except Exception as e:   # HTTPException (bad plan / data) or anything else: the card says why, nothing was rented
                     why = e.detail if isinstance(e, HTTPException) else f"{type(e).__name__}: {e}"
                     typically_job.write_status(slug, "failed", f"Preparing your examples failed: {why}", "failed_build",
@@ -390,6 +396,15 @@ def train(req: TrainRequest):
     return train_slug(_slug(req.name), req.base, req.steps)
 
 
+@app.post("/api/typically/train/{slug}/stop")
+def stop(slug: str):
+    """Ask a running job to stop: it raises at its next pod call (≤ ~20 s) and deletes the GPU in its finally, as on any failure."""
+    if not typically_job.SLUG_RE.fullmatch(slug) or not auth.visible(slug) or slug not in _jobs:
+        raise HTTPException(404, "no running job with that name")
+    typically_job.stop(slug)
+    return {"stopping": slug}
+
+
 @app.post("/api/typically/teach")
 def teach(req: BuildPlanRequest):
     """/build + /train in one call that returns at once: the job's first milestone builds the dataset (AI enrichment included),
@@ -399,6 +414,7 @@ def teach(req: BuildPlanRequest):
     records = _plan_records(req, slug)
 
     def progress(kind: str, done: int, total: int):
+        typically_job.check_stop(slug)   # Stop during AI enrichment: build_from_plan drops the queued calls
         typically_job.add_events(slug, typically_job.event(kind, n=done, of=total))
 
     def prepare():

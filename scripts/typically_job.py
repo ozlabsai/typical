@@ -50,6 +50,23 @@ ACTIVE = PHASES[:6]
 SLUG_RE = re.compile(r"^[a-z0-9_]{1,40}$")
 # a hosted server (deploy/serve.sh) uses "typically-hosted-job-": its reconcile then never sees a local server's pods on the same account
 POD_PREFIX = os.environ.get("TYPICALLY_POD_PREFIX") or "typically-job-"
+_STOP: set[str] = set()   # slugs the user pressed Stop on; checked before every pod call and between AI enrichment calls
+STOPPED = "You stopped this run. The GPU was shut down; nothing is running or billing."
+
+
+class Stopped(BaseException):   # BaseException: no retry / poll handler may swallow it
+    """The user pressed Stop."""
+
+
+def stop(slug: str) -> None:
+    _STOP.add(slug)
+
+
+def check_stop(slug: str) -> None:
+    if slug in _STOP:
+        raise Stopped()
+
+
 _ACTIVE: set[str] = set()   # job_ids running in THIS process; ponytail: reconcile assumes one process owns all typically-job-* pods
 REMOTE = "/workspace/pcdm"
 JOB_SH = """trap 'echo $? > /workspace/job.exit' EXIT   # the poller reads the chain's exit code, not log text
@@ -196,6 +213,7 @@ class Job:
 
     def call(self, argv: list[str], cap: float, out: Path | None = None) -> str:
         """_run under the job's single deadline. Cleanup (delete) calls _run directly so it still works after the deadline."""
+        check_stop(self.slug)
         left = self.deadline - time.monotonic()
         if left <= 0:
             raise Deadline(f"the job took longer than {DEADLINE_S * BASES[self.base]['scale'] / 60:.0f} minutes")
@@ -447,9 +465,10 @@ def run(slug: str, log=None, base: str = "small", steps: int = 400, prepared: bo
             j.to("done", "Your model is ready.", events=[event("done")], progress=1.0)
         except BaseException as e:   # incl. KeyboardInterrupt from the CLI; the pod must still go
             log(f"FAILED: {type(e).__name__}: {e}")
-            failed = PROVIDER_DOWN if isinstance(e, ProviderDown) else f"Training did not finish: {e}"
+            failed = PROVIDER_DOWN if isinstance(e, ProviderDown) else STOPPED if isinstance(e, Stopped) else f"Training did not finish: {e}"
             j.to("failed", failed, "failed_timeout" if isinstance(e, Deadline) else "failed_training" if isinstance(e, TrainingFailed)
-                 else "failed_provider" if isinstance(e, ProviderDown) else "failed_infra", events=[event("failed")])
+                 else "failed_provider" if isinstance(e, ProviderDown) else "stopped" if isinstance(e, Stopped) else "failed_infra",
+                 events=[event("failed")])
         finally:
             gone = j.delete()
             if gone and j.pod_id:

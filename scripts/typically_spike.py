@@ -570,7 +570,8 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None, progress=Non
         total, done = Counter(), Counter()
         for *_, kind, n in tasks:
             total[kind] += n
-        with ThreadPoolExecutor(LLM_WORKERS) as pool:
+        pool = ThreadPoolExecutor(LLM_WORKERS)
+        try:
             for (_, _, apply, kind, n), res in zip(tasks, pool.map(call, tasks)):
                 done[kind] += n
                 if progress:
@@ -581,6 +582,8 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None, progress=Non
                 out, usage = res
                 cost += tllm.usd(usage["input_tokens"], usage["output_tokens"])
                 apply(out["texts"])
+        finally:   # a Stop raised by progress() must not wait for the queued calls (the ≤ LLM_WORKERS in flight finish alone)
+            pool.shutdown(wait=False, cancel_futures=True)
         # a synthetic / translated case must not share a normalised state with the other side: train side vs val + real eval + eval
         # translations, then eval translations vs the final train
         norms = lambda rows: {tp.norm(r["state"]) for r in rows}

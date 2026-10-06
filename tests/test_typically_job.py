@@ -589,3 +589,17 @@ def test_dense_loss_and_val_agreement_series(tmp_path):
     assert s["acc"][s["step"].index(50)] == 0.64 and s["val"].count(None) == 9
     flags = tj.train_flags("acme", 400, "co_acme", tj.RELEASED_ARGS["small"])
     assert flags[flags.index("--log_every") + 1] == "10" and flags[flags.index("--val_every") + 1] == "50"
+
+
+def test_stop_mid_training_deletes_the_pod_and_says_stopped(env, monkeypatch):
+    class Cli(FakeCli):   # the user presses Stop while the first training poll is answered
+        def __call__(self, argv, timeout, out=None):
+            if argv[0] == "ssh" and "job.pid" in argv[-1] and "kill" in argv[-1]:
+                tj.stop(SLUG)
+            return super().__call__(argv, timeout, out)
+    cli = use(monkeypatch, Cli(POLLS))
+    tj.run(SLUG, lambda m: None)
+    st = tj.read_status(SLUG)
+    assert (st["phase"], st["code"], st["message"]) == ("failed", "stopped", tj.STOPPED)
+    assert cli.deleted_ids() == {"pod1"} and cli.pods == []
+    tj._STOP.discard(SLUG)

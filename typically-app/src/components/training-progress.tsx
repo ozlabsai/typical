@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react"
-import { Check, Circle, Cpu, Loader2, X } from "lucide-react"
+import { Check, Circle, Cpu, Loader2, Square, X } from "lucide-react"
+import { toast } from "sonner"
 
-import { StatusCopy } from "@/components/shared"
+import { msg, StatusCopy } from "@/components/shared"
 import { TrainingCurve } from "@/components/training-curve"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -49,6 +50,27 @@ export function useTrainStatus(slug: string, active: boolean) {
     return () => clearInterval(t)
   }, [slug, active])
   return st
+}
+
+/** Stop a running job: it ends at its next GPU-provider call (≤ ~20 s), deletes the GPU, and the card turns "Stopped". */
+export function StopButton({ slug }: { slug: string }) {
+  const { t } = useI18n()
+  const [busy, setBusy] = useState(false)
+  async function stop() {
+    if (!window.confirm(t("tr.stopConfirm"))) return
+    setBusy(true)
+    try {
+      await api.stopTraining(slug)
+    } catch (e) {
+      toast.error(msg(e))
+      setBusy(false)
+    }
+  }
+  return (
+    <Button variant="outline" size="sm" onClick={stop} disabled={busy}>
+      {busy ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Square data-icon="inline-start" />} {t(busy ? "tr.stopping" : "tr.stop")}
+    </Button>
+  )
 }
 
 /** Each milestone's state, start event and duration; `failedAt`: the milestone the job stopped in. */
