@@ -1,0 +1,542 @@
+"""Teach it: rent one H100 on RunPod, fine-tune typical-small|medium on .context/typically/jobs/<slug>/, fetch the result, delete the pod.
+
+uv run --no-project python scripts/typically_job.py <slug> [small|medium] [steps]   (stdlib + the runpodctl/ssh/scp/git binaries only)
+Progress for the UI: .context/typically/jobs/<slug>/status.json; full log: jobs/<slug>/job.log (never contains the HF token).
+The pod (named typically-job-<slug>-<job_id>, job_id in status.json) is deleted in a `finally` on every path; a single deadline (75 min small,
+150 min medium) caps every subprocess call. RunPod API calls (create / get / list) ride out a flaky API with backoff, then fail as
+"failed_provider"; deletion retries until confirmed. `--reconcile` (also run at server start and before every job) deletes orphaned typically-job-* pods.
+`--train-flags <company> <steps> <run>` (run on the pod by scripts/typically_spike_pod.sh) prints the pcdm/train.py flags.
+Needs: runpodctl configured (`runpodctl config --apiKey "$RUNPOD_API_KEY"` also creates the ~/.runpod/ssh key this uses), and HF_TOKEN
+(env, else the `hf auth login` cache). Data dir: TYPICALLY_DATA, else .context/typically.
+"""
+import json
+import math
+import os
+import re
+import secrets
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+TYPICALLY = Path(os.environ.get("TYPICALLY_DATA") or REPO / ".context" / "typically")
+KEY = Path.home() / ".runpod" / "ssh" / "RunPod-Key-Go"
+IMAGE = "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
+SSH_OPTS = ["-i", str(KEY), "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=20"]
+NOT_SHIPPED = ("site/", "figures/", "paper/", "blog/", "docs/", "vendor/")   # ponytail: nothing the training chain reads
+POLL_S, READY_S, DEADLINE_S, STALE_S = 20, 300, 75 * 60, 90 * 60   # DEADLINE_S / STALE_S are the small base's; x BASES[base]["scale"]
+WAIT_CAP_S = 3 * READY_S   # readiness wait incl. time lost to a failing RunPod API (which does not count against READY_S of boot)
+RETRY_S = (5, 15, 30)   # backoff between the attempts of one RunPod API call (4 attempts)
+PROVIDER_DOWN = "The GPU provider isn't responding; nothing is running or billing."
+NO_GPU = re.compile(r"instance|availab|capacity", re.I)   # ponytail: runpodctl's no-capacity text is not documented; this is a guess
+HEARTBEAT = timedelta(minutes=15)   # an active job not owned by this process is orphaned only after this long without a status write
+STEPS = (200, 400, 800)   # Quick / Balanced / Thorough
+# scale: deadline + stale multiplier. mem: the memory profile of each release's own recipe (medium = 4B: grad-checkpointing, smaller micro-batch).
+BASES = {"small": {"scale": 1, "mem": ["--grad_accum", "8"]}, "medium": {"scale": 2, "mem": ["--grad_ckpt", "--grad_accum", "16"]}}
+# The released checkpoints' ckpt["args"] the fine-tune must match. The pod reads the real ones from runs/base/best.pt (train_flags);
+# this table only feeds the command the UI displays -- ponytail: verified against both releases 2026-09-30, re-check when a release changes.
+RELEASED_ARGS = {
+    "small": {"backbone": "Qwen/Qwen3-1.7B-Base", "tap_layer": 20, "nc_render": "semif", "lora_r": 16, "lora_layers": 8,
+              "nc_head": "n3", "null": "factored", "noul_head": "bern", "score_head": "choice"},
+    "medium": {"backbone": "Qwen/Qwen3.5-4B-Base", "tap_layer": 23, "nc_render": "letters_nonull", "lora_r": 16, "lora_layers": 8,
+               "nc_head": "n3", "null": "factored", "noul_head": "bern", "score_head": "choice"},
+}
+PHASES = ("queued", "starting_gpu", "uploading", "training", "evaluating", "downloading", "done", "failed")
+ACTIVE = PHASES[:6]
+SLUG_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+# a hosted server (deploy/serve.sh) uses "typically-hosted-job-": its reconcile then never sees a local server's pods on the same account
+POD_PREFIX = os.environ.get("TYPICALLY_POD_PREFIX") or "typically-job-"
+_STOP: set[str] = set()   # slugs the user pressed Stop on; checked before every pod call and between AI enrichment calls
+STOPPED = "You stopped this run. The GPU was shut down; nothing is running or billing."
+
+
+class Stopped(BaseException):   # BaseException: no retry / poll handler may swallow it
+    """The user pressed Stop."""
+
+
+def stop(slug: str) -> None:
+    _STOP.add(slug)
+
+
+def check_stop(slug: str) -> None:
+    if slug in _STOP:
+        raise Stopped()
+
+
+_ACTIVE: set[str] = set()   # job_ids running in THIS process; ponytail: reconcile assumes one process owns all typically-job-* pods
+REMOTE = "/workspace/pcdm"
+JOB_SH = """trap 'echo $? > /workspace/job.exit' EXIT   # the poller reads the chain's exit code, not log text
+set -e
+export PATH=$HOME/.local/bin:$PATH UV_HTTP_TIMEOUT=300   # uv's 30s default timed out on a 567 MB cuBLAS wheel (2026-10-04)
+command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+cd {REMOTE}
+bash scripts/typically_spike_pod.sh job {slug} {base} {steps}
+"""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class TrainingFailed(RuntimeError):   # the run on the pod exited badly (vs. infrastructure trouble)
+    pass
+
+
+class Deadline(Exception):   # not a RuntimeError: the poll/ssh-retry loops must not swallow it
+    pass
+
+
+class ProviderDown(RuntimeError):   # the RunPod API itself kept failing (timeouts, errors, garbage) -- not the pod, not the run
+    pass
+
+
+class NoGpu(Exception):   # RunPod answered: no H100 right now. Not retried.
+    pass
+
+
+def job_dir(slug: str) -> Path:
+    if not SLUG_RE.fullmatch(slug):
+        raise ValueError(f"bad slug {slug!r}: need ^[a-z0-9_]{{1,40}}$")
+    return TYPICALLY / "jobs" / slug
+
+
+def read_status(slug: str) -> dict | None:
+    p = job_dir(slug) / "status.json"
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+CODES = {"starting_gpu": "gpu_starting"}   # phase -> code when they differ; `code` is the stable key the frontend localises, `message` stays English for logs
+
+
+def event(key: str, detail: str | None = None, t: str | None = None, **counts) -> dict:
+    """One milestone of the UI's live card: {t, key, detail?, n?, of?}. The frontend localises `key`; detail is data (a GPU name, a size)."""
+    return {"t": t or _now(), "key": key, **({"detail": detail} if detail else {}), **counts}
+
+
+def merge_events(events: list[dict], new) -> list[dict]:
+    """Upsert by key: a repeated key updates its detail / counts but keeps its first time (progress, the pod's real GPU name)."""
+    out = {e["key"]: e for e in events}
+    for e in new:
+        out[e["key"]] = {**e, **out[e["key"]], **{k: v for k, v in e.items() if k != "t"}} if e["key"] in out else e
+    return list(out.values())
+
+
+def write_status(slug: str, phase: str, message: str, code: str | None = None, events=(), reset: bool | None = None, **extra) -> dict:
+    """reset (default: phase == "queued") starts a new run's status; else started_at, pod_id, events and gpu carry over."""
+    assert phase in PHASES
+    prev = {} if (phase == "queued" if reset is None else reset) else (read_status(slug) or {})
+    st = {"phase": phase, "started_at": prev.get("started_at", _now()), "updated_at": _now(), "message": message,
+          "code": code or CODES.get(phase, phase), "pod_id": prev.get("pod_id"), "events": merge_events(prev.get("events", []), events),
+          **({"gpu": prev["gpu"]} if "gpu" in prev else {}), **extra}
+    job_dir(slug).mkdir(parents=True, exist_ok=True)
+    (job_dir(slug) / "status.json").write_text(json.dumps(st))
+    return st
+
+
+def add_events(slug: str, *events: dict) -> None:
+    """Milestones without a phase change (dataset preparation progress, the GPU shut down after done/failed)."""
+    if st := read_status(slug):
+        st["events"] = merge_events(st.get("events", []), events)
+        (job_dir(slug) / "status.json").write_text(json.dumps(st))
+
+
+MARK = re.compile(r"^\[typically\] (\w+) (\S+) ?(.*)$", re.M)   # scripts/typically_spike_pod.sh mark(): key, pod time, detail
+GPU = re.compile(r"^\[gpu\] (\d+), (\d+), (\d+)\s*$", re.M)   # its nvidia-smi loop: utilization %, memory used / total MiB
+
+
+def pod_events(log: str) -> list[dict]:
+    return [event(k, d.strip() or None, t) for k, t, d in MARK.findall(log)]
+
+
+def gpu_stats(log: str) -> dict | None:
+    """The last nvidia-smi sample + the last logged training throughput (tok/s), for the UI's GPU panel."""
+    if not (g := GPU.findall(log)):
+        return None
+    tok = re.findall(r"^step \d+ .*?\btok/s (\d+)", log, re.M)
+    return {"util": int(g[-1][0]), "mem_used": int(g[-1][1]), "mem_total": int(g[-1][2]), "tok_s": int(tok[-1]) if tok else None}
+
+
+def _run(argv: list[str], timeout: int, out: Path | None = None) -> str:
+    """The one subprocess seam (tests replace it). Returns stdout; with `out` the stdout is also saved there."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{argv[0]} {argv[1] if len(argv) > 1 else ''} timed out after {timeout:.0f}s")
+    if out:
+        out.write_text(r.stdout)
+    if r.returncode:
+        err = re.findall(r'^\{"error".*$', r.stderr or r.stdout, re.M)   # runpodctl buries its JSON error under the usage text
+        raise RuntimeError(f"{argv[0]} {argv[1] if len(argv) > 1 else ''} failed ({r.returncode}): {err[-1] if err else (r.stderr or r.stdout).strip()[-400:]}")
+    return r.stdout
+
+
+def retry(once, what: str, log=print):
+    """once() is one RunPod API call (+ parsing). A failure (timeout, non-zero exit, unparseable output) is retried after
+    RETRY_S; the last one raises ProviderDown. Deadline / NoGpu / an inner ProviderDown pass straight through."""
+    for wait in (*RETRY_S, None):
+        try:
+            return once()
+        except ProviderDown:
+            raise
+        except (RuntimeError, ValueError, KeyError, TypeError) as e:
+            log(f"RunPod API {what} failed: {e}")
+            if wait is None:
+                raise ProviderDown(PROVIDER_DOWN) from e
+            time.sleep(wait)
+
+
+def _pods() -> list[dict]:
+    return json.loads(_run(["runpodctl", "pod", "list", "-o", "json"], 60))
+
+
+def list_pods(log=print) -> list[dict]:
+    return retry(_pods, "pod list", log)
+
+
+def delete_pod(pod_id: str) -> None:
+    _run(["runpodctl", "pod", "delete", pod_id], 60)
+
+
+class Job:
+    def __init__(self, slug: str, log, tmp: Path, base: str = "small", steps: int = 400):
+        if base not in BASES or steps not in STEPS:
+            raise ValueError(f"bad base/steps {base!r}/{steps!r}: need one of {list(BASES)} and {list(STEPS)}")
+        self.slug, self.log, self.tmp, self.id, self.base, self.steps = slug, log, tmp, secrets.token_hex(4), base, steps
+        self.name = f"{POD_PREFIX}{slug}-{self.id}"   # unique per job: nothing else can ever match it
+        self.dir, self.pod_id, self.host, self.lost, self.gpu = job_dir(slug), None, None, 0.0, None   # lost: seconds spent on failed API calls
+        self.deadline = time.monotonic() + DEADLINE_S * BASES[base]["scale"]
+        self.tar = tmp / "repo.tar.gz"
+
+    def call(self, argv: list[str], cap: float, out: Path | None = None) -> str:
+        """_run under the job's single deadline. Cleanup (delete) calls _run directly so it still works after the deadline."""
+        check_stop(self.slug)
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise Deadline(f"the job took longer than {DEADLINE_S * BASES[self.base]['scale'] / 60:.0f} minutes")
+        return _run(argv, min(cap, left), out)
+
+    def to(self, phase: str, message: str, code: str | None = None, **extra):
+        self.log(f"[{phase}] {message}" + "".join(f" <{e['key']}>" for e in extra.get("events", ())))
+        write_status(self.slug, phase, message, code, pod_id=self.pod_id, job_id=self.id, base=self.base, steps=self.steps, **extra)
+
+    def api(self, argv: list[str], cap: float = 60) -> dict:
+        """A runpodctl call under the deadline, retried; the time its failed attempts + backoff took is added to self.lost."""
+        starts = []
+
+        def once():
+            starts.append(time.monotonic())
+            return json.loads(self.call(argv, cap))
+        try:
+            return retry(once, argv[2], self.log)
+        finally:
+            self.lost += starts[-1] - starts[0]
+
+    def ssh(self, cmd: str, timeout: int = 60) -> str:
+        return self.call(["ssh", "-n", *SSH_OPTS, "-p", self.host[1], f"root@{self.host[0]}", cmd], timeout)
+
+    # -- pod lifecycle
+    def mine(self, pods: list[dict]) -> list[str]:
+        """Only the recorded pod id or the exact unique name; never a prefix match."""
+        return [p["id"] for p in pods if p["id"] == self.pod_id or p.get("name") == self.name]
+
+    def create(self):
+        pub = (KEY.parent / (KEY.name + ".pub")).read_text().strip()
+        out = self.dir / "create.out"   # the "no instances" error also arrives on stdout
+        out.unlink(missing_ok=True)
+        tries = []
+
+        def once():
+            if tries and (ids := self.mine(list_pods(self.log))):   # an earlier attempt went through despite its error: adopt it, never rent a second
+                return ids[0]
+            tries.append(1)
+            try:
+                pod = json.loads(self.call(["runpodctl", "pod", "create", "--name", self.name, "--image", IMAGE, "--gpu-id", "NVIDIA H100 80GB HBM3",
+                                             "--cloud-type", "SECURE", "--container-disk-in-gb", "150", "--ports", "22/tcp",
+                                             "--env", json.dumps({"PUBLIC_KEY": pub})], 180, out))
+                self.gpu = (pod.get("machine") or {}).get("gpuDisplayName")   # e.g. "H100 SXM"; the pod's nvidia-smi names it exactly later
+                return pod["id"]
+            except (RuntimeError, ValueError, KeyError, TypeError) as e:
+                said = out.read_text().strip() if out.exists() else ""
+                if NO_GPU.search(f"{e} {said}"):
+                    raise NoGpu("no GPU was available right now: " + (said or str(e))[:200])
+                raise
+        self.pod_id = retry(once, "pod create", self.log)
+        self.log(f"pod {self.pod_id} created")
+        if len(ids := self.mine(list_pods(self.log))) != 1:
+            raise RuntimeError(f"expected exactly one {self.name} pod, found {ids}")
+
+    def wait_ssh(self):
+        """READY_S of boot time. Time lost to a failing RunPod API is not boot time; WAIT_CAP_S caps the whole wait."""
+        start, self.lost = time.monotonic(), 0.0
+        while time.monotonic() - start - self.lost < READY_S:
+            if time.monotonic() - start > WAIT_CAP_S:
+                raise ProviderDown(PROVIDER_DOWN)
+            s = self.api(["runpodctl", "pod", "get", self.pod_id, "-o", "json"]).get("ssh") or {}
+            if s.get("ip") and s.get("port"):
+                self.host = (s["ip"], str(s["port"]))
+                try:
+                    self.ssh("true", 30)
+                    return self.log(f"ssh up at {s['ip']}:{s['port']}")
+                except RuntimeError as e:   # sshd not up yet (a Deadline must escape)
+                    self.log(f"waiting for ssh: {e}")
+            time.sleep(10)
+        raise RuntimeError("the GPU machine did not come up in 5 minutes")
+
+    def delete(self) -> bool:
+        """Retried with backoff until RunPod confirms the pod is gone. Plain _run calls: works after the deadline. False = unconfirmed."""
+        for wait in (*RETRY_S, None):
+            try:
+                ids = self.mine(_pods())
+            except Exception as e:
+                self.log(f"pod list failed: {e}")
+                ids = [self.pod_id] if self.pod_id else []
+            for i in ids:
+                try:
+                    delete_pod(i)
+                except Exception as e:
+                    self.log(f"pod delete {i} failed: {e}")
+            try:
+                if not self.mine(_pods()):
+                    self.log("pod deleted")
+                    return True
+            except Exception as e:
+                self.log(f"pod list failed: {e}")
+            if wait:
+                time.sleep(wait)
+        self.log(f"WARNING: pod may still be running ({self.name}, {self.pod_id}) - delete it by hand")
+        return False
+
+    # -- work
+    def snapshot(self):
+        """Immutable upload: the tarball is built once, before any pod exists, from the dataset as it is right now."""
+        files = self.call(["git", "ls-files", "-co", "--exclude-standard"], 60).splitlines()
+        with tarfile.open(self.tar, "w:gz") as t:
+            for f in files:
+                if not f.startswith(NOT_SHIPPED) and (REPO / f).is_file():
+                    t.add(REPO / f, arcname=f)
+            for f in ("train.jsonl", "val.jsonl", *(f"eval/{p.name}" for p in (self.dir / "eval").glob("*.jsonl"))):
+                t.add(self.dir / f, arcname=f"data_co_{self.slug}/{f}")
+        self.log(f"tar {self.tar.stat().st_size / 1e6:.1f} MB, {len(files)} tracked files")
+
+    def upload(self):
+        # ponytail: HF token goes through a local temp file (0600) -> scp -> /workspace/.env; never argv, never logged
+        token = os.environ.get("HF_TOKEN") or (Path.home() / ".cache/huggingface/token").read_text().strip()
+        env, sh = self.tmp / "env", self.tmp / "job.sh"
+        env.write_text(f"HF_TOKEN={token}\n")
+        env.chmod(0o600)
+        sh.write_text(JOB_SH.format(REMOTE=REMOTE, slug=self.slug, base=self.base, steps=self.steps))
+        addr = f"root@{self.host[0]}:"
+        scp = ["scp", *SSH_OPTS, "-P", self.host[1]]
+        self.ssh(f"mkdir -p {REMOTE}")
+        self.call([*scp, str(self.tar), addr + "/workspace/repo.tar.gz"], 900)
+        self.call([*scp, str(env), addr + "/workspace/.env"], 120)
+        self.call([*scp, str(sh), addr + "/workspace/job.sh"], 120)
+        self.ssh(f"chmod 600 /workspace/.env && tar xzf /workspace/repo.tar.gz -C {REMOTE}", 300)
+
+    def launch(self):
+        self.ssh("rm -f /workspace/job.exit; setsid nohup bash /workspace/job.sh > /workspace/job.log 2>&1 < /dev/null & echo $! > /workspace/job.pid")
+
+    def poll(self):
+        bad = 0
+        while True:
+            time.sleep(POLL_S)
+            try:   # order matters: job.exit is written before the pid dies, so check it only once the pid is gone
+                out = self.ssh('if kill -0 "$(cat /workspace/job.pid)" 2>/dev/null; then echo ALIVE; elif [ -f /workspace/job.exit ]; '
+                               'then echo EXIT $(cat /workspace/job.exit); else echo DEAD; fi; '
+                               "grep -aE '^(\\[typically\\]|\\[gpu\\]|step [0-9])' /workspace/job.log | tail -n 3000; tail -n 100 /workspace/job.log", 90)
+                bad = 0
+            except (RuntimeError, subprocess.SubprocessError) as e:   # a dropped ssh must not kill a 20 minute run
+                bad += 1
+                self.log(f"poll failed ({bad}/3): {e}")
+                if bad >= 3:
+                    raise
+                continue
+            (self.dir / "pod.log").write_text(out)
+            steps = [int(s) for s in re.findall(r"^step (\d+) ", out, re.M)]
+            head = out.split("\n", 1)[0]
+            if head != "ALIVE":   # EXIT <code> | DEAD (pid gone, no exit code: killed)
+                code = head.removeprefix("EXIT").strip() if head.startswith("EXIT") else ""
+                if code == "0":
+                    return
+                hint = " (Python traceback in the log)" if "Traceback" in out else ""
+                raise TrainingFailed(f"the training run failed (exit {code or 'unknown'}){hint}; see job.log")
+            seen = {e["key"]: e for e in (read_status(self.slug) or {}).get("events", [])}
+            new = [e for e in pod_events(out) if e["key"] not in seen or e.get("detail") not in (None, seen[e["key"]].get("detail"))]
+            gpu = {"gpu": g} if (g := gpu_stats(out)) else {}
+            if "best step" in out or "testing" in seen or any(e["key"] == "testing" for e in new):
+                self.to("evaluating", "Training finished. Scoring your model on held-out examples.", events=new, progress=1.0, **gpu)
+            else:
+                p = min(max(steps, default=0) / self.steps, 1.0)
+                self.to("training", f"Learning from your examples ({p:.0%} done)." if steps else
+                        "Setting up and measuring the starting model.", None if steps else "baseline", events=new, progress=p, **gpu)
+
+    def download(self):
+        dest = TYPICALLY / "results" / f"co_{self.slug}"
+        dest.mkdir(parents=True, exist_ok=True)
+        get = lambda remote, name: self.call(["scp", *SSH_OPTS, "-P", self.host[1], f"root@{self.host[0]}:{REMOTE}/{remote}", str(dest / name)], 600)
+        try:   # the UI shows what is coming back
+            size = int(self.ssh(f"stat -c %s {REMOTE}/runs/co_{self.slug}/best.pt").strip() or 0)
+            if size:
+                add_events(self.slug, event("fetch", f"{size / 1e6:.0f} MB"))
+        except (RuntimeError, ValueError) as e:
+            self.log(f"best.pt size unknown: {e}")
+        get(f"runs/co_{self.slug}/eval_co.json", "eval_co.json")
+        get("runs/base/eval_co.json", "base_eval_co.json")
+        reveal = dest / "reveal.json"   # scored on the pod (typically_reveal --job); optional: the server scores locally without it
+        reveal.unlink(missing_ok=True)   # a retrain's stale one must not be touched fresh below
+        try:
+            get(f"runs/co_{self.slug}/reveal.json", "reveal.json")
+        except RuntimeError as e:
+            self.log(f"no reveal.json from the pod ({e}); the server will score it locally")
+        get(f"runs/co_{self.slug}/best.pt", "best.pt")   # best.pt last: a half-done run is never offered as a model
+        if reveal.exists():
+            os.utime(reveal)   # the server's cache counts only if reveal.json is no older than best.pt
+        self.log(f"downloaded to {dest}")
+
+
+def reconcile(log=print) -> list[str]:
+    """Delete typically-job-* pods this process is not actively running: no status file, not an active phase / not ours, or stale
+    (> 90 min small / 180 min medium). Never touches pods with other names. Returns the deleted pod ids."""
+    known = {}   # job_id / pod_id -> status, from every job dir (the latest job per slug wins: status.json is overwritten)
+    for p in (TYPICALLY / "jobs").glob("*/status.json"):
+        try:
+            st = json.loads(p.read_text())
+        except ValueError:
+            continue
+        known.update({k: st for k in (st.get("job_id"), st.get("pod_id")) if k})
+    gone = []
+    for pod in list_pods(log):
+        name = pod.get("name") or ""
+        if not name.startswith(POD_PREFIX):
+            continue
+        st = known.get(pod["id"]) or known.get(name.rsplit("-", 1)[-1])
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(st["updated_at"]) if st and st.get("updated_at") else None
+        if not st:
+            why = "no status file"
+        elif st.get("phase") not in ACTIVE:
+            why = f"job is {st.get('phase')}"
+        elif st.get("job_id") not in _ACTIVE and age > HEARTBEAT:
+            # another process may own a live job (a second server on the same .context once deleted one): only a
+            # silent heartbeat (the poller rewrites status.json every POLL_S) marks it orphaned
+            why = f"no heartbeat for {int(age.total_seconds() // 60)} min"
+        elif age > timedelta(seconds=STALE_S * BASES.get(st.get("base"), BASES["small"])["scale"]):
+            why = "status older than its deadline + 15 min"
+        else:
+            continue
+        log(f"reconcile: deleting {name} ({pod['id']}): {why}")
+        try:
+            delete_pod(pod["id"])
+            gone.append(pod["id"])
+        except Exception as e:
+            log(f"reconcile: delete {pod['id']} failed: {e}")
+    return gone
+
+
+def run(slug: str, log=None, base: str = "small", steps: int = 400, prepared: bool = False) -> None:
+    """Raises ValueError on a bad slug/base/steps; otherwise never raises: the outcome is in status.json (done / failed).
+    prepared: the server just built the dataset under this status (its "prepare" events stay on the card)."""
+    job_dir(slug).mkdir(parents=True, exist_ok=True)   # validates the slug
+    (job_dir(slug) / "pod.log").unlink(missing_ok=True)   # a retrain must not chart the previous run's log
+    log = log or file_log(slug)
+    with tempfile.TemporaryDirectory() as tmp:
+        j = Job(slug, log, Path(tmp), base, steps)
+        _ACTIVE.add(j.id)
+        failed = ""
+        try:
+            j.to("queued", "Waiting to start.", reset=not prepared)
+            j.snapshot()
+            reconcile(log)
+            j.to("starting_gpu", "Getting a GPU ready (about 3 minutes).", events=[event("gpu_request")])
+            j.create()
+            j.to("starting_gpu", "Getting a GPU ready (about 3 minutes).", events=[event("gpu_assigned", j.gpu)])   # records the pod id
+            j.wait_ssh()
+            n = (j.dir / "train.jsonl").read_text().count("\n")
+            j.to("uploading", "Sending your examples to the GPU.", events=[event("upload", f"{j.tar.stat().st_size / 1e6:.1f} MB", n=n)])
+            j.upload()
+            j.launch()
+            j.to("training", "Setting up and measuring the starting model.", "baseline", events=[event("env")], progress=0.0)
+            j.poll()
+            j.to("downloading", "Bringing your model back.", events=[event("fetch")])
+            j.download()
+            j.to("done", "Your model is ready.", events=[event("done")], progress=1.0)
+        except BaseException as e:   # incl. KeyboardInterrupt from the CLI; the pod must still go
+            log(f"FAILED: {type(e).__name__}: {e}")
+            failed = PROVIDER_DOWN if isinstance(e, ProviderDown) else STOPPED if isinstance(e, Stopped) else f"Training did not finish: {e}"
+            j.to("failed", failed, "failed_timeout" if isinstance(e, Deadline) else "failed_training" if isinstance(e, TrainingFailed)
+                 else "failed_provider" if isinstance(e, ProviderDown) else "stopped" if isinstance(e, Stopped) else "failed_infra",
+                 events=[event("failed")])
+        finally:
+            gone = j.delete()
+            if gone and j.pod_id:
+                add_events(slug, event("gpu_off"))
+            if not gone and (read_status(slug) or {}).get("phase") == "failed":   # the message must not claim nothing is billing
+                j.to("failed", failed.removesuffix("; nothing is running or billing.").rstrip(".") + ". We could not confirm the GPU machine was shut "
+                     "down; it is removed automatically the next time the server starts or a model is taught.")   # code "failed": the UI shows this text
+            _ACTIVE.discard(j.id)
+
+
+def train_flags(company: str, steps: int, run: str, base_args: dict, base: str = "small") -> list[str]:
+    """pcdm/train.py argv for a fine-tune of data_co_<company>, warm-started from runs/base/best.pt. The architecture flags come
+    from that checkpoint's own ckpt["args"] (`base_args`), so small and medium share this one code path. No value has a space."""
+    d = f"data_co_{company}"
+    arch = [x for k in RELEASED_ARGS[base] for x in (f"--{k}", str(base_args[k]))]   # the keys, not the values, of the table
+    return ["--name", run, "--init_from", "runs/base/best.pt", "--readout", "native", *arch, "--zscore", "--ordinal_smooth", "0.7",
+            "--max_state", "1024", *BASES[base]["mem"], "--data", "data_v5", "--extra_data", f"data_wf,data_wh,data_u,{d}",
+            "--bucket_map", f"data_wh=W,data_u=U,{d}=C", "--family_weights", "C:0.5,W:0.3,E:0.15,U:0.05", "--null_aug", "W:0.20",
+            "--steps", str(steps), "--bs", "64", "--val_every", "50", "--log_every", "10", "--ckpt_every", "100", "--eval_every", str(steps),
+            "--eval_limit", "200", "--eval_bs", "8", "--best_on", f"{d}_val", "--no_final_eval"]
+
+
+def log_series(path: Path, limit: int = 200, tail: int = 256_000) -> dict:
+    """The last `limit` logged steps of a pod.log (only its last `tail` bytes are read): train loss, val_nll, the company-val
+    nll best.pt is chosen on and the company-val accuracy, aligned on `step` (None where a step has no value), and the mean recent step_time."""
+    try:
+        with path.open("rb") as f:
+            size = f.seek(0, 2)
+            f.seek(max(0, size - tail))
+            lines = f.read().decode("utf-8", "replace").splitlines()[1 if size > tail else 0:]   # drop the cut first line
+    except FileNotFoundError:
+        lines = []
+    cols: dict[str, dict[int, float]] = {"loss": {}, "val": {}, "best_on": {}, "acc": {}}
+    times = []
+    for line in lines:
+        if not (m := re.match(r"step (\d+) (?:val_nll (\S+)|best_on_nll (\S+)|best_on_acc (\S+)|.*?\bloss (\S+)(?:.*?\bstep_time ([\d.]+)s)?)", line)):
+            continue
+        for col, v in zip(cols, (m[5], m[2], m[3], m[4])):
+            try:
+                if v is not None and math.isfinite(x := float(v)):   # a nan loss is dropped: JSON has no NaN
+                    cols[col][int(m[1])] = x
+            except ValueError:
+                pass
+        if m[6]:
+            times.append(float(m[6]))
+    steps = sorted({s for c in cols.values() for s in c})[-limit:]
+    return {"step": steps, **{k: [c.get(s) for s in steps] for k, c in cols.items()},
+            "step_time": sum(times[-5:]) / len(times[-5:]) if times else None}
+
+
+def file_log(slug: str):
+    def log(msg: str):
+        line = f"{_now()} {msg}"
+        print(line, flush=True)
+        with open(job_dir(slug) / "job.log", "a") as f:
+            f.write(line + "\n")
+    return log
+
+
+if __name__ == "__main__":
+    try:
+        if sys.argv[1:2] == ["--train-flags"]:   # on the pod, after runs/base/best.pt is downloaded (needs torch: uv run --no-sync)
+            import torch
+            company, steps, name, *base = sys.argv[2:]
+            print(" ".join(train_flags(company, int(steps), name, torch.load("runs/base/best.pt", map_location="cpu", weights_only=True)["args"], *base)))
+        elif sys.argv[1:] == ["--reconcile"]:
+            reconcile()
+        else:
+            run(sys.argv[1], None, (sys.argv[2:3] or ["small"])[0], int((sys.argv[3:4] or ["400"])[0]))
+    except ValueError as e:
+        sys.exit(str(e))
