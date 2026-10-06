@@ -28,10 +28,10 @@ def _payload(value):
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
 
 
-def _preparation_payload(artifacts):
+def _preparation_payload(artifacts, recipe_payload=fixtures.RECIPE_PAYLOAD):
     assignment = json.loads(artifacts["assignment"])
     provenance = json.loads(artifacts["reference_provenance"])
-    recipe = json.loads(fixtures.RECIPE_PAYLOAD)
+    recipe = json.loads(recipe_payload)
     value = {
         "schema_version": "r047-m1-preparation-receipt-v1",
         "status": "complete",
@@ -59,8 +59,8 @@ def _preparation_payload(artifacts):
     return _payload(value)
 
 
-def _reference_args(artifacts):
-    preparation = _preparation_payload(artifacts)
+def _reference_args(artifacts, recipe_payload=fixtures.RECIPE_PAYLOAD):
+    preparation = _preparation_payload(artifacts, recipe_payload)
     return {
         "assignment_payload": artifacts["assignment"],
         "assignment_sha256": _sha(artifacts["assignment"]),
@@ -68,7 +68,7 @@ def _reference_args(artifacts):
         "reference_report": artifacts["reports"]["reference"],
         "reference_report_sha256": _sha(artifacts["reports"]["reference"]),
         "reference_provenance_payload": artifacts["reference_provenance"],
-        "recipe_payload": fixtures.RECIPE_PAYLOAD,
+        "recipe_payload": recipe_payload,
         "preparation_receipt_payload": preparation,
         "preparation_receipt_sha256": _sha(preparation),
         "panel_payload": artifacts["panel"],
@@ -92,6 +92,39 @@ def _control_args(artifacts, reference_receipt):
         "slot_b_report_sha256": _sha(artifacts["reports"]["slot_b"]),
         "slot_b_run_receipt": artifacts["receipts"]["slot_b"],
         "slot_b_run_receipt_sha256": _sha(artifacts["receipts"]["slot_b"]),
+    }
+
+
+def _frozen_recipe(assignment):
+    from scripts import finalize_r047_m1 as finalizer
+    from scripts.build_r047_model_inventory import FROZEN_BASE_REVISION
+
+    return {
+        "schema_version": finalizer.RECIPE_SCHEMA_VERSION,
+        "base_revision": FROZEN_BASE_REVISION,
+        "parent_adapter_sha256": finalizer.FROZEN_PARENT_SHA256,
+        "parent_adapter_tree_sha256": finalizer.FROZEN_PARENT_TREE_SHA256,
+        "parent_adapter_tree_files": finalizer.FROZEN_PARENT_TREE_FILES,
+        "parent_adapter_config_sha256": finalizer.FROZEN_PARENT_CONFIG_SHA256,
+        "model_inventory_sha256": assignment["model_inventory_sha256"],
+        "arm_manifest_sha256": finalizer.FROZEN_ARM_MANIFEST_SHA256,
+        "arm_sha256": finalizer.KNOWN_ARM_SHA256,
+        "image_tree_sha256": finalizer.FROZEN_IMAGE_TREE_SHA256,
+        "image_tree_files": finalizer.FROZEN_IMAGE_TREE_FILES,
+        "trainer_sha256": _sha(
+            Path(precheck.__file__).with_name(
+                "train_gemma_decision_lora.py").read_bytes()),
+        "arm_preflight_sha256": assignment["arm_preflight_sha256"],
+        "panel_sha256": assignment["panel_sha256"],
+        "panel_manifest_sha256": assignment["panel_manifest_sha256"],
+        "panel_preflight_sha256": assignment["panel_preflight_sha256"],
+        "inventory_manifest_sha256": assignment["inventory_manifest_sha256"],
+        "evaluator_sha256": assignment["evaluator_sha256"],
+        "comparator_sha256": assignment["comparator_sha256"],
+        "precheck_sha256": assignment["precheck_sha256"],
+        "bootstrap_replicates": comparator.MIN_BOOTSTRAP_REPLICATES,
+        "bootstrap_seed": comparator.FROZEN_BOOTSTRAP_SEED,
+        "trainer_config": dict(finalizer.FROZEN_TRAINING_INVARIANTS),
     }
 
 
@@ -173,7 +206,13 @@ def test_production_assignment_pins_frozen_parent_and_source(monkeypatch):
                         assignment["model_revision"])
     monkeypatch.setattr(prepare, "FROZEN_R044_CHECKPOINT_PROVENANCE_SHA256",
                         provenance["source_checkpoint_provenance_sha256"])
-    args = {**_reference_args(artifacts), "_require_frozen_assignment": True}
+    recipe = _frozen_recipe(assignment)
+    recipe_payload = _payload(recipe)
+    assignment["recipe_sha256"] = _sha(recipe_payload)
+    assignment_payload = _payload(assignment)
+    production_artifacts = {**artifacts, "assignment": assignment_payload}
+    args = {**_reference_args(production_artifacts, recipe_payload),
+            "_require_frozen_assignment": True}
 
     assert precheck_reference(**args)["status"] == "pass"
     forged = copy.deepcopy(assignment)
@@ -185,6 +224,18 @@ def test_production_assignment_pins_frozen_parent_and_source(monkeypatch):
             **args,
             "assignment_payload": forged_payload,
             "assignment_sha256": _sha(forged_payload),
+        })
+
+    mutated_recipe = {**recipe, "unexpected": True}
+    mutated_recipe_payload = _payload(mutated_recipe)
+    mutated_assignment = copy.deepcopy(assignment)
+    mutated_assignment["recipe_sha256"] = _sha(mutated_recipe_payload)
+    mutated_assignment_payload = _payload(mutated_assignment)
+    mutated_artifacts = {**artifacts, "assignment": mutated_assignment_payload}
+    with pytest.raises(ValueError, match="complete frozen R047-M1 contract"):
+        precheck_reference(**{
+            **_reference_args(mutated_artifacts, mutated_recipe_payload),
+            "_require_frozen_assignment": True,
         })
 
 

@@ -38,6 +38,47 @@ def _with_binding(receipt):
     return receipt
 
 
+def _validate_frozen_recipe(recipe, assignment):
+    """Recompute the complete production recipe contract without trusting its hash."""
+    from scripts import finalize_r047_m1 as finalizer
+    from scripts.build_r047_model_inventory import FROZEN_BASE_REVISION
+
+    direct = {
+        "schema_version": finalizer.RECIPE_SCHEMA_VERSION,
+        "base_revision": FROZEN_BASE_REVISION,
+        "parent_adapter_sha256": finalizer.FROZEN_PARENT_SHA256,
+        "parent_adapter_tree_sha256": finalizer.FROZEN_PARENT_TREE_SHA256,
+        "parent_adapter_tree_files": finalizer.FROZEN_PARENT_TREE_FILES,
+        "parent_adapter_config_sha256": finalizer.FROZEN_PARENT_CONFIG_SHA256,
+        "model_inventory_sha256": assignment["model_inventory_sha256"],
+        "arm_manifest_sha256": finalizer.FROZEN_ARM_MANIFEST_SHA256,
+        "arm_sha256": finalizer.KNOWN_ARM_SHA256,
+        "image_tree_sha256": finalizer.FROZEN_IMAGE_TREE_SHA256,
+        "image_tree_files": finalizer.FROZEN_IMAGE_TREE_FILES,
+        "trainer_sha256": _sha(
+            Path(__file__).with_name("train_gemma_decision_lora.py").read_bytes()),
+        "arm_preflight_sha256": assignment["arm_preflight_sha256"],
+        "panel_sha256": assignment["panel_sha256"],
+        "panel_manifest_sha256": assignment["panel_manifest_sha256"],
+        "panel_preflight_sha256": assignment["panel_preflight_sha256"],
+        "inventory_manifest_sha256": assignment["inventory_manifest_sha256"],
+        "evaluator_sha256": assignment["evaluator_sha256"],
+        "comparator_sha256": assignment["comparator_sha256"],
+        "precheck_sha256": assignment["precheck_sha256"],
+        "bootstrap_replicates": comparator.MIN_BOOTSTRAP_REPLICATES,
+        "bootstrap_seed": comparator.FROZEN_BOOTSTRAP_SEED,
+    }
+    config = recipe.get("trainer_config") if isinstance(recipe, dict) else None
+    if (not isinstance(recipe, dict) or set(recipe) != finalizer.RECIPE_FIELDS
+            or any(recipe.get(key) != value for key, value in direct.items())
+            or not isinstance(config, dict)
+            or set(config) != finalizer.TRAINER_CONFIG_KEYS
+            or any(not finalizer._same(config.get(key), value)
+                   for key, value in finalizer.FROZEN_TRAINING_INVARIANTS.items())
+            or not finalizer._finite(recipe)):
+        raise ValueError("recipe differs from the complete frozen R047-M1 contract")
+
+
 def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
                         panel_manifest_payload, panel_manifest_sha256,
                         panel_preflight_payload, inventory_manifest_payload,
@@ -148,8 +189,10 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
         preparation = json.loads(preparation_receipt_payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("invalid recipe or preparation receipt JSON") from error
-    if (not isinstance(recipe, dict)
-            or recipe.get("schema_version") != "r047-m1-recipe-v1"):
+    if _require_frozen_assignment:
+        _validate_frozen_recipe(recipe, assignment)
+    elif (not isinstance(recipe, dict)
+          or recipe.get("schema_version") != "r047-m1-recipe-v1"):
         raise ValueError("recipe schema differs from the frozen R047-M1 contract")
     if (not comparator._valid_sha(preparation_receipt_sha256)
             or _sha(preparation_receipt_payload) != preparation_receipt_sha256):
