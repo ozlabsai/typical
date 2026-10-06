@@ -8,6 +8,7 @@ from scripts.soft_action_executor import (
     ACTIONS,
     action_log_cross_entropy,
     action_for,
+    semantic_truth_logits,
     semantic_yes_probabilities,
     soft_action_distribution,
     soft_action_log_distribution,
@@ -70,6 +71,31 @@ def test_semantic_option_order_does_not_change_probabilities_or_actions():
         soft_action_distribution(scores, labels, **kwargs),
         soft_action_distribution(reversed_scores, reversed_labels, **kwargs),
     )
+
+
+def test_semantic_truth_logits_support_arbitrary_fields_and_option_order():
+    scores = {
+        "תקציב": torch.tensor([-0.4, 0.8], requires_grad=True),
+        "account_age_days": torch.tensor([1.2, -0.1], requires_grad=True),
+    }
+    labels = {name: ["no", "yes"] for name in scores}
+    reversed_scores = {
+        name: values.detach().flip(0).requires_grad_()
+        for name, values in scores.items()
+    }
+    reversed_labels = {name: ["yes", "no"] for name in scores}
+
+    direct = semantic_truth_logits(
+        scores, labels, decision_threshold=0.63, temperature=0.7)
+    reversed_order = semantic_truth_logits(
+        reversed_scores, reversed_labels, decision_threshold=0.63, temperature=0.7)
+
+    assert set(direct) == set(scores)
+    for name in scores:
+        torch.testing.assert_close(direct[name], reversed_order[name])
+    sum(direct.values()).backward()
+    assert all(value.grad is not None and torch.isfinite(value.grad).all()
+               for value in scores.values())
 
 
 def test_distribution_matches_exact_action_v1_partition():

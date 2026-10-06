@@ -1,15 +1,19 @@
 import copy
 import hashlib
 import json
+import math
 from types import SimpleNamespace
 
 import pytest
 import torch
 
 import scripts.train_gemma_decision_lora as trainer
+from scripts.exact_policy_executor import execute_policy
 from scripts.train_gemma_decision_lora import (
     flatten_row,
     grouped_action_slot_loss,
+    grouped_exact_policy_slot_loss,
+    hard_exact_outcome_from_scores,
     hard_action_from_scores,
     load_examples,
     loss_for_examples,
@@ -41,6 +45,73 @@ def action_row(*, reverse=False):
             "action_trace": fields,
             "action_gold": "escalate",
             "decision_threshold": 0.6,
+        },
+    }
+
+
+def _action(name, **payload):
+    return {"name": name, "payload": payload}
+
+
+def priority_policy():
+    return {
+        "fields": ["account_verified", "בתוך_התקציב"],
+        "mode": "priority",
+        "rules": [
+            {"when": {"not": {"field": "account_verified"}},
+             "action": _action("deny", reason="identity")},
+            {"when": {"not": {"field": "בתוך_התקציב"}},
+             "action": _action("review", queue="limits")},
+        ],
+        "fallback": _action("allow", queue="automatic"),
+    }
+
+
+def collect_policy(*, ranked=True):
+    return {
+        "fields": ["notify_customer", "notify_risk"],
+        "mode": "collect",
+        "rules": [
+            {"when": {"field": "notify_customer"},
+             "action": _action("email", template="status"),
+             "primary_rank": None},
+            {"when": {"field": "notify_risk"},
+             "action": _action("alert", queue="risk"),
+             "primary_rank": 0 if ranked else None},
+        ],
+        "fallback": None,
+    }
+
+
+def exact_policy_row(*, policy=None, truths=None, reverse=False):
+    policy = copy.deepcopy(policy or priority_policy())
+    truths = dict(truths or {
+        "account_verified": True, "בתוך_התקציב": False,
+    })
+    questions = {}
+    targets = {}
+    for index, field in enumerate(policy["fields"]):
+        criteria = {"no": "No", "yes": "Yes"}
+        if reverse:
+            criteria = dict(reversed(list(criteria.items())))
+        qid = f"q{index:02d}"
+        questions[qid] = {
+            "type": "noul", "instructions": f"Is {field} true?", "criteria": criteria,
+        }
+        targets[qid] = {"label": "yes" if truths[field] else "no"}
+    return {
+        "id": "exact-policy-case",
+        "state": "Apply the exact policy to the recorded facts.",
+        "questions": questions,
+        "targets": targets,
+        "meta": {
+            "panel": "exact_policy_v1",
+            "field_order": list(policy["fields"]),
+            "action_trace": truths,
+            "policy": policy,
+            "gold_outcome": execute_policy(policy, truths).as_dict(),
+            "decision_threshold": 0.6,
+            "audit_family": "extra metadata is intentionally tolerated",
         },
     }
 
@@ -85,6 +156,75 @@ def test_loader_preserves_action_row_as_one_logical_slot(tmp_path):
     ]
     assert group["action_gold"] == "escalate"
     assert group["decision_threshold"] == 0.6
+
+
+@pytest.mark.parametrize(
+    ("policy", "truths", "expected_primary", "expected_actions"),
+    [
+        (priority_policy(), {"account_verified": True, "בתוך_התקציב": False},
+         "review", {"review"}),
+        (collect_policy(), {"notify_customer": True, "notify_risk": True},
+         "alert", {"alert", "email"}),
+        (collect_policy(ranked=False),
+         {"notify_customer": True, "notify_risk": False}, None, {"email"}),
+        (collect_policy(), {"notify_customer": False, "notify_risk": False},
+         None, set()),
+    ],
+)
+def test_loader_compiles_exact_policy_once_and_accepts_complete_outcomes(
+        tmp_path, policy, truths, expected_primary, expected_actions):
+    path = tmp_path / "exact.jsonl"
+    path.write_text(json.dumps(exact_policy_row(policy=policy, truths=truths)) + "\n")
+
+    group, = load_examples([path])
+
+    assert group["action_kind"] == "exact_policy_v1"
+    assert tuple(group["compiled_policy"].fields) == tuple(policy["fields"])
+    assert group["gold_outcome"].primary is None or (
+        group["gold_outcome"].primary.name == expected_primary)
+    assert {action.name for action in group["gold_outcome"].actions} == expected_actions
+    assert group["action_trace"] == truths
+    assert group["decision_threshold"] == 0.6
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda row: row["meta"]["policy"].__setitem__("mode", "unknown"),
+         "policy mode"),
+        (lambda row: row["meta"]["field_order"].__setitem__(1, "undeclared"),
+         "exactly match policy fields"),
+        (lambda row: row["meta"]["action_trace"].__setitem__("account_verified", False),
+         "trace or gold outcome mismatch"),
+        (lambda row: row["meta"]["gold_outcome"].__setitem__("actions", []),
+         "gold_outcome"),
+        (lambda row: row["questions"]["q00"]["criteria"].__setitem__("maybe", "Maybe"),
+         "semantic no/yes"),
+        (lambda row: row["questions"]["q00"].__setitem__("type", "other"),
+         "semantic no/yes"),
+        (lambda row: row["questions"]["q00"].__setitem__("instructions", "  "),
+         "semantic no/yes"),
+        (lambda row: row.__setitem__("image", "case.png"), "text-only"),
+        (lambda row: row.__setitem__("auxiliary_views", []), "cannot be paired"),
+    ],
+)
+def test_exact_policy_loader_rejects_malformed_groups(tmp_path, mutate, message):
+    row = exact_policy_row()
+    mutate(row)
+    path = tmp_path / "invalid-exact.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    with pytest.raises(ValueError, match=message):
+        load_examples([path])
+
+
+@pytest.mark.parametrize("wrapper_key", ["paired_views", "auxiliary_views"])
+def test_loader_rejects_exact_policy_rows_inside_wrappers(tmp_path, wrapper_key):
+    row = exact_policy_row()
+    wrapper = {"id": "wrapped-exact", wrapper_key: [row, copy.deepcopy(row)]}
+    path = tmp_path / "wrapped-exact.jsonl"
+    path.write_text(json.dumps(wrapper) + "\n")
+    with pytest.raises(ValueError, match="cannot be paired wrappers"):
+        load_examples([path])
 
 
 @pytest.mark.parametrize(
@@ -224,6 +364,83 @@ def test_grouped_action_training_loss_has_finite_gradients_at_confident_scores()
         assert score.grad is not None and torch.isfinite(score.grad).all()
 
 
+@pytest.mark.parametrize(
+    ("policy", "truths"),
+    [
+        (priority_policy(), {"account_verified": True, "בתוך_התקציב": False}),
+        (collect_policy(), {"notify_customer": True, "notify_risk": True}),
+        (collect_policy(ranked=False),
+         {"notify_customer": True, "notify_risk": False}),
+        (collect_policy(), {"notify_customer": False, "notify_risk": False}),
+    ],
+)
+def test_grouped_exact_policy_loss_supports_priority_collect_and_null_outcomes(
+        policy, truths):
+    scores = {
+        name: torch.tensor([-0.45, 0.35], requires_grad=True)
+        for name in policy["fields"]
+    }
+    labels = {name: ["no", "yes"] for name in scores}
+    gold = execute_policy(policy, truths)
+    field_losses = [torch.tensor(0.2, requires_grad=True) for _ in scores]
+
+    loss, distribution, exact_loss = grouped_exact_policy_slot_loss(
+        field_losses, scores, labels, policy, gold,
+        decision_threshold=0.55, action_loss_weight=0.8, action_temperature=0.7)
+    loss.backward()
+
+    assert gold in distribution
+    assert torch.isfinite(loss) and torch.isfinite(exact_loss)
+    torch.testing.assert_close(sum(distribution.values()), torch.tensor(1.0))
+    for values in scores.values():
+        assert values.grad is not None and torch.isfinite(values.grad).all()
+
+
+def test_grouped_exact_policy_loss_is_invariant_to_option_reversal():
+    policy = collect_policy()
+    truths = {"notify_customer": True, "notify_risk": True}
+    gold = execute_policy(policy, truths)
+    direct_scores = {
+        field: torch.tensor([-0.3 + index, 0.7 - index], requires_grad=True)
+        for index, field in enumerate(policy["fields"])
+    }
+    reversed_scores = {
+        field: values.detach().flip(0).requires_grad_()
+        for field, values in direct_scores.items()
+    }
+    field_losses = [torch.tensor(0.1), torch.tensor(0.4)]
+    kwargs = dict(
+        policy=policy, gold_outcome=gold, decision_threshold=0.61,
+        action_loss_weight=0.9, action_temperature=0.8)
+
+    direct_loss, direct_distribution, _ = grouped_exact_policy_slot_loss(
+        field_losses, direct_scores,
+        {field: ["no", "yes"] for field in direct_scores}, **kwargs)
+    reversed_loss, reversed_distribution, _ = grouped_exact_policy_slot_loss(
+        field_losses, reversed_scores,
+        {field: ["yes", "no"] for field in reversed_scores}, **kwargs)
+
+    torch.testing.assert_close(direct_loss, reversed_loss)
+    assert direct_distribution.keys() == reversed_distribution.keys()
+    for outcome in direct_distribution:
+        torch.testing.assert_close(
+            direct_distribution[outcome], reversed_distribution[outcome])
+
+
+def test_hard_exact_outcome_replays_thresholded_policy_execution():
+    policy = collect_policy()
+    scores = {
+        "notify_customer": torch.tensor([-1.0, 1.0]),
+        "notify_risk": torch.tensor([1.0, -1.0]),
+    }
+    labels = {field: ["no", "yes"] for field in scores}
+
+    outcome = hard_exact_outcome_from_scores(scores, labels, policy, 0.6)
+
+    assert outcome == execute_policy(
+        policy, {"notify_customer": True, "notify_risk": False})
+
+
 def test_action_accuracy_replays_hard_serving_policy_not_relaxed_distribution_mode():
     margin = torch.tensor(0.4054651081081642)  # semantic yes probability 0.60
     scores = {name: torch.stack((torch.tensor(0.0), margin))
@@ -244,6 +461,28 @@ def test_action_accuracy_replays_hard_serving_policy_not_relaxed_distribution_mo
 def test_zero_action_weight_exactly_matches_grouped_mean_field_ce_and_gradient(tmp_path):
     row = action_row()
     path = tmp_path / "action.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    group, = load_examples([path])
+    groups = [torch.tensor([1]), torch.tensor([2])]
+    grouped_model, flat_model = TinyModel(), TinyModel()
+    flat_model.load_state_dict(grouped_model.state_dict())
+
+    actual, _, _ = loss_for_examples(
+        grouped_model, [group], TinyTokenizer(), groups, 100, torch.device("cpu"),
+        shuffle=False, action_loss_weight=0.0)
+    expected, _, _ = loss_for_examples(
+        flat_model, flatten_row(row), TinyTokenizer(), groups, 100, torch.device("cpu"),
+        shuffle=False)
+    actual.backward()
+    expected.backward()
+
+    assert torch.equal(actual, expected)
+    assert torch.equal(grouped_model.theta.grad, flat_model.theta.grad)
+
+
+def test_zero_exact_policy_weight_exactly_matches_flat_field_ce_and_gradient(tmp_path):
+    row = exact_policy_row(reverse=True)
+    path = tmp_path / "exact.jsonl"
     path.write_text(json.dumps(row) + "\n")
     group, = load_examples([path])
     groups = [torch.tensor([1]), torch.tensor([2])]
@@ -288,6 +527,34 @@ def test_positive_action_weight_changes_finite_tiny_model_loss_and_gradients(tmp
     assert not torch.equal(model.theta.grad, field_gradient)
     assert stats["action_groups_seen"] == 1
     assert stats["action_ce"] > 0
+
+
+def test_positive_exact_policy_weight_runs_cached_policy_and_reports_outcome_accuracy(
+        tmp_path, monkeypatch):
+    path = tmp_path / "exact.jsonl"
+    path.write_text(json.dumps(exact_policy_row()) + "\n")
+    group, = load_examples([path])
+    compiled_identity = id(group["compiled_policy"])
+    seen = []
+    original = trainer.exact_outcome_log_distribution
+
+    def observe(policy, truth_logits):
+        seen.append(id(policy))
+        return original(policy, truth_logits)
+
+    monkeypatch.setattr(trainer, "exact_outcome_log_distribution", observe)
+    model = TinyModel()
+    loss, _, stats = loss_for_examples(
+        model, [group], TinyTokenizer(), [torch.tensor([1]), torch.tensor([2])],
+        100, torch.device("cpu"), shuffle=False, action_loss_weight=0.75,
+        action_temperature=0.8)
+    loss.backward()
+
+    assert seen == [compiled_identity]
+    assert torch.isfinite(loss) and torch.isfinite(model.theta.grad).all()
+    assert stats["action_groups_seen"] == 1
+    assert stats["action_groups_correct"] in {0, 1}
+    assert math.isfinite(stats["action_ce"])
 
 
 @pytest.mark.parametrize("kwargs", [

@@ -20,12 +20,20 @@ from PIL import Image
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
+from scripts.exact_policy_executor import (
+    canonicalize_outcome,
+    compile_policy,
+    exact_outcome_log_distribution,
+    execute_policy,
+    outcome_nll,
+)
 from scripts.soft_action_executor import (
     ACTIONS,
     FIELD_NAMES,
     REQUIRED_FIELDS,
     action_for,
     action_log_cross_entropy,
+    semantic_truth_logits,
     soft_action_log_distribution,
 )
 
@@ -39,6 +47,7 @@ SYSTEM = (
 TARGET_MODULES = (
     r".*language_model.*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$"
 )
+GROUPED_ACTION_PANELS = frozenset(("action_v1", "exact_policy_v1"))
 
 
 def _unique_json_object(pairs):
@@ -212,6 +221,105 @@ def _action_group(row, source_dir=None):
     }
 
 
+def _exact_policy_group(row, source_dir=None):
+    """Validate and cache one generic exact-policy optimizer slot."""
+    identifier = row.get("id")
+    if not isinstance(identifier, str) or not identifier:
+        raise ValueError("exact-policy group id must be a nonempty string")
+    meta = row.get("meta")
+    if not isinstance(meta, dict) or meta.get("panel") != "exact_policy_v1":
+        raise ValueError(f"{identifier}: malformed exact_policy_v1 metadata")
+    if "image" in row and row["image"] is not None:
+        raise ValueError(f"{identifier}: exact-policy groups must be text-only")
+    if "paired_views" in row or "auxiliary_views" in row:
+        raise ValueError(f"{identifier}: exact-policy groups cannot be paired or auxiliary wrappers")
+
+    questions, targets = row.get("questions"), row.get("targets")
+    if not isinstance(questions, dict) or not questions:
+        raise ValueError(f"{identifier}: exact-policy group needs questions")
+    if not isinstance(targets, dict) or set(targets) != set(questions):
+        raise ValueError(
+            f"{identifier}: exact-policy group targets must exactly match its qids")
+    expected_qids = [f"q{index:02d}" for index in range(len(questions))]
+    if set(questions) != set(expected_qids):
+        raise ValueError(f"{identifier}: exact-policy qids must be contiguous q00..qNN")
+
+    # Compilation is intentionally a loader operation.  The immutable result is
+    # retained on the example and reused by every optimizer step.
+    compiled_policy = compile_policy(meta.get("policy"))
+    field_order = meta.get("field_order")
+    if (not isinstance(field_order, list)
+            or field_order != list(compiled_policy.fields)):
+        raise ValueError(
+            f"{identifier}: field_order must exactly match policy fields")
+    qid_to_field = dict(zip(expected_qids, field_order))
+    explicit_mapping = meta.get("qid_to_field")
+    if explicit_mapping is not None and explicit_mapping != qid_to_field:
+        raise ValueError(f"{identifier}: qid_to_field conflicts with field_order")
+
+    threshold = meta.get("decision_threshold")
+    if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+            or not math.isfinite(threshold) or not 0 < threshold < 1):
+        raise ValueError(f"{identifier}: invalid exact-policy decision_threshold")
+    action_trace = meta.get("action_trace")
+    if (not isinstance(action_trace, dict)
+            or set(action_trace) != set(compiled_policy.fields)
+            or any(type(value) is not bool for value in action_trace.values())):
+        raise ValueError(f"{identifier}: invalid exact-policy action_trace")
+    target_truths = {}
+    for qid in expected_qids:
+        question = questions[qid]
+        if (not isinstance(question, dict) or question.get("type") != "noul"
+                or not isinstance(question.get("instructions"), str)
+                or not question["instructions"].strip()
+                or not isinstance(question.get("criteria"), dict)
+                or set(question["criteria"]) != {"no", "yes"}
+                or any(not isinstance(value, str) or not value.strip()
+                       for value in question["criteria"].values())):
+            raise ValueError(
+                f"{identifier}/{qid}: exact-policy fields require semantic no/yes options")
+        target = targets[qid]
+        if not isinstance(target, dict) or target.get("label") not in {"no", "yes"}:
+            raise ValueError(
+                f"{identifier}/{qid}: exact-policy target must be semantic no/yes")
+        target_truths[qid_to_field[qid]] = target["label"] == "yes"
+    try:
+        gold_outcome = canonicalize_outcome(meta.get("gold_outcome"))
+    except ValueError as error:
+        raise ValueError(f"{identifier}: invalid gold_outcome: {error}") from error
+    if (target_truths != action_trace
+            or execute_policy(compiled_policy, action_trace) != gold_outcome):
+        raise ValueError(f"{identifier}: exact-policy trace or gold outcome mismatch")
+
+    views = flatten_row(row, source_dir)
+    by_qid = {}
+    prefix = f"{identifier}/"
+    for view in views:
+        if not view["id"].startswith(prefix):
+            raise ValueError(f"{identifier}: cannot recover exact-policy qid")
+        qid = view["id"][len(prefix):]
+        if qid in by_qid:
+            raise ValueError(f"{identifier}: duplicate exact-policy qid {qid!r}")
+        if set(label for label, _ in view["items"]) != {"no", "yes"}:
+            raise ValueError(
+                f"{identifier}/{qid}: exact-policy fields require semantic no/yes labels")
+        by_qid[qid] = view
+    if set(by_qid) != set(qid_to_field):
+        raise ValueError(
+            f"{identifier}: flattened exact-policy qids do not match qid_to_field")
+    return {
+        "id": identifier,
+        "action_kind": "exact_policy_v1",
+        "action_views": [by_qid[qid] for qid in expected_qids],
+        "action_qids": expected_qids,
+        "action_qid_to_field": qid_to_field,
+        "action_trace": dict(action_trace),
+        "compiled_policy": compiled_policy,
+        "gold_outcome": gold_outcome,
+        "decision_threshold": float(threshold),
+    }
+
+
 def load_examples(paths):
     examples = []
     for path in paths:
@@ -224,13 +332,16 @@ def load_examples(paths):
                     if isinstance(meta, dict) and meta.get("panel") == "action_v1":
                         examples.append(_action_group(row, path.parent))
                         continue
+                    if isinstance(meta, dict) and meta.get("panel") == "exact_policy_v1":
+                        examples.append(_exact_policy_group(row, path.parent))
+                        continue
                     wrapped_views = [
                         view for key in ("paired_views", "auxiliary_views")
                         if isinstance(row.get(key), list) for view in row[key]
                     ]
                     if any(isinstance(view, dict)
                            and isinstance(view.get("meta"), dict)
-                           and view["meta"].get("panel") == "action_v1"
+                           and view["meta"].get("panel") in GROUPED_ACTION_PANELS
                            for view in wrapped_views):
                         raise ValueError(f"{row.get('id')}: action groups cannot be paired wrappers")
                     if "auxiliary_views" in row and "paired_views" not in row:
@@ -451,6 +562,27 @@ def grouped_action_slot_loss(field_losses, field_scores, field_labels, gold_acti
     return loss, log_distribution.exp(), action_loss
 
 
+def grouped_exact_policy_slot_loss(
+        field_losses, field_scores, field_labels, policy, gold_outcome,
+        decision_threshold, action_loss_weight, action_temperature):
+    """Mean field CE plus exact complete-outcome NLL for a generic policy."""
+    validate_action_objective(action_loss_weight, action_temperature)
+    if not field_losses:
+        raise ValueError("exact-policy group needs at least one field loss")
+    field_loss = torch.stack(field_losses).mean()
+    truth_logits = semantic_truth_logits(
+        field_scores, field_labels, decision_threshold=decision_threshold,
+        temperature=action_temperature)
+    log_distribution = exact_outcome_log_distribution(policy, truth_logits)
+    exact_loss = outcome_nll(log_distribution, gold_outcome)
+    # Compute the complete outcome objective in both arms for matched compute,
+    # while preserving the field-only graph and gradients exactly at weight 0.
+    loss = (field_loss if action_loss_weight == 0
+            else field_loss + action_loss_weight * exact_loss)
+    return loss, {outcome: value.exp()
+                  for outcome, value in log_distribution.items()}, exact_loss
+
+
 def hard_action_from_scores(field_scores, field_labels, decision_threshold):
     """Replay serving's semantic threshold and Boolean executor for telemetry."""
     truths = {}
@@ -459,6 +591,17 @@ def hard_action_from_scores(field_scores, field_labels, decision_threshold):
         yes_probability = F.softmax(scores.detach().float(), dim=0)[labels.index("yes")]
         truths[field] = bool(yes_probability.item() >= decision_threshold)
     return action_for(truths)
+
+
+def hard_exact_outcome_from_scores(field_scores, field_labels, policy,
+                                   decision_threshold):
+    """Threshold semantic scores and run the deterministic generic policy."""
+    truths = {}
+    for field, scores in field_scores.items():
+        labels = field_labels[field]
+        yes_probability = F.softmax(scores.detach().float(), dim=0)[labels.index("yes")]
+        truths[field] = bool(yes_probability.item() >= decision_threshold)
+    return execute_policy(policy, truths)
 
 
 def pair_consistency_stats(active, seen):
@@ -777,15 +920,26 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                 scores, labels = view_scores[cursor + local_index]
                 field_scores[field] = scores
                 field_labels[field] = labels
-            action_slot, _, action_loss = grouped_action_slot_loss(
-                slot_view_losses, field_scores, field_labels,
-                logical_example["action_gold"], logical_example["decision_threshold"],
-                action_loss_weight, action_temperature)
+            if logical_example.get("action_kind") == "exact_policy_v1":
+                action_slot, _, action_loss = grouped_exact_policy_slot_loss(
+                    slot_view_losses, field_scores, field_labels,
+                    logical_example["compiled_policy"], logical_example["gold_outcome"],
+                    logical_example["decision_threshold"], action_loss_weight,
+                    action_temperature)
+                predicted_action = hard_exact_outcome_from_scores(
+                    field_scores, field_labels, logical_example["compiled_policy"],
+                    logical_example["decision_threshold"])
+                action_correct += int(predicted_action == logical_example["gold_outcome"])
+            else:
+                action_slot, _, action_loss = grouped_action_slot_loss(
+                    slot_view_losses, field_scores, field_labels,
+                    logical_example["action_gold"], logical_example["decision_threshold"],
+                    action_loss_weight, action_temperature)
+                predicted_action = hard_action_from_scores(
+                    field_scores, field_labels, logical_example["decision_threshold"])
+                action_correct += int(predicted_action == logical_example["action_gold"])
             slot_losses.append([action_slot])
             action_losses.append(action_loss)
-            predicted_action = hard_action_from_scores(
-                field_scores, field_labels, logical_example["decision_threshold"])
-            action_correct += int(predicted_action == logical_example["action_gold"])
         elif logical_example.get("pair_mode") is not None:
             if len(logical_example.get("paired_views", [])) != 2:
                 raise ValueError(f"{logical_example['id']}: counterfactual pair needs two views")

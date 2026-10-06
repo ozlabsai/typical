@@ -78,6 +78,35 @@ def _validate_inputs(field_scores, field_labels):
             raise ValueError(f"{name} labels must contain exactly no/yes")
 
 
+def _validate_semantic_inputs(field_scores, field_labels):
+    """Validate order-aware binary scores without imposing a policy vocabulary."""
+    if not isinstance(field_scores, Mapping) or not isinstance(field_labels, Mapping):
+        raise ValueError("field scores and labels must be mappings")
+    score_fields, label_fields = set(field_scores), set(field_labels)
+    if score_fields != label_fields:
+        raise ValueError("field scores and labels must contain the same fields")
+    if (not score_fields
+            or any(not isinstance(name, str) or not name for name in score_fields)):
+        raise ValueError("semantic fields must be nonempty strings")
+
+    device = None
+    for name in field_scores:
+        scores, labels = field_scores[name], field_labels[name]
+        if not isinstance(scores, torch.Tensor) or scores.ndim != 1 or scores.numel() != 2:
+            raise ValueError(f"{name} must have exactly two scores")
+        if not scores.is_floating_point():
+            raise ValueError(f"{name} scores must be floating point")
+        if not bool(torch.isfinite(scores.detach()).all().item()):
+            raise ValueError(f"{name} scores must be finite")
+        if device is None:
+            device = scores.device
+        elif scores.device != device:
+            raise ValueError("all field scores must be on the same device")
+        if (not isinstance(labels, Sequence) or isinstance(labels, (str, bytes))
+                or len(labels) != 2 or set(labels) != {"no", "yes"}):
+            raise ValueError(f"{name} labels must contain exactly no/yes")
+
+
 def semantic_yes_probabilities(
     field_scores,
     field_labels,
@@ -97,7 +126,37 @@ def semantic_yes_probabilities(
         decision_threshold=decision_threshold,
         temperature=temperature,
     )
-    return {name: torch.sigmoid(logit) for name, logit in logits.items()}
+    return {name: torch.sigmoid(logits[name])
+            for name in FIELD_NAMES if name in logits}
+
+
+def semantic_truth_logits(
+    field_scores,
+    field_labels,
+    *,
+    decision_threshold,
+    temperature,
+):
+    """Return semantic true-vs-false logits for arbitrary binary fields.
+
+    Label order is explicit, so reversing the presented ``no``/``yes`` options
+    cannot change the result.  The threshold and temperature exactly relax the
+    serving boundary used by the legacy action executor.
+    """
+    _validate_semantic_inputs(field_scores, field_labels)
+    threshold = _validate_scalar(
+        "decision_threshold", decision_threshold, unit_interval=True
+    )
+    temperature = _validate_scalar("temperature", temperature, positive=True)
+    threshold_logit = math.log(threshold) - math.log1p(-threshold)
+
+    logits = {}
+    for name in field_scores:
+        labels = field_labels[name]
+        scores = field_scores[name].float()
+        margin = scores[labels.index("yes")] - scores[labels.index("no")]
+        logits[name] = (margin - threshold_logit) / temperature
+    return logits
 
 
 def _semantic_truth_logits(
@@ -107,22 +166,15 @@ def _semantic_truth_logits(
     decision_threshold,
     temperature,
 ):
+    """Legacy action-vocabulary wrapper retained for API compatibility."""
     _validate_inputs(field_scores, field_labels)
-    threshold = _validate_scalar(
-        "decision_threshold", decision_threshold, unit_interval=True
+    logits = semantic_truth_logits(
+        field_scores,
+        field_labels,
+        decision_threshold=decision_threshold,
+        temperature=temperature,
     )
-    temperature = _validate_scalar("temperature", temperature, positive=True)
-    threshold_logit = math.log(threshold) - math.log1p(-threshold)
-
-    logits = {}
-    for name in FIELD_NAMES:
-        if name not in field_scores:
-            continue
-        labels = field_labels[name]
-        scores = field_scores[name].float()
-        margin = scores[labels.index("yes")] - scores[labels.index("no")]
-        logits[name] = (margin - threshold_logit) / temperature
-    return logits
+    return {name: logits[name] for name in FIELD_NAMES if name in logits}
 
 
 def soft_action_log_distribution(
