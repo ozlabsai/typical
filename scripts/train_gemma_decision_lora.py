@@ -10,6 +10,7 @@ import json
 import math
 import random
 import time
+from numbers import Real
 from pathlib import Path
 
 import torch
@@ -18,6 +19,15 @@ from peft import LoraConfig, PeftModel, get_peft_model
 from PIL import Image
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+
+from scripts.soft_action_executor import (
+    ACTIONS,
+    FIELD_NAMES,
+    REQUIRED_FIELDS,
+    action_for,
+    action_log_cross_entropy,
+    soft_action_log_distribution,
+)
 
 
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -29,6 +39,15 @@ SYSTEM = (
 TARGET_MODULES = (
     r".*language_model.*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$"
 )
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
 
 
 def parse_args():
@@ -62,6 +81,8 @@ def parse_args():
     parser.add_argument("--pair-flip-margin", type=float, default=1.0)
     parser.add_argument("--pair-flip-start-step", type=int, default=0)
     parser.add_argument("--stage-counterfactual-pairs", action="store_true")
+    parser.add_argument("--action-loss-weight", type=float, default=0.0)
+    parser.add_argument("--action-temperature", type=float, default=1.0)
     return parser.parse_args()
 
 
@@ -119,6 +140,78 @@ def flatten_row(row, source_dir=None):
     return examples
 
 
+def _action_group(row, source_dir=None):
+    """Preserve an action-panel row as one grouped optimizer slot."""
+    identifier = row.get("id")
+    if not isinstance(identifier, str) or not identifier:
+        raise ValueError("action group id must be a nonempty string")
+    meta = row.get("meta")
+    if not isinstance(meta, dict) or meta.get("panel") != "action_v1":
+        raise ValueError(f"{identifier}: malformed action_v1 metadata")
+    if "image" in row and row["image"] is not None:
+        raise ValueError(f"{identifier}: action groups must be text-only")
+    if "paired_views" in row or "auxiliary_views" in row:
+        raise ValueError(f"{identifier}: action groups cannot be paired or auxiliary wrappers")
+    questions, targets = row.get("questions"), row.get("targets")
+    if not isinstance(questions, dict) or not questions:
+        raise ValueError(f"{identifier}: action group needs questions")
+    if not isinstance(targets, dict) or set(targets) != set(questions):
+        raise ValueError(f"{identifier}: action group targets must exactly match its qids")
+    expected_qids = [f"q{index:02d}" for index in range(len(questions))]
+    if set(questions) != set(expected_qids):
+        raise ValueError(f"{identifier}: action qids must be contiguous q00..qNN")
+    field_order = meta.get("field_order")
+    if (not isinstance(field_order, list) or len(field_order) != len(expected_qids)
+            or any(not isinstance(field, str) or not field for field in field_order)):
+        raise ValueError(f"{identifier}: field_order must exactly map action-group qids")
+    if len(set(field_order)) != len(field_order):
+        raise ValueError(f"{identifier}: action fields must be unique")
+    fields = set(field_order)
+    if not REQUIRED_FIELDS <= fields or not fields <= set(FIELD_NAMES):
+        raise ValueError(f"{identifier}: action fields are missing or unsupported")
+    qid_to_field = dict(zip(expected_qids, field_order))
+    explicit_mapping = meta.get("qid_to_field")
+    if explicit_mapping is not None and explicit_mapping != qid_to_field:
+        raise ValueError(f"{identifier}: qid_to_field conflicts with field_order")
+    threshold = meta.get("decision_threshold")
+    if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+            or not math.isfinite(threshold) or not 0 < threshold < 1):
+        raise ValueError(f"{identifier}: invalid action decision_threshold")
+    action_gold = meta.get("action_gold")
+    if action_gold not in ACTIONS:
+        raise ValueError(f"{identifier}: invalid action_gold")
+    action_trace = meta.get("action_trace")
+    truths = {qid_to_field[qid]: targets[qid].get("label") == "yes"
+              for qid in expected_qids if isinstance(targets[qid], dict)}
+    if (not isinstance(action_trace, dict) or set(action_trace) != fields
+            or any(type(value) is not bool for value in action_trace.values())
+            or len(truths) != len(expected_qids) or action_trace != truths
+            or action_for(truths) != action_gold):
+        raise ValueError(f"{identifier}: action trace or gold action mismatch")
+    views = flatten_row(row, source_dir)
+    by_qid = {}
+    prefix = f"{identifier}/"
+    for view in views:
+        if not view["id"].startswith(prefix):
+            raise ValueError(f"{identifier}: cannot recover action qid")
+        qid = view["id"][len(prefix):]
+        if qid in by_qid:
+            raise ValueError(f"{identifier}: duplicate action qid {qid!r}")
+        if set(label for label, _ in view["items"]) != {"no", "yes"}:
+            raise ValueError(f"{identifier}/{qid}: action fields require semantic no/yes labels")
+        by_qid[qid] = view
+    if set(by_qid) != set(qid_to_field):
+        raise ValueError(f"{identifier}: flattened action qids do not match qid_to_field")
+    return {
+        "id": identifier,
+        "action_views": [by_qid[qid] for qid in expected_qids],
+        "action_qids": expected_qids,
+        "action_qid_to_field": dict(qid_to_field),
+        "action_gold": action_gold,
+        "decision_threshold": float(threshold),
+    }
+
+
 def load_examples(paths):
     examples = []
     for path in paths:
@@ -126,7 +219,20 @@ def load_examples(paths):
         with path.open() as source:
             for line in source:
                 if line.strip():
-                    row = json.loads(line)
+                    row = json.loads(line, object_pairs_hook=_unique_json_object)
+                    meta = row.get("meta")
+                    if isinstance(meta, dict) and meta.get("panel") == "action_v1":
+                        examples.append(_action_group(row, path.parent))
+                        continue
+                    wrapped_views = [
+                        view for key in ("paired_views", "auxiliary_views")
+                        if isinstance(row.get(key), list) for view in row[key]
+                    ]
+                    if any(isinstance(view, dict)
+                           and isinstance(view.get("meta"), dict)
+                           and view["meta"].get("panel") == "action_v1"
+                           for view in wrapped_views):
+                        raise ValueError(f"{row.get('id')}: action groups cannot be paired wrappers")
                     if "auxiliary_views" in row and "paired_views" not in row:
                         raise ValueError(
                             f"{row.get('id')}: auxiliary_views are only valid on a paired slot")
@@ -224,6 +330,9 @@ def load_examples(paths):
 
 def logical_slot_views(example):
     """Return canonical views followed by optional training-only auxiliary views."""
+    action = example.get("action_views")
+    if action is not None:
+        return action
     paired = example.get("paired_views")
     if paired is None:
         return [example]
@@ -301,6 +410,55 @@ def pair_slot_loss(view_losses, consistency, weight):
     if weight == 0 or consistency is None:
         return base
     return base + weight * consistency
+
+
+def validate_action_objective(action_loss_weight, action_temperature):
+    if (isinstance(action_loss_weight, bool) or not isinstance(action_loss_weight, Real)
+            or not math.isfinite(action_loss_weight)
+            or action_loss_weight < 0):
+        raise ValueError("action loss weight must be finite and nonnegative")
+    if (isinstance(action_temperature, bool) or not isinstance(action_temperature, Real)
+            or not math.isfinite(action_temperature)
+            or action_temperature <= 0):
+        raise ValueError("action temperature must be finite and positive")
+
+
+def validate_action_training_mix(examples, action_loss_weight, pair_consistency_weight,
+                                 pair_flip_weight, project_consistency_against_guard,
+                                 stage_counterfactual_pairs):
+    has_actions = any("action_views" in example for example in examples)
+    if has_actions and (pair_consistency_weight > 0 or pair_flip_weight > 0
+                        or project_consistency_against_guard or stage_counterfactual_pairs):
+        raise ValueError("grouped action slots are incompatible with pair and guard objectives")
+    if action_loss_weight > 0 and not has_actions:
+        raise ValueError("positive action loss weight requires grouped action_v1 training rows")
+
+
+def grouped_action_slot_loss(field_losses, field_scores, field_labels, gold_action,
+                             decision_threshold, action_loss_weight, action_temperature):
+    """Mean field CE plus optional executable action CE for one grouped row."""
+    validate_action_objective(action_loss_weight, action_temperature)
+    if not field_losses:
+        raise ValueError("action group needs at least one field loss")
+    field_loss = torch.stack(field_losses).mean()
+    log_distribution = soft_action_log_distribution(
+        field_scores, field_labels, decision_threshold=decision_threshold,
+        temperature=action_temperature)
+    action_loss = action_log_cross_entropy(log_distribution, gold_action)
+    # Keep weight zero exactly on the grouped field-CE graph.
+    loss = (field_loss if action_loss_weight == 0
+            else field_loss + action_loss_weight * action_loss)
+    return loss, log_distribution.exp(), action_loss
+
+
+def hard_action_from_scores(field_scores, field_labels, decision_threshold):
+    """Replay serving's semantic threshold and Boolean executor for telemetry."""
+    truths = {}
+    for field, scores in field_scores.items():
+        labels = field_labels[field]
+        yes_probability = F.softmax(scores.detach().float(), dim=0)[labels.index("yes")]
+        truths[field] = bool(yes_probability.item() >= decision_threshold)
+    return action_for(truths)
 
 
 def pair_consistency_stats(active, seen):
@@ -532,9 +690,15 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                       pair_consistency_weight=0.0, pair_consistency_min_gold_probability=0.80,
                       pair_consistency_clip=4.0, pair_consistency_beta=1.0,
                       pair_flip_weight=0.0, pair_flip_margin=1.0,
-                      return_components=False, processor=None):
+                      return_components=False, processor=None, action_loss_weight=0.0,
+                      action_temperature=1.0):
     validate_pair_objectives(pair_consistency_weight, return_components,
                              pair_flip_weight, pair_flip_margin)
+    validate_action_objective(action_loss_weight, action_temperature)
+    action_examples = [example for example in examples if "action_views" in example]
+    if action_examples and (pair_consistency_weight > 0 or pair_flip_weight > 0
+                            or return_components):
+        raise ValueError("grouped action slots are incompatible with pair and guard objectives")
     logical_views = [logical_slot_views(example) for example in examples]
     flat_examples = [view for views in logical_views for view in views]
     image_examples = [example for example in flat_examples if example.get("image")]
@@ -587,11 +751,14 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     consistency_active = 0
     flip_losses = []
     flip_active = 0
+    action_losses = []
+    action_correct = 0
     cursor = 0
     for logical_example, views in zip(examples, logical_views):
         end = cursor + len(views)
         slot_view_losses = view_losses[cursor:end]
-        canonical_count = 2 if "paired_views" in logical_example else 1
+        canonical_count = (len(views) if "action_views" in logical_example
+                           else 2 if "paired_views" in logical_example else 1)
         auxiliary_count = len(views) - canonical_count
         canonical_views_seen += canonical_count
         canonical_views_correct += sum(view_correct[cursor:cursor + canonical_count])
@@ -599,7 +766,27 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
         auxiliary_views_seen += auxiliary_count
         auxiliary_views_correct += sum(view_correct[cursor + canonical_count:end])
         auxiliary_ce_losses.extend(slot_view_losses[canonical_count:])
-        if logical_example.get("pair_mode") is not None:
+        if "action_views" in logical_example:
+            qids = logical_example["action_qids"]
+            if len(qids) != len(views) or set(qids) != set(logical_example["action_qid_to_field"]):
+                raise ValueError(f"{logical_example['id']}: malformed action field mapping")
+            field_scores = {}
+            field_labels = {}
+            for local_index, qid in enumerate(qids):
+                field = logical_example["action_qid_to_field"][qid]
+                scores, labels = view_scores[cursor + local_index]
+                field_scores[field] = scores
+                field_labels[field] = labels
+            action_slot, _, action_loss = grouped_action_slot_loss(
+                slot_view_losses, field_scores, field_labels,
+                logical_example["action_gold"], logical_example["decision_threshold"],
+                action_loss_weight, action_temperature)
+            slot_losses.append([action_slot])
+            action_losses.append(action_loss)
+            predicted_action = hard_action_from_scores(
+                field_scores, field_labels, logical_example["decision_threshold"])
+            action_correct += int(predicted_action == logical_example["action_gold"])
+        elif logical_example.get("pair_mode") is not None:
             if len(logical_example.get("paired_views", [])) != 2:
                 raise ValueError(f"{logical_example['id']}: counterfactual pair needs two views")
             # The canonical final-decision pair is always first. Auxiliary views affect
@@ -659,6 +846,12 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                   "pair_flip_active": flip_active,
                   "pair_flip_loss": (sum(loss.detach().item() for loss in flip_losses) /
                                      len(flip_losses) if flip_losses else 0.0)})
+    if action_losses:
+        stats.update({"action_groups_seen": len(action_losses),
+                      "action_groups_correct": action_correct,
+                      "action_accuracy": action_correct / len(action_losses),
+                      "action_ce": (sum(item.detach().item() for item in action_losses) /
+                                    len(action_losses))})
     canonical_ce_sum = torch.stack(canonical_ce_losses).detach().sum().item()
     auxiliary_ce_sum = (torch.stack(auxiliary_ce_losses).detach().sum().item()
                         if auxiliary_ce_losses else 0.0)
@@ -684,21 +877,33 @@ def evaluate(model, examples, args, tokenizer, groups, device, processor=None):
     view_totals = {"canonical_views_seen": 0, "canonical_views_correct": 0.0,
                    "canonical_ce_sum": 0.0, "auxiliary_views_seen": 0,
                    "auxiliary_views_correct": 0.0, "auxiliary_ce_sum": 0.0}
+    action_seen = action_correct = 0
+    action_ce_sum = 0.0
     for start in range(0, min(args.eval_samples, len(examples)), args.microbatch):
         batch = examples[start:start + args.microbatch]
         loss, batch_correct, stats = loss_for_examples(
             model, batch, tokenizer, groups, args.max_length, device, shuffle=False,
-            processor=processor)
+            processor=processor,
+            action_loss_weight=getattr(args, "action_loss_weight", 0.0),
+            action_temperature=getattr(args, "action_temperature", 1.0))
         losses.append(loss.item())
         correct += batch_correct
         count += len(batch)
         accumulate_view_stats_(view_totals, stats)
+        action_seen += stats.get("action_groups_seen", 0)
+        action_correct += stats.get("action_groups_correct", 0)
+        action_ce_sum += stats.get("action_ce", 0.0) * stats.get("action_groups_seen", 0)
     model.train()
     result = {"nll": sum(losses) / len(losses), "accuracy": correct / count, "n": count}
     result.update(view_role_stats(
         view_totals["canonical_views_correct"], view_totals["canonical_views_seen"],
         view_totals["canonical_ce_sum"], view_totals["auxiliary_views_correct"],
         view_totals["auxiliary_views_seen"], view_totals["auxiliary_ce_sum"]))
+    if action_seen:
+        result.update({"action_groups_seen": action_seen,
+                       "action_groups_correct": action_correct,
+                       "action_accuracy": action_correct / action_seen,
+                       "action_ce": action_ce_sum / action_seen})
     return result
 
 
@@ -742,6 +947,7 @@ def validate_trainable_path(model):
 def main():
     args = parse_args()
     explicit_save_steps = parse_save_steps(args.save_steps, args.steps)
+    validate_action_objective(args.action_loss_weight, args.action_temperature)
     if args.pair_consistency_weight < 0:
         raise ValueError("pair consistency weight must be nonnegative")
     if not 0 <= args.pair_consistency_min_gold_probability <= 1:
@@ -757,6 +963,11 @@ def main():
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     train = load_examples(args.train)
+    validate_action_training_mix(
+        train, args.action_loss_weight, args.pair_consistency_weight,
+        args.pair_flip_weight, args.project_consistency_against_guard,
+        args.stage_counterfactual_pairs)
+    has_action_training = any("action_views" in example for example in train)
     validation = {name: load_examples([path]) for name, path in
                   (item.split("=", 1) for item in args.val)}
     validate_multimodal_examples(train, args.microbatch)
@@ -834,6 +1045,8 @@ def main():
         pair_active = pair_seen = 0
         flip_active = flip_seen = 0
         flip_loss_sum = 0.0
+        action_groups_seen = action_groups_correct = 0
+        action_ce_sum = 0.0
         view_totals = {"canonical_views_seen": 0, "canonical_views_correct": 0.0,
                        "canonical_ce_sum": 0.0, "auxiliary_views_seen": 0,
                        "auxiliary_views_correct": 0.0, "auxiliary_ce_sum": 0.0}
@@ -862,12 +1075,18 @@ def main():
                     pair_consistency_beta=args.pair_consistency_beta,
                     pair_flip_weight=flip_weight,
                     pair_flip_margin=args.pair_flip_margin,
-                    return_components=True, processor=processor)
+                    return_components=True, processor=processor,
+                    action_loss_weight=args.action_loss_weight,
+                    action_temperature=args.action_temperature)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
                 flip_active += pair_stats["pair_flip_active"]
                 flip_seen += pair_stats["pair_flip_seen"]
                 flip_loss_sum += pair_stats["pair_flip_loss"] * pair_stats["pair_flip_seen"]
+                action_groups_seen += pair_stats.get("action_groups_seen", 0)
+                action_groups_correct += pair_stats.get("action_groups_correct", 0)
+                action_ce_sum += (pair_stats.get("action_ce", 0.0)
+                                  * pair_stats.get("action_groups_seen", 0))
                 accumulate_view_stats_(view_totals, pair_stats)
                 scale = 1.0 / args.grad_accum
                 backward_into_dense_gradients_(
@@ -931,12 +1150,18 @@ def main():
                     pair_consistency_clip=args.pair_consistency_clip,
                     pair_consistency_beta=args.pair_consistency_beta,
                     pair_flip_weight=flip_weight,
-                    pair_flip_margin=args.pair_flip_margin, processor=processor)
+                    pair_flip_margin=args.pair_flip_margin, processor=processor,
+                    action_loss_weight=args.action_loss_weight,
+                    action_temperature=args.action_temperature)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
                 flip_active += pair_stats["pair_flip_active"]
                 flip_seen += pair_stats["pair_flip_seen"]
                 flip_loss_sum += pair_stats["pair_flip_loss"] * pair_stats["pair_flip_seen"]
+                action_groups_seen += pair_stats.get("action_groups_seen", 0)
+                action_groups_correct += pair_stats.get("action_groups_correct", 0)
+                action_ce_sum += (pair_stats.get("action_ce", 0.0)
+                                  * pair_stats.get("action_groups_seen", 0))
                 accumulate_view_stats_(view_totals, pair_stats)
                 (loss / args.grad_accum).backward()
                 accumulated += loss.item()
@@ -965,6 +1190,15 @@ def main():
                   "pair_flip_loss": flip_loss_sum / flip_seen if flip_seen else 0.0,
                   "pair_flip_weight": flip_weight,
                   "pair_flip_weight_configured": args.pair_flip_weight}
+        if has_action_training:
+            metric.update({"action_groups_seen": action_groups_seen,
+                           "action_groups_correct": action_groups_correct,
+                           "action_accuracy": (action_groups_correct / action_groups_seen
+                                               if action_groups_seen else 0.0),
+                           "action_ce": (action_ce_sum / action_groups_seen
+                                         if action_groups_seen else 0.0),
+                           "action_loss_weight": args.action_loss_weight,
+                           "action_temperature": args.action_temperature})
         metric.update(view_role_stats(
             view_totals["canonical_views_correct"], view_totals["canonical_views_seen"],
             view_totals["canonical_ce_sum"], view_totals["auxiliary_views_correct"],
