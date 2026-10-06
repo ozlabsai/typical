@@ -246,12 +246,30 @@ training-only bundles. Train four deterministic epochs (`400` steps × accumulat
 same R044-R parent with the M0-passing capacity. Control runs first, then treatment. Seed, order,
 optimizer, scheduler, base revision, images, and every retention row are identical.
 
-Before candidate exposure, freeze seed 47/domain-offset 2 mechanism and final panels. Reject exact
-or normalized overlap in states, questions, clause JSON, decisive pairs, complete AST/multisets,
-scenario lineage, and all quarantined benchmarks. Freeze builder, evaluator, arm, panel, manifest,
-and threshold hashes.
+Before candidate exposure, freeze two panels. The existing seed-47/domain-offset-2 panel is retained
+only as a 32-scenario **near-transfer smoke diagnostic**: despite 144 language rows, it has only 24
+K=2 and 8 K=3 independent clusters, reuses the generator/template family, and confounds language
+with answer order. It may detect obvious failure but cannot establish the mechanism gate.
 
-**Mechanism gate:** treatment minus control on unseen data must satisfy all of:
+The primary panel is generator-disjoint and uses semantic clusters as its independent unit:
+
+- 312 scenarios spanning all 13 unseen K=2 compositions (24 per composition);
+- 320 scenarios spanning all 20 K=3 compositions (16 per composition);
+- 48 scenarios on the two seen K=2 compositions, reported only as a near-transfer diagnostic;
+- the full Boolean truth cube per scenario, crossing EN/HE with both answer orders and at least three
+  held-out clause-query families;
+- new entity, renderer, numeric-margin, ledger-order/length, date/timezone, fraction, conditional,
+  and policy regimes, with independently executed gold and explicit generator-family provenance.
+
+Freeze builder, evaluator, comparison, bootstrap RNG, arm, panel, manifest, and threshold hashes.
+Reject exact or normalized overlap in states, questions, instructions, clause JSON, numeric
+signatures, decisive pairs, complete AST/multisets, composition hyperedges, scenario/template/
+generator lineage, near-duplicates, and all quarantined benchmarks. Language/order twins and the
+complete truth cube remain in one semantic cluster. Resample whole clusters within K×composition
+for at least 20,000 fixed paired-bootstrap replicates; never row-bootstrap or pool K=2 with K=3.
+
+**Mechanism gate:** treatment minus control must pass separately on both unseen K=2 and K=3
+co-primary strata (an intersection-union decision), satisfying all of:
 
 - clause balanced accuracy `+5` points with scenario-clustered 95% bootstrap lower bound above 0;
 - exact clause-vector accuracy `+8` points;
@@ -260,6 +278,12 @@ and threshold hashes.
   more than 2 points;
 - final presentation accuracy `+5` points, no regression in correct pairs/sources, and NLL/Brier at
   most 105% of control and the best frozen R044/R046 reference.
+
+Report per primitive×language×K class confusion, truth-Hamming-weight and seen-edge slices, both
+answer orders, semantic order agreement, probability delta/JSD, and treatment×order interaction.
+Every language/order point effect must be nonnegative, no cell may lose more than two points, and a
+gain driven by only one answer order fails. M1 is one paired optimizer-seed causal screen; a second
+paired training seed is required in M2 before calling the mechanism replicated.
 
 A final-only gain without clause gains is a shortcut and fails. Complete scenarios are reported but
 are not the mechanism gate. Promotion-scale expectations require at least `.81` final presentation
