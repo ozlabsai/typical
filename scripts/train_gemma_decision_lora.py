@@ -1094,7 +1094,12 @@ def evaluate(model, examples, args, tokenizer, groups, device, processor=None):
         if stats.get("action_groups_seen", 0):
             action_loss_kinds.add(stats.get("action_loss_kind", "nll"))
     model.train()
-    result = {"nll": sum(losses) / len(losses), "accuracy": correct / count, "n": count}
+    objective_loss = sum(losses) / len(losses)
+    result = {"objective_loss": objective_loss, "accuracy": correct / count, "n": count}
+    # Preserve the established key for CE/NLL runs, but do not mislabel an
+    # objective containing a Brier term as negative log likelihood.
+    if "brier" not in action_loss_kinds:
+        result["nll"] = objective_loss
     result.update(view_role_stats(
         view_totals["canonical_views_correct"], view_totals["canonical_views_seen"],
         view_totals["canonical_ce_sum"], view_totals["auxiliary_views_correct"],

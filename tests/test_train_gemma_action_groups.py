@@ -332,9 +332,42 @@ def test_evaluate_forwards_action_objective_configuration(monkeypatch):
     assert seen == [{"shuffle": False, "processor": None,
                      "action_loss_weight": 0.7, "action_temperature": 0.8,
                      "exact_policy_outcome_loss": "brier"}]
+    assert report["objective_loss"] == 0.75
     assert report["nll"] == 0.75
     assert report["action_ce"] == 0.4
     assert report["action_loss"] == 0.4
+
+
+def test_evaluate_does_not_label_brier_objective_as_nll(monkeypatch):
+    def fake_loss(*_args, **_kwargs):
+        stats = {
+            "canonical_views_seen": 1, "canonical_views_correct": 1.0,
+            "canonical_ce_sum": 0.25, "auxiliary_views_seen": 0,
+            "auxiliary_views_correct": 0.0, "auxiliary_ce_sum": 0.0,
+            "action_groups_seen": 1, "action_groups_correct": 1,
+            "action_loss": 0.4, "action_loss_kind": "brier", "action_brier": 0.4,
+        }
+        return torch.tensor(0.75), 1.0, stats
+
+    class ModeModel:
+        def eval(self):
+            return self
+
+        def train(self):
+            return self
+
+    monkeypatch.setattr(trainer, "loss_for_examples", fake_loss)
+    args = SimpleNamespace(eval_samples=1, microbatch=1, max_length=100,
+                           action_loss_weight=0.7, action_temperature=1.0,
+                           exact_policy_outcome_loss="brier")
+
+    report = trainer.evaluate(
+        ModeModel(), [object()], args, object(), object(), torch.device("cpu"))
+
+    assert report["objective_loss"] == 0.75
+    assert "nll" not in report
+    assert report["action_loss_kind"] == "brier"
+    assert report["action_brier"] == 0.4
 
 
 def test_grouped_action_loss_uses_semantic_labels_not_option_positions():
@@ -554,6 +587,30 @@ def test_zero_exact_policy_weight_exactly_matches_flat_field_ce_and_gradient(tmp
     actual, _, _ = loss_for_examples(
         grouped_model, [group], TinyTokenizer(), groups, 100, torch.device("cpu"),
         shuffle=False, action_loss_weight=0.0)
+    expected, _, _ = loss_for_examples(
+        flat_model, flatten_row(row), TinyTokenizer(), groups, 100, torch.device("cpu"),
+        shuffle=False)
+    actual.backward()
+    expected.backward()
+
+    assert torch.equal(actual, expected)
+    assert torch.equal(grouped_model.theta.grad, flat_model.theta.grad)
+
+
+def test_zero_exact_policy_brier_weight_exactly_matches_field_ce_and_gradient(tmp_path):
+    row = exact_policy_row(reverse=True)
+    row["meta"]["decision_threshold"] = 0.5
+    path = tmp_path / "exact-brier.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    group, = load_examples([path])
+    groups = [torch.tensor([1]), torch.tensor([2])]
+    grouped_model, flat_model = TinyModel(), TinyModel()
+    flat_model.load_state_dict(grouped_model.state_dict())
+
+    actual, _, _ = loss_for_examples(
+        grouped_model, [group], TinyTokenizer(), groups, 100, torch.device("cpu"),
+        shuffle=False, action_loss_weight=0.0, action_temperature=1.0,
+        exact_policy_outcome_loss="brier")
     expected, _, _ = loss_for_examples(
         flat_model, flatten_row(row), TinyTokenizer(), groups, 100, torch.device("cpu"),
         shuffle=False)
