@@ -533,6 +533,23 @@ This supports arbitrary AND/OR/NOT, priority, fallback, multi-action sets, and t
 `action_v1` as a verified special case. Only this generic version may scale to 30k--100k workflow
 groups. RL remains deferred while legal outcomes can be enumerated exactly.
 
+This computation is an application of semantic loss / weighted model counting, not a claim that
+exact differentiable logic is itself novel. Xu et al.'s
+[semantic loss](https://proceedings.mlr.press/v80/xu18h.html) directly motivates optimizing exact
+structured correctness even when per-field accuracy is already supervised; DeepProbLog
+([NeurIPS 2018](https://papers.nips.cc/paper/2018/hash/dc5d637ed5e62c36ecb73b654b05ba2a-Abstract.html))
+establishes gradient propagation from exact probabilistic-logic inference into neural predicates.
+Semantic Probabilistic Layers
+([NeurIPS 2022](https://papers.nips.cc/paper_files/paper/2022/hash/c182ec594f38926b7fcb827635b9a8f4-Abstract-Conference.html))
+show why a future interaction layer may be necessary when the factorized field distribution is too
+weak. R048's contribution under test is the workflow-specific outcome construction, preservation
+protocol, and causal evidence—not weighted model counting itself.
+
+The first executor assumes conditionally independent field Bernoullis. That is a deliberate minimal
+factorization, not an empirical claim about error independence. If R048-H shows adequate field
+accuracy but the action loss cannot improve exact outcomes, test a compact joint semantic
+probabilistic layer as a separately isolated factor instead of increasing loss weight blindly.
+
 ### Run order and compute budget
 
 | Milestone | Runs | Decision gate | Estimated A100 cost | Main risk |

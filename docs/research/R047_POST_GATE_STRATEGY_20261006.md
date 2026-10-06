@@ -103,6 +103,15 @@ This is a lower-variance proper target because all legal actions can be enumerat
 Online RL is reserved for a slow multi-turn teacher only if exploration changes future state and a
 verified best-of-eight oracle shows at least five points of headroom over direct decisions.
 
+The exact outcome term is a workflow-specific use of semantic loss / weighted model counting, not a
+claim that differentiable probabilistic logic is novel. The relevant foundations are
+[Semantic Loss](https://proceedings.mlr.press/v80/xu18h.html),
+[DeepProbLog](https://papers.nips.cc/paper/2018/hash/dc5d637ed5e62c36ecb73b654b05ba2a-Abstract.html),
+and [Semantic Probabilistic Layers](https://papers.nips.cc/paper_files/paper/2022/hash/c182ec594f38926b7fcb827635b9a8f4-Abstract-Conference.html).
+The initial independent-Bernoulli field distribution is a deliberately minimal factorization. A
+learned joint semantic layer is a later isolated factor only if exact field competence is high while
+factorized outcome training fails.
+
 ## Protected multimodal and Hebrew mix
 
 Suggested optimizer-slot mix:
