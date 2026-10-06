@@ -739,6 +739,29 @@ def outcome_nll(log_distribution: Mapping[CanonicalOutcome, torch.Tensor],
     return -distribution[gold]
 
 
+def outcome_brier(log_distribution: Mapping[CanonicalOutcome, torch.Tensor],
+                  gold_outcome: CanonicalOutcome | Mapping[str, Any]) -> torch.Tensor:
+    """Unscaled categorical Brier score for one complete policy outcome.
+
+    The score is ``sum((p_k - 1[k == gold]) ** 2)`` over the policy's
+    canonical outcome partition.  It is a strictly proper scoring rule and
+    remains differentiable through the exact truth-table marginalization.
+    """
+    distribution = _validate_log_distribution(log_distribution)
+    gold = canonicalize_outcome(gold_outcome)
+    if gold not in distribution:
+        raise ValueError("gold outcome is structurally impossible under the policy")
+    terms = []
+    for outcome, log_probability in distribution.items():
+        probability = log_probability.exp()
+        target = probability.new_tensor(float(outcome == gold))
+        terms.append((probability - target).square())
+    loss = torch.stack(terms).sum()
+    if not bool(torch.isfinite(loss.detach()).item()):
+        raise ValueError("outcome Brier score must be finite")
+    return loss
+
+
 def primary_action_nll(
     log_distribution: Mapping[CanonicalOutcome, torch.Tensor],
     gold_action: CanonicalAction | Mapping[str, Any] | None,

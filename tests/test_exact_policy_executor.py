@@ -16,6 +16,7 @@ from scripts.exact_policy_executor import (
     exact_outcome_distribution,
     exact_outcome_log_distribution,
     execute_policy,
+    outcome_brier,
     outcome_nll,
     primary_action_nll,
 )
@@ -188,6 +189,42 @@ def test_gold_nll_helpers_marginalize_complete_primary_and_action_set_targets():
         -torch.logsumexp(torch.stack(primary_matches), 0).item())
     assert action_set_nll(distribution, list(reversed(both.actions))).item() == pytest.approx(
         -distribution[both].item())
+
+
+def test_complete_outcome_brier_matches_categorical_definition_and_backpropagates():
+    policy = compile_policy(collect_policy())
+    logits = {"a": torch.tensor(0.2, requires_grad=True),
+              "b": torch.tensor(-0.4, requires_grad=True)}
+    log_distribution = exact_outcome_log_distribution(policy, logits)
+    gold = execute_policy(policy, {"a": True, "b": False})
+
+    actual = outcome_brier(log_distribution, gold)
+    expected = sum(
+        (value.exp() - float(outcome == gold)).square()
+        for outcome, value in log_distribution.items()
+    )
+    torch.testing.assert_close(actual, expected)
+    actual.backward()
+    assert torch.isfinite(actual)
+    assert all(value.grad is not None and torch.isfinite(value.grad)
+               for value in logits.values())
+
+
+def test_complete_outcome_brier_rejects_impossible_gold_and_extreme_logits_stay_finite():
+    policy = compile_policy(collect_policy())
+    logits = {"a": torch.tensor(1e30, requires_grad=True),
+              "b": torch.tensor(-1e30, requires_grad=True)}
+    log_distribution = exact_outcome_log_distribution(policy, logits)
+    loss = outcome_brier(log_distribution, execute_policy(
+        policy, {"a": False, "b": True}))
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert all(value.grad is not None and torch.isfinite(value.grad)
+               for value in logits.values())
+    with pytest.raises(ValueError, match="structurally impossible"):
+        outcome_brier(log_distribution, {
+            "primary": action("unknown"), "actions": [action("unknown")],
+        })
 
 
 def test_collect_null_fallback_and_unranked_rules_cover_typesafe_outcomes_and_nlls():

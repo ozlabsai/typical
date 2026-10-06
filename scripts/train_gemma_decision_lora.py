@@ -25,6 +25,7 @@ from scripts.exact_policy_executor import (
     compile_policy,
     exact_outcome_log_distribution,
     execute_policy,
+    outcome_brier,
     outcome_nll,
 )
 from scripts.soft_action_executor import (
@@ -92,6 +93,8 @@ def parse_args():
     parser.add_argument("--stage-counterfactual-pairs", action="store_true")
     parser.add_argument("--action-loss-weight", type=float, default=0.0)
     parser.add_argument("--action-temperature", type=float, default=1.0)
+    parser.add_argument("--exact-policy-outcome-loss", choices=("nll", "brier"),
+                        default="nll")
     return parser.parse_args()
 
 
@@ -534,6 +537,17 @@ def validate_action_objective(action_loss_weight, action_temperature):
         raise ValueError("action temperature must be finite and positive")
 
 
+def validate_exact_policy_outcome_objective(
+        loss_kind, decision_threshold, action_temperature):
+    if loss_kind not in {"nll", "brier"}:
+        raise ValueError("exact-policy outcome loss must be 'nll' or 'brier'")
+    if (loss_kind == "brier"
+            and (decision_threshold != 0.5 or action_temperature != 1.0)):
+        raise ValueError(
+            "Brier calibration requires decision_threshold=0.5 and "
+            "action_temperature=1.0")
+
+
 def validate_action_training_mix(examples, action_loss_weight, pair_consistency_weight,
                                  pair_flip_weight, project_consistency_against_guard,
                                  stage_counterfactual_pairs):
@@ -564,9 +578,12 @@ def grouped_action_slot_loss(field_losses, field_scores, field_labels, gold_acti
 
 def grouped_exact_policy_slot_loss(
         field_losses, field_scores, field_labels, policy, gold_outcome,
-        decision_threshold, action_loss_weight, action_temperature):
-    """Mean field CE plus exact complete-outcome NLL for a generic policy."""
+        decision_threshold, action_loss_weight, action_temperature,
+        exact_policy_outcome_loss="nll"):
+    """Mean field CE plus a proper score over exact complete outcomes."""
     validate_action_objective(action_loss_weight, action_temperature)
+    validate_exact_policy_outcome_objective(
+        exact_policy_outcome_loss, decision_threshold, action_temperature)
     if not field_losses:
         raise ValueError("exact-policy group needs at least one field loss")
     field_loss = torch.stack(field_losses).mean()
@@ -574,7 +591,13 @@ def grouped_exact_policy_slot_loss(
         field_scores, field_labels, decision_threshold=decision_threshold,
         temperature=action_temperature)
     log_distribution = exact_outcome_log_distribution(policy, truth_logits)
-    exact_loss = outcome_nll(log_distribution, gold_outcome)
+    # Compute both experimental arms from the identical exact distribution so
+    # NLL and Brier runs have matched executor work and differ only in score.
+    exact_losses = {
+        "nll": outcome_nll(log_distribution, gold_outcome),
+        "brier": outcome_brier(log_distribution, gold_outcome),
+    }
+    exact_loss = exact_losses[exact_policy_outcome_loss]
     # Compute the complete outcome objective in both arms for matched compute,
     # while preserving the field-only graph and gradients exactly at weight 0.
     loss = (field_loss if action_loss_weight == 0
@@ -834,10 +857,12 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                       pair_consistency_clip=4.0, pair_consistency_beta=1.0,
                       pair_flip_weight=0.0, pair_flip_margin=1.0,
                       return_components=False, processor=None, action_loss_weight=0.0,
-                      action_temperature=1.0):
+                      action_temperature=1.0, exact_policy_outcome_loss="nll"):
     validate_pair_objectives(pair_consistency_weight, return_components,
                              pair_flip_weight, pair_flip_margin)
     validate_action_objective(action_loss_weight, action_temperature)
+    if exact_policy_outcome_loss not in {"nll", "brier"}:
+        raise ValueError("exact-policy outcome loss must be 'nll' or 'brier'")
     action_examples = [example for example in examples if "action_views" in example]
     if action_examples and (pair_consistency_weight > 0 or pair_flip_weight > 0
                             or return_components):
@@ -895,6 +920,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     flip_losses = []
     flip_active = 0
     action_losses = []
+    action_loss_kinds = []
     action_correct = 0
     cursor = 0
     for logical_example, views in zip(examples, logical_views):
@@ -925,11 +951,12 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                     slot_view_losses, field_scores, field_labels,
                     logical_example["compiled_policy"], logical_example["gold_outcome"],
                     logical_example["decision_threshold"], action_loss_weight,
-                    action_temperature)
+                    action_temperature, exact_policy_outcome_loss)
                 predicted_action = hard_exact_outcome_from_scores(
                     field_scores, field_labels, logical_example["compiled_policy"],
                     logical_example["decision_threshold"])
                 action_correct += int(predicted_action == logical_example["gold_outcome"])
+                action_loss_kinds.append(exact_policy_outcome_loss)
             else:
                 action_slot, _, action_loss = grouped_action_slot_loss(
                     slot_view_losses, field_scores, field_labels,
@@ -938,6 +965,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                 predicted_action = hard_action_from_scores(
                     field_scores, field_labels, logical_example["decision_threshold"])
                 action_correct += int(predicted_action == logical_example["action_gold"])
+                action_loss_kinds.append("nll")
             slot_losses.append([action_slot])
             action_losses.append(action_loss)
         elif logical_example.get("pair_mode") is not None:
@@ -1001,11 +1029,22 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                   "pair_flip_loss": (sum(loss.detach().item() for loss in flip_losses) /
                                      len(flip_losses) if flip_losses else 0.0)})
     if action_losses:
+        mean_action_loss = (sum(item.detach().item() for item in action_losses) /
+                            len(action_losses))
         stats.update({"action_groups_seen": len(action_losses),
                       "action_groups_correct": action_correct,
                       "action_accuracy": action_correct / len(action_losses),
-                      "action_ce": (sum(item.detach().item() for item in action_losses) /
-                                    len(action_losses))})
+                      "action_loss": mean_action_loss})
+        loss_kinds = set(action_loss_kinds)
+        stats["action_loss_kind"] = (next(iter(loss_kinds))
+                                     if len(loss_kinds) == 1 else "mixed")
+        if loss_kinds == {"nll"}:
+            stats["action_ce"] = mean_action_loss
+        elif loss_kinds == {"brier"}:
+            stats["action_brier"] = mean_action_loss
+        if any(example.get("action_kind") == "exact_policy_v1"
+               for example in action_examples):
+            stats["exact_policy_outcome_loss"] = exact_policy_outcome_loss
     canonical_ce_sum = torch.stack(canonical_ce_losses).detach().sum().item()
     auxiliary_ce_sum = (torch.stack(auxiliary_ce_losses).detach().sum().item()
                         if auxiliary_ce_losses else 0.0)
@@ -1032,21 +1071,28 @@ def evaluate(model, examples, args, tokenizer, groups, device, processor=None):
                    "canonical_ce_sum": 0.0, "auxiliary_views_seen": 0,
                    "auxiliary_views_correct": 0.0, "auxiliary_ce_sum": 0.0}
     action_seen = action_correct = 0
-    action_ce_sum = 0.0
+    action_loss_sum = 0.0
+    action_loss_kinds = set()
     for start in range(0, min(args.eval_samples, len(examples)), args.microbatch):
         batch = examples[start:start + args.microbatch]
         loss, batch_correct, stats = loss_for_examples(
             model, batch, tokenizer, groups, args.max_length, device, shuffle=False,
             processor=processor,
             action_loss_weight=getattr(args, "action_loss_weight", 0.0),
-            action_temperature=getattr(args, "action_temperature", 1.0))
+            action_temperature=getattr(args, "action_temperature", 1.0),
+            exact_policy_outcome_loss=getattr(
+                args, "exact_policy_outcome_loss", "nll"))
         losses.append(loss.item())
         correct += batch_correct
         count += len(batch)
         accumulate_view_stats_(view_totals, stats)
         action_seen += stats.get("action_groups_seen", 0)
         action_correct += stats.get("action_groups_correct", 0)
-        action_ce_sum += stats.get("action_ce", 0.0) * stats.get("action_groups_seen", 0)
+        action_loss_sum += stats.get(
+            "action_loss", stats.get("action_ce", 0.0)
+        ) * stats.get("action_groups_seen", 0)
+        if stats.get("action_groups_seen", 0):
+            action_loss_kinds.add(stats.get("action_loss_kind", "nll"))
     model.train()
     result = {"nll": sum(losses) / len(losses), "accuracy": correct / count, "n": count}
     result.update(view_role_stats(
@@ -1057,7 +1103,13 @@ def evaluate(model, examples, args, tokenizer, groups, device, processor=None):
         result.update({"action_groups_seen": action_seen,
                        "action_groups_correct": action_correct,
                        "action_accuracy": action_correct / action_seen,
-                       "action_ce": action_ce_sum / action_seen})
+                       "action_loss": action_loss_sum / action_seen,
+                       "action_loss_kind": (next(iter(action_loss_kinds))
+                                            if len(action_loss_kinds) == 1 else "mixed")})
+        if action_loss_kinds == {"nll"}:
+            result["action_ce"] = action_loss_sum / action_seen
+        elif action_loss_kinds == {"brier"}:
+            result["action_brier"] = action_loss_sum / action_seen
     return result
 
 
@@ -1102,6 +1154,8 @@ def main():
     args = parse_args()
     explicit_save_steps = parse_save_steps(args.save_steps, args.steps)
     validate_action_objective(args.action_loss_weight, args.action_temperature)
+    if args.exact_policy_outcome_loss not in {"nll", "brier"}:
+        raise ValueError("exact-policy outcome loss must be 'nll' or 'brier'")
     if args.pair_consistency_weight < 0:
         raise ValueError("pair consistency weight must be nonnegative")
     if not 0 <= args.pair_consistency_min_gold_probability <= 1:
@@ -1200,7 +1254,8 @@ def main():
         flip_active = flip_seen = 0
         flip_loss_sum = 0.0
         action_groups_seen = action_groups_correct = 0
-        action_ce_sum = 0.0
+        action_loss_sum = 0.0
+        action_loss_kinds = set()
         view_totals = {"canonical_views_seen": 0, "canonical_views_correct": 0.0,
                        "canonical_ce_sum": 0.0, "auxiliary_views_seen": 0,
                        "auxiliary_views_correct": 0.0, "auxiliary_ce_sum": 0.0}
@@ -1231,7 +1286,8 @@ def main():
                     pair_flip_margin=args.pair_flip_margin,
                     return_components=True, processor=processor,
                     action_loss_weight=args.action_loss_weight,
-                    action_temperature=args.action_temperature)
+                    action_temperature=args.action_temperature,
+                    exact_policy_outcome_loss=args.exact_policy_outcome_loss)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
                 flip_active += pair_stats["pair_flip_active"]
@@ -1239,8 +1295,11 @@ def main():
                 flip_loss_sum += pair_stats["pair_flip_loss"] * pair_stats["pair_flip_seen"]
                 action_groups_seen += pair_stats.get("action_groups_seen", 0)
                 action_groups_correct += pair_stats.get("action_groups_correct", 0)
-                action_ce_sum += (pair_stats.get("action_ce", 0.0)
-                                  * pair_stats.get("action_groups_seen", 0))
+                action_loss_sum += (pair_stats.get(
+                    "action_loss", pair_stats.get("action_ce", 0.0))
+                    * pair_stats.get("action_groups_seen", 0))
+                if pair_stats.get("action_groups_seen", 0):
+                    action_loss_kinds.add(pair_stats.get("action_loss_kind", "nll"))
                 accumulate_view_stats_(view_totals, pair_stats)
                 scale = 1.0 / args.grad_accum
                 backward_into_dense_gradients_(
@@ -1306,7 +1365,8 @@ def main():
                     pair_flip_weight=flip_weight,
                     pair_flip_margin=args.pair_flip_margin, processor=processor,
                     action_loss_weight=args.action_loss_weight,
-                    action_temperature=args.action_temperature)
+                    action_temperature=args.action_temperature,
+                    exact_policy_outcome_loss=args.exact_policy_outcome_loss)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
                 flip_active += pair_stats["pair_flip_active"]
@@ -1314,8 +1374,11 @@ def main():
                 flip_loss_sum += pair_stats["pair_flip_loss"] * pair_stats["pair_flip_seen"]
                 action_groups_seen += pair_stats.get("action_groups_seen", 0)
                 action_groups_correct += pair_stats.get("action_groups_correct", 0)
-                action_ce_sum += (pair_stats.get("action_ce", 0.0)
-                                  * pair_stats.get("action_groups_seen", 0))
+                action_loss_sum += (pair_stats.get(
+                    "action_loss", pair_stats.get("action_ce", 0.0))
+                    * pair_stats.get("action_groups_seen", 0))
+                if pair_stats.get("action_groups_seen", 0):
+                    action_loss_kinds.add(pair_stats.get("action_loss_kind", "nll"))
                 accumulate_view_stats_(view_totals, pair_stats)
                 (loss / args.grad_accum).backward()
                 accumulated += loss.item()
@@ -1349,10 +1412,19 @@ def main():
                            "action_groups_correct": action_groups_correct,
                            "action_accuracy": (action_groups_correct / action_groups_seen
                                                if action_groups_seen else 0.0),
-                           "action_ce": (action_ce_sum / action_groups_seen
-                                         if action_groups_seen else 0.0),
+                           "action_loss": (action_loss_sum / action_groups_seen
+                                           if action_groups_seen else 0.0),
+                           "action_loss_kind": (
+                               next(iter(action_loss_kinds))
+                               if len(action_loss_kinds) == 1 else "mixed"),
                            "action_loss_weight": args.action_loss_weight,
-                           "action_temperature": args.action_temperature})
+                           "action_temperature": args.action_temperature,
+                           "exact_policy_outcome_loss":
+                               args.exact_policy_outcome_loss})
+            if action_loss_kinds == {"nll"}:
+                metric["action_ce"] = metric["action_loss"]
+            elif action_loss_kinds == {"brier"}:
+                metric["action_brier"] = metric["action_loss"]
         metric.update(view_role_stats(
             view_totals["canonical_views_correct"], view_totals["canonical_views_seen"],
             view_totals["canonical_ce_sum"], view_totals["auxiliary_views_correct"],

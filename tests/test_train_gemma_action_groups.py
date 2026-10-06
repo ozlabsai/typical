@@ -18,6 +18,7 @@ from scripts.train_gemma_decision_lora import (
     load_examples,
     loss_for_examples,
     validate_action_objective,
+    validate_exact_policy_outcome_objective,
 )
 
 
@@ -291,6 +292,15 @@ def test_action_objective_cli_values_fail_closed(weight, temperature):
         validate_action_objective(weight, temperature)
 
 
+def test_cli_selects_exact_policy_brier(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["train", "--model", "base", "--train", "train.jsonl", "--out", "run",
+         "--exact-policy-outcome-loss", "brier"],
+    )
+    assert trainer.parse_args().exact_policy_outcome_loss == "brier"
+
+
 def test_evaluate_forwards_action_objective_configuration(monkeypatch):
     seen = []
 
@@ -313,15 +323,18 @@ def test_evaluate_forwards_action_objective_configuration(monkeypatch):
 
     monkeypatch.setattr(trainer, "loss_for_examples", fake_loss)
     args = SimpleNamespace(eval_samples=1, microbatch=1, max_length=100,
-                           action_loss_weight=0.7, action_temperature=0.8)
+                           action_loss_weight=0.7, action_temperature=0.8,
+                           exact_policy_outcome_loss="brier")
 
     report = trainer.evaluate(
         ModeModel(), [object()], args, object(), object(), torch.device("cpu"))
 
     assert seen == [{"shuffle": False, "processor": None,
-                     "action_loss_weight": 0.7, "action_temperature": 0.8}]
+                     "action_loss_weight": 0.7, "action_temperature": 0.8,
+                     "exact_policy_outcome_loss": "brier"}]
     assert report["nll"] == 0.75
     assert report["action_ce"] == 0.4
+    assert report["action_loss"] == 0.4
 
 
 def test_grouped_action_loss_uses_semantic_labels_not_option_positions():
@@ -425,6 +438,55 @@ def test_grouped_exact_policy_loss_is_invariant_to_option_reversal():
     for outcome in direct_distribution:
         torch.testing.assert_close(
             direct_distribution[outcome], reversed_distribution[outcome])
+
+
+def test_grouped_exact_policy_brier_is_order_invariant_and_has_finite_gradients():
+    policy = collect_policy()
+    gold = execute_policy(policy, {"notify_customer": True, "notify_risk": False})
+    direct = {field: torch.tensor([-50.0, 50.0], requires_grad=True)
+              for field in policy["fields"]}
+    reversed_scores = {field: scores.detach().flip(0).requires_grad_()
+                       for field, scores in direct.items()}
+    kwargs = dict(
+        policy=policy, gold_outcome=gold, decision_threshold=0.5,
+        action_loss_weight=0.9, action_temperature=1.0,
+        exact_policy_outcome_loss="brier")
+    direct_loss, direct_distribution, direct_brier = grouped_exact_policy_slot_loss(
+        [torch.tensor(0.2), torch.tensor(0.3)], direct,
+        {field: ["no", "yes"] for field in direct}, **kwargs)
+    reversed_loss, reversed_distribution, reversed_brier = grouped_exact_policy_slot_loss(
+        [torch.tensor(0.2), torch.tensor(0.3)], reversed_scores,
+        {field: ["yes", "no"] for field in reversed_scores}, **kwargs)
+    direct_loss.backward()
+    reversed_loss.backward()
+
+    torch.testing.assert_close(direct_loss, reversed_loss)
+    torch.testing.assert_close(direct_brier, reversed_brier)
+    assert direct_distribution.keys() == reversed_distribution.keys()
+    assert all(torch.isfinite(scores.grad).all() for scores in direct.values())
+    assert all(torch.isfinite(scores.grad).all() for scores in reversed_scores.values())
+
+
+@pytest.mark.parametrize("threshold,temperature", [(0.6, 1.0), (0.5, 0.8)])
+def test_brier_calibration_configuration_fails_closed(threshold, temperature):
+    with pytest.raises(ValueError, match="Brier calibration requires"):
+        validate_exact_policy_outcome_objective("brier", threshold, temperature)
+
+
+def test_default_exact_policy_objective_is_nll_identical():
+    policy = collect_policy()
+    gold = execute_policy(policy, {"notify_customer": True, "notify_risk": True})
+    scores = {field: torch.tensor([-0.4, 0.8], requires_grad=True)
+              for field in policy["fields"]}
+    labels = {field: ["no", "yes"] for field in scores}
+    fields = [torch.tensor(0.2), torch.tensor(0.4)]
+    implicit = grouped_exact_policy_slot_loss(
+        fields, scores, labels, policy, gold, 0.5, 0.7, 1.0)
+    explicit = grouped_exact_policy_slot_loss(
+        fields, scores, labels, policy, gold, 0.5, 0.7, 1.0, "nll")
+    for implicit_value, explicit_value in zip(implicit[:1] + implicit[2:],
+                                              explicit[:1] + explicit[2:]):
+        torch.testing.assert_close(implicit_value, explicit_value)
 
 
 def test_hard_exact_outcome_replays_thresholded_policy_execution():
@@ -555,6 +617,27 @@ def test_positive_exact_policy_weight_runs_cached_policy_and_reports_outcome_acc
     assert stats["action_groups_seen"] == 1
     assert stats["action_groups_correct"] in {0, 1}
     assert math.isfinite(stats["action_ce"])
+
+
+def test_positive_exact_policy_brier_reports_selected_objective(tmp_path):
+    row = exact_policy_row()
+    row["meta"]["decision_threshold"] = 0.5
+    path = tmp_path / "exact-brier.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    group, = load_examples([path])
+    model = TinyModel()
+
+    loss, _, stats = loss_for_examples(
+        model, [group], TinyTokenizer(), [torch.tensor([1]), torch.tensor([2])],
+        100, torch.device("cpu"), shuffle=False, action_loss_weight=0.75,
+        action_temperature=1.0, exact_policy_outcome_loss="brier")
+    loss.backward()
+
+    assert torch.isfinite(loss) and torch.isfinite(model.theta.grad).all()
+    assert stats["exact_policy_outcome_loss"] == "brier"
+    assert stats["action_loss_kind"] == "brier"
+    assert stats["action_loss"] == stats["action_brier"]
+    assert "action_ce" not in stats
 
 
 @pytest.mark.parametrize("kwargs", [
