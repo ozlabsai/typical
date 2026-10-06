@@ -10,6 +10,8 @@ import json
 import random
 from pathlib import Path
 
+from scripts.soft_action_executor import action_for
+
 
 SPLITS = {
     "train": {"families": ("access", "commerce"), "templates": ("plain", "checklist"),
@@ -31,18 +33,6 @@ FAMILY_NAMES = {
     "access": "access request", "commerce": "purchase request", "safety": "safety review",
     "support": "support case", "finance": "payment review", "operations": "operations request",
 }
-
-
-def action_for(fields):
-    """Map semantic field booleans to the policy's exact final action."""
-    if not fields["safe"]:
-        return "deny"
-    if not fields["approved"] or any(not value for name, value in fields.items()
-                                      if name not in {"safe", "approved", "within_limit"}):
-        return "review"
-    if "within_limit" in fields and not fields["within_limit"]:
-        return "escalate"
-    return "allow"
 
 
 def _criteria(template, yes, no):
