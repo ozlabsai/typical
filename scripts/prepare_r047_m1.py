@@ -7,6 +7,7 @@ inputs.  Candidate-output hashes deliberately do not exist at this stage.
 import argparse
 import hashlib
 import json
+import tempfile
 from pathlib import Path
 
 from scripts import compare_r047_causal as comparator
@@ -79,7 +80,10 @@ def _assignment(*, control_sha256, treatment_sha256, recipe_sha256,
 def _validate_assignment(value):
     if (set(value) != comparator.ASSIGNMENT_FIELDS
             or value["schema_version"] != "r047-causal-slot-assignment-v1"
-            or {value["control_slot"], value["treatment_slot"]} != {"slot_a", "slot_b"}
+            or value["control_slot"] != "slot_b"
+            or value["treatment_slot"] != "slot_a"
+            or value["control_train_sha256"] != finalizer.KNOWN_ARM_SHA256["control"]
+            or value["treatment_train_sha256"] != finalizer.KNOWN_ARM_SHA256["treatment"]
             or value["bootstrap_seed"] != comparator.FROZEN_BOOTSTRAP_SEED
             or value["bootstrap_replicates"] != comparator.MIN_BOOTSTRAP_REPLICATES):
         raise ValueError("slot assignment differs from the frozen comparator contract")
@@ -95,14 +99,12 @@ def prepare(*, out, model_inventory_path, model_path, parent_adapter,
             arm_manifest_path, control_train_path, treatment_train_path, image_root,
             trainer_path, panel_path, panel_manifest_path, panel_preflight_path,
             inventory_manifest_path, evaluator_path, comparator_path,
-            source_checkpoint_provenance):
+            arm_preflight_path, source_checkpoint_provenance):
     """Validate frozen inputs, then write the three pre-training artifacts once."""
     out = Path(out)
-    if out.exists() and not out.is_dir():
-        raise ValueError("preparation output must be a directory")
-    targets = [out / name for name in (RECIPE_NAME, REFERENCE_NAME, ASSIGNMENT_NAME)]
-    if any(path.exists() for path in targets):
+    if out.exists():
         raise ValueError("R047-M1 preparation artifacts already exist")
+    out.parent.mkdir(parents=True, exist_ok=True)
 
     _, model_inventory_sha256 = verify_inventory(
         model_inventory_path, model_path, FROZEN_BASE_REVISION)
@@ -116,6 +118,7 @@ def prepare(*, out, model_inventory_path, model_path, parent_adapter,
     evaluation_binding = finalizer._evaluation_bindings(
         panel_path, panel_manifest_path, panel_preflight_path, inventory_manifest_path,
         evaluator_path, comparator_path)
+    arm_preflight_sha256 = finalizer._validate_arm_preflight(arm_preflight_path)
     if (evaluation_binding["panel_preflight_sha256"]
             != comparator.FROZEN_PANEL_PREFLIGHT_SHA256
             or evaluation_binding["inventory_manifest_sha256"]
@@ -131,6 +134,7 @@ def prepare(*, out, model_inventory_path, model_path, parent_adapter,
         "arm_sha256": finalizer.KNOWN_ARM_SHA256,
         **control_images,
         "trainer_sha256": _nonempty_hash(trainer_path, "trainer implementation"),
+        "arm_preflight_sha256": arm_preflight_sha256,
         **evaluation_binding,
         "bootstrap_replicates": comparator.MIN_BOOTSTRAP_REPLICATES,
         "bootstrap_seed": comparator.FROZEN_BOOTSTRAP_SEED,
@@ -140,20 +144,30 @@ def prepare(*, out, model_inventory_path, model_path, parent_adapter,
         parent_binding, model_inventory_sha256, source_checkpoint_provenance)
     evaluator.validate_reference_provenance(json.dumps(reference).encode())
 
-    recipe_path, reference_path, assignment_path = targets
-    _write_new(recipe_path, recipe)
-    finalizer._validate_recipe(recipe_path, model_inventory_sha256, trainer_path,
-                               parent_binding, control_images, evaluation_binding)
-    _write_new(reference_path, reference)
-    assignment = _assignment(
-        control_sha256=control_sha256, treatment_sha256=treatment_sha256,
-        recipe_sha256=file_hash(recipe_path),
-        reference_provenance_sha256=file_hash(reference_path),
-        parent_adapter_sha256=parent_binding["parent_adapter_sha256"],
-        model_inventory_sha256=model_inventory_sha256,
-        evaluation_binding=evaluation_binding)
-    _validate_assignment(assignment)
-    _write_new(assignment_path, assignment)
+    with tempfile.TemporaryDirectory(prefix=f".{out.name}.tmp-", dir=out.parent) as temporary:
+        staging = Path(temporary)
+        recipe_path = staging / RECIPE_NAME
+        reference_path = staging / REFERENCE_NAME
+        assignment_path = staging / ASSIGNMENT_NAME
+        _write_new(recipe_path, recipe)
+        finalizer._validate_recipe(recipe_path, model_inventory_sha256, trainer_path,
+                                   parent_binding, control_images, evaluation_binding,
+                                   arm_preflight_sha256)
+        _write_new(reference_path, reference)
+        assignment = _assignment(
+            control_sha256=control_sha256, treatment_sha256=treatment_sha256,
+            recipe_sha256=file_hash(recipe_path),
+            reference_provenance_sha256=file_hash(reference_path),
+            parent_adapter_sha256=parent_binding["parent_adapter_sha256"],
+            model_inventory_sha256=model_inventory_sha256,
+            evaluation_binding={**evaluation_binding,
+                                "arm_preflight_sha256": arm_preflight_sha256})
+        _validate_assignment(assignment)
+        _write_new(assignment_path, assignment)
+        staging.replace(out)
+    recipe_path = out / RECIPE_NAME
+    reference_path = out / REFERENCE_NAME
+    assignment_path = out / ASSIGNMENT_NAME
     return {
         "recipe": str(recipe_path), "recipe_sha256": file_hash(recipe_path),
         "reference_provenance": str(reference_path),
@@ -179,6 +193,7 @@ def main(argv=None):
     parser.add_argument("--inventory-manifest", required=True)
     parser.add_argument("--evaluator", required=True)
     parser.add_argument("--comparator", required=True)
+    parser.add_argument("--arm-preflight", required=True)
     parser.add_argument("--reference-source-provenance", required=True)
     args = parser.parse_args(argv)
     print(json.dumps(prepare(
@@ -188,7 +203,7 @@ def main(argv=None):
         image_root=args.image_root, trainer_path=args.trainer, panel_path=args.panel,
         panel_manifest_path=args.panel_manifest, panel_preflight_path=args.panel_preflight,
         inventory_manifest_path=args.inventory_manifest, evaluator_path=args.evaluator,
-        comparator_path=args.comparator,
+        comparator_path=args.comparator, arm_preflight_path=args.arm_preflight,
         source_checkpoint_provenance=args.reference_source_provenance),
         indent=2, sort_keys=True))
     return 0

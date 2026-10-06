@@ -7,6 +7,7 @@ from pathlib import Path
 
 from scripts.build_r045_arms import _tree_hash as _arm_image_tree_hash, _valid_row
 from scripts.build_r047_clause_arms import _summary
+from scripts.build_r047_clause_arms import FROZEN_R045_ARM_B_SHA256
 from scripts.build_r047_model_inventory import (
     FROZEN_BASE_REVISION,
     verify_inventory,
@@ -24,6 +25,11 @@ FROZEN_PARENT_CONFIG_SHA256 = "ba83cbbcc1e793843372bc1f080e272df8f5bb06c9580ba49
 FROZEN_ARM_MANIFEST_SHA256 = "c18214db7befdfb93aa818b445bf9606a5f4333a2b7f0024cb802e8399460cef"
 FROZEN_IMAGE_TREE_SHA256 = "56adbf7b9aa3101c06f3f254a0d8f62a9c41b786d29aad71b58a5e912c5f5394"
 FROZEN_IMAGE_TREE_FILES = 200
+FROZEN_ARM_PREFLIGHT_SHA256 = (
+    "d3708564062d6533c12fedc0fd24139850756c64de58f991a71f70831d0ff02c")
+FROZEN_M0_TREATMENT_SHA256 = (
+    "f4e82bcfb272158c5b988238ec6ab56e0a5afa7d77143c1972fa7b7f0d0a647f")
+TOKEN_DELTA_LIMIT = 0.005
 KNOWN_ARM_SHA256 = {
     "control": "179b6497fb6050dc5974b2545b1fed198fc0c00b200481e6e29c5bf1f8e27694",
     "treatment": "10366cc7656a89331ff85fd88e304637f5487f82b50f7ccd69be30436357a586",
@@ -59,6 +65,7 @@ RECIPE_FIELDS = {
     "parent_adapter_tree_sha256", "parent_adapter_tree_files",
     "parent_adapter_config_sha256", "model_inventory_sha256", "arm_manifest_sha256",
     "arm_sha256", "image_tree_sha256", "image_tree_files", "trainer_sha256",
+    "arm_preflight_sha256",
     "panel_sha256", "panel_manifest_sha256", "panel_preflight_sha256",
     "inventory_manifest_sha256", "evaluator_sha256", "comparator_sha256",
     "bootstrap_replicates", "bootstrap_seed", "trainer_config",
@@ -254,8 +261,57 @@ def _evaluation_bindings(panel_path, panel_manifest_path, panel_preflight_path,
     return hashes
 
 
+def _validate_arm_preflight(path):
+    """Validate the frozen structural/token-budget audit that justified both arms."""
+    digest = _nonempty_file_hash(path, "arm preflight")
+    report = _json(path, "arm preflight")
+    required = {
+        "passed", "input_sha256", "control_sha256", "clause_sha256",
+        "m0_treatment_sha256", "control", "clause", "token_budget",
+    }
+    budget = report.get("token_budget")
+    budget_fields = {
+        "tokenizer", "control_tokens", "clause_tokens", "absolute_delta",
+        "relative_delta", "limit", "within_limit",
+    }
+    if (digest != FROZEN_ARM_PREFLIGHT_SHA256
+            or set(report) != required
+            or report.get("passed") is not True
+            or report.get("input_sha256") != FROZEN_R045_ARM_B_SHA256
+            or report.get("control_sha256") != KNOWN_ARM_SHA256["control"]
+            or report.get("clause_sha256") != KNOWN_ARM_SHA256["treatment"]
+            or report.get("m0_treatment_sha256") != FROZEN_M0_TREATMENT_SHA256
+            or not isinstance(report.get("control"), dict)
+            or not isinstance(report.get("clause"), dict)
+            or any(report[name].get(key) != value for name in ("control", "clause")
+                   for key, value in EXPECTED_ARM.items())
+            or not isinstance(budget, dict) or set(budget) != budget_fields):
+        raise ValueError("arm preflight differs from the frozen R047 contract")
+    control_tokens = budget.get("control_tokens")
+    clause_tokens = budget.get("clause_tokens")
+    delta = budget.get("absolute_delta")
+    relative = budget.get("relative_delta")
+    tokenizer = budget.get("tokenizer")
+    expected_suffix = (
+        f"models--google--gemma-4-12B-it/snapshots/{FROZEN_BASE_REVISION}")
+    if (type(control_tokens) is not int or control_tokens <= 0
+            or type(clause_tokens) is not int or clause_tokens <= 0
+            or type(delta) is not int
+            or delta != abs(control_tokens - clause_tokens)
+            or type(relative) not in (int, float) or not math.isfinite(relative)
+            or not math.isclose(relative, delta / max(control_tokens, clause_tokens),
+                                rel_tol=1e-12, abs_tol=1e-12)
+            or not _same(budget.get("limit"), TOKEN_DELTA_LIMIT)
+            or relative > TOKEN_DELTA_LIMIT
+            or budget.get("within_limit") is not True
+            or not isinstance(tokenizer, str)
+            or not Path(tokenizer).as_posix().endswith(expected_suffix)):
+        raise ValueError("arm preflight token-budget evidence is invalid")
+    return digest
+
+
 def _validate_recipe(recipe_path, model_inventory_sha256, trainer_path, parent_binding,
-                     image_binding, evaluation_binding):
+                     image_binding, evaluation_binding, arm_preflight_sha256):
     recipe = _json(recipe_path, "recipe")
     if (set(recipe) != RECIPE_FIELDS
             or recipe.get("schema_version") != RECIPE_SCHEMA_VERSION
@@ -266,6 +322,7 @@ def _validate_recipe(recipe_path, model_inventory_sha256, trainer_path, parent_b
             or any(recipe.get(key) != value for key, value in parent_binding.items())
             or any(recipe.get(key) != value for key, value in image_binding.items())
             or any(recipe.get(key) != value for key, value in evaluation_binding.items())
+            or recipe.get("arm_preflight_sha256") != arm_preflight_sha256
             or recipe.get("bootstrap_replicates") != 20_000
             or recipe.get("bootstrap_seed") != 470_047
             or recipe.get("trainer_sha256") != _nonempty_file_hash(
@@ -356,8 +413,8 @@ def _validate_checkpoint(checkpoint_path):
 def finalize(*, slot, train_path, arm_manifest_path, recipe_path, config_path, metrics_path,
              log_path, checkpoint_path, parent_adapter, image_root, model_inventory_path,
              trainer_path, panel_path, panel_manifest_path, panel_preflight_path,
-             inventory_manifest_path, evaluator_path, comparator_path, base_revision,
-             model_path):
+             inventory_manifest_path, evaluator_path, comparator_path,
+             arm_preflight_path, base_revision, model_path):
     if slot not in SLOTS:
         raise ValueError("R047-M1 slot must be slot_a or slot_b")
     if base_revision != FROZEN_BASE_REVISION:
@@ -368,9 +425,10 @@ def finalize(*, slot, train_path, arm_manifest_path, recipe_path, config_path, m
     evaluation_binding = _evaluation_bindings(
         panel_path, panel_manifest_path, panel_preflight_path, inventory_manifest_path,
         evaluator_path, comparator_path)
+    arm_preflight_sha256 = _validate_arm_preflight(arm_preflight_path)
     recipe, recipe_hash = _validate_recipe(
         recipe_path, inventory_hash, trainer_path, parent_binding, image_binding,
-        evaluation_binding)
+        evaluation_binding, arm_preflight_sha256)
     config_hash = _validate_config(
         config_path, recipe, train_path, parent_adapter, model_path, checkpoint_path)
     metrics_hash = _validate_metrics(metrics_path)
@@ -414,6 +472,7 @@ def main(argv=None):
     parser.add_argument("--inventory-manifest", required=True)
     parser.add_argument("--evaluator", required=True)
     parser.add_argument("--comparator", required=True)
+    parser.add_argument("--arm-preflight", required=True)
     parser.add_argument("--base-revision", required=True)
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--out", required=True)
@@ -427,7 +486,8 @@ def main(argv=None):
         panel_path=args.panel, panel_manifest_path=args.panel_manifest,
         panel_preflight_path=args.panel_preflight,
         inventory_manifest_path=args.inventory_manifest, evaluator_path=args.evaluator,
-        comparator_path=args.comparator, base_revision=args.base_revision,
+        comparator_path=args.comparator, arm_preflight_path=args.arm_preflight,
+        base_revision=args.base_revision,
         model_path=args.model_path)
     output = Path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)

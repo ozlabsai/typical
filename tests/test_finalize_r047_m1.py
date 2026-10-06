@@ -157,6 +157,25 @@ def _fixture(tmp_path, monkeypatch):
         "inventory_manifest_sha256": inventory_manifest_hash,
         "outputs": {"primary": {"sha256": panel_hash, "rows": 1}},
     })
+    arm_preflight = _write(tmp_path / "arm-preflight.json", {
+        "passed": True,
+        "input_sha256": finalizer.FROZEN_R045_ARM_B_SHA256,
+        "control_sha256": control_hash,
+        "clause_sha256": train_hash,
+        "m0_treatment_sha256": finalizer.FROZEN_M0_TREATMENT_SHA256,
+        "control": {**finalizer.EXPECTED_ARM},
+        "clause": {**finalizer.EXPECTED_ARM},
+        "token_budget": {
+            "tokenizer": ("/models--google--gemma-4-12B-it/snapshots/"
+                          + FROZEN_BASE_REVISION),
+            "control_tokens": 1000, "clause_tokens": 999,
+            "absolute_delta": 1, "relative_delta": .001,
+            "limit": .005, "within_limit": True,
+        },
+    })
+    monkeypatch.setattr(
+        finalizer, "FROZEN_ARM_PREFLIGHT_SHA256",
+        hashlib.sha256(arm_preflight.read_bytes()).hexdigest())
     trainer = _write(tmp_path / "train_gemma_decision_lora.py", "# frozen trainer\n")
     evaluator = _write(tmp_path / "eval_r047_executor.py", "# frozen evaluator\n")
     comparator = _write(tmp_path / "compare_r047_causal.py", "# frozen comparator\n")
@@ -181,6 +200,7 @@ def _fixture(tmp_path, monkeypatch):
         "image_tree_sha256": image_tree_hash,
         "image_tree_files": image_tree_files,
         "trainer_sha256": hashlib.sha256(trainer.read_bytes()).hexdigest(),
+        "arm_preflight_sha256": hashlib.sha256(arm_preflight.read_bytes()).hexdigest(),
         **evaluation_binding,
         "bootstrap_replicates": 20_000,
         "bootstrap_seed": 470_047,
@@ -213,6 +233,7 @@ def _fixture(tmp_path, monkeypatch):
         "panel_manifest_path": panel_manifest, "panel_preflight_path": panel_preflight,
         "inventory_manifest_path": inventory_manifest, "evaluator_path": evaluator,
         "comparator_path": comparator,
+        "arm_preflight_path": arm_preflight,
     }
     return values, adapter
 
@@ -348,6 +369,23 @@ def test_finalize_rejects_panel_preflight_or_evaluator_drift(tmp_path, monkeypat
     values, _ = _fixture(tmp_path / "fresh", monkeypatch)
     Path(values["evaluator_path"]).write_text("# modified evaluator\n")
     with pytest.raises(ValueError, match="recipe provenance"):
+        finalizer.finalize(**values)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda item: item["token_budget"].__setitem__("relative_delta", .006),
+    lambda item: item["token_budget"].__setitem__("within_limit", False),
+    lambda item: item["token_budget"].__setitem__("tokenizer", "/wrong/revision"),
+    lambda item: item.__setitem__("control_sha256", "0" * 64),
+])
+def test_finalize_rejects_rehashed_invalid_arm_preflight(
+        tmp_path, monkeypatch, mutation):
+    values, _ = _fixture(tmp_path, monkeypatch)
+    _update_json(values["arm_preflight_path"], mutation)
+    changed_hash = hashlib.sha256(
+        Path(values["arm_preflight_path"]).read_bytes()).hexdigest()
+    monkeypatch.setattr(finalizer, "FROZEN_ARM_PREFLIGHT_SHA256", changed_hash)
+    with pytest.raises(ValueError, match="arm preflight"):
         finalizer.finalize(**values)
 
 

@@ -29,6 +29,7 @@ def _fixture(tmp_path, monkeypatch):
     model_hash = hashlib.sha256(b"model-inventory").hexdigest()
     preflight_hash = hashlib.sha256(b"preflight").hexdigest()
     inventory_hash = hashlib.sha256(b"inventory").hexdigest()
+    arm_preflight_hash = hashlib.sha256(b"arm-preflight").hexdigest()
     binding = {
         "panel_sha256": hashlib.sha256(b"panel").hexdigest(),
         "panel_manifest_sha256": hashlib.sha256(b"panel-manifest").hexdigest(),
@@ -39,6 +40,10 @@ def _fixture(tmp_path, monkeypatch):
     }
     control = _write(tmp_path / "control.jsonl", "control\n")
     treatment = _write(tmp_path / "treatment.jsonl", "treatment\n")
+    monkeypatch.setattr(finalizer, "KNOWN_ARM_SHA256", {
+        "control": hashlib.sha256(control.read_bytes()).hexdigest(),
+        "treatment": hashlib.sha256(treatment.read_bytes()).hexdigest(),
+    })
     source = _write(tmp_path / "checkpoint.sha256", "r044 provenance\n")
     trainer = _write(tmp_path / "trainer.py", "# trainer\n")
     monkeypatch.setattr(preparer, "FROZEN_R044_CHECKPOINT_PROVENANCE_SHA256",
@@ -55,6 +60,8 @@ def _fixture(tmp_path, monkeypatch):
         }),
     )
     monkeypatch.setattr(finalizer, "_evaluation_bindings", lambda *args: binding.copy())
+    monkeypatch.setattr(finalizer, "_validate_arm_preflight",
+                        lambda _: arm_preflight_hash)
     checked = []
 
     def validate_recipe(path, *_):
@@ -80,6 +87,7 @@ def _fixture(tmp_path, monkeypatch):
         "inventory_manifest_path": tmp_path / "inventory.json",
         "evaluator_path": tmp_path / "evaluator.py",
         "comparator_path": tmp_path / "comparator.py",
+        "arm_preflight_path": tmp_path / "arm-preflight.json",
         "source_checkpoint_provenance": source,
     }, checked
 
@@ -102,6 +110,7 @@ def test_prepare_emits_exact_pretraining_consumer_artifacts(tmp_path, monkeypatc
     assert assignment["treatment_slot"] == "slot_a"
     assert assignment["recipe_sha256"] == result["recipe_sha256"]
     assert assignment["reference_provenance_sha256"] == result["reference_provenance_sha256"]
+    assert recipe["arm_preflight_sha256"] == assignment["arm_preflight_sha256"]
 
 
 def test_prepare_fails_before_writing_when_reference_receipt_is_wrong(tmp_path, monkeypatch):
@@ -121,3 +130,37 @@ def test_prepare_refuses_to_replace_a_frozen_preassignment(tmp_path, monkeypatch
 
     with pytest.raises(ValueError, match="already exist"):
         preparer.prepare(**args)
+
+
+def test_prepare_rejects_complete_role_and_train_swap(tmp_path, monkeypatch):
+    args, _ = _fixture(tmp_path, monkeypatch)
+    preparer.prepare(**args)
+    assignment = json.loads((args["out"] / preparer.ASSIGNMENT_NAME).read_text())
+    assignment["control_slot"], assignment["treatment_slot"] = (
+        assignment["treatment_slot"], assignment["control_slot"])
+    assignment["control_train_sha256"], assignment["treatment_train_sha256"] = (
+        assignment["treatment_train_sha256"], assignment["control_train_sha256"])
+    with pytest.raises(ValueError, match="frozen comparator contract"):
+        preparer._validate_assignment(assignment)
+
+    assignment = json.loads((args["out"] / preparer.ASSIGNMENT_NAME).read_text())
+    assignment["control_train_sha256"], assignment["treatment_train_sha256"] = (
+        assignment["treatment_train_sha256"], assignment["control_train_sha256"])
+    with pytest.raises(ValueError, match="frozen comparator contract"):
+        preparer._validate_assignment(assignment)
+
+
+def test_prepare_late_failure_is_atomic_and_rerunnable(tmp_path, monkeypatch):
+    args, _ = _fixture(tmp_path, monkeypatch)
+    validate_assignment = preparer._validate_assignment
+    monkeypatch.setattr(
+        preparer, "_validate_assignment",
+        lambda _: (_ for _ in ()).throw(ValueError("late assignment failure")))
+    with pytest.raises(ValueError, match="late assignment failure"):
+        preparer.prepare(**args)
+    assert not args["out"].exists()
+    assert not list(args["out"].parent.glob(f".{args['out'].name}.tmp-*"))
+
+    monkeypatch.setattr(preparer, "_validate_assignment", validate_assignment)
+    result = preparer.prepare(**args)
+    assert result["assignment"] == str(args["out"] / preparer.ASSIGNMENT_NAME)

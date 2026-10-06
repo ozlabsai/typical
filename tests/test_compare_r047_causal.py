@@ -20,7 +20,9 @@ from scripts.eval_r047_executor import (
 SHA = {name: hashlib.sha256(name.encode()).hexdigest() for name in (
     "control-train", "treatment-train", "control-adapter",
     "treatment-adapter", "parent-adapter", "recipe", "base-inventory",
-    "config", "metrics", "log", "reference-provenance")}
+    "config", "metrics", "log", "reference-provenance", "arm-preflight")}
+SHA["control-train"] = comparator_module.FROZEN_CONTROL_TRAIN_SHA256
+SHA["treatment-train"] = comparator_module.FROZEN_TREATMENT_TRAIN_SHA256
 MODEL_REVISION = "revision-707f0a3"
 
 
@@ -76,6 +78,7 @@ def _assignment(panel, manifest, preflight, inventory, reference_provenance):
         "panel_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
         "panel_preflight_sha256": hashlib.sha256(preflight).hexdigest(),
         "inventory_manifest_sha256": hashlib.sha256(inventory).hexdigest(),
+        "arm_preflight_sha256": SHA["arm-preflight"],
         "evaluator_sha256": hashlib.sha256(
             Path(evaluator_module.__file__).read_bytes()).hexdigest(),
         "comparator_sha256": hashlib.sha256(
@@ -203,6 +206,7 @@ def _artifacts(control=None, treatment=None):
         sort_keys=True) + "\n").encode()
     return {"rows": rows, "panel": panel, "manifest": manifest,
             "preflight": preflight, "inventory": inventory,
+            "arm_preflight": b"arm-preflight",
             "reference_provenance": reference_provenance,
             "predictions": predictions, "reports": reports, "receipts": receipts,
             "assignment": assignment}
@@ -221,6 +225,7 @@ def _compare(artifacts=None, replicates=MIN_BOOTSTRAP_REPLICATES,
         "panel_payload": value["panel"], "panel_manifest_payload": value["manifest"],
         "panel_preflight_payload": value["preflight"],
         "inventory_manifest_payload": value["inventory"],
+        "arm_preflight_payload": value["arm_preflight"],
         "reference_provenance_payload": value["reference_provenance"],
         "assignment_payload": value["assignment"],
         "slot_a_run_receipt": value["receipts"]["slot_a"],
@@ -375,6 +380,7 @@ def test_external_hash_tampering_fails(target, match):
 @pytest.mark.parametrize("payload,match", [
     ("panel_preflight_payload", "preflight/inventory hash"),
     ("inventory_manifest_payload", "preflight/inventory hash"),
+    ("arm_preflight_payload", "preflight/inventory hash"),
     ("reference_provenance_payload", "reference provenance hash"),
 ])
 def test_supporting_provenance_payload_tampering_fails(payload, match):
@@ -492,7 +498,28 @@ def test_assignment_slot_and_training_provenance_tampering_fails():
     assignment = json.loads(value["assignment"])
     assignment["control_train_sha256"] = "f" * 64
     payload = (json.dumps(assignment, sort_keys=True) + "\n").encode()
-    with pytest.raises(ValueError, match="provenance mismatch"):
+    with pytest.raises(ValueError, match="control/treatment slot assignment"):
+        _compare(value, assignment_payload=payload,
+                 assignment_sha256=hashlib.sha256(payload).hexdigest())
+
+    assignment = json.loads(value["assignment"])
+    assignment["control_train_sha256"], assignment["treatment_train_sha256"] = (
+        assignment["treatment_train_sha256"], assignment["control_train_sha256"])
+    payload = (json.dumps(assignment, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="control/treatment slot assignment"):
+        _compare(value, assignment_payload=payload,
+                 assignment_sha256=hashlib.sha256(payload).hexdigest())
+
+
+def test_complete_role_and_train_hash_swap_fails_even_when_rehashed():
+    value = _artifacts()
+    assignment = json.loads(value["assignment"])
+    assignment["control_slot"], assignment["treatment_slot"] = (
+        assignment["treatment_slot"], assignment["control_slot"])
+    assignment["control_train_sha256"], assignment["treatment_train_sha256"] = (
+        assignment["treatment_train_sha256"], assignment["control_train_sha256"])
+    payload = (json.dumps(assignment, sort_keys=True) + "\n").encode()
+    with pytest.raises(ValueError, match="control/treatment slot assignment"):
         _compare(value, assignment_payload=payload,
                  assignment_sha256=hashlib.sha256(payload).hexdigest())
 
