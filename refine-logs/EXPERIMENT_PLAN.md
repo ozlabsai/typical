@@ -228,6 +228,16 @@ gradients and separately preregister any capacity change: the current trainer's 
 when `--init-adapter` loads R044-R, so a valid higher-rank test requires an explicit merge-and-attach
 or second-adapter procedure with a new parent hash. No holdout result may choose that retry.
 
+**Result (2026-10-06): PASS at step 200.** Steps 20, 50, and 100 failed the frozen gate; step 200
+reached `1.0` final balanced accuracy (`96/96`), `1.0` clause balanced accuracy (`192/192`), `1.0`
+clause-vector accuracy, `1.0` final direction (`48/48`), `1.0` pair-both correctness, and `1.0`
+coherence. Each of decimal, ledger, policy, and conditional reached `1.0` clause balanced accuracy
+and `1.0` direction; the minimum pair-direction delta was `7.625`. The fail-closed receipt selected
+only step 200 and all integrity checks passed. This establishes representation/capacity on the
+in-sample panel only; it does not establish prospective transfer or benchmark parity. An initial
+post-training launch failed because a scorer dependency was absent from the remote bundle; the
+dependency was restored and only evaluation/finalization reran against unchanged checkpoint hashes.
+
 ### M1 — matched causal screen
 
 Use the frozen 800-slot R045-B mixture in both arms. The 700 non-compositional slots and all 100
