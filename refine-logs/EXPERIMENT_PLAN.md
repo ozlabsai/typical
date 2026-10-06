@@ -255,6 +255,15 @@ A final-only gain without clause gains is a shortcut and fails. Complete scenari
 are not the mechanism gate. Promotion-scale expectations require at least `.81` final presentation
 accuracy before treating five complete scenarios as plausible.
 
+The initial intervention reaches only `48/800` logical slots (`6%`). If M1 produces no clause
+improvement, that result rejects this dose, not the mechanism family. One preregistered dose-response
+screen, M1b, may compare `200/800` executable slots (`25%`) with a view-, token-, order-, and
+optimizer-matched repeated-final control. M1b must clear the same `+5` clause-BA and `+8`
+clause-vector gates; otherwise this form of process supervision is abandoned. If M1 improves clauses
+but not final/coherence, skip M1b and test a matched aggregate-consistency objective instead. If only
+decimal/ledger remain weak, test machine-executable arithmetic traces rather than increasing generic
+clause dose.
+
 ### M2 — scale only a causally validated treatment
 
 If M1 passes, build a source-grouped curriculum from multiple fresh seeds/domain offsets with at
@@ -277,9 +286,16 @@ WorkflowEvals evaluation.
 
 - **RL/GRPO/DPO:** deferred because every clause and final action already has exact dense gold;
   sampled rewards would add variance and credit-assignment ambiguity. Reconsider RLVR only for
-  genuinely sequential verified workflows after supervised execution works.
+  genuinely sequential verified workflows after supervised execution works. The first eligible
+  pilot should enumerate the small typed action space to form a Rao-Blackwellized conditional
+  advantage, with CE anchoring and KL to our own pre-RL Typical checkpoint; use sampled RLOO only if
+  exact enumeration is impossible. Require at least `+3` exact-action points with a
+  scenario-clustered lower confidence bound above zero and no field, Hebrew, English, or multimodal
+  regression before scaling.
 - **KDA/custom attention:** deferred because the failures occur on short and even seen examples.
   Kimi Linear (`https://arxiv.org/abs/2510.26692`) demonstrates a pretrained hybrid architecture
-  and long-context efficiency, not a repair for this adaptation failure.
+  and long-context efficiency, not a repair for this adaptation failure. Reopen attention research
+  only if short-context primitive accuracy reaches `90%` while a controlled 1k/4k/16k/32k
+  evidence-position sweep loses more than 10 points at 32k or retrieval falls below `90%`.
 - **Activation/optimizer changes:** deferred until M0 learning curves establish a capacity or
   optimization defect. Answer-order permutations remain a guard, not the primary intervention.
