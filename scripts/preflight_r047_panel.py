@@ -189,7 +189,8 @@ def _validate_causal(rows, manifest, output_name):
                     "option_order", "prompt_family", "truth_pattern",
                     "truth_hamming_weight", "prediction_role", "primitive",
                     "decisive_role", "seen_edge_count", "clauses", "program", "gold",
-                    "renderer", "template_id", "entity_vocab", "cluster_lineage"}
+                    "renderer", "template_id", "entity_vocab", "cluster_lineage",
+                    "cluster_ordinal"}
         if required - set(meta):
             raise ValueError(f"{output_name}: row metadata is incomplete")
         composition, clauses, truth = meta["composition"], meta["clauses"], meta["truth_pattern"]
@@ -283,7 +284,7 @@ def _validate_causal(rows, manifest, output_name):
         cluster_identity = {(item["meta"]["panel_stratum"],
                              tuple(item["meta"]["composition"]), item["meta"]["arity"],
                              item["meta"]["clause_prompt_family"], item["meta"]["renderer"],
-                             item["meta"]["entity_vocab"])
+                             item["meta"]["entity_vocab"], item["meta"].get("cluster_ordinal"))
                             for item in items}
         if len(cluster_identity) != 1:
             raise ValueError(f"{output_name}: semantic-cluster metadata drift")
@@ -443,6 +444,31 @@ def _panel_fingerprints(rows):
     return result
 
 
+def _assert_unique_clause_ownership(rows):
+    """Independently reject executable clause reuse across semantic clusters."""
+    owners = defaultdict(set)
+    kinds = {}
+    for row in rows:
+        meta = row.get("meta") or {}
+        cluster_id = meta.get("semantic_cluster_id")
+        if not isinstance(cluster_id, str) or not cluster_id:
+            raise ValueError("causal panel row is missing semantic-cluster ownership")
+        for clause in meta.get("clauses") or []:
+            fingerprint = _fingerprint(clause)
+            owners[fingerprint].add(cluster_id)
+            kinds[fingerprint] = clause.get("kind")
+    collisions = {fingerprint: values for fingerprint, values in owners.items() if len(values) > 1}
+    if collisions:
+        raise ValueError(
+            f"executable clause ownership collision: {len(collisions)} fingerprints; "
+            f"max owners={max(map(len, collisions.values()))}")
+    return {"unique_clause_fingerprints": len(owners),
+            "unique_clause_fingerprints_by_kind": dict(sorted(
+                Counter(kinds.values()).items())),
+            "cross_cluster_collisions": 0,
+            "max_cluster_owners_per_fingerprint": max(map(len, owners.values()), default=0)}
+
+
 def _inventory_fingerprints(rows):
     result = _sets()
     views = list(_iter_views(rows))
@@ -590,6 +616,19 @@ def audit(panel_dir, inventory_manifest, expected_inventory_manifest_sha256,
     benchmark_fp, benchmark_receipts = _load_inventory_entries(
         inventory["benchmarks"], inventory_base, benchmark=True)
     causal_rows = rows_by_name["primary"] + rows_by_name["near-transfer"]
+    clause_ownership = _assert_unique_clause_ownership(causal_rows)
+    if manifest.get("clause_ownership") != clause_ownership:
+        raise ValueError("manifest executable-clause ownership receipt mismatch")
+    cluster_ordinals = {}
+    for row in causal_rows:
+        meta = row["meta"]
+        cluster_ordinals.setdefault(meta["semantic_cluster_id"], meta["cluster_ordinal"])
+        if cluster_ordinals[meta["semantic_cluster_id"]] != meta["cluster_ordinal"]:
+            raise ValueError("semantic cluster has inconsistent global ordinal")
+    ordinals = list(cluster_ordinals.values())
+    if (any(not isinstance(value, int) or isinstance(value, bool) for value in ordinals)
+            or len(set(ordinals)) != len(ordinals) or set(ordinals) != set(range(len(ordinals)))):
+        raise ValueError("semantic-cluster ordinals are not globally unique and contiguous")
     panel_fp = _panel_fingerprints(causal_rows)
     training_overlap = _reject_overlap(panel_fp, training_fp, "training")
     benchmark_overlap = _reject_overlap(panel_fp, benchmark_fp, "benchmark")
@@ -605,6 +644,7 @@ def audit(panel_dir, inventory_manifest, expected_inventory_manifest_sha256,
                            "rows": manifest["outputs"][name]["rows"]}
                     for name in ("primary", "near-transfer", "legacy-smoke")},
         "causal": {"primary": primary, "near_transfer": near},
+        "clause_ownership": clause_ownership,
         "legacy_smoke": legacy,
         "training_inventories": training_receipts,
         # Deliberately omit benchmark path/name/content. Hashes are sufficient receipts.

@@ -1,10 +1,15 @@
+import copy
 import hashlib
 import json
 
 import pytest
 
 from scripts.build_r047_panel import build
-from scripts.preflight_r047_panel import FINGERPRINT_FIELDS, audit
+from scripts.preflight_r047_panel import (
+    FINGERPRINT_FIELDS,
+    _assert_unique_clause_ownership,
+    audit,
+)
 
 
 MINI_COUNTS = {"unseen_k2": 1, "k3": 1, "seen_k2": 1}
@@ -62,6 +67,15 @@ def test_preflight_reexecutes_cube_and_emits_content_free_hash_receipts(tmp_path
     assert report["causal"]["near_transfer"]["clusters"] == 2
     assert report["legacy_smoke"] == {
         "rows": 144, "scenarios": 32, "causal_gate_eligible": False}
+    assert report["clause_ownership"] == {
+        "unique_clause_fingerprints": 180,
+        "unique_clause_fingerprints_by_kind": {
+            "conditional": 30, "datetime": 30, "decimal": 30,
+            "fraction": 30, "ledger": 30, "policy": 30,
+        },
+        "cross_cluster_collisions": 0,
+        "max_cluster_owners_per_fingerprint": 1,
+    }
     assert report["benchmark_content_emitted"] is False
     assert all(value == 0 for scope in report["overlap"].values() for value in scope.values())
     assert set(report["overlap"]["training"]) == set(FINGERPRINT_FIELDS)
@@ -78,6 +92,16 @@ def test_preflight_rejects_a_training_state_collision(tmp_path):
     inventory, inventory_hash = _inventory(tmp_path, training_rows=[collision])
     with pytest.raises(ValueError, match="training leakage: raw_state overlap"):
         audit(panel, inventory, inventory_hash, require_frozen=False)
+
+
+def test_preflight_independently_rejects_cross_cluster_clause_reuse(tmp_path):
+    panel = tmp_path / "panel"
+    build(panel, counts=MINI_COUNTS)
+    row = json.loads((panel / "primary.jsonl").read_text().splitlines()[0])
+    collision = copy.deepcopy(row)
+    collision["meta"]["semantic_cluster_id"] = "foreign-cluster"
+    with pytest.raises(ValueError, match="executable clause ownership collision"):
+        _assert_unique_clause_ownership([row, collision])
 
 
 def test_preflight_fails_closed_on_manifest_and_benchmark_hashes(tmp_path):

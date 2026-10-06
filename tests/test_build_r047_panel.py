@@ -1,6 +1,10 @@
+import copy
+import hashlib
 import itertools
 import json
 from collections import Counter, defaultdict
+
+import pytest
 
 from scripts.build_r047_panel import (
     FROZEN_COUNTS,
@@ -8,6 +12,7 @@ from scripts.build_r047_panel import (
     PROMPT_FAMILIES,
     SEEN_K2,
     UNSEEN_K2,
+    _assert_unique_clause_ownership,
     _cluster_plan,
     build,
 )
@@ -40,6 +45,18 @@ def test_mini_panel_is_deterministic_flat_and_has_complete_crossings(tmp_path):
     assert manifest["clusters"] == {"unseen_k2": 13, "k3": 20,
                                     "seen_k2_near_transfer": 2,
                                     "causal_primary": 33}
+    assert manifest["clause_ownership"] == {
+        "unique_clause_fingerprints": 180,
+        "unique_clause_fingerprints_by_kind": {
+            "conditional": 30, "datetime": 30, "decimal": 30,
+            "fraction": 30, "ledger": 30, "policy": 30,
+        },
+        "cross_cluster_collisions": 0,
+        "max_cluster_owners_per_fingerprint": 1,
+    }
+    assert manifest["contract"]["shared_ast_and_oracle_family_with_r045"]
+    assert not manifest["contract"]["full_generator_disjointness_claimed"]
+    assert not manifest["contract"]["near_duplicate_disjointness_claimed"]
     assert not manifest["contract"]["frozen_production"]
     for name in ("primary", "near-transfer", "legacy-smoke"):
         assert (first / f"{name}.jsonl").read_bytes() == (
@@ -71,6 +88,25 @@ def test_mini_panel_is_deterministic_flat_and_has_complete_crossings(tmp_path):
             "final": 1, "clause": arity}
         assert len({row["state"] for row in items}) == 1
     assert {row["meta"]["clause_prompt_family"] for row in rows} == set(PROMPT_FAMILIES)
+
+    owners = defaultdict(set)
+    for row in rows:
+        for clause in row["meta"]["clauses"]:
+            fingerprint = hashlib.sha256(json.dumps(
+                clause, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            owners[fingerprint].add(row["meta"]["semantic_cluster_id"])
+    assert len(owners) == 180
+    assert {len(values) for values in owners.values()} == {1}
+
+
+def test_builder_rejects_cross_cluster_executable_clause_reuse(tmp_path):
+    build(tmp_path, counts=MINI_COUNTS)
+    row = json.loads((tmp_path / "primary.jsonl").read_text().splitlines()[0])
+    collision = copy.deepcopy(row)
+    collision["id"] += "-collision"
+    collision["meta"]["semantic_cluster_id"] = "foreign-cluster"
+    with pytest.raises(ValueError, match="executable clause ownership collision"):
+        _assert_unique_clause_ownership([row, collision])
 
 
 def test_legacy_slice_is_separate_and_repairs_the_policy_specific_question(tmp_path):

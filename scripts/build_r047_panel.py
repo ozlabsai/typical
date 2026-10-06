@@ -1,15 +1,20 @@
-"""Build the generator-disjoint R047 causal panel and legacy smoke slice.
+"""Build the template/value-regime-disjoint R047 panel and legacy smoke.
 
 The causal outputs are flat, one-question rows.  ``semantic_cluster_id`` is the
 bootstrap unit and ``semantic_view_id`` joins the final prediction to its
 clause predictions.  Benchmark data is deliberately not an input to this
 builder; leakage checks belong to :mod:`scripts.preflight_r047_panel`.
+
+The panel intentionally shares the six primitive AST semantics and executable
+oracle family with R045.  Its renderers, entities, and operand regimes are
+fresh; this module does not claim fuzzy or full generator disjointness.
 """
 
 import argparse
 import hashlib
 import itertools
 import json
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from fractions import Fraction
@@ -28,7 +33,7 @@ UNSEEN_K2 = tuple(c for c in itertools.combinations(KINDS, 2) if c not in SEEN_K
 K3 = tuple(itertools.combinations(KINDS, 3))
 FROZEN_COUNTS = {"unseen_k2": 24, "k3": 16, "seen_k2": 24}
 PROMPT_FAMILIES = ("criterion_probe", "evidence_check", "binary_audit")
-GENERATOR_FAMILY_ID = "r047-primary-generator-v1"
+GENERATOR_FAMILY_ID = "r047-primary-generator-v2"
 SEED = 4701
 
 ENTITIES = (
@@ -94,13 +99,13 @@ def _quantized(value):
     return str(Decimal(value).quantize(Decimal("0.01")))
 
 
-def _panel_clause(kind, variant, passed):
+def _panel_clause(kind, operand_id, variant, passed):
     """Create a fresh-regime clause executable by the shared R045 oracle."""
     margin = (Decimal("0.00"), Decimal("0.19"), Decimal("1.37"),
               Decimal("4.61"))[variant % 4]
     signed_margin = margin if passed else -(margin or Decimal("0.23"))
     if kind == "decimal":
-        threshold = Decimal(50_000 + variant * 7) + Decimal("0.43")
+        threshold = Decimal(50_000 + operand_id * 7) + Decimal("0.43")
         fee = Decimal(31 + variant % 17) + Decimal("0.29")
         tail = [Decimal("-13.17"), Decimal("8.41"), Decimal("21.73")]
         if variant % 2:
@@ -110,7 +115,9 @@ def _panel_clause(kind, variant, passed):
                 "fee": _quantized(fee), "threshold": _quantized(threshold),
                 "unit": "clearance-points"}
     if kind == "fraction":
-        denominator = 211 + 2 * (variant % 89)
+        # This is a semantic operand, not a provenance nonce.  Its global ID
+        # makes the executable fraction unique to one cluster.
+        denominator = 1_009 + 2 * operand_id
         threshold = (2, 5) if variant % 3 == 0 else ((3, 7) if variant % 3 == 1 else (5, 8))
         boundary = (threshold[0] * denominator + threshold[1] - 1) // threshold[1]
         return {"kind": kind, "numerator": boundary + (variant % 2 if passed else -1),
@@ -119,8 +126,8 @@ def _panel_clause(kind, variant, passed):
         zones = ("Asia/Tokyo", "Australia/Perth", "America/Los_Angeles",
                  "Africa/Johannesburg", "America/Sao_Paulo")
         zone = zones[variant % len(zones)]
-        instant = datetime(2055 + variant % 3, 2 + variant % 9, 2 + variant % 23,
-                           (variant * 7) % 24, 17, tzinfo=timezone.utc)
+        instant = (datetime(2055, 1, 3, 0, 17, tzinfo=timezone.utc)
+                   + timedelta(hours=operand_id * 29))
         local = instant.astimezone(ZoneInfo(zone)).replace(tzinfo=None)
         delta = timedelta(minutes=(0 if passed and variant % 3 == 0 else
                                    47 if passed else -53))
@@ -128,21 +135,21 @@ def _panel_clause(kind, variant, passed):
         return {"kind": kind, "local_time": local.isoformat(), "timezone": zone,
                 "deadline": deadline.isoformat()}
     if kind == "ledger":
-        threshold = Decimal(70_000 + variant * 11)
+        threshold = Decimal(70_000 + operand_id * 11)
         desired = threshold + signed_margin
         length = 4 + variant % 4
-        values = [Decimal(90_000 + variant), Decimal("-1723.31"), Decimal("491.27")]
+        values = [Decimal(90_000 + operand_id), Decimal("-1723.31"), Decimal("491.27")]
         values.extend(Decimal(((-1) ** i) * (37 + i * 13)) + Decimal("0.11")
                       for i in range(length - 3))
         values[-1] += desired - sum(values)
-        events = [{"event_id": f"txn-{variant:05d}-{i:02d}", "delta": _quantized(value)}
+        events = [{"event_id": f"txn-{operand_id:05d}-{i:02d}", "delta": _quantized(value)}
                   for i, value in enumerate(values)]
         shift = (variant * 3) % len(events)
         events = events[shift:] + events[:shift]
         return {"kind": kind, "events": events, "threshold": _quantized(threshold),
                 "currency": "audit-units"}
     if kind == "conditional":
-        total = 307 + variant % 97
+        total = 1_009 + operand_id * 2
         threshold = (4, 9) if variant % 2 else (7, 13)
         boundary = (threshold[0] * total + threshold[1] - 1) // threshold[1]
         success = boundary + (variant % 2 if passed else -1)
@@ -155,15 +162,15 @@ def _panel_clause(kind, variant, passed):
         return {"kind": kind, "condition_group": "reviewed",
                 "groups": groups[shift:] + groups[:shift], "threshold": list(threshold)}
     if kind == "policy":
-        base = 500 + variant % 131
+        base = 500 + operand_id * 11
         allow_priority = base + (17 if passed else 9)
         deny_priority = base + (16 if passed else 10)
         rules = [
             {"name": "fallback-bar", "priority": 1, "effect": "deny", "active": True,
              "scope": "all"},
-            {"name": f"permit-{variant}", "priority": allow_priority, "effect": "allow",
+            {"name": f"permit-{operand_id}", "priority": allow_priority, "effect": "allow",
              "active": True, "scope": "clearance"},
-            {"name": f"bar-{variant}", "priority": deny_priority, "effect": "deny",
+            {"name": f"bar-{operand_id}", "priority": deny_priority, "effect": "deny",
              "active": True, "scope": "clearance"},
             {"name": "inactive-superrule", "priority": base + 200, "effect": "deny",
              "active": False, "scope": "clearance"},
@@ -293,7 +300,21 @@ def _row(cluster_meta, state, clauses, truth, language, option_order, role,
             "meta": common}
 
 
-def _cluster_rows(stratum, composition, composition_index, scenario_index, seed):
+def _cluster_rows(stratum, composition, composition_index, scenario_index, seed,
+                  cluster_ordinal=None):
+    if cluster_ordinal is None:
+        key = (stratum, tuple(composition), composition_index, scenario_index)
+        cluster_ordinal = next((index for index, item in enumerate(_cluster_plan())
+                                if item == key), None)
+        # Test/evaluation callers historically supplied a cosmetic
+        # composition_index. Resolve by semantic composition if that index is
+        # not the frozen one, while production always passes the exact ordinal.
+        if cluster_ordinal is None:
+            cluster_ordinal = next((index for index, item in enumerate(_cluster_plan())
+                                    if item[0] == stratum and item[1] == tuple(composition)
+                                    and item[3] == scenario_index), None)
+        if cluster_ordinal is None:
+            raise ValueError("cluster is outside the frozen R047 panel plan")
     arity = len(composition)
     cluster_id = (f"r047p-{seed}-{stratum}-c{composition_index:02d}-"
                   f"s{scenario_index:03d}")
@@ -311,7 +332,8 @@ def _cluster_rows(stratum, composition, composition_index, scenario_index, seed)
         "cluster_lineage": {"root": cluster_id, "parent": None,
                             "generator_family_id": GENERATOR_FAMILY_ID},
         "generator_family_id": GENERATOR_FAMILY_ID,
-        "generator_version": 1,
+        "generator_version": 2,
+        "cluster_ordinal": cluster_ordinal,
         "composition": list(composition),
         "arity": arity,
         "seen_edge_count": seen_edge_count,
@@ -321,14 +343,15 @@ def _cluster_rows(stratum, composition, composition_index, scenario_index, seed)
         "template_id": f"r047-panel-{renderer}-v1",
         "rendered_contract": "r047-primary-explicit-all-v1",
         "entity_vocab": entity,
-        "numeric_regime": "r047-high-range-variable-margin-v1",
+        "numeric_regime": "r047-globally-unique-semantic-operands-v2",
         "program": program,
         "seed": seed,
     }
     rows = []
     variant = int(_sha(f"{seed}:{cluster_id}".encode())[:10], 16)
     for truth in itertools.product((False, True), repeat=arity):
-        clauses = [_panel_clause(kind, variant + position * 997, truth[position])
+        clauses = [_panel_clause(kind, cluster_ordinal * 3 + position,
+                                 variant + position * 997, truth[position])
                    for position, kind in enumerate(composition)]
         if [clause["kind"] for clause in clauses] != list(composition):
             raise AssertionError("clause order must match composition")
@@ -346,6 +369,31 @@ def _cluster_rows(stratum, composition, composition_index, scenario_index, seed)
                 rows.extend(_row(common, state, clauses, truth, language, option_order, "clause", i)
                             for i in range(arity))
     return rows
+
+
+def _assert_unique_clause_ownership(rows):
+    """Require each executable clause value to belong to one semantic cluster."""
+    owners = {}
+    kinds = {}
+    for row in rows:
+        meta = row.get("meta") or {}
+        cluster_id = meta.get("semantic_cluster_id")
+        if not isinstance(cluster_id, str) or not cluster_id:
+            raise ValueError("causal panel row is missing semantic-cluster ownership")
+        for clause in meta.get("clauses") or []:
+            fingerprint = _sha(_canonical(clause))
+            owners.setdefault(fingerprint, set()).add(cluster_id)
+            kinds[fingerprint] = clause.get("kind")
+    collisions = {fingerprint: values for fingerprint, values in owners.items() if len(values) > 1}
+    if collisions:
+        raise ValueError(
+            f"executable clause ownership collision: {len(collisions)} fingerprints; "
+            f"max owners={max(map(len, collisions.values()))}")
+    return {"unique_clause_fingerprints": len(owners),
+            "unique_clause_fingerprints_by_kind": dict(sorted(
+                Counter(kinds.values()).items())),
+            "cross_cluster_collisions": 0,
+            "max_cluster_owners_per_fingerprint": max(map(len, owners.values()), default=0)}
 
 
 def _legacy_smoke(seed=47, domain_offset=2):
@@ -376,10 +424,13 @@ def build(out, seed=SEED, counts=None):
         raise ValueError(f"counts must be positive integers for {sorted(FROZEN_COUNTS)}")
     primary, near = [], []
     cluster_counts = {"unseen_k2": 0, "k3": 0, "seen_k2": 0}
-    for stratum, composition, composition_index, scenario_index in _cluster_plan(effective_counts):
+    for cluster_ordinal, (stratum, composition, composition_index, scenario_index) in enumerate(
+            _cluster_plan(effective_counts)):
         target = near if stratum == "seen_k2" else primary
-        target.extend(_cluster_rows(stratum, composition, composition_index, scenario_index, seed))
+        target.extend(_cluster_rows(stratum, composition, composition_index, scenario_index, seed,
+                                    cluster_ordinal=cluster_ordinal))
         cluster_counts[stratum] += 1
+    clause_ownership = _assert_unique_clause_ownership(primary + near)
     legacy = _legacy_smoke()
     outputs = {"primary": primary, "near-transfer": near, "legacy-smoke": legacy}
     out = Path(out)
@@ -404,7 +455,12 @@ def build(out, seed=SEED, counts=None):
             "one_clause_prompt_family_per_cluster": True,
             "independently_executable_gold": True,
             "legacy_smoke_excluded_from_causal_panel": True,
+            "shared_ast_and_oracle_family_with_r045": True,
+            "template_and_value_regime_exactly_disjoint": True,
+            "full_generator_disjointness_claimed": False,
+            "near_duplicate_disjointness_claimed": False,
         },
+        "clause_ownership": clause_ownership,
         "counts_per_composition": effective_counts,
         "clusters": {
             "unseen_k2": cluster_counts["unseen_k2"],
