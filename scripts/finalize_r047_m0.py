@@ -81,13 +81,18 @@ def finalize(data_path, manifest_path, preflight_path, config_path, metrics_path
     if (manifest["m0_treatment"].get("canonical_views") != 96
             or manifest["m0_treatment"].get("auxiliary_views") != 192):
         raise ValueError("M0 canonical/auxiliary view contract mismatch")
+    model_path = Path(model_path).resolve()
     if base_revision != FROZEN_BASE_REVISION:
         raise ValueError("base revision differs from the frozen R047 revision")
+    if (model_path.name != FROZEN_BASE_REVISION or model_path.parent.name != "snapshots"
+            or model_path.parent.parent.name != "models--google--gemma-4-12B-it"
+            or not (model_path / "config.json").is_file()):
+        raise ValueError("model path is not the frozen Gemma snapshot")
     parent_hash = _sha(parent_adapter)
     if parent_hash != FROZEN_PARENT_SHA256:
         raise ValueError("parent adapter differs from frozen R044-R")
     expected_paths = {
-        "model": str(Path(model_path)), "init_adapter": str(Path(parent_adapter).parent),
+        "model": str(model_path), "init_adapter": str(Path(parent_adapter).parent),
         "train": [str(Path(data_path))], "val": [f"m0={Path(data_path)}"],
     }
     for key, expected in expected_paths.items():
@@ -98,11 +103,34 @@ def finalize(data_path, manifest_path, preflight_path, config_path, metrics_path
             raise ValueError(f"config {key} must equal {expected!r}")
     if (preflight.get("passed") is not True or preflight.get("input_sha256") !=
             manifest.get("input", {}).get("sha256")
+            or preflight.get("control_sha256") !=
+            manifest.get("outputs", {}).get("control", {}).get("sha256")
+            or preflight.get("clause_sha256") !=
+            manifest.get("outputs", {}).get("clause", {}).get("sha256")
             or preflight.get("m0_treatment_sha256") != data_hash):
         raise ValueError("tokenizer preflight is missing or does not match frozen inputs")
     token_budget = preflight.get("token_budget")
-    if (not isinstance(token_budget, dict) or token_budget.get("within_limit") is not True
-            or token_budget.get("relative_delta", 1) > 0.005):
+    if not isinstance(token_budget, dict):
+        raise ValueError("tokenizer preflight did not record a token budget")
+    control_tokens, clause_tokens = (token_budget.get(key)
+                                     for key in ("control_tokens", "clause_tokens"))
+    if (not isinstance(control_tokens, int) or isinstance(control_tokens, bool)
+            or not isinstance(clause_tokens, int) or isinstance(clause_tokens, bool)
+            or control_tokens <= 0 or clause_tokens <= 0):
+        raise ValueError("tokenizer preflight token counts must be positive integers")
+    absolute_delta = abs(control_tokens - clause_tokens)
+    relative_delta = absolute_delta / max(control_tokens, clause_tokens)
+    tokenizer_name = token_budget.get("tokenizer")
+    try:
+        tokenizer_matches = Path(tokenizer_name).resolve() == model_path
+    except TypeError:
+        tokenizer_matches = False
+    if (token_budget.get("within_limit") is not True
+            or token_budget.get("absolute_delta") != absolute_delta
+            or not math.isclose(token_budget.get("relative_delta", -1), relative_delta,
+                                rel_tol=0, abs_tol=1e-12)
+            or token_budget.get("limit") != 0.005 or relative_delta > 0.005
+            or not tokenizer_matches):
         raise ValueError("tokenizer preflight did not pass the 0.5% token budget")
     if len(metrics) != 201 or [item.get("step") for item in metrics] != list(range(201)):
         raise ValueError("metrics must cover steps 0..200 exactly")

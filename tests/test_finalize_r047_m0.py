@@ -26,10 +26,14 @@ def _fixture(tmp_path, passing_step=50):
     data_hash = hashlib.sha256(data.read_bytes()).hexdigest()
     manifest = _write(tmp_path / "manifest.json", {
         "input": {"sha256": "source"},
-        "outputs": {"m0-treatment": {"sha256": data_hash}},
+        "outputs": {"control": {"sha256": "control"},
+                    "clause": {"sha256": "clause"},
+                    "m0-treatment": {"sha256": data_hash}},
         "m0_treatment": {"rows": 48, "canonical_views": 96, "auxiliary_views": 192,
                          "source_subset_sha256": "subset"}})
-    model = tmp_path / "model"
+    model = (tmp_path / "models--google--gemma-4-12B-it" / "snapshots"
+             / finalizer.FROZEN_BASE_REVISION)
+    _write(model / "config.json", {})
     parent = _write(tmp_path / "parent" / "adapter_model.safetensors", "parent")
     parent_hash = hashlib.sha256(parent.read_bytes()).hexdigest()
     config = _write(tmp_path / "config.json", {
@@ -37,8 +41,12 @@ def _fixture(tmp_path, passing_step=50):
         "train": [str(data)], "val": [f"m0={data}"],
     })
     preflight = _write(tmp_path / "preflight.json", {
-        "passed": True, "input_sha256": "source", "m0_treatment_sha256": data_hash,
-        "token_budget": {"within_limit": True, "relative_delta": 0.001},
+        "passed": True, "input_sha256": "source", "control_sha256": "control",
+        "clause_sha256": "clause", "m0_treatment_sha256": data_hash,
+        "token_budget": {"within_limit": True, "tokenizer": str(model.resolve()),
+                         "control_tokens": 10_000, "clause_tokens": 10_001,
+                         "absolute_delta": 1, "relative_delta": 1 / 10_001,
+                         "limit": 0.005},
     })
     metrics = [{"step": 0}]
     metrics.extend({"step": step, "canonical_views_seen": 16, "auxiliary_views_seen": 32,
@@ -118,4 +126,22 @@ def test_finalize_recomputes_gate_and_binds_predictions_to_adapter(tmp_path, mon
     report["m0_gate"]["passed"] = True
     _write(first_report, report)
     with pytest.raises(ValueError, match="recomputed gate"):
+        finalizer.finalize(**values)
+
+
+def test_finalize_rejects_caller_revision_text_with_wrong_snapshot(tmp_path, monkeypatch):
+    values, parent_hash = _fixture(tmp_path)
+    monkeypatch.setattr(finalizer, "FROZEN_PARENT_SHA256", parent_hash)
+    values["model_path"] = tmp_path / "wrong-model"
+    with pytest.raises(ValueError, match="frozen Gemma snapshot"):
+        finalizer.finalize(**values)
+
+
+def test_finalize_recomputes_token_budget_instead_of_trusting_boolean(tmp_path, monkeypatch):
+    values, parent_hash = _fixture(tmp_path)
+    monkeypatch.setattr(finalizer, "FROZEN_PARENT_SHA256", parent_hash)
+    preflight = json.loads(Path(values["preflight_path"]).read_text())
+    preflight["token_budget"] = {"within_limit": True, "relative_delta": 0.001}
+    _write(values["preflight_path"], preflight)
+    with pytest.raises(ValueError, match="positive integers"):
         finalizer.finalize(**values)
