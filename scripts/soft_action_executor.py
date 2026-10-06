@@ -125,28 +125,20 @@ def _semantic_truth_logits(
     return logits
 
 
-def _log1mexp(value):
-    """Stable ``log(1 - exp(value))`` for a scalar ``value <= 0``."""
-    cutoff = -math.log(2.0)
-    return torch.where(
-        value < cutoff,
-        torch.log1p(-torch.exp(value)),
-        torch.log(-torch.expm1(value)),
-    )
-
-
-def soft_action_distribution(
+def soft_action_log_distribution(
     field_scores,
     field_labels,
     *,
     decision_threshold,
     temperature,
 ):
-    """Return the exact independent-Bernoulli ``action_v1`` distribution.
+    """Return log probabilities for the exact relaxed ``action_v1`` policy.
 
-    The output order is :data:`ACTIONS`.  The four gates form a partition:
+    The output order is :data:`ACTIONS`. The four gates form a partition:
     unsafe; safe but not review-clear; safe/review-clear but over limit; and
-    safe/review-clear/within limit.
+    safe/review-clear/within limit. Review failures are represented as a
+    disjoint log-sum-exp rather than ``log(1 - product(p))``. This keeps
+    backward finite even when every review gate is highly confident.
     """
     logits = _semantic_truth_logits(
         field_scores,
@@ -157,9 +149,13 @@ def soft_action_distribution(
     log_safe = F.logsigmoid(logits["safe"])
     log_unsafe = F.logsigmoid(-logits["safe"])
     log_review_clear = torch.zeros((), dtype=torch.float32, device=log_safe.device)
+    review_failure_terms = []
     for name in FIELD_NAMES:
         if name in logits and name not in {"safe", "within_limit"}:
+            review_failure_terms.append(log_review_clear + F.logsigmoid(-logits[name]))
             log_review_clear = log_review_clear + F.logsigmoid(logits[name])
+    # ``approved`` is required, so the failure partition cannot be empty.
+    log_review_failure = torch.logsumexp(torch.stack(review_failure_terms), dim=0)
     if "within_limit" in logits:
         log_within_limit = F.logsigmoid(logits["within_limit"])
         log_over_limit = F.logsigmoid(-logits["within_limit"])
@@ -170,11 +166,32 @@ def soft_action_distribution(
 
     log_actions = torch.stack((
         log_unsafe,
-        log_safe + _log1mexp(log_review_clear),
+        log_safe + log_review_failure,
         log_safe + log_review_clear + log_over_limit,
         log_safe + log_review_clear + log_within_limit,
     ))
-    distribution = F.softmax(log_actions, dim=0)
+    log_distribution = F.log_softmax(log_actions, dim=0)
+    detached = log_distribution.detach()
+    if bool(torch.isnan(detached).any().item() or torch.isposinf(detached).any().item()):
+        raise ValueError("action log distribution must not contain NaN or positive infinity")
+    return log_distribution
+
+
+def soft_action_distribution(
+    field_scores,
+    field_labels,
+    *,
+    decision_threshold,
+    temperature,
+):
+    """Return action probabilities; use log probabilities for training loss."""
+    log_distribution = soft_action_log_distribution(
+        field_scores,
+        field_labels,
+        decision_threshold=decision_threshold,
+        temperature=temperature,
+    )
+    distribution = log_distribution.exp()
     _validate_distribution(distribution)
     return distribution
 
@@ -192,10 +209,19 @@ def _validate_distribution(distribution):
         raise ValueError("action distribution must sum to one")
 
 
-def action_cross_entropy(distribution, gold_action):
-    """Return primary-action cross entropy for an ``action_v1`` distribution."""
+def action_log_cross_entropy(log_distribution, gold_action):
+    """Return action cross entropy directly from stable log probabilities."""
     if gold_action not in ACTIONS:
         raise ValueError(f"unsupported gold action: {gold_action!r}")
-    _validate_distribution(distribution)
-    probability = distribution[ACTIONS.index(gold_action)]
-    return -torch.log(probability.clamp_min(torch.finfo(distribution.dtype).tiny))
+    if (not isinstance(log_distribution, torch.Tensor)
+            or log_distribution.ndim != 1
+            or log_distribution.numel() != len(ACTIONS)
+            or not log_distribution.is_floating_point()):
+        raise ValueError(f"action log distribution must have {len(ACTIONS)} values")
+    detached = log_distribution.detach()
+    if bool(torch.isnan(detached).any().item() or torch.isposinf(detached).any().item()):
+        raise ValueError("action log distribution must not contain NaN or positive infinity")
+    selected = log_distribution[ACTIONS.index(gold_action)]
+    if not bool(torch.isfinite(selected.detach()).item()):
+        raise ValueError(f"gold action {gold_action!r} is structurally impossible")
+    return -selected

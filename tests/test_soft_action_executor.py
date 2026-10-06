@@ -6,10 +6,11 @@ import torch
 
 from scripts.soft_action_executor import (
     ACTIONS,
-    action_cross_entropy,
+    action_log_cross_entropy,
     action_for,
     semantic_yes_probabilities,
     soft_action_distribution,
+    soft_action_log_distribution,
 )
 
 
@@ -94,10 +95,10 @@ def test_distribution_matches_exact_action_v1_partition():
 def test_action_loss_has_finite_nonzero_gradients_for_decisive_fields(gold):
     fields = {"safe": True, "approved": True, "within_limit": True, "timely": True}
     scores, labels = _scores(fields, magnitude=0.3, requires_grad=True)
-    distribution = soft_action_distribution(
+    log_distribution = soft_action_log_distribution(
         scores, labels, decision_threshold=0.5, temperature=0.8
     )
-    loss = action_cross_entropy(distribution, gold)
+    loss = action_log_cross_entropy(log_distribution, gold)
     loss.backward()
     assert torch.isfinite(loss)
     decisive = {
@@ -110,6 +111,32 @@ def test_action_loss_has_finite_nonzero_gradients_for_decisive_fields(gold):
         assert scores[name].grad is not None
         assert torch.isfinite(scores[name].grad).all()
         assert scores[name].grad.abs().sum() > 0
+
+
+@pytest.mark.parametrize("gold", ACTIONS)
+@pytest.mark.parametrize("magnitude,temperature", [(10.0, 1.0), (10.0, 0.1), (1e3, 1.0)])
+def test_log_action_loss_has_finite_gradients_for_confident_logits(
+        gold, magnitude, temperature):
+    fields = {"safe": True, "approved": True, "within_limit": True, "timely": True}
+    scores, labels = _scores(fields, magnitude=magnitude, requires_grad=True)
+    log_distribution = soft_action_log_distribution(
+        scores, labels, decision_threshold=0.5, temperature=temperature
+    )
+    loss = action_log_cross_entropy(log_distribution, gold)
+    loss.backward()
+    assert torch.isfinite(loss)
+    for values in scores.values():
+        assert values.grad is not None
+        assert torch.isfinite(values.grad).all()
+
+
+def test_probability_and_log_probability_paths_agree():
+    fields = {"safe": True, "approved": False, "within_limit": True, "timely": False}
+    scores, labels = _scores(fields, magnitude=1.7)
+    kwargs = {"decision_threshold": 0.63, "temperature": 0.4}
+    distribution = soft_action_distribution(scores, labels, **kwargs)
+    log_distribution = soft_action_log_distribution(scores, labels, **kwargs)
+    torch.testing.assert_close(distribution, log_distribution.exp())
 
 
 @pytest.mark.parametrize(
@@ -145,15 +172,19 @@ def test_invalid_threshold_or_temperature_fails_closed(threshold, temperature):
         )
 
 
-def test_action_loss_rejects_bad_gold_and_bad_distributions():
-    valid = torch.full((4,), 0.25)
+def test_action_loss_rejects_bad_gold_and_bad_log_distributions():
+    valid = torch.full((4,), -math.log(4.0))
     with pytest.raises(ValueError, match="gold action"):
-        action_cross_entropy(valid, "maybe")
+        action_log_cross_entropy(valid, "maybe")
     for invalid in (
-        torch.ones(3) / 3,
-        torch.tensor([0.4, 0.4, 0.4, -0.2]),
-        torch.tensor([0.2, 0.2, 0.2, 0.2]),
-        torch.tensor([0.25, 0.25, float("nan"), 0.25]),
+        torch.zeros(3),
+        torch.tensor([0.0, 0.0, 0.0, float("inf")]),
+        torch.tensor([0.0, 0.0, float("nan"), 0.0]),
     ):
         with pytest.raises(ValueError):
-            action_cross_entropy(invalid, "allow")
+            action_log_cross_entropy(invalid, "allow")
+
+
+def test_action_loss_rejects_structurally_impossible_gold_action():
+    with pytest.raises(ValueError, match="structurally impossible"):
+        action_log_cross_entropy(torch.tensor([0.0, -1.0, -torch.inf, -2.0]), "escalate")
