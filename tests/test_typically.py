@@ -228,25 +228,17 @@ def test_llm_enrichment_drops_normalised_collisions_with_the_other_side():
     assert not norm_of(split["import_oneliner"]) & norm_of(split["train"])
 
 
-def test_llm_spend_is_reserved_and_charged_from_usage(monkeypatch):
+def test_llm_spend_is_charged_from_usage():
     recs = company()
     plan = company_plan(recs)
     llm = FakeLLM(usage=(1000, 2000))   # $0.044 a call
     _, st = build(recs, plan, llm, synthetic=True, languages=["es", "de"])
     assert len(llm.calls) > 3 and st["warnings"] == [] and st["llm_cost_usd"] == round(0.044 * len(llm.calls), 2)
     assert all(m < 16000 for m in llm.max_tokens)   # sized to the call, not the old 16000
-    monkeypatch.setattr(ts, "LLM_CAP_USD", 0.15)
-    llm = FakeLLM(usage=(1000, 2000))
-    _, st = build(recs, plan, llm, synthetic=True, languages=["es", "de"])
-    assert 0 < len(llm.calls) < 4 and "stopped early" in st["warnings"][0] and st["llm_cost_usd"] <= 0.15
 
 
-def test_build_from_plan_llm_cost_cap_and_bad_language():
-    recs = [{**r, "msg": r["msg"] + " x" * 3000} for r in company()]   # ~6k chars per case
+def test_build_from_plan_bad_language():
     llm = FakeLLM()
-    with pytest.raises(ValueError, match="limit"):
-        build(recs, company_plan(recs), llm, languages=["es", "de", "fr"])
-    assert llm.calls == []   # refused before any call
     with pytest.raises(ValueError, match="language"):
         build(company(), company_plan(company()), llm, languages=["../x"])
 

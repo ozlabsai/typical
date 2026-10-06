@@ -389,7 +389,6 @@ def build_import(records, text_col, decisions, rng, balance=True, flips=0.10):
 
 # ============================== typically UI import v2: from a confirmed DatasetPlan ==============================
 FLIP_RATE, POLICY_RATE, SYNTH_SHARE, SYNTH_MIN, TRANSLATE_RATE, EVAL_TRANSLATE_RATE = 0.10, 0.30, 0.15, 10, 0.20, 0.10
-LLM_CAP_USD = 2.0   # priced by tllm.usd (the active provider's list price); estimate = chars / 4 tokens
 TEXTS = {"type": "object", "properties": {"texts": {"type": "array", "items": {"type": "string"}}}, "required": ["texts"],
          "additionalProperties": False}
 
@@ -558,16 +557,8 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None):
             tr_states = rng.sample(sorted(base["train"]), max(1, round(TRANSLATE_RATE * len(base["train"]))))
             tasks += _translate_tasks(tr_states, lang, lambda l, s, t: tr.extend(_copy(base["train"][s], t, l)))
             tasks += _translate_tasks(ev_states, lang, lambda l, s, t: ev.setdefault(l, []).extend(_copy(base["import_oneliner"][s], t, l)))
-        est = sum(tllm.usd(len(p) / 4, o / 4) for p, o, _ in tasks)
-        if est > LLM_CAP_USD:
-            raise ValueError(f"AI enrichment would cost about ${est:.2f}, over the ${LLM_CAP_USD:.2f} limit; "
-                             "turn off synthetic cases or add fewer languages")
         for prompt, out_chars, apply in tasks:
-            # the hard cap: reserve this call's worst case (chars/3 input tokens + all max_tokens out), then charge the real usage
-            max_tokens = min(16000, int(out_chars / 2) + 500)
-            if cost + tllm.usd(len(prompt) / 3, max_tokens) > LLM_CAP_USD:
-                warnings.append(f"AI enrichment stopped early to stay under the ${LLM_CAP_USD:.2f} limit; the remaining cases were skipped.")
-                break
+            max_tokens = min(16000, int(out_chars / 2) + 500)   # no spend cap: the operator pays (llm_cost_usd is still reported)
             try:
                 out, usage = llm("Return only the JSON requested.", prompt, TEXTS, max_tokens=max_tokens)
                 cost += tllm.usd(usage["input_tokens"], usage["output_tokens"])
