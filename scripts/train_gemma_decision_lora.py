@@ -113,12 +113,37 @@ def load_examples(paths):
             for line in source:
                 if line.strip():
                     row = json.loads(line)
+                    if "auxiliary_views" in row and "paired_views" not in row:
+                        raise ValueError(
+                            f"{row.get('id')}: auxiliary_views are only valid on a paired slot")
                     if "paired_views" in row:
-                        if len(row["paired_views"]) != 2:
+                        if (not isinstance(row["paired_views"], list) or
+                                len(row["paired_views"]) != 2):
                             raise ValueError(f"{row.get('id')}: paired slot must have exactly two views")
+                        if any(not isinstance(view, dict) for view in row["paired_views"]):
+                            raise ValueError(f"{row.get('id')}: paired views must be objects")
                         views = [flatten_row(view, path.parent) for view in row["paired_views"]]
                         if any(len(view) != 1 for view in views):
                             raise ValueError(f"{row.get('id')}: each paired view must flatten to one example")
+                        if any("auxiliary_views" in view for view in row["paired_views"]):
+                            raise ValueError(
+                                f"{row.get('id')}: auxiliary_views belong on the paired row")
+                        auxiliary_rows = row.get("auxiliary_views", [])
+                        if not isinstance(auxiliary_rows, list):
+                            raise ValueError(f"{row.get('id')}: auxiliary_views must be a list")
+                        if any(not isinstance(view, dict) for view in auxiliary_rows):
+                            raise ValueError(f"{row.get('id')}: auxiliary views must be objects")
+                        auxiliary = [flatten_row(view, path.parent) for view in auxiliary_rows]
+                        if any(len(view) != 1 for view in auxiliary):
+                            raise ValueError(
+                                f"{row.get('id')}: each auxiliary view must flatten to one example")
+                        auxiliary = [view[0] for view in auxiliary]
+                        if any(view.get("image") for view in auxiliary):
+                            raise ValueError(f"{row.get('id')}: auxiliary views must be text-only")
+                        all_view_ids = [view[0]["id"] for view in views] + [
+                            view["id"] for view in auxiliary]
+                        if len(all_view_ids) != len(set(all_view_ids)):
+                            raise ValueError(f"{row.get('id')}: paired and auxiliary view ids must be unique")
                         paired_metas = [(raw.get("meta") or {}) for raw in row["paired_views"]]
                         pair_mode = row.get("pair_mode")
                         if pair_mode is not None:
@@ -153,10 +178,13 @@ def load_examples(paths):
                                 if None in families or families[0] != families[1]:
                                     raise ValueError(
                                         f"{row.get('id')}: shuffled counterfactual needs one shared family")
-                            examples.append({"id": row["id"],
-                                             "paired_views": [view[0] for view in views],
-                                             "pair_mode": pair_mode,
-                                             "pair_source_ids": source_ids})
+                            example = {"id": row["id"],
+                                       "paired_views": [view[0] for view in views],
+                                       "pair_mode": pair_mode,
+                                       "pair_source_ids": source_ids}
+                            if auxiliary:
+                                example["auxiliary_views"] = auxiliary
+                            examples.append(example)
                             continue
                         arms = [meta.get("s2_arm") for meta in paired_metas]
                         polarities = [meta.get("polarity") for meta in paired_metas]
@@ -168,18 +196,30 @@ def load_examples(paths):
                             raise ValueError(f"{row.get('id')}: paired views must be ordered A then B")
                         if polarities[0] not in ("positive", "negative") or polarities[1] != polarities[0]:
                             raise ValueError(f"{row.get('id')}: paired views need matching polarity")
-                        examples.append({"id": row["id"],
-                                         "paired_views": [view[0] for view in views],
-                                         "paired_polarity": polarities[0],
-                                         "paired_view_arms": arms})
+                        example = {"id": row["id"],
+                                   "paired_views": [view[0] for view in views],
+                                   "paired_polarity": polarities[0],
+                                   "paired_view_arms": arms}
+                        if auxiliary:
+                            example["auxiliary_views"] = auxiliary
+                        examples.append(example)
                     else:
                         examples.extend(flatten_row(row, path.parent))
     return examples
 
 
+def logical_slot_views(example):
+    """Return canonical views followed by optional training-only auxiliary views."""
+    paired = example.get("paired_views")
+    if paired is None:
+        return [example]
+    auxiliary = example.get("auxiliary_views")
+    return paired if not auxiliary else [*paired, *auxiliary]
+
+
 def examples_have_images(examples):
     return any(view.get("image") for example in examples
-               for view in example.get("paired_views", [example]))
+               for view in logical_slot_views(example))
 
 
 def validate_multimodal_examples(examples, microbatch):
@@ -188,7 +228,7 @@ def validate_multimodal_examples(examples, microbatch):
     if microbatch != 1:
         raise ValueError("multimodal training requires --microbatch 1")
     for example in examples:
-        views = example.get("paired_views", [example])
+        views = logical_slot_views(example)
         if any(view.get("image") for view in views) and len(views) != 1:
             raise ValueError(f"{example['id']}: image examples must be singleton logical slots")
 
@@ -242,7 +282,7 @@ def pair_consistency_term(anchor_margin, view_b_margin, anchor_gold_probability,
 
 
 def pair_slot_loss(view_losses, consistency, weight):
-    """Mean paired CE plus optional consistency; preserve the exact zero-weight path."""
+    """Mean logical-slot CE plus optional consistency; preserve the zero-weight path."""
     base = torch.stack(view_losses).mean()
     if weight == 0 or consistency is None:
         return base
@@ -298,13 +338,51 @@ def staged_counterfactual_order(examples, steps, microbatch, grad_accum, start_s
     return singles + pairs
 
 
-def guard_logical_slot_loss(view_losses):
-    """Mean slot loss, retaining only A at half weight for paired slots."""
+def guard_logical_slot_loss(view_losses, paired_view_counts=None):
+    """Mean slot loss, omitting canonical B while preserving every other CE coefficient."""
     if not view_losses or any(not losses for losses in view_losses):
         raise ValueError("each logical slot needs at least one view loss")
-    slots = [losses[0] * 0.5 if len(losses) == 2 else losses[0]
-             for losses in view_losses]
+    if paired_view_counts is None:
+        paired_view_counts = [2 if len(losses) == 2 else 1 for losses in view_losses]
+    if len(paired_view_counts) != len(view_losses):
+        raise ValueError("paired-view counts must align with logical slots")
+    slots = []
+    for losses, canonical_count in zip(view_losses, paired_view_counts):
+        if canonical_count not in (1, 2) or len(losses) < canonical_count:
+            raise ValueError("each slot needs one singleton or two canonical paired views")
+        if canonical_count == 1:
+            if len(losses) != 1:
+                raise ValueError("singleton logical slots cannot have auxiliary views")
+            slots.append(losses[0])
+        else:
+            # D averages A, B, and every auxiliary view. The guard drops only B and
+            # keeps the same denominator, so every retained CE coefficient is unchanged.
+            slots.append(torch.stack([losses[0], *losses[2:]]).sum() / len(losses))
     return torch.stack(slots).mean()
+
+
+def view_role_stats(canonical_correct, canonical_count, canonical_ce_sum,
+                    auxiliary_correct, auxiliary_count, auxiliary_ce_sum):
+    return {
+        "canonical_views_seen": canonical_count,
+        "canonical_views_correct": canonical_correct,
+        "canonical_view_accuracy": (canonical_correct / canonical_count
+                                    if canonical_count else 0.0),
+        "canonical_ce_sum": canonical_ce_sum,
+        "canonical_ce": canonical_ce_sum / canonical_count if canonical_count else 0.0,
+        "auxiliary_views_seen": auxiliary_count,
+        "auxiliary_views_correct": auxiliary_correct,
+        "auxiliary_view_accuracy": (auxiliary_correct / auxiliary_count
+                                    if auxiliary_count else 0.0),
+        "auxiliary_ce_sum": auxiliary_ce_sum,
+        "auxiliary_ce": auxiliary_ce_sum / auxiliary_count if auxiliary_count else 0.0,
+    }
+
+
+def accumulate_view_stats_(totals, stats):
+    for key in ("canonical_views_seen", "canonical_views_correct", "canonical_ce_sum",
+                "auxiliary_views_seen", "auxiliary_views_correct", "auxiliary_ce_sum"):
+        totals[key] += stats[key]
 
 
 def project_conflicting_gradient(cons_grads, guard_grads, params=None, eps=1e-12):
@@ -443,7 +521,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                       return_components=False, processor=None):
     validate_pair_objectives(pair_consistency_weight, return_components,
                              pair_flip_weight, pair_flip_margin)
-    logical_views = [example.get("paired_views", [example]) for example in examples]
+    logical_views = [logical_slot_views(example) for example in examples]
     flat_examples = [view for views in logical_views for view in views]
     image_examples = [example for example in flat_examples if example.get("image")]
     if image_examples:
@@ -484,8 +562,13 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
         view_gold_probabilities.append(F.softmax(option_scores.detach(), dim=0)[gold_index])
     slot_losses = []
     guard_slot_losses = []
+    guard_paired_view_counts = []
     consistency_slot_losses = []
     slot_correct = []
+    canonical_views_seen = auxiliary_views_seen = 0
+    canonical_views_correct = auxiliary_views_correct = 0.0
+    canonical_ce_losses = []
+    auxiliary_ce_losses = []
     consistency_seen = 0
     consistency_active = 0
     flip_losses = []
@@ -494,9 +577,19 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     for logical_example, views in zip(examples, logical_views):
         end = cursor + len(views)
         slot_view_losses = view_losses[cursor:end]
+        canonical_count = 2 if "paired_views" in logical_example else 1
+        auxiliary_count = len(views) - canonical_count
+        canonical_views_seen += canonical_count
+        canonical_views_correct += sum(view_correct[cursor:cursor + canonical_count])
+        canonical_ce_losses.extend(slot_view_losses[:canonical_count])
+        auxiliary_views_seen += auxiliary_count
+        auxiliary_views_correct += sum(view_correct[cursor + canonical_count:end])
+        auxiliary_ce_losses.extend(slot_view_losses[canonical_count:])
         if logical_example.get("pair_mode") is not None:
-            if len(views) != 2:
+            if len(logical_example.get("paired_views", [])) != 2:
                 raise ValueError(f"{logical_example['id']}: counterfactual pair needs two views")
+            # The canonical final-decision pair is always first. Auxiliary views affect
+            # only the slot CE average and can never become pair-flip endpoints.
             margin_a = semantic_gold_margin(
                 *view_scores[cursor], flat_examples[cursor]["gold_label"])
             margin_b = semantic_gold_margin(
@@ -511,7 +604,8 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                 slot_losses.append(slot_view_losses)
             if return_components:
                 raise ValueError("counterfactual pair flip is incompatible with guard projection")
-        elif len(views) == 2 and (pair_consistency_weight > 0 or return_components):
+        elif ("paired_views" in logical_example and
+              (pair_consistency_weight > 0 or return_components)):
             if logical_example.get("paired_view_arms") != ["A", "B"]:
                 raise ValueError(f"{logical_example['id']}: paired views must be ordered A then B")
             polarity = logical_example["paired_polarity"]
@@ -530,6 +624,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
             if return_components:
                 slot_losses.append(slot_view_losses)
                 guard_slot_losses.append(slot_view_losses)
+                guard_paired_view_counts.append(2)
                 consistency_slot_losses.append(
                     consistency if consistency is not None else slot_view_losses[0].new_zeros(())
                 )
@@ -541,6 +636,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
             slot_losses.append(slot_view_losses)
             if return_components:
                 guard_slot_losses.append(slot_view_losses)
+                guard_paired_view_counts.append(canonical_count)
                 consistency_slot_losses.append(slot_view_losses[0].new_zeros(()))
         slot_correct.append(sum(view_correct[cursor:end]) / len(views))
         cursor = end
@@ -549,10 +645,17 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                   "pair_flip_active": flip_active,
                   "pair_flip_loss": (sum(loss.detach().item() for loss in flip_losses) /
                                      len(flip_losses) if flip_losses else 0.0)})
+    canonical_ce_sum = torch.stack(canonical_ce_losses).detach().sum().item()
+    auxiliary_ce_sum = (torch.stack(auxiliary_ce_losses).detach().sum().item()
+                        if auxiliary_ce_losses else 0.0)
+    stats.update(view_role_stats(
+        canonical_views_correct, canonical_views_seen, canonical_ce_sum,
+        auxiliary_views_correct, auxiliary_views_seen, auxiliary_ce_sum))
     loss = mean_logical_slot_loss(slot_losses)
     if return_components:
         components = {"d_loss": loss,
-                      "guard_loss": guard_logical_slot_loss(guard_slot_losses),
+                      "guard_loss": guard_logical_slot_loss(
+                          guard_slot_losses, guard_paired_view_counts),
                       "consistency_loss": torch.stack(consistency_slot_losses).mean()}
         return loss, sum(slot_correct), stats, components
     return loss, sum(slot_correct), stats
@@ -564,16 +667,25 @@ def evaluate(model, examples, args, tokenizer, groups, device, processor=None):
     losses = []
     correct = 0
     count = 0
+    view_totals = {"canonical_views_seen": 0, "canonical_views_correct": 0.0,
+                   "canonical_ce_sum": 0.0, "auxiliary_views_seen": 0,
+                   "auxiliary_views_correct": 0.0, "auxiliary_ce_sum": 0.0}
     for start in range(0, min(args.eval_samples, len(examples)), args.microbatch):
         batch = examples[start:start + args.microbatch]
-        loss, batch_correct, _ = loss_for_examples(model, batch, tokenizer, groups,
-                                                   args.max_length, device, shuffle=False,
-                                                   processor=processor)
+        loss, batch_correct, stats = loss_for_examples(
+            model, batch, tokenizer, groups, args.max_length, device, shuffle=False,
+            processor=processor)
         losses.append(loss.item())
         correct += batch_correct
         count += len(batch)
+        accumulate_view_stats_(view_totals, stats)
     model.train()
-    return {"nll": sum(losses) / len(losses), "accuracy": correct / count, "n": count}
+    result = {"nll": sum(losses) / len(losses), "accuracy": correct / count, "n": count}
+    result.update(view_role_stats(
+        view_totals["canonical_views_correct"], view_totals["canonical_views_seen"],
+        view_totals["canonical_ce_sum"], view_totals["auxiliary_views_correct"],
+        view_totals["auxiliary_views_seen"], view_totals["auxiliary_ce_sum"]))
+    return result
 
 
 def save(model, optimizer, scheduler, step, out):
@@ -707,6 +819,9 @@ def main():
         pair_active = pair_seen = 0
         flip_active = flip_seen = 0
         flip_loss_sum = 0.0
+        view_totals = {"canonical_views_seen": 0, "canonical_views_correct": 0.0,
+                       "canonical_ce_sum": 0.0, "auxiliary_views_seen": 0,
+                       "auxiliary_views_correct": 0.0, "auxiliary_ce_sum": 0.0}
         staged_step_singles = staged_step_pairs = 0
         if args.project_consistency_against_guard:
             for buffers in (grad_d, grad_guard, grad_cons):
@@ -738,6 +853,7 @@ def main():
                 flip_active += pair_stats["pair_flip_active"]
                 flip_seen += pair_stats["pair_flip_seen"]
                 flip_loss_sum += pair_stats["pair_flip_loss"] * pair_stats["pair_flip_seen"]
+                accumulate_view_stats_(view_totals, pair_stats)
                 scale = 1.0 / args.grad_accum
                 backward_into_dense_gradients_(
                     components["d_loss"] * scale, params, grad_d, "D loss", retain_graph=True)
@@ -806,6 +922,7 @@ def main():
                 flip_active += pair_stats["pair_flip_active"]
                 flip_seen += pair_stats["pair_flip_seen"]
                 flip_loss_sum += pair_stats["pair_flip_loss"] * pair_stats["pair_flip_seen"]
+                accumulate_view_stats_(view_totals, pair_stats)
                 (loss / args.grad_accum).backward()
                 accumulated += loss.item()
         if args.stage_counterfactual_pairs:
@@ -833,6 +950,10 @@ def main():
                   "pair_flip_loss": flip_loss_sum / flip_seen if flip_seen else 0.0,
                   "pair_flip_weight": flip_weight,
                   "pair_flip_weight_configured": args.pair_flip_weight}
+        metric.update(view_role_stats(
+            view_totals["canonical_views_correct"], view_totals["canonical_views_seen"],
+            view_totals["canonical_ce_sum"], view_totals["auxiliary_views_correct"],
+            view_totals["auxiliary_views_seen"], view_totals["auxiliary_ce_sum"]))
         if args.stage_counterfactual_pairs:
             metric.update({"staged_single_slots": staged_step_singles,
                            "staged_counterfactual_slots": staged_step_pairs,

@@ -58,6 +58,23 @@ def counterfactual_pair(mode="counterfactual"):
             ]}
 
 
+def auxiliary_view(identifier, target="yes", image=None, questions=1):
+    row = {
+        "id": identifier,
+        "state": f"auxiliary state {identifier}",
+        "questions": {
+            f"q{index}": {"type": "noul", "instructions": "Evaluate the clause.",
+                           "criteria": {"no": "No", "yes": "Yes"}}
+            for index in range(questions)
+        },
+        "targets": {f"q{index}": {"label": target} for index in range(questions)},
+        "meta": {"source_id": "source-a", "family": "approval"},
+    }
+    if image is not None:
+        row["image"] = image
+    return row
+
+
 def test_counterfactual_loader_distinguishes_true_and_shuffled_pairs(tmp_path):
     path = tmp_path / "pairs.jsonl"
     path.write_text("".join(json.dumps(row) + "\n" for row in (
@@ -65,8 +82,60 @@ def test_counterfactual_loader_distinguishes_true_and_shuffled_pairs(tmp_path):
     true_pair, shuffled = load_examples([path])
     assert true_pair["pair_mode"] == "counterfactual"
     assert true_pair["pair_source_ids"] == ["source-a", "source-a"]
+    assert "auxiliary_views" not in true_pair
     assert shuffled["pair_mode"] == "shuffled_counterfactual"
     assert shuffled["pair_source_ids"] == ["source-a", "source-b"]
+
+
+def test_paired_loader_adds_text_auxiliary_views_to_the_same_slot(tmp_path):
+    row = counterfactual_pair()
+    row["auxiliary_views"] = [auxiliary_view("clause-0"), auxiliary_view("clause-1", "no")]
+    path = tmp_path / "auxiliary.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+
+    pair, = load_examples([path])
+    assert [view["id"] for view in pair["paired_views"]] == ["left/q", "right/q"]
+    assert [view["id"] for view in pair["auxiliary_views"]] == [
+        "clause-0/q0", "clause-1/q0",
+    ]
+    assert all(view["image"] is None for view in pair["auxiliary_views"])
+
+
+def test_paired_loader_fails_closed_on_malformed_auxiliary_schema(tmp_path):
+    invalid = []
+
+    row = auxiliary_view("singleton")
+    row["auxiliary_views"] = []
+    invalid.append((row, "only valid on a paired slot"))
+
+    row = counterfactual_pair()
+    row["auxiliary_views"] = {"not": "a list"}
+    invalid.append((row, "must be a list"))
+
+    row = counterfactual_pair()
+    row["paired_views"][0]["auxiliary_views"] = []
+    invalid.append((row, "belong on the paired row"))
+
+    row = counterfactual_pair()
+    row["auxiliary_views"] = [auxiliary_view("too-many", questions=2)]
+    invalid.append((row, "each auxiliary view must flatten to one example"))
+
+    row = counterfactual_pair()
+    row["auxiliary_views"] = [auxiliary_view("with-image", image="image.png")]
+    invalid.append((row, "auxiliary views must be text-only"))
+
+    row = counterfactual_pair()
+    row["auxiliary_views"] = [auxiliary_view("left")]
+    row["auxiliary_views"][0]["questions"] = {
+        "q": row["auxiliary_views"][0]["questions"].pop("q0")}
+    row["auxiliary_views"][0]["targets"] = {"q": {"label": "yes"}}
+    invalid.append((row, "view ids must be unique"))
+
+    for index, (row, message) in enumerate(invalid):
+        path = tmp_path / f"invalid-aux-{index}.jsonl"
+        path.write_text(json.dumps(row) + "\n")
+        with pytest.raises(ValueError, match=message):
+            load_examples([path])
 
 
 def test_counterfactual_loader_fails_closed_on_invalid_pair_metadata(tmp_path):
@@ -302,6 +371,67 @@ def test_counterfactual_zero_weight_matches_ce_and_positive_weight_adds_flip(tmp
     assert weighted_stats["pair_flip_seen"] == 1
     assert torch.allclose(
         weighted, legacy.detach() + 0.25 * weighted.new_tensor(weighted_stats["pair_flip_loss"]))
+
+
+def test_auxiliary_ce_is_averaged_in_one_slot_and_flip_uses_only_final_pair(tmp_path):
+    row = counterfactual_pair()
+    row["auxiliary_views"] = [
+        auxiliary_view("clause-0"), auxiliary_view("clause-1", "no"),
+        auxiliary_view("clause-2"), auxiliary_view("clause-3", "no"),
+    ]
+    path = tmp_path / "pair-with-aux.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    examples = load_examples([path])
+    groups = [torch.tensor([1]), torch.tensor([2])]
+    model = TinyModel()
+
+    rng = random.Random(1407).getstate()
+    random.setstate(rng)
+    zero, zero_correct, zero_stats = loss_for_examples(
+        model, examples, TinyTokenizer(), groups, 100, torch.device("cpu"), shuffle=True,
+        pair_flip_weight=0.0)
+
+    expected_examples = [{"id": examples[0]["id"], "paired_views": [
+        *examples[0]["paired_views"], *examples[0]["auxiliary_views"],
+    ]}]
+    random.setstate(rng)
+    expected, expected_correct = legacy_ce(
+        model, expected_examples, TinyTokenizer(), groups, 100, torch.device("cpu"), shuffle=True)
+    assert torch.equal(zero, expected)
+    assert zero_correct == expected_correct
+    assert zero_stats["canonical_views_seen"] == 2
+    assert zero_stats["auxiliary_views_seen"] == 4
+    assert (zero_stats["canonical_views_correct"] +
+            zero_stats["auxiliary_views_correct"]) >= 0
+    assert zero.item() == pytest.approx(
+        (zero_stats["canonical_ce_sum"] + zero_stats["auxiliary_ce_sum"]) / 6)
+    assert zero_stats["canonical_ce"] == pytest.approx(
+        zero_stats["canonical_ce_sum"] / 2)
+    assert zero_stats["auxiliary_ce"] == pytest.approx(
+        zero_stats["auxiliary_ce_sum"] / 4)
+
+    random.setstate(rng)
+    weighted, _, weighted_stats = loss_for_examples(
+        model, examples, TinyTokenizer(), groups, 100, torch.device("cpu"), shuffle=True,
+        pair_flip_weight=0.25, pair_flip_margin=1.0)
+    assert weighted_stats["pair_flip_seen"] == 1
+    assert torch.allclose(
+        weighted, expected.detach() + 0.25 * weighted.new_tensor(weighted_stats["pair_flip_loss"]))
+
+    # Auxiliary correctness can change the CE/statistics, but never creates extra flip endpoints.
+    changed = counterfactual_pair()
+    changed["auxiliary_views"] = [
+        auxiliary_view("clause-0", "no"), auxiliary_view("clause-1", "yes"),
+        auxiliary_view("clause-2", "no"), auxiliary_view("clause-3", "yes"),
+    ]
+    changed_path = tmp_path / "changed-aux.jsonl"
+    changed_path.write_text(json.dumps(changed) + "\n")
+    random.setstate(rng)
+    _, _, changed_stats = loss_for_examples(
+        model, load_examples([changed_path]), TinyTokenizer(), groups, 100,
+        torch.device("cpu"), shuffle=True, pair_flip_weight=0.25, pair_flip_margin=1.0)
+    assert changed_stats["pair_flip_seen"] == 1
+    assert changed_stats["pair_flip_loss"] == weighted_stats["pair_flip_loss"]
 
 
 def test_zero_weight_matches_legacy_loss_gradients_rng_and_option_order():
