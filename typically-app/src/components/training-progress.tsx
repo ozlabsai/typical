@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Check, Circle, Cpu, Loader2, X } from "lucide-react"
 
+import { StatusCopy } from "@/components/shared"
 import { TrainingCurve } from "@/components/training-curve"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -96,6 +97,14 @@ function useLabel() {
   }
 }
 
+/** The status line: while it runs, the milestone in progress (the coarse server copy lags it); else the server's code / message. */
+export function StatusLine({ status }: { status: TrainStatus }) {
+  const label = useLabel()
+  const { order, at, state } = milestones(status)
+  const k = status.phase !== "done" && status.phase !== "failed" ? order.find((x) => state(x) === "current") : undefined
+  return k ? <>{label(at.get(k), k, "current")}…</> : <StatusCopy code={status.code} message={status.message} />
+}
+
 /**
  * A running (or finished) training job, for someone watching it: every milestone in plain language with its time, the
  * step counter + curves while it learns, a small GPU panel, and a timestamped activity feed. The Train step and the model page share it.
@@ -177,7 +186,7 @@ function GpuPanel({ status }: { status: TrainStatus }) {
   const items = [
     [t("gpu.busy"), `${g.util}%`],
     [t("gpu.memory"), t("gpu.gb", { used: gb(g.mem_used), total: gb(g.mem_total) })],
-    ...(g.tok_s ? [[t("gpu.speed"), t("gpu.tokens", { n: g.tok_s.toLocaleString() })]] : []),
+    ...(g.tok_s ? [[t("gpu.speed"), g.tok_s.toLocaleString()]] : []),
   ]
   return (
     <section className="grid gap-2 rounded-lg border bg-muted/30 p-3" aria-label={t("gpu.title")}>
@@ -188,7 +197,7 @@ function GpuPanel({ status }: { status: TrainStatus }) {
         {items.map(([k, v]) => (
           <div key={k} className="grid gap-0.5">
             <dt className="text-xs text-muted-foreground">{k}</dt>
-            <dd className="font-mono text-sm tabular">{v}</dd>
+            <dd className="text-sm font-medium tabular whitespace-nowrap">{v}</dd>
           </div>
         ))}
       </dl>

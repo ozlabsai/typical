@@ -1,9 +1,9 @@
-import { useId, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 
 import type { Series, TrainStatus } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 
-const W = 560, M = { top: 10, end: 14, bottom: 22, start: 40 }
+const M = { top: 10, end: 14, bottom: 22, start: 40 }
 const fmt = (v: number | null | undefined) => (v == null ? "—" : v.toFixed(3))
 const pctOf = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v * 100)}%`)
 const lastOf = (ys: (number | null)[]) => [...ys].reverse().find((v) => v != null) ?? null
@@ -27,6 +27,14 @@ function Chart({ s, total, lines, height, fmtY, title, desc, best, domain }: {
   const id = useId()
   const [hover, setHover] = useState<number | null>(null)
   const H = height
+  // drawn at the figure's real pixel width, so the 10px labels stay 10px on a phone and on a wide screen
+  const fig = useRef<HTMLElement>(null)
+  const [W, setW] = useState(560)
+  useEffect(() => {
+    const ro = new ResizeObserver(([e]) => e.contentRect.width > 0 && setW(Math.round(e.contentRect.width)))
+    if (fig.current) ro.observe(fig.current)
+    return () => ro.disconnect()
+  }, [])
   const values = lines.flatMap((r) => r.ys).filter((v): v is number => v != null)
   const step = niceStep(((domain?.[1] ?? Math.max(...values)) - (domain?.[0] ?? Math.min(...values))) / 3)
   const lo = domain?.[0] ?? Math.max(0, Math.floor(Math.min(...values) / step) * step)
@@ -48,7 +56,7 @@ function Chart({ s, total, lines, height, fmtY, title, desc, best, domain }: {
   }
 
   return (
-    <figure dir="ltr" className="relative m-0">
+    <figure ref={fig} dir="ltr" className="relative m-0">
       {/* the step axis reads left to right in both languages */}
       <svg viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full overflow-visible" role="img" aria-labelledby={`${id}-t ${id}-d`}>
         <title id={`${id}-t`}>{title}</title>

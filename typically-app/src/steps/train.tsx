@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react"
 import { AlertCircle, ArrowRight, ChevronDown, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
-import { msg, OptionCard, PageHead, StatusCopy } from "@/components/shared"
-import { settled, TrainingProgress } from "@/components/training-progress"
+import { msg, OptionCard, PageHead } from "@/components/shared"
+import { settled, StatusLine, TrainingProgress } from "@/components/training-progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -140,7 +140,7 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
           <Card>
             <CardHeader>
               <CardTitle>{t(status.phase === "done" ? "tr.trained" : status.phase === "failed" ? "tr.stopped" : "tr.training")}</CardTitle>
-              <CardDescription><StatusCopy code={status.code} message={status.message} /></CardDescription>
+              <CardDescription><StatusLine status={status} /></CardDescription>
               {elapsed && <CardAction><span className="font-mono text-sm text-muted-foreground tabular">{elapsed}</span></CardAction>}
             </CardHeader>
             <CardContent><TrainingProgress status={status} /></CardContent>

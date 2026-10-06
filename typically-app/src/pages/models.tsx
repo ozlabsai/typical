@@ -6,7 +6,7 @@ import { StatusDot } from "@/components/app-sidebar"
 import { ShareButton } from "@/components/share-dialog"
 import { Page, PageHeader, SectionHeader, Stat } from "@/components/layout"
 import { CodeBlock, msg, StatusCopy } from "@/components/shared"
-import { TrainingProgress, useTrainStatus } from "@/components/training-progress"
+import { StatusLine, TrainingProgress, useTrainStatus } from "@/components/training-progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -219,21 +219,25 @@ function Corrections({ m }: { m: LibraryModel }) {
   )
 }
 
-/** The live card while it trains; after a failure, the same milestones show where it stopped. */
+/** The live card while it trains; after a failure, the same milestones show where it stopped; once ready, the run's record (folded). */
 function TrainingCard({ m }: { m: LibraryModel }) {
   const { t } = useI18n()
-  const status = useTrainStatus(m.id, true)
-  const failed = m.status === "failed"
-  if (failed && !status?.events?.length) return null   // failed before this card existed: the alert says it all
+  const status = useTrainStatus(m.id, !m.sample)
+  const [open, setOpen] = useState(false)
+  const failed = m.status === "failed", ready = m.status === "ready"
+  if ((failed || ready) && !status?.events?.length) return null   // a run from before milestones were recorded
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t(failed ? "tr.stopped" : "models.training")}</CardTitle>
-        {!failed && <CardDescription>{m.code || m.message ? <StatusCopy code={m.code} message={m.message} /> : t("models.notReady")}</CardDescription>}
+        <CardTitle>{t(ready ? "models.howTrained" : failed ? "tr.stopped" : "models.training")}</CardTitle>
+        {!failed && !ready && <CardDescription>{status ? <StatusLine status={status} /> : m.code || m.message ? <StatusCopy code={m.code} message={m.message} /> : t("models.notReady")}</CardDescription>}
+        {ready && <CardAction><Button variant="ghost" size="sm" aria-expanded={open} onClick={() => setOpen(!open)}>{t(open ? "models.hideRun" : "models.showRun")}</Button></CardAction>}
       </CardHeader>
-      <CardContent>
-        {status ? <TrainingProgress status={status} /> : <Progress value={(m.progress ?? 0) * 100} className="h-1.5" aria-label={t("tr.progress")} />}
-      </CardContent>
+      {(!ready || open) && (
+        <CardContent>
+          {status ? <TrainingProgress status={status} /> : <Progress value={(m.progress ?? 0) * 100} className="h-1.5" aria-label={t("tr.progress")} />}
+        </CardContent>
+      )}
     </Card>
   )
 }
@@ -278,7 +282,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
       {m.status === "failed" && (
         <Alert variant="destructive"><AlertCircle /><AlertTitle>{t("models.failed")}</AlertTitle><AlertDescription><p><StatusCopy code={m.code} message={m.message} /></p></AlertDescription></Alert>
       )}
-      {(m.status === "training" || m.status === "failed") && <TrainingCard key={m.id} m={m} />}
+      {m.status !== "ready" && <TrainingCard key={m.id} m={m} />}
 
       <Tabs value={ready ? tab ?? "overview" : "overview"} onValueChange={(v) => go({ name: "model", id, tab: v === "overview" ? undefined : v })}>
         <TabsList className="mb-2">
@@ -295,6 +299,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
             </div>
           )}
           <Corrections m={m} />
+          {ready && <TrainingCard key={m.id} m={m} />}
           <Card>
             <CardHeader><CardTitle>{t("models.decisions")}</CardTitle></CardHeader>
             <CardContent className="px-0">
