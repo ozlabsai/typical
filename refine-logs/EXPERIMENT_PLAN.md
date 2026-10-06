@@ -576,3 +576,31 @@ headroom—not optimizer, attention, or GPU availability.
 - [ ] seed 49 replication passes
 - [ ] generic exact-set DSL validated before scale
 - [ ] frozen JevBench, WorkflowEvals, Hebrew, and multimodal release gates pass
+
+## R049 — calibrated-decision post-training (prospective 2026-10-06)
+
+TypeSafe expands RLCD as Reinforcement Learning for Calibrated Decisions but does not disclose an
+implementable algorithm. The independent OpenJev-RLCD reconstruction (arXiv:2609.38850) separates
+proper-score readout training from optional rationale REINFORCE. Typical currently has no sampled
+rationale and can exactly differentiate its finite policy-outcome distribution, so the first causal
+test is a bounded complete-outcome Brier objective—not PPO, GRPO, or a noisy REINFORCE estimate of
+the same expectation.
+
+On one immutable exact-policy corpus, compare matched field CE, field CE plus exact-outcome NLL,
+and field CE plus categorical complete-outcome Brier. Add outcome-only Brier only as a short
+predicate-masking diagnostic. Freeze `decision_threshold=.5` and `action_temperature=1.0` for the
+calibration claim; choose fixed NLL/Brier coefficients from a training-only gradient-norm probe;
+keep field supervision and protected Hebrew/pixel replay in every promotable arm.
+
+Advance only with `>=3pp` unseen-policy exact-outcome gain and clustered lower bound above zero,
+`>=5%` relative Brier gain, NLL degradation upper bound `<=.02` nats, field loss `<=1pp`, every
+HE/MM/English guard loss `<=1pp`, and validation-frozen selective-risk improvement. A frozen
+candidate must then improve WorkflowEvals by at least two points without a per-workflow loss beyond
+two points; the final project gate remains Jev parity.
+
+Online rationale RL is conditional. A four-rationale validation probe must first show `>=5pp`
+single-rationale exact-outcome accuracy headroom or `>=10%` NLL reduction over direct scoring.
+Mixture-only gains do not qualify. If the gate passes, compare proper-score rationale REINFORCE to
+matched readout continuation, correctness-reward GRPO, and an anchored no-reward control. Full
+rationale, preservation, calibration, and failure analysis is frozen in
+`docs/research/R049_CALIBRATED_DECISION_POSTTRAIN_20261006.md`.
