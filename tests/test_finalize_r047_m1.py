@@ -62,7 +62,7 @@ def _rows():
 def _trainer_config():
     values = {
         "steps": 400, "microbatch": 1, "grad_accum": 8, "max_length": 8192,
-        "lr": 2e-5, "min_lr": 2e-6, "weight_decay": .01, "rank": 32,
+        "lr": 5e-6, "min_lr": 5e-7, "weight_decay": .01, "rank": 32,
         "alpha": 64, "save_every": 400, "save_steps": "", "eval_every": 400,
         "eval_samples": 128, "seed": 47, "pair_consistency_weight": 0.0,
         "pair_consistency_min_gold_probability": .8, "pair_consistency_clip": 4.0,
@@ -197,6 +197,20 @@ def test_finalize_rejects_boolean_disguised_as_integer(tmp_path, monkeypatch):
     _update_json(values["recipe_path"],
                  lambda item: item["trainer_config"].__setitem__("microbatch", True))
     with pytest.raises(ValueError, match="invalid value types"):
+        finalizer.finalize(**values)
+
+
+@pytest.mark.parametrize("key,value", [
+    ("lr", 2e-5),
+    ("save_every", 399),
+    ("pair_consistency_clip", 3.0),
+])
+def test_finalize_rejects_wrong_frozen_hyperparameter(
+        tmp_path, monkeypatch, key, value):
+    values, _ = _fixture(tmp_path, monkeypatch)
+    _update_json(values["recipe_path"],
+                 lambda item: item["trainer_config"].__setitem__(key, value))
+    with pytest.raises(ValueError, match="training invariant"):
         finalizer.finalize(**values)
 
 
