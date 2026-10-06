@@ -278,3 +278,21 @@ def test_rejects_benchmark_source_references(tmp_path, path, content):
     with pytest.raises(ValueError, match="prohibited benchmark source"):
         build(tmp_path / "out", source_paths=[path] if path else (),
               source_contents=[content] if content else ())
+
+
+def test_domain_offset_moves_every_decisive_pair(tmp_path):
+    base, shifted = tmp_path / "base", tmp_path / "shifted"
+    assert build(base, seed=46)["domain_offset"] == 0
+    assert build(shifted, seed=46, domain_offset=1)["domain_offset"] == 1
+
+    def decisive_pairs(path):
+        result = set()
+        for row in _rows(path / "test.jsonl"):
+            kind = row["meta"]["decisive_kind"]
+            clauses = [next(clause for clause in view["meta"]["clauses"]
+                            if clause["kind"] == kind) for view in row["paired_views"]]
+            result.add((kind, tuple(sorted(json.dumps(clause, sort_keys=True)
+                                           for clause in clauses))))
+        return result
+
+    assert decisive_pairs(base).isdisjoint(decisive_pairs(shifted))

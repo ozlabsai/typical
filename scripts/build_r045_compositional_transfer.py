@@ -108,9 +108,9 @@ def execute(program, clauses):
     return all(_evaluate(by_kind[kind]) for kind in program["composition"])
 
 
-def _clause(kind, split, variant, passed, temporal_index=0):
+def _clause(kind, split, variant, passed, temporal_index=0, domain_offset=0):
     config = SPLITS[split]
-    base = config["base"] + (variant % 24) * 10
+    base = config["base"] + domain_offset + (variant % 24) * 10
     fraction = FRACTIONS[variant % len(FRACTIONS)]
     if kind == "decimal":
         threshold = Decimal(base) + Decimal(5 + variant % 91) / 100
@@ -122,13 +122,13 @@ def _clause(kind, split, variant, passed, temporal_index=0):
         return {"kind": kind, "credits": [str(first), str(second)], "fee": str(fee),
                 "threshold": str(threshold), "unit": "credits"}
     if kind == "fraction":
-        denominator = (40, 53, 72, 83)[variant % 4]
+        denominator = (40, 53, 72, 83)[variant % 4] + domain_offset
         threshold_num = ((fraction.numerator * denominator + fraction.denominator - 1)
                          // fraction.denominator)
         return {"kind": kind, "numerator": threshold_num if passed else threshold_num - 1,
                 "denominator": denominator, "threshold": [fraction.numerator, fraction.denominator]}
     if kind == "datetime":
-        group, mode = divmod(temporal_index, 2)
+        group, mode = divmod(temporal_index + domain_offset * 24, 2)
         local_day = group % 20 + 1
         year = YEARS[group % len(YEARS)]
         timezone_name = ("Pacific/Auckland", "America/New_York",
@@ -155,7 +155,7 @@ def _clause(kind, split, variant, passed, temporal_index=0):
                     {"event_id": "adjustment", "delta": str(adjustment)}],
                 "threshold": str(threshold), "currency": "units"}
     if kind == "conditional":
-        condition_count = (41, 59, 73, 89)[variant % 4]
+        condition_count = (41, 59, 73, 89)[variant % 4] + domain_offset
         threshold_num = ((fraction.numerator * condition_count + fraction.denominator - 1)
                          // fraction.denominator)
         success = threshold_num if passed else threshold_num - 1
@@ -166,7 +166,7 @@ def _clause(kind, split, variant, passed, temporal_index=0):
                      "failure": 3 + variant % 7}],
                 "threshold": [fraction.numerator, fraction.denominator]}
     if kind == "policy":
-        priority = PRIORITIES[variant % len(PRIORITIES)]
+        priority = PRIORITIES[variant % len(PRIORITIES)] + domain_offset
         allow_name = ("allow-alpha", "allow-beta")[variant % 2]
         deny_name = ("deny-alpha", "deny-beta")[(variant // 2) % 2]
         deny_priority = priority + 5 + variant % 7
@@ -249,7 +249,7 @@ def _describe(clause, lang):
     return f"{HE_KIND[kind]}: {detail}"
 
 
-def _pair(split, composition, index, seed, case_index=None):
+def _pair(split, composition, index, seed, case_index=None, domain_offset=0):
     case_index = index % CASES_PER_COMPOSITION if case_index is None else case_index
     config = SPLITS[split]
     source_id = f"r045-{seed}-{split}-{index:05d}"
@@ -266,7 +266,8 @@ def _pair(split, composition, index, seed, case_index=None):
         views = []
         for passed in (True, False):
             clauses = [_clause(kind, split, variant + position * 17,
-                               passed if position == decisive else True, scenario_index)
+                               passed if position == decisive else True,
+                               scenario_index, domain_offset)
                        for position, kind in enumerate(composition)]
             shift = variant % len(clauses)
             clauses = clauses[shift:] + clauses[:shift]
@@ -316,14 +317,17 @@ def _pair(split, composition, index, seed, case_index=None):
     return result
 
 
-def build(out, seed=45, source_paths=(), source_contents=()):
+def build(out, seed=45, source_paths=(), source_contents=(), domain_offset=0):
     _check_sources(source_paths, source_contents)
+    if domain_offset < 0:
+        raise ValueError("domain_offset must be non-negative")
     generated = {split: [] for split in SPLITS}
     index = 0
     for split, compositions in COMPOSITIONS.items():
         for composition_index, composition in enumerate(compositions):
             for case_index in range(CASES_PER_COMPOSITION):
-                generated[split].extend(_pair(split, composition, index, seed, case_index))
+                generated[split].extend(_pair(split, composition, index, seed, case_index,
+                                              domain_offset))
                 index += 1
     # Every generated group stays whole, and its language twins share the same split.
     by_name, output_hashes = {}, {}
@@ -338,6 +342,7 @@ def build(out, seed=45, source_paths=(), source_contents=()):
                           "sha256": _digest(payload)}
         output_hashes[split] = _digest(payload)
     manifest = {"experiment": "r045_compositional_transfer", "seed": seed,
+                "domain_offset": domain_offset,
                 "generator": "stdlib-only", "builder_sha256": _digest(Path(__file__).read_bytes()),
                 "source_inputs": [], "rejected_source_count": 0,
                 "splits": by_name, "compositions": {split: [list(c) for c in COMPOSITIONS[split]]
@@ -355,12 +360,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True)
     parser.add_argument("--seed", type=int, default=45)
+    parser.add_argument("--domain-offset", type=int, default=0,
+                        help="Shift generated value domains; default zero preserves R045 data.")
     parser.add_argument("--source-path", action="append", default=[],
                         help="Prohibited benchmark sources are rejected; the builder reads no sources.")
     parser.add_argument("--source-content", action="append", default=[],
                         help="Prohibited benchmark text/labels are rejected; the builder reads no sources.")
     args = parser.parse_args(argv)
-    manifest = build(args.out, args.seed, args.source_path, args.source_content)
+    manifest = build(args.out, args.seed, args.source_path, args.source_content,
+                     args.domain_offset)
     print(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
