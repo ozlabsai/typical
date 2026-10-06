@@ -12,8 +12,8 @@ The prior multimodal/Hebrew plan and completed E1 history remain in `EXPERIMENT_
 
 | Claim | Minimum convincing evidence | Blocks |
 |---|---|---|
-| C1: Typical equals or beats Jev's decision capability | Official JevBench score ≥72.1 **and** Intelligence ≥72.0; public diagnostic reported but not used as a gate | B0, B2, B5 |
-| C2: Typical equals or beats Jev on real workflows | Official WorkflowEvals exact-actions mean ≥67.8 and each workflow within two points of Jev | B0, B1, B3, B5 |
+| C1: Typical equals or beats Jev's decision capability | Fresh official JevBench submission equal to or above the Jev row on the submission-time scorer; public diagnostic reported but not used as a gate | B0, B2, B5 |
+| C2: Typical equals or beats Jev on real workflows | Current official WorkflowEvals exact-actions mean equal to or above Jev, while retaining the stricter original `67.8%` preregistered mean floor | B0, B1, B3, B5 |
 | C3: The model is genuinely multimodal | Pinned image benchmark plus real/shuffled/no-image and mismatch-null controls | B0, B4, B5 |
 | C4: Hebrew improves without erasing English | Paired Hebrew gain; English loss ≤1 point; calibration and pair JSD reported | B0, B4, B5 |
 | C5: The result is fast and calibrated | Valid distributions; Brier/ECE no worse than Jev on comparable sets; latency/cost within 2× Jev | B0, B5, B6 |
@@ -23,16 +23,28 @@ The prior multimodal/Hebrew plan and completed E1 history remain in `EXPERIMENT_
 
 | Evaluation | Jev target | Promotion gate |
 |---|---:|---:|
-| JevBench official v1.5.x | score 72.1; Intelligence 72.0 | ≥ both; report open/sealed and type breakdown |
+| JevBench official v1.4.2.2 (current 2026-10-06) | Jev score 63.292057; Intelligence 53.059046 | ≥ both on a fresh full-coverage submission; also report distance to current leader Imajev-4B score 67.368216 |
+| JevBench official v1.2-era frozen target (historical contract) | score 72.1; Intelligence 72.0 | retain as a separately labelled historical result; never compare across scorer versions |
 | JevBench public diagnostic | Cygnet 203/231; Winnow 199/231 | report paired/family results; no pass/fail threshold |
-| WorkflowEvals security | 61.7% | ≥59.7% |
-| WorkflowEvals agent trace | 71.6% | ≥69.6% |
-| WorkflowEvals invoice | 61.8% | ≥59.8% |
-| WorkflowEvals customer | 76.0% | ≥74.0% |
-| WorkflowEvals equal-weight mean | 67.8% | ≥67.8% |
+| WorkflowEvals security, current exact-actions/policy mean | 59.5833% | ≥57.5833% |
+| WorkflowEvals agent trace, current exact-actions/policy mean | 70.8419% | ≥68.8419% |
+| WorkflowEvals invoice, current exact-actions/policy mean | 63.0370% | ≥61.0370% |
+| WorkflowEvals customer, current exact-actions/policy mean | 74.8366% | ≥72.8366% |
+| WorkflowEvals current equal-workflow exact-actions mean | 67.0747% | ≥67.8% (the stricter original preregistered mean floor) |
 | typed-decisions, grouped | accuracy .727 | ≥.727 plus KL/Brier/ECE no worse |
 
 Image JevBench and the paired Hebrew suite are additional release gates, not substitutes for the text/workflow targets.
+
+Target refresh provenance (2026-10-06): JevBench repository commit
+`bb05a335bc809e61b20c0f745d25499a82b326fc`, result
+`results/v1.4.2.2/jevbench-v1.4.2.2-results.json`. Current WorkflowEvals code is commit
+`0ac3b8ad845429f0d8e064ecfb2430a47c5a25cb`; the exact-actions figures above are recomputed by its
+published `plot.py average --hf` path from pinned dataset revisions invoice
+`6beeb2d2acd65c086c835022f5f4d7434114cafc`, customer
+`b1342f5a704587dbc465867c38c2694348ff86e4`, trace
+`8635540973910a92465fe2bc53e195375aa6e1a8`, and security
+`fbe1ea5c69cf494157fd23f2002a0d9d9a418443`. These moving external targets are refreshed only for
+the final frozen evaluation; they never select training data, losses, checkpoints, or calibration.
 
 ## Experiment blocks
 
@@ -159,7 +171,7 @@ Only after B5 quality passes: Q8, prefix packing, concurrent questions, and then
 - [x] G0 baseline matrix complete for Cygnet, Winnow, and Intern
 - [ ] Candidate clears locked development gates
 - [ ] Official JevBench score and Intelligence equal/beat Jev
-- [ ] Official WorkflowEvals mean equal/beats 67.8
+- [ ] Official WorkflowEvals mean equals/beats current Jev and clears the retained 67.8% floor
 - [ ] Multimodal and Hebrew release gates pass
 - [ ] Serving latency/cost and calibration reported
 
