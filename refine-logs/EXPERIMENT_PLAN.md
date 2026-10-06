@@ -251,7 +251,9 @@ only as a 32-scenario **near-transfer smoke diagnostic**: despite 144 language r
 K=2 and 8 K=3 independent clusters, reuses the generator/template family, and confounds language
 with answer order. It may detect obvious failure but cannot establish the mechanism gate.
 
-The primary panel is generator-disjoint and uses semantic clusters as its independent unit:
+The primary panel is exact template/value-regime disjoint and uses semantic clusters as its
+independent unit. It deliberately shares the six executable AST semantics and oracle family with
+R045; it does not claim full generator-family or fuzzy near-duplicate disjointness:
 
 - 312 scenarios spanning all 13 unseen K=2 compositions (24 per composition);
 - 320 scenarios spanning all 20 K=3 compositions (16 per composition);
@@ -264,7 +266,8 @@ The primary panel is generator-disjoint and uses semantic clusters as its indepe
 Freeze builder, evaluator, comparison, bootstrap RNG, arm, panel, manifest, and threshold hashes.
 Reject exact or normalized overlap in states, questions, instructions, clause JSON, numeric
 signatures, decisive pairs, complete AST/multisets, composition hyperedges, scenario/template/
-generator lineage, near-duplicates, and all quarantined benchmarks. Language/order twins and the
+generator lineage, and all quarantined benchmarks. The preflight proves these exact normalized
+overlap classes only; it does not prove fuzzy near-duplicate absence. Language/order twins and the
 complete truth cube remain in one semantic cluster. Resample whole clusters within K×composition
 for at least 20,000 fixed paired-bootstrap replicates; never row-bootstrap or pool K=2 with K=3.
 
