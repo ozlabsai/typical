@@ -24,6 +24,7 @@ from scripts.exact_policy_executor import (
 
 PANEL = "exact_policy_v1"
 NLL_PROBABILITY_FLOOR = 1e-12
+PROBABILITY_SUM_TOLERANCE = 1e-9
 ECE_BINS = 10
 RISK_COVERAGE_TARGETS = tuple(index / 10 for index in range(1, 11))
 SLICE_KEYS = (
@@ -70,8 +71,10 @@ def _row_contract(row):
 
     threshold = meta.get("decision_threshold")
     if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
-            or not math.isfinite(threshold) or not 0 < threshold < 1):
-        raise ValueError(f"{row['id']}: invalid decision threshold")
+            or not math.isfinite(threshold) or float(threshold) != 0.5):
+        raise ValueError(
+            f"{row['id']}: exact-policy calibration requires decision threshold 0.5"
+        )
     compiled = compile_policy(meta.get("policy"))
     if tuple(fields) != compiled.fields:
         raise ValueError(f"{row['id']}: policy fields differ from field_order")
@@ -114,24 +117,28 @@ def _probability_contract(row, probabilities):
                     or not math.isfinite(value) or not 0 <= value <= 1):
                 raise ValueError(f"{row['id']}/{qid}: invalid probability")
             parsed[label] = float(value)
-        if not math.isclose(sum(parsed.values()), 1.0, rel_tol=0.0, abs_tol=1e-6):
+        total = math.fsum(parsed.values())
+        if not math.isclose(
+                total, 1.0, rel_tol=0.0, abs_tol=PROBABILITY_SUM_TOLERANCE):
             raise ValueError(f"{row['id']}/{qid}: probabilities do not sum to one")
-        clean[qid] = parsed
+        # Canonicalize the pair once.  Downstream code then consumes exactly the
+        # same normalized Bernoulli distribution for both truth values.
+        yes_probability = parsed["yes"] / total
+        clean[qid] = {"no": 1.0 - yes_probability, "yes": yes_probability}
     return clean
 
 
 def _outcome_calibration(policy, gold, mapping, probabilities):
     """Exactly marginalize independent semantic-field Bernoulli probabilities."""
-    yes_probabilities = {
-        field: probabilities[qid]["yes"] for qid, field in mapping.items()
+    field_probabilities = {
+        field: probabilities[qid] for qid, field in mapping.items()
     }
     log_masses = defaultdict(list)
     for assignment_id, outcome in enumerate(policy.truth_outcomes):
         log_probability = 0.0
         for bit, field in enumerate(policy.fields):
-            yes_probability = yes_probabilities[field]
-            probability = (yes_probability if assignment_id & (1 << bit)
-                           else 1.0 - yes_probability)
+            label = "yes" if assignment_id & (1 << bit) else "no"
+            probability = field_probabilities[field][label]
             if probability == 0.0:
                 log_probability = -math.inf
                 break
@@ -289,8 +296,8 @@ def _invalid_calibration():
     }
 
 
-def _unit_calibration(entries, key):
-    """Collapse rendered views so every semantic endpoint/cluster has unit weight."""
+def _unit_robustness(entries, key):
+    """Report equal-weight view losses and all-views correctness per semantic unit."""
     grouped = defaultdict(list)
     for entry in entries:
         value = key(entry["row"]["meta"])
@@ -299,26 +306,41 @@ def _unit_calibration(entries, key):
     units = []
     for items in grouped.values():
         units.append({
-            "complete_outcome_nll": math.fsum(
+            "mean_view_complete_outcome_nll": math.fsum(
                 item["complete_outcome_nll"] for item in items
             ) / len(items),
-            "categorical_brier": math.fsum(
+            "mean_view_categorical_brier": math.fsum(
                 item["categorical_brier"] for item in items
             ) / len(items),
-            # Conservative confidence for an all-views-correct unit.
-            "top_outcome_confidence": min(
-                item["top_outcome_confidence"] for item in items
-            ),
-            "top_outcome_correct": all(
+            "all_views_top_outcome_correct": all(
                 item["top_outcome_correct"] for item in items
             ),
         })
-    summary = _calibration_summary(units)
-    summary["unit_definition"] = (
-        "equal-weight semantic units; mean view loss, minimum view confidence, "
-        "and all views top-outcome correct"
-    )
-    return summary
+    if not units:
+        return {
+            "n": 0,
+            "mean_view_complete_outcome_nll": None,
+            "mean_view_categorical_brier": None,
+            "all_views_top_outcome_accuracy": None,
+            "unit_definition": "equal-weight semantic units",
+        }
+    return {
+        "n": len(units),
+        "mean_view_complete_outcome_nll": math.fsum(
+            unit["mean_view_complete_outcome_nll"] for unit in units
+        ) / len(units),
+        "mean_view_categorical_brier": math.fsum(
+            unit["mean_view_categorical_brier"] for unit in units
+        ) / len(units),
+        "all_views_top_outcome_accuracy": math.fsum(
+            float(unit["all_views_top_outcome_correct"]) for unit in units
+        ) / len(units),
+        "unit_definition": (
+            "equal-weight semantic units; mean proper loss across rendered views "
+            "and all rendered views top-outcome correct; no joint-event "
+            "confidence or calibration is asserted"
+        ),
+    }
 
 
 def _summary(records):
@@ -483,14 +505,14 @@ def summarize(rows, prediction_rows):
             ),
             "valid_only": _calibration_summary(valid_calibration),
             "headline_fail_closed": _calibration_summary(fail_closed_calibration),
-            "semantic_endpoints_fail_closed": _unit_calibration(
+            "semantic_endpoint_robustness_fail_closed": _unit_robustness(
                 fail_closed_calibration,
                 lambda meta: ((str(meta["semantic_group_id"]),
                                str(meta["counterfactual_side"]))
                               if meta.get("semantic_group_id") is not None
                               and meta.get("counterfactual_side") is not None else None),
             ),
-            "independent_clusters_fail_closed": _unit_calibration(
+            "independent_cluster_robustness_fail_closed": _unit_robustness(
                 fail_closed_calibration,
                 lambda meta: (str(meta["semantic_group_id"])
                               if meta.get("semantic_group_id") is not None else None),

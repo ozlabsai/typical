@@ -4,7 +4,7 @@ import math
 import pytest
 
 from scripts.exact_policy_executor import execute_policy
-from scripts.score_exact_policy_panel import classify, summarize
+from scripts.score_exact_policy_panel import _risk_coverage, classify, summarize
 
 
 def _action(name):
@@ -126,8 +126,14 @@ def test_summarize_separates_rendered_endpoints_and_clusters():
         0.0524
     )
     assert calibration["headline_fail_closed"]["aurc"] == 0.0
-    assert calibration["semantic_endpoints_fail_closed"]["n"] == 2
-    assert calibration["independent_clusters_fail_closed"]["n"] == 1
+    endpoint = calibration["semantic_endpoint_robustness_fail_closed"]
+    cluster = calibration["independent_cluster_robustness_fail_closed"]
+    assert endpoint["n"] == 2
+    assert endpoint["all_views_top_outcome_accuracy"] == 1.0
+    assert "aurc" not in endpoint
+    assert "fixed_bin_ece" not in endpoint
+    assert "top_outcome_confidence" not in endpoint
+    assert cluster["n"] == 1
 
 
 def test_summarize_counts_invalid_predictions_without_hiding_data_errors():
@@ -207,6 +213,12 @@ def test_fail_closed_calibration_does_not_reward_partial_coverage():
     # The invalid row is maximally confident and therefore appears first in
     # selective prediction, making the AURC worse than final error alone.
     assert calibration["headline_fail_closed"]["aurc"] == pytest.approx(0.75)
+    cluster = calibration["independent_cluster_robustness_fail_closed"]
+    assert cluster["n"] == 1
+    assert cluster["all_views_top_outcome_accuracy"] == 0.0
+    assert cluster["mean_view_categorical_brier"] == pytest.approx(
+        (0.0524 + 2.0) / 2
+    )
 
 
 def test_risk_coverage_is_tie_invariant():
@@ -223,3 +235,39 @@ def test_risk_coverage_is_tie_invariant():
     ]["headline_fail_closed"]
     assert first["aurc"] == second["aurc"]
     assert first["risk_coverage"] == second["risk_coverage"]
+
+
+def test_tied_risk_coverage_uses_whole_tie_groups():
+    entries = [
+        {"top_outcome_confidence": 0.9, "top_outcome_correct": True},
+        {"top_outcome_confidence": 0.9, "top_outcome_correct": False},
+        {"top_outcome_confidence": 0.5, "top_outcome_correct": True},
+    ]
+    aurc, curve = _risk_coverage(entries)
+    assert aurc == pytest.approx(4 / 9)
+    assert curve[0] == {
+        "target_coverage": 0.1,
+        "coverage": pytest.approx(2 / 3),
+        "risk": 0.5,
+        "minimum_confidence": 0.9,
+    }
+
+
+def test_calibration_contract_requires_half_threshold_and_strict_probabilities():
+    row = _row()
+    row["meta"]["decision_threshold"] = 0.6
+    with pytest.raises(ValueError, match="requires decision threshold 0.5"):
+        classify(row, _prediction(row)["probabilities"])
+
+    row["meta"]["decision_threshold"] = 0.5
+    probabilities = _prediction(row)["probabilities"]
+    probabilities["q00"] = {"no": 0.1000000005, "yes": 0.9}
+    result = classify(row, probabilities)
+    assert result["gold_outcome_probability"] == pytest.approx(
+        (0.9 / 1.0000000005) * 0.9
+    )
+
+    probabilities = _prediction(row)["probabilities"]
+    probabilities["q00"] = {"no": 0.100000002, "yes": 0.9}
+    with pytest.raises(ValueError, match="do not sum to one"):
+        classify(row, probabilities)
