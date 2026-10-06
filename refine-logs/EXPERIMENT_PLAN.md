@@ -418,3 +418,144 @@ WorkflowEvals evaluation.
   evidence-position sweep loses more than 10 points at 32k or retrieval falls below `90%`.
 - **Activation/optimizer changes:** deferred until M0 learning curves establish a capacity or
   optimization defect. Answer-order permutations remain a guard, not the primary intervention.
+
+## R048 — protected exact-action objective (frozen design 2026-10-06)
+
+**Problem:** R044-R reaches only `52.81%` on official WorkflowEvals versus Jev's current
+`67.0747%`, while the model is already nearly perfect on the old one-topology action panel. The
+next experiment must test downstream outcome credit without mistaking an easy renderer panel for
+workflow transfer.
+
+**Method thesis:** for an enumerable deterministic policy, optimize the exact probability of its
+gold action outcome through the field distributions. This gives lower-variance, policy-aligned
+credit than PPO/GRPO while retaining the existing constrained readout and external executor.
+
+### Claim map
+
+| Claim | Minimum convincing evidence | Linked block |
+|---|---|---|
+| C1: exact downstream action loss adds value beyond grouped field CE | treatment-control exact-action gain `>=3` points, scenario-clustered 95% lower bound `>0`, positive on same-operator and held-out-topology halves | R048-H, R048-P |
+| C2: the gain is compatible with the promoted Hebrew/multimodal model | all inherited WF/WH/replay, renderer, pair, Hebrew, English, real-image, mismatch, and gold-dropped floors pass | R048-R |
+| Anti-claim: gains come from more data, compute, calibration, answer order, or a different initializer | byte-identical mixture/order, equal forwards and updates, common parent hash, blinded arm assignment, option-order interaction gate | R048-P |
+
+The old `.context/action-panel-v1` is not primary evidence. R044-R scores `255/256` on its balanced
+evaluation slice and `1999/2000` on the calibration split. It contains one fixed action topology,
+only 25 truth traces, at most one false predicate, and no exact multi-action sets. It remains a
+retention/interface check only.
+
+### Block R048-H — action_v1.1 headroom and correctness
+
+- **Claim tested:** the panel can expose policy-critical field errors without benchmark leakage.
+- **Data:** generate `1,600/400/2,000` train/cal/eval rendered groups from split-disjoint latent
+  counterfactual clusters. Each twin changes exactly one primitive and changes the final action.
+- **Fields:** 2--6 per group; `safe` and `approved` required; randomized subsets and field order;
+  explicit `qid_to_field`; threshold `.5` on the primary panel.
+- **Primitive coverage:** decimal, temporal, ledger, conditional, authorization/policy,
+  missing-evidence, and Boolean AND/OR/NOT clauses with executable AST truth.
+- **Balance:** exactly 25% each `deny/review/escalate/allow`; at least 40% multi-failure groups and
+  at least 25% policy-priority conflicts (`deny > review > escalate > allow`).
+- **Views:** EN/HE semantic twins and both option orders remain inside one split/cluster. Held-out
+  renderer, value regime, clause topology, and source family are crossed only in evaluation.
+- **Leakage:** the generator never reads JevBench or WorkflowEvals cases. Freeze exact AST,
+  normalized-state, question, template, clause-fingerprint, and near-duplicate audits.
+- **Preflight:** executable oracle `100%`; hard/soft executor truth-table parity; finite gradients;
+  option-order invariance; exact BF16/SDPA singleton reference scoring.
+- **Headroom gate:** the accepted parent must score from `55%` through `94%` exact action. At
+  `>=95%`, training is prohibited and the panel must be made harder. A 32-group treatment overfit
+  must reach `>=95%` action accuracy without NaNs before the matched arms.
+- **Priority:** MUST-RUN. No R048 GPU training may precede it.
+
+### Block R048-P — matched field-only versus exact-action loss
+
+The common parent is the R047 treatment only if both its causal and retention gates pass;
+otherwise it is frozen R044-R. Both arms bind the identical adapter tree hash.
+
+The shared 3,200-slot mixture is:
+
+- 1,600 action_v1.1 groups;
+- 800 broad text/compositional replay slots;
+- 400 protected visual slots spanning real, shuffled/no-image, mismatch, and gold-dropped views;
+- 400 grouped Hebrew/English replay slots.
+
+Both arms receive identical bytes, row order, option-shuffle RNG, tokens, forwards, optimizer
+slots, seed, and schedule. Pair consistency, pair flip, guard projection, and staged-pair objectives
+are disabled. The vision tower/projector remain frozen.
+
+| Setting | Control A | Treatment B |
+|---|---:|---:|
+| grouped mean field CE | yes | yes |
+| relaxed executor forward/telemetry | yes | yes |
+| `action_loss_weight` | `0.0` | `0.1` |
+| `action_temperature` | `1.0` | `1.0` |
+
+Shared training is one exact epoch: 400 steps, microbatch 1, accumulation 8, max length 8192,
+BF16/SDPA, LR `5e-6`, minimum LR `5e-7`, weight decay `.01`, seed 48, and fixed step-400
+checkpoint. Rank 32/alpha 64 are metadata when continuing the inherited adapter; the current
+trainer does not attach a fresh residual. Seed 49 runs only after seed 48 passes.
+
+**Causal advancement gates:**
+
+- exact action treatment-control gain `>=3` points and 20,000-replicate scenario-clustered 95%
+  bootstrap lower bound above zero;
+- complete-counterfactual-cluster accuracy gain `>=3` points;
+- positive gains on both same-operator and held-out-topology halves;
+- gain survives reverse option order; original/reversed difference `<=1` point;
+- no action class or program family loses more than 2 points;
+- field accuracy loses at most `.5` point, and field NLL/Brier worsen by at most 1%;
+- zero invalid or incomplete predictions.
+
+Seed 49 must independently pass, the two gains must sum to at least 8 points, and the pooled
+clustered lower bound must remain above zero before scaling. If control improves but treatment does
+not beat control, grouped executable data is useful but action loss is not established.
+
+### Block R048-R — inherited retention and replication
+
+- WF/WH/replay may lose at most 2 points from the common parent.
+- Legacy action may lose at most `1/256`; renderer cells at most `1/65`.
+- Hebrew, English, real-image, mismatch, and gold-dropped metrics may lose at most `1/128`.
+- R043 pair metrics may lose at most 1%; Hebrew JSD and visual grounding/abstention gates remain
+  mandatory.
+- A method gain with retention failure is research evidence only. Discard the checkpoint and test
+  a fresh zero-initialized residual or separately validated parent-logit protection as a new factor.
+
+### Block R048-X — generic exact-outcome marginalization
+
+This CPU implementation is NICE-TO-HAVE during R048-P and becomes MUST-RUN only after positive
+paired replication. For 2--12 Boolean fields and a deterministic program `f`, enumerate assignments
+and compute:
+
+```text
+P(o | s) = sum_{z: f(z)=o} product_i q_i^z_i (1-q_i)^(1-z_i)
+L_outcome = -log P(gold exact action set and primary action | s)
+```
+
+This supports arbitrary AND/OR/NOT, priority, fallback, multi-action sets, and typed payloads, with
+`action_v1` as a verified special case. Only this generic version may scale to 30k--100k workflow
+groups. RL remains deferred while legal outcomes can be enumerated exactly.
+
+### Run order and compute budget
+
+| Milestone | Runs | Decision gate | Estimated A100 cost | Main risk |
+|---|---|---|---:|---|
+| M0 correctness | generator, leakage preflight, truth-table/autograd tests | every invariant exact | CPU only | synthetic shortcuts |
+| M1 headroom | singleton parent score + 32-group overfit | parent `55--94%`; overfit `>=95%` | `<1` GPU-hour | panel ceiling/floor |
+| M2 causal seed 48 | blinded control/treatment + retention | every causal and retention gate | 3--5 paired GPU-hours | forgetting |
+| M3 replication | identical pair at seed 49 | both pass; gains sum `>=8` | 3--5 paired GPU-hours | seed instability |
+| M4 scaled DSL | 30k--100k only after R048-X validation | internal action/topology + retention | separately budgeted | topology leakage |
+| M5 frozen official | all-705 WorkflowEvals and fresh JevBench | `>=67.8%` Workflow mean and Jev score/Intelligence parity | one frozen evaluation | target drift |
+
+The biggest immediate bottleneck is a hard, leakage-safe efficacy panel with measured parent
+headroom—not optimizer, attention, or GPU availability.
+
+### R048 checklist
+
+- [x] Differentiable action executor and grouped trainer implemented
+- [x] NaN-gradient and hard-serving telemetry defects independently audited and fixed
+- [x] Existing action panel rejected as saturated primary evidence
+- [ ] action_v1.1 generator, manifest, leakage audit, and tests pass
+- [ ] singleton parent headroom and 32-group overfit pass
+- [ ] immutable mixture, launcher, comparator, and receipts implemented
+- [ ] seed 48 causal and retention gates pass
+- [ ] seed 49 replication passes
+- [ ] generic exact-set DSL validated before scale
+- [ ] frozen JevBench, WorkflowEvals, Hebrew, and multimodal release gates pass
