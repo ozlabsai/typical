@@ -162,3 +162,119 @@ Only after B5 quality passes: Q8, prefix packing, concurrent questions, and then
 - [ ] Official WorkflowEvals mean equal/beats 67.8
 - [ ] Multimodal and Hebrew release gates pass
 - [ ] Serving latency/cost and calibration reported
+
+## R047 — factorized executor curriculum (frozen 2026-10-06)
+
+### Claim correction
+
+R046 does not isolate a special conjunction or attention failure. Weight `1.0` still fitted only
+`125/200` seen presentations; on the clean panel its strongest families were policy-bearing while
+decimal and ledger counterfactual direction remained weak. Moreover, `0/32` complete scenarios is
+compatible with ordinary row accuracy around `.615`: 24 scenarios require eight simultaneous
+correct presentations and eight require twelve. Complete-scenario accuracy remains a promotion
+metric, but the mechanistic claim is narrower:
+
+> Executable supervision for each typed primitive and its evidence binding improves unseen
+> primitive execution and final decisions more than spending the same supervised-answer budget on
+> repeated final decisions.
+
+The anti-claim is that any gain comes from rereading states, extra answer positions, longer
+training, option order, language balance, or more optimizer weight per source program.
+
+This is deterministic process supervision, not free-form chain-of-thought. It is directionally
+supported by process-supervision and scratchpad results, but those papers do not establish the
+effect in this classifier setting; R047 is the causal test. See Lightman et al.
+(`https://arxiv.org/abs/2305.20050`), Uesato et al.
+(`https://arxiv.org/abs/2211.14275`), and Nye et al.
+(`https://arxiv.org/abs/2112.00114`).
+
+### Frozen representation
+
+- Start every candidate from exact R044-R, never from a rejected R045/R046 candidate.
+- Preserve the canonical final question and constrained single-letter serving interface byte for
+  byte. Training-only auxiliary views never appear at inference.
+- Keep each program as one optimizer slot. Average all views inside the slot so multi-clause
+  programs receive the same optimizer weight as control programs.
+- For the 48 frozen K=2 training pair rows, keep the two original counterfactual final views and
+  attach four training-only views: clause 1 and clause 2 on each state.
+- Treatment targets are computed directly by `_evaluate(clause)`. Control has the same states,
+  view count, option order, and slot order but its four extra views ask paraphrased whole-case audit
+  questions and repeat `execute(program, clauses)`.
+- Pair-flip operates only on the two canonical final views. Both arms use weight `1.0` so R047 does
+  not silently change the R046 setting.
+- The auxiliary implementation must be generic over K even though frozen training has 52 K=1 and
+  48 K=2 rows. K=3 remains held-out transfer.
+- Tokenizer preflight must show equal view counts and aggregate non-padding tokens within `0.5%`;
+  report wall time and peak VRAM. Config differences are limited to arm path/mode and output path.
+- Full-clause treatment targets are 75% yes while repeated-final control targets are 50% yes. This
+  is part of the semantic intervention, must be disclosed, and requires balanced-accuracy and
+  per-class reporting. A decisive-only target is rejected because it duplicates the final label and
+  adds no intermediate information.
+
+### M0 — can-fit sanity before causal training
+
+Run the 48 K=2 treatment slots without replay from R044-R, rank-32 LoRA, seed 47, LR `2e-5`,
+cosine floor `2e-6`, batch `1×8`, and checkpoints at 20/50/100/200 steps. This is a diagnostic
+overfit run, not a candidate.
+
+**Go gate:** by or before step 200, executable auxiliary balanced accuracy and final counterfactual
+direction are each at least `98%` overall and for decimal, ledger, policy, and conditional. Metrics
+must be finite and every clause target must independently reproduce from the AST. If it fails, do
+not run the matched arms: inspect objective/readout gradients, then permit exactly one preregistered
+capacity retry at rank 64 with all other settings fixed. No holdout result chooses the retry.
+
+### M1 — matched causal screen
+
+Use the frozen 800-slot R045-B mixture in both arms. The 700 non-compositional slots and all 100
+canonical counterfactual pair rows are byte-identical; only the 48 K=2 rows receive matched
+training-only bundles. Train four deterministic epochs (`400` steps × accumulation `8`) from the
+same R044-R parent with the M0-passing capacity. Control runs first, then treatment. Seed, order,
+optimizer, scheduler, base revision, images, and every retention row are identical.
+
+Before candidate exposure, freeze seed 47/domain-offset 2 mechanism and final panels. Reject exact
+or normalized overlap in states, questions, clause JSON, decisive pairs, complete AST/multisets,
+scenario lineage, and all quarantined benchmarks. Freeze builder, evaluator, arm, panel, manifest,
+and threshold hashes.
+
+**Mechanism gate:** treatment minus control on unseen data must satisfy all of:
+
+- clause balanced accuracy `+5` points with scenario-clustered 95% bootstrap lower bound above 0;
+- exact clause-vector accuracy `+8` points;
+- final/clauses coherence (`final == AND(predicted clauses)`) `+10` points;
+- counterfactual direction gains for both decimal and ledger, with no primitive or language losing
+  more than 2 points;
+- final presentation accuracy `+5` points, no regression in correct pairs/sources, and NLL/Brier at
+  most 105% of control and the best frozen R044/R046 reference.
+
+A final-only gain without clause gains is a shortcut and fails. Complete scenarios are reported but
+are not the mechanism gate. Promotion-scale expectations require at least `.81` final presentation
+accuracy before treating five complete scenarios as plausible.
+
+### M2 — scale only a causally validated treatment
+
+If M1 passes, build a source-grouped curriculum from multiple fresh seeds/domain offsets with at
+least 1,600 executable program slots and an equal number of replay/retention slots. Preserve EN/HE
+twins, full scenario groups, option permutations, real-pixel replay, and family balance. Compare the
+same matched control/treatment at two fixed paired seeds. Scale next to 30k–100k grouped cases only
+if operator direction reaches at least `90%` for every family and unseen-value/composition transfer
+survives both seeds.
+
+If clauses improve but final aggregation does not, R048 tests deterministic aggregate-consistency
+or a small training-only aggregator. If arithmetic primitives remain weak after can-fit succeeds,
+R048 instead adds machine-generated traces (`operands -> computed value -> predicate -> action`)
+against a token-matched answer-only control. No teacher prose is allowed.
+
+Only an M2 candidate that passes every inherited WF/WH/replay, renderer, action, real-image,
+mismatch/null, Hebrew, and English gate receives fresh official JevBench v1.5.x and all-705-case
+WorkflowEvals evaluation.
+
+### Deferred methods
+
+- **RL/GRPO/DPO:** deferred because every clause and final action already has exact dense gold;
+  sampled rewards would add variance and credit-assignment ambiguity. Reconsider RLVR only for
+  genuinely sequential verified workflows after supervised execution works.
+- **KDA/custom attention:** deferred because the failures occur on short and even seen examples.
+  Kimi Linear (`https://arxiv.org/abs/2510.26692`) demonstrates a pretrained hybrid architecture
+  and long-context efficiency, not a repair for this adaptation failure.
+- **Activation/optimizer changes:** deferred until M0 learning curves establish a capacity or
+  optimization defect. Answer-order permutations remain a guard, not the primary intervention.
