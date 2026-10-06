@@ -5,7 +5,7 @@ import copy
 import hashlib
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
 from fractions import Fraction
@@ -15,6 +15,200 @@ from zoneinfo import ZoneInfo
 
 def _read(path):
     return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
+
+
+CAUSAL_SCHEMA_VERSION = "r047-causal-prediction-v1"
+CAUSAL_META_FIELDS = (
+    "semantic_cluster_id", "semantic_view_id", "scenario_id", "composition", "arity",
+    "language", "option_order", "prompt_family", "prediction_role", "primitive",
+    "decisive_role", "truth_hamming_weight", "truth_pattern", "seen_edge_count",
+)
+
+
+def _canonical_json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _causal_row_metadata(row):
+    """Validate and normalize the explicit metadata on one causal-panel question."""
+    row_id = row.get("id")
+    meta = row.get("meta")
+    if not isinstance(row_id, str) or not row_id or not isinstance(meta, dict):
+        raise ValueError("causal rows need a non-empty ID and metadata")
+    missing = [field for field in CAUSAL_META_FIELDS if field not in meta]
+    if missing:
+        raise ValueError(f"{row_id}: causal metadata missing {', '.join(missing)}")
+    questions, targets = row.get("questions"), row.get("targets")
+    if (not isinstance(questions, dict) or len(questions) != 1
+            or set(questions) != set(targets or {})):
+        raise ValueError(f"{row_id}: causal row must contain one aligned question and target")
+    qid = next(iter(questions))
+    question = questions[qid]
+    if question.get("type") != "choice" or set(question.get("criteria") or {}) != {"no", "yes"}:
+        raise ValueError(f"{row_id}: causal question must expose semantic no/yes options")
+    option_order = meta["option_order"]
+    expected_order = (["yes", "no"] if option_order == "yes_no" else
+                      ["no", "yes"] if option_order == "no_yes" else None)
+    if expected_order is None or list(question["criteria"]) != expected_order:
+        raise ValueError(f"{row_id}: option-order metadata differs from the rendered question")
+    composition = meta["composition"]
+    if (not isinstance(composition, list) or len(composition) not in (2, 3)
+            or len(set(composition)) != len(composition)
+            or meta["arity"] != len(composition)):
+        raise ValueError(f"{row_id}: invalid causal composition/arity")
+    clauses = meta.get("clauses")
+    if (not isinstance(clauses, list) or len(clauses) != len(composition)
+            or [clause.get("kind") for clause in clauses] != composition):
+        raise ValueError(f"{row_id}: executable clauses do not match composition")
+    by_kind = {clause["kind"]: clause for clause in clauses}
+    truth_pattern = [bool(execute_clause(by_kind[kind])) for kind in composition]
+    if execute_program(meta.get("program") or {}, clauses) is not all(truth_pattern):
+        raise ValueError(f"{row_id}: program result disagrees with executable clauses")
+    if meta["truth_pattern"] != truth_pattern:
+        raise ValueError(f"{row_id}: truth pattern disagrees with executable clauses")
+    if meta["truth_hamming_weight"] != sum(truth_pattern):
+        raise ValueError(f"{row_id}: truth Hamming weight disagrees with executable clauses")
+    if meta["language"] not in {"en", "he"}:
+        raise ValueError(f"{row_id}: unsupported causal language")
+    for field in ("semantic_cluster_id", "semantic_view_id", "scenario_id", "prompt_family"):
+        if not isinstance(meta[field], str) or not meta[field]:
+            raise ValueError(f"{row_id}: {field} must be a non-empty string")
+    if (not isinstance(meta["seen_edge_count"], int) or isinstance(meta["seen_edge_count"], bool)
+            or not 0 <= meta["seen_edge_count"] <= len(composition)):
+        raise ValueError(f"{row_id}: invalid seen-edge count")
+    role, primitive = meta["prediction_role"], meta["primitive"]
+    if role == "final":
+        if primitive is not None or meta["decisive_role"] != "final":
+            raise ValueError(f"{row_id}: final row must use primitive=null and decisive_role=final")
+        expected = all(truth_pattern)
+    elif role == "clause":
+        if primitive not in composition or meta["decisive_role"] not in {
+                "decisive", "non_decisive"}:
+            raise ValueError(f"{row_id}: invalid clause primitive/decisive role")
+        primitive_index = composition.index(primitive)
+        expected_role = ("decisive" if all(
+            value for index, value in enumerate(truth_pattern) if index != primitive_index)
+                         else "non_decisive")
+        if meta["decisive_role"] != expected_role:
+            raise ValueError(f"{row_id}: decisive role disagrees with truth pattern")
+        expected = truth_pattern[primitive_index]
+    else:
+        raise ValueError(f"{row_id}: prediction_role must be final or clause")
+    target = targets[qid].get("label")
+    if target != ("yes" if expected else "no"):
+        raise ValueError(f"{row_id}: target disagrees with executable causal gold")
+    if meta.get("gold") is not expected:
+        raise ValueError(f"{row_id}: metadata gold disagrees with executable causal gold")
+    return {field: copy.deepcopy(meta[field]) for field in CAUSAL_META_FIELDS}, target
+
+
+def seal_causal_predictions(rows, predictions):
+    """Bind model outputs to all causal-panel semantics and add per-record integrity seals."""
+    if not rows:
+        raise ValueError("causal panel is empty")
+    row_ids = [row.get("id") for row in rows]
+    prediction_ids = [item.get("id") for item in predictions]
+    if None in row_ids or len(row_ids) != len(set(row_ids)):
+        raise ValueError("causal row IDs must be present and unique")
+    if None in prediction_ids or len(prediction_ids) != len(set(prediction_ids)):
+        raise ValueError("causal prediction IDs must be present and unique")
+    if len(rows) != len(predictions) or set(row_ids) != set(prediction_ids):
+        raise ValueError("causal predictions must cover every row exactly once")
+    by_id = {item["id"]: item for item in predictions}
+    sealed = []
+    for row in rows:
+        metadata, gold = _causal_row_metadata(row)
+        no, yes = _probabilities(by_id[row["id"]], row["id"])
+        record = {
+            "schema_version": CAUSAL_SCHEMA_VERSION,
+            "id": row["id"],
+            "row_sha256": hashlib.sha256(_canonical_json(row).encode()).hexdigest(),
+            "gold": gold,
+            "probabilities": {"no": no, "yes": yes},
+            **metadata,
+        }
+        record["record_sha256"] = hashlib.sha256(_canonical_json(record).encode()).hexdigest()
+        sealed.append(record)
+    return sealed
+
+
+def validate_sealed_causal_predictions(records):
+    """Fail closed on malformed, incomplete, or tampered causal prediction records."""
+    if not isinstance(records, list) or not records:
+        raise ValueError("sealed causal predictions are empty")
+    ids = [record.get("id") for record in records]
+    if None in ids or len(ids) != len(set(ids)):
+        raise ValueError("sealed causal prediction IDs must be present and unique")
+    expected = {"schema_version", "id", "row_sha256", "gold", "probabilities", "record_sha256",
+                *CAUSAL_META_FIELDS}
+    for record in records:
+        if set(record) != expected or record["schema_version"] != CAUSAL_SCHEMA_VERSION:
+            raise ValueError(f"{record.get('id')}: invalid sealed causal schema")
+        seal = record["record_sha256"]
+        unsigned = {key: value for key, value in record.items() if key != "record_sha256"}
+        if seal != hashlib.sha256(_canonical_json(unsigned).encode()).hexdigest():
+            raise ValueError(f"{record.get('id')}: causal prediction seal mismatch")
+        if (not isinstance(record["row_sha256"], str) or len(record["row_sha256"]) != 64
+                or any(character not in "0123456789abcdef" for character in record["row_sha256"])):
+            raise ValueError(f"{record.get('id')}: invalid causal source-row hash")
+        _probabilities(record, record["id"])
+        if record["gold"] not in {"no", "yes"}:
+            raise ValueError(f"{record['id']}: invalid sealed gold")
+        composition = record["composition"]
+        pattern = record["truth_pattern"]
+        if (not isinstance(composition, list) or record["arity"] != len(composition)
+                or len(composition) not in (2, 3) or len(pattern) != len(composition)
+                or len(set(composition)) != len(composition)
+                or any(type(value) is not bool for value in pattern)
+                or record["truth_hamming_weight"] != sum(pattern)):
+            raise ValueError(f"{record['id']}: invalid sealed truth metadata")
+        if (record["language"] not in {"en", "he"}
+                or record["option_order"] not in {"no_yes", "yes_no"}
+                or not isinstance(record["seen_edge_count"], int)
+                or isinstance(record["seen_edge_count"], bool)
+                or not 0 <= record["seen_edge_count"] <= len(composition)
+                or any(not isinstance(record[field], str) or not record[field]
+                       for field in ("semantic_cluster_id", "semantic_view_id", "scenario_id",
+                                     "prompt_family"))):
+            raise ValueError(f"{record['id']}: invalid sealed causal metadata")
+        role, primitive = record["prediction_role"], record["primitive"]
+        if role == "final":
+            expected_gold = "yes" if all(pattern) else "no"
+            if primitive is not None or record["decisive_role"] != "final":
+                raise ValueError(f"{record['id']}: invalid sealed final metadata")
+        elif role == "clause" and primitive in composition:
+            primitive_index = composition.index(primitive)
+            expected_role = ("decisive" if all(
+                value for index, value in enumerate(pattern) if index != primitive_index)
+                             else "non_decisive")
+            if record["decisive_role"] != expected_role:
+                raise ValueError(f"{record['id']}: invalid sealed decisive role")
+            expected_gold = "yes" if pattern[primitive_index] else "no"
+        else:
+            raise ValueError(f"{record['id']}: invalid sealed clause metadata")
+        if record["gold"] != expected_gold:
+            raise ValueError(f"{record['id']}: sealed gold disagrees with truth pattern")
+    return records
+
+
+def causal_coverage_report(records):
+    """Summarize every bound causal dimension without replacing metric recomputation."""
+    validate_sealed_causal_predictions(records)
+    dimensions = {}
+    for field in CAUSAL_META_FIELDS:
+        values = Counter(_canonical_json(item[field]) for item in records)
+        dimensions[field] = {key: values[key] for key in sorted(values)}
+    projection = [{field: item[field]
+                   for field in ("id", "row_sha256", "gold", *CAUSAL_META_FIELDS)}
+                  for item in records]
+    return {
+        "schema_version": CAUSAL_SCHEMA_VERSION,
+        "records": len(records),
+        "semantic_clusters": len({item["semantic_cluster_id"] for item in records}),
+        "scenarios": len({item["scenario_id"] for item in records}),
+        "dimensions": dimensions,
+        "metadata_sha256": hashlib.sha256(_canonical_json(projection).encode()).hexdigest(),
+    }
 
 
 def _probabilities(item, row_id):
@@ -329,6 +523,59 @@ def m0_gate(report, required_kinds, threshold=0.98):
             "required_kinds": list(required_kinds), "failures": failures}
 
 
+def score_causal_rows_batched(model, tokenizer, groups, rows, device, max_length,
+                              max_batch_tokens=32768, max_batch_rows=64):
+    """Score standalone text rows in stable bounded batches using the legacy letter logits."""
+    import torch
+    import torch.nn.functional as functional
+    from torch.nn.utils.rnn import pad_sequence
+    from scripts.train_gemma_decision_lora import encode, flatten_row
+
+    if max_batch_tokens <= 0 or max_batch_rows <= 0:
+        raise ValueError("causal batch limits must be positive")
+    predictions, batch = [], []
+
+    def flush():
+        if not batch:
+            return
+        ids = pad_sequence([item[1][0] for item in batch], batch_first=True,
+                           padding_value=tokenizer.pad_token_id)
+        mask = ids.ne(tokenizer.pad_token_id)
+        positions = torch.tensor([len(item[1][0]) - 1 for item in batch])
+        unique_positions = torch.unique(positions, sorted=True)
+        output = model(input_ids=ids.to(device), attention_mask=mask.to(device), use_cache=False,
+                       logits_to_keep=unique_positions.to(device))
+        offsets = {position.item(): index for index, position in enumerate(unique_positions)}
+        for index, (row_id, (_, _, labels)) in enumerate(batch):
+            logits = output.logits[index, offsets[positions[index].item()]].float()
+            scores = torch.stack([torch.logsumexp(logits[token_ids.to(device)], dim=0)
+                                  for token_ids in groups[:len(labels)]])
+            values = functional.softmax(scores, dim=0).tolist()
+            probabilities = {label: float(value) for label, value in zip(labels, values)}
+            predictions.append({"id": row_id, "probabilities": probabilities,
+                                "semantic_margin": math.log(
+                                    max(probabilities["yes"], 1e-12)
+                                    / max(probabilities["no"], 1e-12))})
+        batch.clear()
+
+    for row in rows:
+        examples = flatten_row(row)
+        if len(examples) != 1 or examples[0].get("image"):
+            raise ValueError(f"{row.get('id')}: causal batched scorer needs one text question")
+        encoded = encode(examples[0], tokenizer, max_length, shuffle=False, include_labels=True)
+        proposed_rows = len(batch) + 1
+        proposed_length = max([len(item[1][0]) for item in batch] + [len(encoded[0])])
+        if batch and (proposed_rows > max_batch_rows
+                      or proposed_rows * proposed_length > max_batch_tokens):
+            flush()
+        if len(encoded[0]) > max_batch_tokens:
+            raise ValueError(
+                f"{row.get('id')}: encoded length exceeds causal max-batch-tokens")
+        batch.append((row["id"], encoded))
+    flush()
+    return predictions
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
@@ -340,6 +587,9 @@ def main(argv=None):
     parser.add_argument("--min-clauses", type=int, default=1)
     parser.add_argument("--m0-threshold", type=float, default=0.98)
     parser.add_argument("--required-kind", action="append", default=[])
+    parser.add_argument("--causal-standalone", action="store_true")
+    parser.add_argument("--max-batch-tokens", type=int, default=32768)
+    parser.add_argument("--max-batch-rows", type=int, default=64)
     args = parser.parse_args(argv)
 
     import torch
@@ -349,8 +599,12 @@ def main(argv=None):
     from scripts.train_gemma_decision_lora import letter_token_groups
 
     rows = _read(args.data)
-    selected = [row for row in rows if len((row.get("meta") or {}).get("composition", []))
-                >= args.min_clauses]
+    selected = (rows if args.causal_standalone else
+                [row for row in rows if len((row.get("meta") or {}).get("composition", []))
+                 >= args.min_clauses])
+    if args.causal_standalone:
+        for row in rows:
+            _causal_row_metadata(row)
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
     groups = letter_token_groups(tokenizer)
     model = AutoModelForImageTextToText.from_pretrained(
@@ -360,22 +614,33 @@ def main(argv=None):
     model.to("cuda").eval()
     predictions = []
     with torch.no_grad():
-        for row in selected:
-            projected_by_parent = row_clause_views(row)
-            for view in row["paired_views"]:
-                to_score = [view] + projected_by_parent[view["id"]]
-                for projected in to_score:
-                    probabilities = score_group(
-                        model, tokenizer, groups, projected, torch.device("cuda"),
-                        args.max_length)["q00"]
-                    predictions.append({"id": projected["id"], "probabilities": probabilities,
-                                        "semantic_margin": math.log(
-                                            max(probabilities["yes"], 1e-12)
-                                            / max(probabilities["no"], 1e-12))})
-    report = audit(rows, predictions, args.min_clauses)
-    if args.required_kind:
-        report["m0_gate"] = m0_gate(report, args.required_kind, args.m0_threshold)
-    prediction_payload = "".join(json.dumps(item, sort_keys=True) + "\n" for item in predictions)
+        if args.causal_standalone:
+            predictions = score_causal_rows_batched(
+                model, tokenizer, groups, selected, torch.device("cuda"), args.max_length,
+                args.max_batch_tokens, args.max_batch_rows)
+        else:
+            for row in selected:
+                projected_by_parent = row_clause_views(row)
+                for view in row["paired_views"]:
+                    to_score = [view] + projected_by_parent[view["id"]]
+                    for projected in to_score:
+                        probabilities = score_group(
+                            model, tokenizer, groups, projected, torch.device("cuda"),
+                            args.max_length)["q00"]
+                        predictions.append({"id": projected["id"], "probabilities": probabilities,
+                                            "semantic_margin": math.log(
+                                                max(probabilities["yes"], 1e-12)
+                                                / max(probabilities["no"], 1e-12))})
+    if args.causal_standalone:
+        predictions = seal_causal_predictions(rows, predictions)
+        report = causal_coverage_report(predictions)
+        prediction_payload = "".join(
+            json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n" for item in predictions)
+    else:
+        report = audit(rows, predictions, args.min_clauses)
+        if args.required_kind:
+            report["m0_gate"] = m0_gate(report, args.required_kind, args.m0_threshold)
+        prediction_payload = "".join(json.dumps(item, sort_keys=True) + "\n" for item in predictions)
     adapter_path = Path(args.adapter) / "adapter_model.safetensors" if args.adapter else None
     report.update({"input_sha256": hashlib.sha256(Path(args.data).read_bytes()).hexdigest(),
                    "predictions_sha256": hashlib.sha256(prediction_payload.encode()).hexdigest(),

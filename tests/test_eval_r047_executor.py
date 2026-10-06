@@ -1,15 +1,21 @@
 import copy
+from types import SimpleNamespace
 
 import pytest
+import torch
 
 from scripts.build_r045_compositional_transfer import _pair
 from scripts.eval_r047_executor import (
     audit,
+    causal_coverage_report,
     clause_view,
     execute_clause,
     execute_program,
     m0_gate,
     row_clause_views,
+    score_causal_rows_batched,
+    seal_causal_predictions,
+    validate_sealed_causal_predictions,
 )
 
 
@@ -110,3 +116,79 @@ def test_audit_fails_closed(mutation, match):
     mutation(rows, predictions)
     with pytest.raises(ValueError, match=match):
         audit(rows, predictions, min_clauses=2)
+
+
+def _causal_row():
+    view = copy.deepcopy(_rows()[0]["paired_views"][0])
+    meta = view["meta"]
+    by_kind = {clause["kind"]: clause for clause in meta["clauses"]}
+    meta["clauses"] = [by_kind[kind] for kind in meta["composition"]]
+    pattern = [execute_clause(by_kind[kind]) for kind in meta["composition"]]
+    meta.update({
+        "semantic_cluster_id": "cluster-0", "semantic_view_id": "view-0",
+        "arity": len(meta["composition"]),
+        "option_order": ("yes_no" if next(iter(view["questions"]["decision"]["criteria"]))
+                         == "yes" else "no_yes"),
+        "prompt_family": "final", "prediction_role": "final", "primitive": None,
+        "decisive_role": "final", "truth_hamming_weight": sum(pattern),
+        "truth_pattern": pattern, "seen_edge_count": 0,
+    })
+    return view
+
+
+def test_causal_seal_binds_metadata_and_detects_tampering():
+    row = _causal_row()
+    predictions = [{"id": row["id"], "probabilities": {"no": .1, "yes": .9}}]
+    sealed = seal_causal_predictions([row], predictions)
+    assert sealed[0]["semantic_cluster_id"] == "cluster-0"
+    assert causal_coverage_report(sealed)["dimensions"]["arity"] == {"2": 1}
+    validate_sealed_causal_predictions(sealed)
+    sealed[0]["language"] = "he"
+    with pytest.raises(ValueError, match="seal mismatch"):
+        validate_sealed_causal_predictions(sealed)
+
+
+def test_causal_seal_rejects_missing_semantic_binding():
+    row = _causal_row()
+    del row["meta"]["seen_edge_count"]
+    with pytest.raises(ValueError, match="missing seen_edge_count"):
+        seal_causal_predictions(
+            [row], [{"id": row["id"], "probabilities": {"no": .1, "yes": .9}}])
+
+
+def test_causal_batched_scorer_is_stable_across_batch_boundaries(monkeypatch):
+    import scripts.train_gemma_decision_lora as trainer
+
+    rows = [{"id": "row-a", "token": 1, "length": 2},
+            {"id": "row-b", "token": 2, "length": 3},
+            {"id": "row-c", "token": 1, "length": 2}]
+
+    def fake_encode(row, tokenizer, max_length, shuffle, include_labels):
+        ids = torch.tensor([row["token"]] + [3] * (row["length"] - 1))
+        return ids, torch.tensor([0.0, 1.0]), ["no", "yes"]
+
+    monkeypatch.setattr(trainer, "flatten_row", lambda row: [row])
+    monkeypatch.setattr(trainer, "encode", fake_encode)
+
+    class Model:
+        def __call__(self, input_ids, attention_mask, use_cache, logits_to_keep):
+            logits = torch.zeros((len(input_ids), len(logits_to_keep), 4))
+            for index in range(len(input_ids)):
+                position = int(attention_mask[index].sum()) - 1
+                offset = int((logits_to_keep == position).nonzero()[0])
+                token = int(input_ids[index, 0])
+                logits[index, offset, 1 if token == 1 else 0] = 2
+            return SimpleNamespace(logits=logits)
+
+    class Tokenizer:
+        pad_token_id = 0
+
+    groups = [torch.tensor([0]), torch.tensor([1])]
+    together = score_causal_rows_batched(
+        Model(), Tokenizer(), groups, rows, torch.device("cpu"), 10,
+        max_batch_tokens=6, max_batch_rows=2)
+    singly = score_causal_rows_batched(
+        Model(), Tokenizer(), groups, rows, torch.device("cpu"), 10,
+        max_batch_tokens=10, max_batch_rows=1)
+    assert together == singly
+    assert [item["id"] for item in together] == [row["id"] for row in rows]
