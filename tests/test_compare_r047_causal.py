@@ -6,6 +6,7 @@ import pytest
 
 from scripts.compare_r047_causal import (
     MIN_BOOTSTRAP_REPLICATES,
+    _gate,
     causal_metrics,
     compare_payloads,
     validate_panel_coverage,
@@ -80,7 +81,9 @@ def _comparison(control=None, treatment=None, replicates=MIN_BOOTSTRAP_REPLICATE
                              "treatment_sha256": first_hash}, sort_keys=True).encode()
     return compare_payloads(
         first, second, assignment, hashlib.sha256(assignment).hexdigest(),
-        first_hash, second_hash, replicates=replicates, seed=17)
+        first_hash, second_hash, replicates=replicates, seed=17,
+        reference_payload=_payload(control),
+        reference_sha256=hashlib.sha256(_payload(control)).hexdigest())
 
 
 def test_causal_comparator_recomputes_separate_k2_k3_gates_and_slices():
@@ -99,7 +102,52 @@ def test_causal_comparator_recomputes_separate_k2_k3_gates_and_slices():
         assert stratum["treatment"]["clauses"]["primitive_language"]
         assert stratum["treatment"]["clauses"]["truth_hamming_weight"]
         assert stratum["treatment"]["clauses"]["seen_edge_count"]
+        assert stratum["treatment"]["complete_semantic_views"]["accuracy"] == 1
+        assert stratum["treatment"]["complete_semantic_clusters"]["accuracy"] == 1
+        assert all(value > 0 for value in
+                   stratum["gate"]["dimension_deltas"]["clauses"]["option_order"].values())
+        assert set(stratum["gate"]["treatment_x_order_interaction"]) == {"clauses", "final"}
     assert result["blinding"]["revealed_only_after_both_hashes_validated"] is True
+
+
+def test_causal_comparator_never_lets_k3_gain_rescue_failed_k2():
+    control, treatment = _panel(False), _panel(True)
+    control_by_id = {item["id"]: item for item in control}
+    for item in treatment:
+        if item["arity"] == 2:
+            item["probabilities"] = copy.deepcopy(control_by_id[item["id"]]["probabilities"])
+            unsigned = {key: value for key, value in item.items() if key != "record_sha256"}
+            item["record_sha256"] = hashlib.sha256(_canonical_json(unsigned).encode()).hexdigest()
+    result = _comparison(control, treatment)
+    assert result["co_primary_gate"]["strata"] == {"K2": False, "K3": True}
+    assert result["co_primary_gate"]["passed"] is False
+
+
+def test_causal_comparator_rejects_one_order_only_gain():
+    control, treatment = _panel(False), _panel(True)
+    control_by_id = {item["id"]: item for item in control}
+    for item in treatment:
+        if item["option_order"] == "no_yes":
+            item["probabilities"] = copy.deepcopy(control_by_id[item["id"]]["probabilities"])
+            unsigned = {key: value for key, value in item.items() if key != "record_sha256"}
+            item["record_sha256"] = hashlib.sha256(_canonical_json(unsigned).encode()).hexdigest()
+    result = _comparison(control, treatment)
+    for name in ("K2", "K3"):
+        failures = result["strata"][name]["gate"]["failures"]
+        assert any("mechanism gain is not positive for order no_yes" in item
+                   for item in failures)
+        assert result["strata"][name]["gate"]["passed"] is False
+
+
+def test_gate_rejects_complete_cluster_regression():
+    control = causal_metrics(_panel(False), 2)
+    treatment = causal_metrics(_panel(True), 2)
+    treatment["complete_semantic_clusters"]["correct"] = -1
+    treatment["complete_semantic_clusters"]["accuracy"] = -1
+    gate = _gate(control, treatment, control,
+                 {"clause_macro_ba": {"delta_lcb_95": .1}})
+    assert not gate["passed"]
+    assert "complete_semantic_clusters correctness regressed" in gate["failures"]
 
 
 def test_causal_metrics_report_confusions_and_order_probability_stability():
@@ -131,6 +179,30 @@ def test_causal_comparator_fails_closed_on_tamper_coverage_hash_and_bootstrap():
     with pytest.raises(ValueError, match="file hash mismatch"):
         compare_payloads(first, second, assignment, hashlib.sha256(assignment).hexdigest(),
                          "0" * 64, hashlib.sha256(second).hexdigest())
+
+
+def test_final_gate_requires_hash_frozen_structurally_identical_reference():
+    control, treatment = _panel(False), _panel(True)
+    first, second = _payload(control), _payload(treatment)
+    hashes = hashlib.sha256(first).hexdigest(), hashlib.sha256(second).hexdigest()
+    assignment = json.dumps({"control_sha256": hashes[0],
+                             "treatment_sha256": hashes[1]}).encode()
+    assignment_hash = hashlib.sha256(assignment).hexdigest()
+    with pytest.raises(ValueError, match="requires frozen reference"):
+        compare_payloads(first, second, assignment, assignment_hash, *hashes)
+    with pytest.raises(ValueError, match="reference prediction hash mismatch"):
+        compare_payloads(first, second, assignment, assignment_hash, *hashes,
+                         reference_payload=first, reference_sha256="0" * 64)
+
+    changed = copy.deepcopy(control)
+    changed[0]["row_sha256"] = "f" * 64
+    unsigned = {key: value for key, value in changed[0].items() if key != "record_sha256"}
+    changed[0]["record_sha256"] = hashlib.sha256(_canonical_json(unsigned).encode()).hexdigest()
+    reference = _payload(changed)
+    with pytest.raises(ValueError, match="semantic metadata differs"):
+        compare_payloads(first, second, assignment, assignment_hash, *hashes,
+                         reference_payload=reference,
+                         reference_sha256=hashlib.sha256(reference).hexdigest())
 
 
 def test_causal_comparator_rejects_semantic_metadata_drift_between_arms():

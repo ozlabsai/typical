@@ -195,13 +195,14 @@ def causal_metrics(records, arity):
     by_primitive = _slices(clauses, "primitive")
     clause_macro_ba = sum(item["balanced_accuracy"] for item in by_primitive.values()) / len(
         by_primitive)
-    vectors, coherences = [], []
+    vectors, coherences, complete_views = [], [], []
     for view_id, view in _view_groups(scored).items():
         final = [item for item in view if item["prediction_role"] == "final"]
         view_clauses = [item for item in view if item["prediction_role"] == "clause"]
         if len(final) != 1 or len(view_clauses) != arity:
             raise ValueError(f"{view_id}: incomplete scored semantic view")
         vectors.append(all(item["correct"] for item in view_clauses))
+        complete_views.append(all(item["correct"] for item in view))
         composed = "yes" if all(item["predicted"] == "yes" for item in view_clauses) else "no"
         coherences.append(final[0]["predicted"] == composed)
     directions = _direction_items(scored)
@@ -212,6 +213,11 @@ def causal_metrics(records, arity):
     for item in clauses:
         key = f"{item['primitive']}|{item['language']}|{item['option_order']}"
         crossed[key].append(item)
+    cluster_groups = defaultdict(list)
+    for item in scored:
+        cluster_groups[item["semantic_cluster_id"]].append(item)
+    complete_clusters = [all(item["correct"] for item in items)
+                         for items in cluster_groups.values()]
     return {
         "arity": arity,
         "semantic_clusters": len({item["semantic_cluster_id"] for item in scored}),
@@ -232,6 +238,12 @@ def causal_metrics(records, arity):
                         name: _summary(items) for name, items in sorted(crossed.items())}},
         "vectors": {"n": len(vectors), "accuracy": sum(vectors) / len(vectors)},
         "coherence": {"n": len(coherences), "accuracy": sum(coherences) / len(coherences)},
+        "complete_semantic_views": {
+            "n": len(complete_views), "correct": sum(complete_views),
+            "accuracy": sum(complete_views) / len(complete_views)},
+        "complete_semantic_clusters": {
+            "n": len(complete_clusters), "correct": sum(complete_clusters),
+            "accuracy": sum(complete_clusters) / len(complete_clusters)},
         "final": {**_summary(finals),
                   "language": _slices(finals, "language"),
                   "composition": _slices(finals, "composition"),
@@ -369,7 +381,7 @@ def _delta(treatment, control, path):
     return left - right
 
 
-def _gate(control, treatment, bootstrap):
+def _gate(control, treatment, reference, bootstrap):
     deltas = {
         "clause_macro_ba": _delta(treatment, control,
                                    ("clauses", "macro_balanced_accuracy")),
@@ -393,6 +405,28 @@ def _gate(control, treatment, bootstrap):
                 or treatment["direction"][primitive]["rate"]
                 <= control["direction"][primitive]["rate"]):
             failures.append(f"{primitive} direction did not improve")
+    dimension_deltas = {}
+    for section in ("clauses", "final"):
+        dimension_deltas[section] = {}
+        for dimension in ("language", "option_order"):
+            dimension_deltas[section][dimension] = {}
+            if set(control[section][dimension]) != set(treatment[section][dimension]):
+                raise ValueError(f"{section} {dimension} coverage differs")
+            for name in sorted(control[section][dimension]):
+                effect = _delta(treatment[section][dimension], control[section][dimension],
+                                (name, "balanced_accuracy"))
+                dimension_deltas[section][dimension][name] = effect
+                if effect < 0:
+                    failures.append(f"{section} {dimension} {name} point effect is negative")
+    order_interaction = {}
+    for section in ("clauses", "final"):
+        order_effects = dimension_deltas[section]["option_order"]
+        if set(order_effects) != {"no_yes", "yes_no"}:
+            raise ValueError(f"{section} option-order coverage is incomplete")
+        order_interaction[section] = order_effects["yes_no"] - order_effects["no_yes"]
+        for order, effect in order_effects.items():
+            if effect <= 0:
+                failures.append(f"{section} mechanism gain is not positive for order {order}")
     cell_deltas = {}
     for name in sorted(control["clauses"]["primitive_language_order"]):
         if name not in treatment["clauses"]["primitive_language_order"]:
@@ -403,22 +437,37 @@ def _gate(control, treatment, bootstrap):
             (name, "balanced_accuracy"))
         if cell_deltas[name] < -.02:
             failures.append(f"robustness cell {name} regressed by more than 2pp")
+    complete_deltas = {}
+    for section in ("complete_semantic_views", "complete_semantic_clusters"):
+        complete_deltas[section] = {
+            "correct": treatment[section]["correct"] - control[section]["correct"],
+            "accuracy": treatment[section]["accuracy"] - control[section]["accuracy"],
+        }
+        if any(value < 0 for value in complete_deltas[section].values()):
+            failures.append(f"{section} correctness regressed")
     calibration_ratios = {}
-    for section in ("clauses", "final"):
-        for metric in ("nll", "brier"):
-            baseline = control[section][metric]
-            candidate = treatment[section][metric]
-            ratio = candidate / baseline if baseline else (1.0 if candidate == 0 else math.inf)
-            calibration_ratios[f"{section}_{metric}"] = ratio
-            if ratio > 1.05:
-                failures.append(f"{section} {metric} exceeds 1.05x control")
+    for baseline_name, baseline_report in (("control", control), ("reference", reference)):
+        calibration_ratios[baseline_name] = {}
+        for section in ("clauses", "final"):
+            calibration_ratios[baseline_name][section] = {}
+            for metric in ("nll", "brier"):
+                baseline = baseline_report[section][metric]
+                candidate = treatment[section][metric]
+                ratio = candidate / baseline if baseline else (1.0 if candidate == 0 else math.inf)
+                calibration_ratios[baseline_name][section][metric] = ratio
+                if ratio > 1.05:
+                    failures.append(
+                        f"{section} {metric} exceeds 1.05x {baseline_name}")
     return {"passed": not failures, "deltas": deltas, "cell_deltas": cell_deltas,
+            "dimension_deltas": dimension_deltas,
+            "treatment_x_order_interaction": order_interaction,
+            "complete_correctness_deltas": complete_deltas,
             "calibration_ratios": calibration_ratios, "failures": failures}
 
 
 def compare_payloads(first_payload, second_payload, assignment_payload, assignment_sha256,
                      first_sha256, second_sha256, replicates=MIN_BOOTSTRAP_REPLICATES,
-                     seed=470047):
+                     seed=470047, reference_payload=None, reference_sha256=None):
     """Hash and validate both blinded arms before revealing the frozen assignment."""
     actual = (_sha(first_payload), _sha(second_payload))
     if actual != (first_sha256, second_sha256):
@@ -430,6 +479,14 @@ def compare_payloads(first_payload, second_payload, assignment_payload, assignme
     validate_panel_coverage(first)
     validate_panel_coverage(second)
     blinded = dict(zip(sorted(actual), ("arm_0", "arm_1")))
+
+    if reference_payload is None or reference_sha256 is None:
+        raise ValueError("final causal gate requires frozen reference predictions and hash")
+    if _sha(reference_payload) != reference_sha256:
+        raise ValueError("frozen reference prediction hash mismatch")
+    reference = _read_payload(reference_payload)
+    _assert_matching_structure(first, reference)
+    validate_panel_coverage(reference)
 
     if _sha(assignment_payload) != assignment_sha256:
         raise ValueError("frozen arm-assignment hash mismatch")
@@ -449,9 +506,11 @@ def compare_payloads(first_payload, second_payload, assignment_payload, assignme
     for arity in (2, 3):
         control_metrics = causal_metrics(control, arity)
         treatment_metrics = causal_metrics(treatment, arity)
+        reference_metrics = causal_metrics(reference, arity)
         bootstrap = _bootstrap(control, treatment, arity, replicates, seed)
-        gate = _gate(control_metrics, treatment_metrics, bootstrap)
+        gate = _gate(control_metrics, treatment_metrics, reference_metrics, bootstrap)
         strata[f"K{arity}"] = {"control": control_metrics, "treatment": treatment_metrics,
+                               "reference": reference_metrics,
                                "paired_bootstrap": bootstrap, "gate": gate}
         gates[f"K{arity}"] = gate["passed"]
     return {
@@ -460,8 +519,10 @@ def compare_payloads(first_payload, second_payload, assignment_payload, assignme
                      "assignment_sha256": assignment_sha256,
                      "revealed_only_after_both_hashes_validated": True},
         "arms": assignment,
+        "reference_sha256": reference_sha256,
         "coverage": {"control": causal_coverage_report(control),
-                     "treatment": causal_coverage_report(treatment)},
+                     "treatment": causal_coverage_report(treatment),
+                     "reference": causal_coverage_report(reference)},
         "bootstrap": {"method": "paired stratified semantic-cluster percentile",
                       "unit": "whole semantic cluster", "strata": "arity_x_composition",
                       "replicates": replicates, "base_seed": seed,
@@ -480,15 +541,19 @@ def main(argv=None):
     parser.add_argument("--second-sha256", required=True)
     parser.add_argument("--assignment", required=True)
     parser.add_argument("--assignment-sha256", required=True)
+    parser.add_argument("--reference", required=True)
+    parser.add_argument("--reference-sha256", required=True)
     parser.add_argument("--bootstrap-replicates", type=int, default=MIN_BOOTSTRAP_REPLICATES)
     parser.add_argument("--bootstrap-seed", type=int, default=470047)
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     first, second = Path(args.first).read_bytes(), Path(args.second).read_bytes()
     assignment = Path(args.assignment).read_bytes()
+    reference = Path(args.reference).read_bytes()
     result = compare_payloads(
         first, second, assignment, args.assignment_sha256, args.first_sha256,
-        args.second_sha256, args.bootstrap_replicates, args.bootstrap_seed)
+        args.second_sha256, args.bootstrap_replicates, args.bootstrap_seed,
+        reference, args.reference_sha256)
     output = Path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
