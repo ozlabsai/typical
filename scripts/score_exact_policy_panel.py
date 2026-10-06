@@ -23,6 +23,9 @@ from scripts.exact_policy_executor import (
 
 
 PANEL = "exact_policy_v1"
+NLL_PROBABILITY_FLOOR = 1e-12
+ECE_BINS = 10
+RISK_COVERAGE_TARGETS = tuple(index / 10 for index in range(1, 11))
 SLICE_KEYS = (
     "split",
     "language",
@@ -117,6 +120,58 @@ def _probability_contract(row, probabilities):
     return clean
 
 
+def _outcome_calibration(policy, gold, mapping, probabilities):
+    """Exactly marginalize independent semantic-field Bernoulli probabilities."""
+    yes_probabilities = {
+        field: probabilities[qid]["yes"] for qid, field in mapping.items()
+    }
+    log_masses = defaultdict(list)
+    for assignment_id, outcome in enumerate(policy.truth_outcomes):
+        log_probability = 0.0
+        for bit, field in enumerate(policy.fields):
+            yes_probability = yes_probabilities[field]
+            probability = (yes_probability if assignment_id & (1 << bit)
+                           else 1.0 - yes_probability)
+            if probability == 0.0:
+                log_probability = -math.inf
+                break
+            log_probability += math.log(probability)
+        log_masses[outcome].append(log_probability)
+
+    def logsumexp(values):
+        maximum = max(values)
+        if maximum == -math.inf:
+            return maximum
+        return maximum + math.log(math.fsum(math.exp(value - maximum) for value in values))
+
+    outcome_logs = {
+        outcome: logsumexp(values) for outcome, values in log_masses.items()
+    }
+    log_total = logsumexp(list(outcome_logs.values()))
+    if not math.isfinite(log_total):
+        raise ValueError("invalid exact outcome distribution")
+    normalized = {
+        outcome: math.exp(value - log_total) for outcome, value in outcome_logs.items()
+    }
+    top_outcome, confidence = min(
+        normalized.items(), key=lambda item: (-item[1], item[0])
+    )
+    gold_log_probability = outcome_logs.get(gold, -math.inf) - log_total
+    gold_probability = math.exp(gold_log_probability)
+    return {
+        "complete_outcome_nll": min(
+            -gold_log_probability, -math.log(NLL_PROBABILITY_FLOOR)
+        ),
+        "categorical_brier": math.fsum(
+            (probability - float(outcome == gold)) ** 2
+            for outcome, probability in normalized.items()
+        ),
+        "top_outcome_confidence": confidence,
+        "top_outcome_correct": top_outcome == gold,
+        "gold_outcome_probability": gold_probability,
+    }
+
+
 def classify(row, probabilities):
     """Execute one prediction and identify its first field-level error class."""
     policy, gold, mapping, threshold = _row_contract(row)
@@ -128,6 +183,7 @@ def classify(row, probabilities):
         field: probabilities[qid]["yes"] >= 0.5 for qid, field in mapping.items()
     }
     predicted = execute_policy(policy, predicted_trace)
+    calibration = _outcome_calibration(policy, gold, mapping, probabilities)
     gold_trace = row["meta"]["action_trace"]
     if predicted == gold:
         category = "correct"
@@ -145,7 +201,124 @@ def classify(row, probabilities):
         "predicted_trace": predicted_trace,
         "gold_trace": gold_trace,
         "error_category": category,
+        **calibration,
     }
+
+
+def _fixed_bin_ece(entries):
+    bins = [[] for _ in range(ECE_BINS)]
+    for entry in entries:
+        index = min(int(entry["top_outcome_confidence"] * ECE_BINS), ECE_BINS - 1)
+        bins[index].append(entry)
+    return math.fsum(
+        len(items) / len(entries) * abs(
+            math.fsum(float(item["top_outcome_correct"]) for item in items) / len(items)
+            - math.fsum(item["top_outcome_confidence"] for item in items) / len(items)
+        )
+        for items in bins if items
+    )
+
+
+def _risk_coverage(entries):
+    """Return a tie-invariant selective-risk curve and its right-step AURC."""
+    by_confidence = defaultdict(list)
+    for entry in entries:
+        by_confidence[entry["top_outcome_confidence"]].append(entry)
+    groups = sorted(by_confidence.items(), reverse=True)
+    selected, errors, previous_coverage = 0, 0, 0.0
+    aurc, full_curve = 0.0, []
+    for confidence, items in groups:
+        selected += len(items)
+        errors += sum(not item["top_outcome_correct"] for item in items)
+        coverage = selected / len(entries)
+        risk = errors / selected
+        aurc += (coverage - previous_coverage) * risk
+        previous_coverage = coverage
+        full_curve.append({
+            "coverage": coverage,
+            "risk": risk,
+            "minimum_confidence": confidence,
+        })
+    curve = []
+    for target in RISK_COVERAGE_TARGETS:
+        point = next(item for item in full_curve if item["coverage"] >= target)
+        curve.append({"target_coverage": target, **point})
+    return aurc, curve
+
+
+def _calibration_summary(entries):
+    if not entries:
+        return {
+            "n": 0,
+            "complete_outcome_nll": None,
+            "categorical_brier": None,
+            "top_outcome_confidence": None,
+            "top_outcome_accuracy": None,
+            "fixed_bin_ece": None,
+            "aurc": None,
+            "risk_coverage": [],
+        }
+    aurc, curve = _risk_coverage(entries)
+    return {
+        "n": len(entries),
+        "complete_outcome_nll": math.fsum(
+            entry["complete_outcome_nll"] for entry in entries
+        ) / len(entries),
+        "categorical_brier": math.fsum(
+            entry["categorical_brier"] for entry in entries
+        ) / len(entries),
+        "top_outcome_confidence": math.fsum(
+            entry["top_outcome_confidence"] for entry in entries
+        ) / len(entries),
+        "top_outcome_accuracy": math.fsum(
+            float(entry["top_outcome_correct"]) for entry in entries
+        ) / len(entries),
+        "fixed_bin_ece": _fixed_bin_ece(entries),
+        "aurc": aurc,
+        "risk_coverage": curve,
+    }
+
+
+def _invalid_calibration():
+    return {
+        "complete_outcome_nll": -math.log(NLL_PROBABILITY_FLOOR),
+        "categorical_brier": 2.0,
+        "top_outcome_confidence": 1.0,
+        "top_outcome_correct": False,
+        "gold_outcome_probability": 0.0,
+    }
+
+
+def _unit_calibration(entries, key):
+    """Collapse rendered views so every semantic endpoint/cluster has unit weight."""
+    grouped = defaultdict(list)
+    for entry in entries:
+        value = key(entry["row"]["meta"])
+        if value is not None:
+            grouped[value].append(entry)
+    units = []
+    for items in grouped.values():
+        units.append({
+            "complete_outcome_nll": math.fsum(
+                item["complete_outcome_nll"] for item in items
+            ) / len(items),
+            "categorical_brier": math.fsum(
+                item["categorical_brier"] for item in items
+            ) / len(items),
+            # Conservative confidence for an all-views-correct unit.
+            "top_outcome_confidence": min(
+                item["top_outcome_confidence"] for item in items
+            ),
+            "top_outcome_correct": all(
+                item["top_outcome_correct"] for item in items
+            ),
+        })
+    summary = _calibration_summary(units)
+    summary["unit_definition"] = (
+        "equal-weight semantic units; mean view loss, minimum view confidence, "
+        "and all views top-outcome correct"
+    )
+    return summary
 
 
 def _summary(records):
@@ -193,6 +366,7 @@ def summarize(rows, prediction_rows):
     by_id = {item.get("id"): item for item in prediction_rows if isinstance(item, dict)}
 
     records, invalid = [], 0
+    calibration_by_id = {}
     category_counts = Counter()
     for row in rows:
         item = by_id.get(row["id"])
@@ -203,9 +377,19 @@ def summarize(rows, prediction_rows):
         except ValueError:
             invalid += 1
             category_counts["invalid"] += 1
+            calibration_by_id[row["id"]] = _invalid_calibration()
             continue
         record["row"] = row
         records.append(record)
+        calibration_by_id[row["id"]] = {
+            name: record[name] for name in (
+                "complete_outcome_nll",
+                "categorical_brier",
+                "top_outcome_confidence",
+                "top_outcome_correct",
+                "gold_outcome_probability",
+            )
+        }
         category_counts[record["error_category"]] += 1
 
     rendered = _summary(records)
@@ -270,6 +454,13 @@ def summarize(rows, prediction_rows):
                              for item in items) for items in endpoints.values())
     cluster_exact = sum(all(item["predicted_outcome"] == item["gold_outcome"]
                             for item in items) for items in clusters.values())
+    fail_closed_calibration = [
+        {**calibration_by_id[row["id"]], "row": row} for row in rows
+    ]
+    valid_calibration = [
+        {**calibration_by_id[record["row"]["id"]], "row": record["row"]}
+        for record in records
+    ]
     return {
         "rendered": rendered,
         "semantic_endpoints": {
@@ -277,6 +468,33 @@ def summarize(rows, prediction_rows):
         },
         "independent_clusters": {
             "n": len(clusters), "all_views_exact_accuracy": _rate(cluster_exact, len(clusters))
+        },
+        "complete_outcome_calibration": {
+            "factorization_assumption": "independent_bernoulli_semantic_fields",
+            "field_probability_operating_point": {
+                "decision_threshold": 0.5, "temperature": 1.0
+            },
+            "categorical_brier_definition": "sum_over_outcomes_squared_error",
+            "fixed_bin_ece_bins": ECE_BINS,
+            "nll_probability_floor": NLL_PROBABILITY_FLOOR,
+            "invalid_prediction_policy": (
+                "zero gold probability clipped at the NLL floor, Brier 2, "
+                "confidence 1, and incorrect"
+            ),
+            "valid_only": _calibration_summary(valid_calibration),
+            "headline_fail_closed": _calibration_summary(fail_closed_calibration),
+            "semantic_endpoints_fail_closed": _unit_calibration(
+                fail_closed_calibration,
+                lambda meta: ((str(meta["semantic_group_id"]),
+                               str(meta["counterfactual_side"]))
+                              if meta.get("semantic_group_id") is not None
+                              and meta.get("counterfactual_side") is not None else None),
+            ),
+            "independent_clusters_fail_closed": _unit_calibration(
+                fail_closed_calibration,
+                lambda meta: (str(meta["semantic_group_id"])
+                              if meta.get("semantic_group_id") is not None else None),
+            ),
         },
         "slices": slices,
     }
@@ -311,6 +529,11 @@ def score_rows_scalar(model, tokenizer, groups, rows, device, max_length, observ
             "gold_outcome": result["gold_outcome"].as_dict(),
             "predicted_trace": result["predicted_trace"],
             "error_category": result["error_category"],
+            "complete_outcome_nll": result["complete_outcome_nll"],
+            "categorical_brier": result["categorical_brier"],
+            "top_outcome_confidence": result["top_outcome_confidence"],
+            "top_outcome_correct": result["top_outcome_correct"],
+            "gold_outcome_probability": result["gold_outcome_probability"],
         })
     return predictions
 

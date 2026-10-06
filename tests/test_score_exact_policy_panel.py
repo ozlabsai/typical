@@ -1,4 +1,5 @@
 import copy
+import math
 
 import pytest
 
@@ -78,6 +79,11 @@ def test_classify_supports_empty_action_set_and_null_primary():
     assert result["error_category"] == "correct"
     assert result["predicted_outcome"].primary is None
     assert result["predicted_outcome"].actions == ()
+    assert result["gold_outcome_probability"] == pytest.approx(0.81)
+    assert result["complete_outcome_nll"] == pytest.approx(-math.log(0.81))
+    assert result["categorical_brier"] == pytest.approx(0.0524)
+    assert result["top_outcome_confidence"] == pytest.approx(0.81)
+    assert result["top_outcome_correct"] is True
 
 
 def test_classify_executes_multi_action_set_with_null_primary():
@@ -113,6 +119,15 @@ def test_summarize_separates_rendered_endpoints_and_clusters():
     assert report["semantic_endpoints"] == {"n": 2, "all_views_exact_accuracy": 1.0}
     assert report["independent_clusters"] == {"n": 1, "all_views_exact_accuracy": 1.0}
     assert set(report["slices"]["language"]) == {"en", "he"}
+    calibration = report["complete_outcome_calibration"]
+    assert calibration["factorization_assumption"] == "independent_bernoulli_semantic_fields"
+    assert calibration["valid_only"]["n"] == 4
+    assert calibration["headline_fail_closed"]["categorical_brier"] == pytest.approx(
+        0.0524
+    )
+    assert calibration["headline_fail_closed"]["aurc"] == 0.0
+    assert calibration["semantic_endpoints_fail_closed"]["n"] == 2
+    assert calibration["independent_clusters_fail_closed"]["n"] == 1
 
 
 def test_summarize_counts_invalid_predictions_without_hiding_data_errors():
@@ -124,6 +139,13 @@ def test_summarize_counts_invalid_predictions_without_hiding_data_errors():
     assert report["rendered"]["invalid"] == 1
     assert report["rendered"]["exact_outcome_accuracy"] == 0.0
     assert report["rendered"]["field_accuracy"] == 0.0
+    calibration = report["complete_outcome_calibration"]
+    assert calibration["valid_only"]["n"] == 0
+    assert calibration["headline_fail_closed"]["complete_outcome_nll"] == pytest.approx(
+        -math.log(1e-12)
+    )
+    assert calibration["headline_fail_closed"]["categorical_brier"] == 2.0
+    assert calibration["headline_fail_closed"]["aurc"] == 1.0
 
     broken_row = copy.deepcopy(row)
     broken_row["meta"]["gold_outcome"] = {
@@ -138,3 +160,66 @@ def test_duplicate_prediction_ids_fail_closed():
     prediction = _prediction(row)
     with pytest.raises(ValueError, match="prediction ids"):
         summarize([row], [prediction, prediction])
+
+
+def test_outcome_calibration_marginalizes_many_traces_into_same_outcome():
+    row = _row()
+    row["meta"]["policy"] = {
+        "fields": ["risk", "evidence"],
+        "mode": "priority",
+        "rules": [
+            {"when": {"field": "risk"}, "action": _action("retain")},
+            {"when": {"field": "evidence"}, "action": _action("review")},
+        ],
+        "fallback": _action("fallback"),
+    }
+    row["meta"]["policy_mode"] = "priority"
+    row["meta"]["gold_outcome"] = execute_policy(
+        row["meta"]["policy"], row["meta"]["action_trace"]
+    ).as_dict()
+    # Priority maps both evidence values to retain when risk=true, so the gold
+    # outcome probability is 0.6 rather than a single trace's 0.6 * 0.8.
+    result = classify(row, _prediction(row, risk=0.6, evidence=0.2)["probabilities"])
+    assert result["gold_outcome_probability"] == pytest.approx(0.6)
+    assert result["top_outcome_confidence"] == pytest.approx(0.6)
+    assert result["complete_outcome_nll"] == pytest.approx(-math.log(0.6))
+
+
+def test_outcome_calibration_handles_deterministic_field_probabilities():
+    row = _row()
+    result = classify(row, _prediction(row, risk=1.0, evidence=0.0)["probabilities"])
+    assert result["gold_outcome_probability"] == 1.0
+    assert result["complete_outcome_nll"] == 0.0
+    assert result["categorical_brier"] == 0.0
+    assert result["top_outcome_confidence"] == 1.0
+
+
+def test_fail_closed_calibration_does_not_reward_partial_coverage():
+    rows = [_row("valid"), _row("missing")]
+    report = summarize(rows, [_prediction(rows[0])])
+    calibration = report["complete_outcome_calibration"]
+    assert calibration["valid_only"]["n"] == 1
+    assert calibration["headline_fail_closed"]["n"] == 2
+    assert calibration["headline_fail_closed"]["categorical_brier"] == pytest.approx(
+        (0.0524 + 2.0) / 2
+    )
+    assert calibration["headline_fail_closed"]["top_outcome_accuracy"] == 0.5
+    # The invalid row is maximally confident and therefore appears first in
+    # selective prediction, making the AURC worse than final error alone.
+    assert calibration["headline_fail_closed"]["aurc"] == pytest.approx(0.75)
+
+
+def test_risk_coverage_is_tie_invariant():
+    rows = [_row("correct"), _row("wrong")]
+    predictions = [
+        _prediction(rows[0], risk=0.9, evidence=0.1),
+        _prediction(rows[1], risk=0.1, evidence=0.9),
+    ]
+    first = summarize(rows, predictions)["complete_outcome_calibration"][
+        "headline_fail_closed"
+    ]
+    second = summarize(list(reversed(rows)), list(reversed(predictions)))[
+        "complete_outcome_calibration"
+    ]["headline_fail_closed"]
+    assert first["aurc"] == second["aurc"]
+    assert first["risk_coverage"] == second["risk_coverage"]
