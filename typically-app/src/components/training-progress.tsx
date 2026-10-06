@@ -4,7 +4,7 @@ import { Check, Circle, Cpu, Loader2, X } from "lucide-react"
 import { TrainingCurve } from "@/components/training-curve"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
-import type { JobEvent, TrainStatus } from "@/lib/api"
+import { api, type JobEvent, type TrainStatus } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import type { LANGUAGES } from "@/lib/project"
 import { cn } from "@/lib/utils"
@@ -29,6 +29,27 @@ function useNow(live: boolean) {
   return now
 }
 
+/** Nothing more will change: finished, and the GPU is confirmed off (or there never was one, it could not be confirmed, or a
+ *  status from before milestones existed). Pollers stop here, not at done / failed: the shutdown lands a few seconds later. */
+export const settled = (st: TrainStatus) => (st.phase === "done" || st.phase === "failed")
+  && (!st.pod_id || st.code === "failed" || !st.events || st.events.some((e) => e.key === "gpu_off"))
+
+/** Poll GET /train/{slug} while `active` and the job runs (the model page; the Train step polls on its own). */
+export function useTrainStatus(slug: string, active: boolean) {
+  const [st, setSt] = useState<TrainStatus | null>(null)
+  useEffect(() => {
+    if (!active) return
+    const load = () => void api.trainStatus(slug).then((s) => {
+      setSt(s)
+      if (settled(s)) clearInterval(t)
+    }).catch(() => {})
+    const t = setInterval(load, 5000)
+    load()
+    return () => clearInterval(t)
+  }, [slug, active])
+  return st
+}
+
 /** Each milestone's state, start event and duration; `failedAt`: the milestone the job stopped in. */
 function milestones(st: TrainStatus) {
   const events = st.events ?? []
@@ -45,7 +66,7 @@ function milestones(st: TrainStatus) {
     return later.map((x) => at.get(x)?.t).find(Boolean)
   }
   const state = (k: Step): State => {
-    if (k === "gpu_off") return at.has(k) ? "done" : over ? "current" : "pending"
+    if (k === "gpu_off") return at.has(k) ? "done" : over && !settled(st) ? "current" : "pending"
     if (failedAt) return k === failedAt ? "failed" : order.indexOf(k) < order.indexOf(failedAt) ? "done" : "pending"
     if (st.phase === "done") return "done"
     if (k === last) return "current"

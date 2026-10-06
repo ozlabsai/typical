@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { AlertCircle, ArrowRight, ChevronDown, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { msg, OptionCard, PageHead, StatusCopy } from "@/components/shared"
-import { TrainingProgress } from "@/components/training-progress"
+import { settled, TrainingProgress } from "@/components/training-progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -34,17 +34,20 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
   const [error, setError] = useState<string | null>(null)
   const s = project.settings
   const live = status && status.phase !== "done" && status.phase !== "failed"
+  const polling = !!status && !settled(status)
+  const announced = useRef(false)
   const elapsed = useElapsed(live ? status.started_at : undefined)
   const base = BASES[project.base]
   const minutes = Math.round(base.minutes * (PRESETS[s.preset].steps / 400))
 
   useEffect(() => {
-    if (!project.slug || !live) return
+    if (!project.slug || !polling) return
     const timer = setInterval(async () => {
       try {
         const st = await api.trainStatus(project.slug!)
         setStatus(st)
-        if (st.phase === "done") {
+        if (st.phase === "done" && !announced.current) {
+          announced.current = true
           update({ run: (st.run as string) ?? `co_${project.slug}`, resultsKey: project.slug })
           toast.success(t("tr.toast", { name: project.name }))
         }
@@ -53,11 +56,12 @@ export function TrainStep({ project, update, back, next }: { project: Project; u
       }
     }, 4000)
     return () => clearInterval(timer)
-  }, [project.slug, live]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [project.slug, polling]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function start() {
     setStarting(true)
     setError(null)
+    announced.current = false
     try {
       // one call that returns at once: preparing the examples (incl. AI enrichment) is the job's first milestone on the card
       const st = await api.teach({

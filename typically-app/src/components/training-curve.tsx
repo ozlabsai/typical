@@ -1,23 +1,7 @@
-import { useEffect, useId, useState } from "react"
+import { useId, useState } from "react"
 
-import { api, type Series, type TrainStatus } from "@/lib/api"
+import type { Series, TrainStatus } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
-
-/** Poll GET /train/{slug} while `active` and the job runs (the model page; the Train step polls on its own). */
-export function useTrainStatus(slug: string, active: boolean) {
-  const [st, setSt] = useState<TrainStatus | null>(null)
-  useEffect(() => {
-    if (!active) return
-    const load = () => void api.trainStatus(slug).then((s) => {
-      setSt(s)
-      if (s.phase === "done" || s.phase === "failed") clearInterval(t)   // a finished job does not change
-    }).catch(() => {})
-    const t = setInterval(load, 5000)
-    load()
-    return () => clearInterval(t)
-  }, [slug, active])
-  return st
-}
 
 const W = 560, M = { top: 10, end: 14, bottom: 22, start: 40 }
 const fmt = (v: number | null | undefined) => (v == null ? "—" : v.toFixed(3))
