@@ -14,12 +14,13 @@ if __package__ in {None, ""}:
 
 from scripts import finalize_r047_m1 as finalizer
 from scripts import precheck_r047_causal as precheck
+from scripts.atomic_publish import publish_directory_noreplace
 from scripts.build_r047_model_inventory import FROZEN_BASE_REVISION, verify_inventory
 from scripts.preflight_r043_assets import file_hash
 
 
-INTENT_SCHEMA = "r047-m1-launch-intent-v1"
-COMPLETION_SCHEMA = "r047-m1-launch-completion-v1"
+INTENT_SCHEMA = precheck.INTENT_SCHEMA
+COMPLETION_SCHEMA = precheck.COMPLETION_SCHEMA
 REFERENCE_KEYS = {
     "assignment", "reference_predictions", "reference_report",
     "reference_provenance", "recipe", "preparation_receipt", "panel",
@@ -28,6 +29,7 @@ REFERENCE_KEYS = {
 }
 CONTROL_KEYS = {
     "slot_b_predictions", "slot_b_report", "slot_b_run_receipt", "control_receipt",
+    "slot_b_launch_intent", "slot_b_launch_completion",
 }
 
 
@@ -124,6 +126,10 @@ def _rerun_prerequisites(slot, reference_paths, control_paths, *,
         slot_b_report_sha256=_sha(control_payloads["slot_b_report"]),
         slot_b_run_receipt=control_payloads["slot_b_run_receipt"],
         slot_b_run_receipt_sha256=_sha(control_payloads["slot_b_run_receipt"]),
+        slot_b_launch_intent_payload=control_payloads["slot_b_launch_intent"],
+        slot_b_launch_intent_sha256=_sha(control_payloads["slot_b_launch_intent"]),
+        slot_b_launch_completion_payload=control_payloads["slot_b_launch_completion"],
+        slot_b_launch_completion_sha256=_sha(control_payloads["slot_b_launch_completion"]),
     )
     control_sha = _exact_receipt(control, control_paths["control_receipt"], "control")
     return {"reference_receipt_sha256": reference_sha,
@@ -205,24 +211,6 @@ def _trainer_command(trainer_path, model_path, parent_adapter, train_path, run_o
     return command
 
 
-def _command_plan(*, slot, role, assignment_sha, assignment, recipe, train_sha, inventory_sha,
-                  parent, source_sha, prerequisites):
-    return {
-        "schema_version": "r047-m1-trainer-command-plan-v1",
-        "slot": slot, "role": role,
-        "assignment_sha256": assignment_sha,
-        "recipe_sha256": assignment["recipe_sha256"],
-        "train_sha256": train_sha, "model_revision": assignment["model_revision"],
-        "model_inventory_sha256": inventory_sha,
-        "parent_adapter_sha256": parent["parent_adapter_sha256"],
-        "parent_adapter_tree_sha256": parent["parent_adapter_tree_sha256"],
-        "source_checkpoint_provenance_sha256": source_sha,
-        "trainer_sha256": recipe["trainer_sha256"],
-        "trainer_config": recipe["trainer_config"],
-        "validation": [], "prerequisites": prerequisites,
-    }
-
-
 def _run_checked(command, cwd):
     return subprocess.run(command, cwd=cwd, check=True, capture_output=True, text=True)
 
@@ -242,6 +230,11 @@ def launch(*, slot, out, train_path, arm_manifest_path, image_root, model_invent
         require_frozen_assignment=require_frozen_assignment)
     assignment_payload = reference_inputs["assignment_payload"]
     recipe_payload = reference_inputs["recipe_payload"]
+    preparation = _object(reference_inputs["preparation_receipt_payload"],
+                          "preparation receipt")
+    launcher_sha = file_hash(Path(__file__))
+    if launcher_sha != preparation.get("launcher_sha256"):
+        raise ValueError("running launcher differs from frozen preparation receipt")
     role, assignment, recipe, train_sha, inventory_sha, parent, source_sha = (
         _validate_launch_inputs(
             slot=slot, train_path=train_path, recipe_payload=recipe_payload,
@@ -257,7 +250,7 @@ def launch(*, slot, out, train_path, arm_manifest_path, image_root, model_invent
         reference_inputs["reference_provenance_payload"], "reference provenance")
     if source_sha != reference_provenance.get("source_checkpoint_provenance_sha256"):
         raise ValueError("source checkpoint provenance differs from frozen reference")
-    plan = _command_plan(
+    plan = precheck.launch_command_plan(
         slot=slot, role=role, assignment_sha=_sha(assignment_payload),
         assignment=assignment, recipe=recipe,
         train_sha=train_sha, inventory_sha=inventory_sha, parent=parent,
@@ -276,6 +269,8 @@ def launch(*, slot, out, train_path, arm_manifest_path, image_root, model_invent
             "parent_adapter_sha256": parent["parent_adapter_sha256"],
             "parent_adapter_tree_sha256": parent["parent_adapter_tree_sha256"],
             "source_checkpoint_provenance_sha256": source_sha,
+            "preparation_receipt_sha256": reference_inputs["preparation_receipt_sha256"],
+            "launcher_sha256": launcher_sha,
             "prerequisite_receipt_sha256": prerequisites,
         }
         intent_path = _write_new(scratch / "launch-intent.json", intent)
@@ -311,7 +306,7 @@ def launch(*, slot, out, train_path, arm_manifest_path, image_root, model_invent
             "prerequisite_receipt_sha256": prerequisites,
         }
         _write_new(scratch / "launch-completion.json", completion)
-        scratch.replace(final_out)
+        publish_directory_noreplace(scratch, final_out)
         return {"out": str(final_out), "intent": str(final_out / "launch-intent.json"),
                 "completion": str(final_out / "launch-completion.json"),
                 "run_receipt": str(final_out / "run-receipt.json")}

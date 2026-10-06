@@ -1,4 +1,5 @@
 import math
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,15 @@ from scripts.jevbench_gemma_lora import (
 
 
 JEVBENCH = Path(".context/jevbench-v154").resolve()
+
+
+def test_direct_script_help_bootstraps_repository_imports(tmp_path):
+    script = Path("scripts/jevbench_gemma_lora.py").resolve()
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"], cwd=tmp_path,
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "Run a pinned Gemma-4" in result.stdout
 
 
 def task(qtype, labels, criteria, state="state", instructions="decide"):
@@ -68,6 +78,34 @@ def test_unicode_and_hebrew_survive_rendering_without_escaping():
     prompt, labels = render_prompt(current)
     assert labels == ["אישור", "דחייה"]
     assert '"לקוח": "שרה"' in prompt and "שלום 👋" in prompt and "מה ההחלטה?" in prompt
+
+
+def test_jevbench_uses_shared_exact_singleton_forward_and_probabilities(monkeypatch):
+    import torch
+    import scripts.singleton_option_scorer as scorer
+
+    assert probabilities_from_option_scores is scorer.probabilities_from_option_scores
+    assert validate_native_probs is scorer.validate_native_probs
+    ids = torch.tensor([[8, 9, 10]])
+    logits = torch.tensor([[[99.0, -99.0, 0.0], [0.5, 2.0, 1.5]]], dtype=torch.bfloat16)
+    calls = []
+
+    def model(**kwargs):
+        calls.append(kwargs)
+        assert set(kwargs) == {"input_ids", "use_cache", "logits_to_keep"}
+        assert kwargs["input_ids"].shape == (1, 3)
+        assert kwargs["use_cache"] is False
+        assert type(kwargs["logits_to_keep"]) is int and kwargs["logits_to_keep"] == 1
+        return SimpleNamespace(logits=logits)
+
+    adapter = GemmaLoraAdapter("base", "rev", None, None, 8192, "bfloat16", device="cpu")
+    adapter._model = model
+    adapter._groups = [torch.tensor([0, 2]), torch.tensor([1])]
+    monkeypatch.setattr(adapter, "_input_ids", lambda prompt: (ids, 3))
+    actual, count = adapter._predict(task("choice", ["a", "b"], {"a": "A", "b": "B"}))
+    expected = scorer.probabilities_from_option_scores(
+        ["a", "b"], [torch.logsumexp(logits[0, -1, [0, 2]].float(), 0).item(), 2.0])
+    assert actual == expected and count == 3 and len(calls) == 1
 
 
 @pytest.mark.parametrize("probs", [

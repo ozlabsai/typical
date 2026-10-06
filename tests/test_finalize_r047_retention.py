@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import inspect
 import json
 import subprocess
 from pathlib import Path
@@ -116,7 +117,7 @@ def _fixture(tmp_path):
     assignment = {field: _sha(field.encode())
                   for field in causal_comparator.ASSIGNMENT_FIELDS}
     assignment.update({
-        "schema_version": "r047-causal-slot-assignment-v1",
+        "schema_version": "r047-causal-slot-assignment-v2",
         "control_slot": "slot_b", "treatment_slot": "slot_a",
         "control_train_sha256": gate.FROZEN_CONTROL_TRAIN_SHA256,
         "treatment_train_sha256": gate.FROZEN_TREATMENT_TRAIN_SHA256,
@@ -214,8 +215,32 @@ def _fixture(tmp_path):
                          "provenance": provenances[role],
                          "evaluations": evaluations}
 
+    evidence_paths = {
+        key: _write(tmp_path / "causal" / f"{key}.json", {"artifact": key})
+        for key in gate.CAUSAL_EVIDENCE_KEYS
+    }
+    evidence_paths.update({
+        "assignment": assignment_path,
+        "recipe": recipe_path,
+        "reference_provenance": provenances["reference"],
+        "slot_b_run_receipt": provenances["control"],
+        "slot_a_run_receipt": provenances["treatment"],
+    })
+    evidence_spec_path = _write(tmp_path / "causal-evidence-spec.json", {
+        key: str(path) for key, path in evidence_paths.items()})
+    chronology = {
+        "preparation_receipt_sha256": file_hash(evidence_paths["preparation_receipt"]),
+        "reference_receipt_sha256": file_hash(evidence_paths["reference_receipt"]),
+        "slot_b_launch_intent_sha256": file_hash(evidence_paths["slot_b_launch_intent"]),
+        "slot_b_launch_completion_sha256": file_hash(
+            evidence_paths["slot_b_launch_completion"]),
+        "control_receipt_sha256": file_hash(evidence_paths["control_receipt"]),
+        "slot_a_launch_intent_sha256": file_hash(evidence_paths["slot_a_launch_intent"]),
+        "slot_a_launch_completion_sha256": file_hash(
+            evidence_paths["slot_a_launch_completion"]),
+    }
     causal = {
-        "schema_version": "r047-causal-comparison-v2",
+        "schema_version": "r047-causal-comparison-v3",
         "preassignment": {
             "assignment_sha256": _sha(assignment_payload),
             "control_slot": assignment["control_slot"],
@@ -223,6 +248,7 @@ def _fixture(tmp_path):
             "pre_frozen_slot_assignment": True,
             "evaluator_sha256": assignment["evaluator_sha256"],
             "comparator_sha256": assignment["comparator_sha256"],
+            "precheck_sha256": assignment["precheck_sha256"],
             "bootstrap_seed": assignment["bootstrap_seed"],
             "bootstrap_replicates": assignment["bootstrap_replicates"],
         },
@@ -233,24 +259,42 @@ def _fixture(tmp_path):
                 assignment["treatment_slot"]: file_hash(provenances["treatment"]),
             },
             "reference_provenance_sha256": file_hash(provenances["reference"]),
+            "chronology": chronology,
+        },
+        "strata": {
+            "K2": {"treatment": {"balanced_accuracy": .9},
+                   "gate": {"passed": True}},
+            "K3": {"treatment": {"balanced_accuracy": .9},
+                   "gate": {"passed": True}},
         },
         "co_primary_gate": {"passed": True},
     }
+    causal_payload = gate._official_json_payload(causal)
     values = {
         "manifest_payload": manifest_payload, "manifest_sha256": manifest_sha,
         "assignment_payload": assignment_payload, "recipe_payload": recipe_path.read_bytes(),
         "model_inventory_payload": inventory_payload, "model_path": model,
         "input_paths": input_paths, "code_paths": code_paths,
-        "causal_comparison_payload": (json.dumps(causal, sort_keys=True) + "\n").encode(),
+        "causal_comparison_payload": causal_payload,
+        "causal_evidence_spec_payload": evidence_spec_path.read_bytes(),
         "role_bundles": bundles,
         "source_checkpoint_provenance_payload": source_payload,
+        "_recomputed_causal": causal,
     }
     return values
 
 
-def test_pass_requires_and_binds_all_three_models_and_all_suites(tmp_path):
+def _finalize(values, monkeypatch, compare=None):
+    recomputed = values.pop("_recomputed_causal")
+    monkeypatch.setattr(
+        causal_comparator, "compare_bound_payloads",
+        compare or (lambda **kwargs: copy.deepcopy(recomputed)))
+    return gate.finalize(**values)
+
+
+def test_pass_requires_and_binds_all_three_models_and_all_suites(tmp_path, monkeypatch):
     values = _fixture(tmp_path)
-    result = gate.finalize(**values)
+    result = _finalize(values, monkeypatch)
     assert result["causal_primary_pass"] is True
     assert result["all_required_reports_present"] is True
     assert result["arms"]["control"]["preservation_pass"] is True
@@ -259,7 +303,8 @@ def test_pass_requires_and_binds_all_three_models_and_all_suites(tmp_path):
     assert set(result["evaluation_report_sha256"]) == set(gate.ROLES)
 
 
-def test_completed_treatment_regression_fails_without_fabricating_result(tmp_path):
+def test_completed_treatment_regression_fails_without_fabricating_result(
+        tmp_path, monkeypatch):
     values = _fixture(tmp_path)
     evaluation = values["role_bundles"]["treatment"]["evaluations"]["retention"]
     report = json.loads(Path(evaluation["report"]).read_text())
@@ -277,34 +322,34 @@ def test_completed_treatment_regression_fails_without_fabricating_result(tmp_pat
         model_path=values["model_path"], input_paths=values["input_paths"],
         code_paths=values["code_paths"])
     _write(evaluation["receipt"], receipt)
-    result = gate.finalize(**values)
+    result = _finalize(values, monkeypatch)
     assert result["arms"]["treatment"]["gates"]["wf_drop_at_most_.02"] is False
     assert result["treatment_advance_to_m2"] is False
 
 
-def test_rejects_report_tamper_after_evaluation_receipt(tmp_path):
+def test_rejects_report_tamper_after_evaluation_receipt(tmp_path, monkeypatch):
     values = _fixture(tmp_path)
     report = values["role_bundles"]["treatment"]["evaluations"]["pair"]["report"]
     Path(report).write_text(Path(report).read_text().replace('"accuracy": 0.9',
                                                               '"accuracy": 0.8', 1))
     with pytest.raises(ValueError, match="evaluation receipt mismatch"):
-        gate.finalize(**values)
+        _finalize(values, monkeypatch)
 
 
-def test_rejects_missing_suite_and_wrong_arm_receipt(tmp_path):
+def test_rejects_missing_suite_and_wrong_arm_receipt(tmp_path, monkeypatch):
     values = _fixture(tmp_path)
     del values["role_bundles"]["control"]["evaluations"]["renderer"]
     with pytest.raises(ValueError, match="coverage is incomplete"):
-        gate.finalize(**values)
+        _finalize(values, monkeypatch)
 
     values = _fixture(tmp_path / "wrong-arm")
     values["role_bundles"]["treatment"]["provenance"] = (
         values["role_bundles"]["control"]["provenance"])
     with pytest.raises(ValueError, match="treatment run receipt differs"):
-        gate.finalize(**values)
+        _finalize(values, monkeypatch)
 
 
-def test_rejects_wrong_adapter_report_receipt_swap(tmp_path):
+def test_rejects_wrong_adapter_report_receipt_swap(tmp_path, monkeypatch):
     values = _fixture(tmp_path)
     control = values["role_bundles"]["control"]["evaluations"]["pair"]
     treatment = values["role_bundles"]["treatment"]["evaluations"]["pair"]
@@ -312,7 +357,7 @@ def test_rejects_wrong_adapter_report_receipt_swap(tmp_path):
     control["receipt"] = treatment["receipt"]
     control["evidence"] = treatment["evidence"]
     with pytest.raises(ValueError, match="control/pair evaluation receipt mismatch"):
-        gate.finalize(**values)
+        _finalize(values, monkeypatch)
 
 
 def test_wrapper_executes_frozen_evaluator_before_receipt(tmp_path):
@@ -392,17 +437,79 @@ def test_rejects_rehashed_complete_control_treatment_assignment_swap(tmp_path):
         gate._validate_assignment(payload, manifest)
 
 
-def test_rejects_tampered_evaluator_and_nonpassing_causal_gate(tmp_path):
+def test_rejects_tampered_evaluator_and_forged_causal_gate(tmp_path, monkeypatch):
     values = _fixture(tmp_path)
     Path(values["code_paths"]["pair_evaluator"]).write_text("# changed\n")
     with pytest.raises(ValueError, match="evaluator code pair_evaluator differs"):
-        gate.finalize(**values)
+        _finalize(values, monkeypatch)
 
     values = _fixture(tmp_path / "causal")
     causal = json.loads(values["causal_comparison_payload"])
     causal["co_primary_gate"]["passed"] = False
-    values["causal_comparison_payload"] = json.dumps(causal).encode()
-    result = gate.finalize(**values)
-    assert result["causal_primary_pass"] is False
-    assert result["arms"]["treatment"]["preservation_pass"] is True
-    assert result["treatment_advance_to_m2"] is False
+    values["causal_comparison_payload"] = gate._official_json_payload(causal)
+    with pytest.raises(ValueError, match="exact official recomputation"):
+        _finalize(values, monkeypatch)
+
+
+@pytest.mark.parametrize("mutation", (
+    lambda value: value.update(schema_version="r047-causal-comparison-v2"),
+    lambda value: value["strata"]["K2"]["treatment"].update(
+        balanced_accuracy=1.0),
+    lambda value: value["provenance"].update(
+        reference_provenance_sha256="0" * 64),
+))
+def test_rejects_forged_causal_top_level_metrics_and_provenance(
+        tmp_path, monkeypatch, mutation):
+    values = _fixture(tmp_path)
+    causal = json.loads(values["causal_comparison_payload"])
+    mutation(causal)
+    values["causal_comparison_payload"] = gate._official_json_payload(causal)
+    with pytest.raises(ValueError, match="exact official recomputation"):
+        _finalize(values, monkeypatch)
+
+
+def test_rejects_missing_or_tampered_causal_chain_evidence(tmp_path, monkeypatch):
+    values = _fixture(tmp_path)
+    spec = json.loads(values["causal_evidence_spec_payload"])
+    del spec["control_receipt"]
+    values["causal_evidence_spec_payload"] = gate._official_json_payload(spec)
+    with pytest.raises(ValueError, match="spec is incomplete"):
+        _finalize(values, monkeypatch)
+
+    values = _fixture(tmp_path / "tampered")
+    spec = json.loads(values["causal_evidence_spec_payload"])
+    Path(spec["slot_a_launch_completion"]).write_text('{"tampered":true}\n')
+    with pytest.raises(ValueError, match="chronology differs"):
+        _finalize(values, monkeypatch)
+
+
+def test_recomputes_with_bound_payloads_and_binds_spec_and_chronology(
+        tmp_path, monkeypatch):
+    values = _fixture(tmp_path)
+    expected = values["_recomputed_causal"]
+    required = {
+        name for name, parameter in inspect.signature(
+            causal_comparator.compare_bound_payloads).parameters.items()
+        if parameter.default is inspect.Parameter.empty
+    }
+    calls = []
+
+    def compare(**kwargs):
+        calls.append(kwargs)
+        return copy.deepcopy(expected)
+
+    result = _finalize(values, monkeypatch, compare)
+    assert len(calls) == 1
+    call = calls[0]
+    assert set(call) == required
+    assert call["assignment_payload"] == values["assignment_payload"]
+    assert call["recipe_payload"] == values["recipe_payload"]
+    assert call["slot_b_run_receipt"] == Path(
+        values["role_bundles"]["control"]["provenance"]).read_bytes()
+    assert call["slot_a_run_receipt"] == Path(
+        values["role_bundles"]["treatment"]["provenance"]).read_bytes()
+    assert call["slot_a_launch_intent_sha256"] == _sha(
+        call["slot_a_launch_intent_payload"])
+    assert result["causal_evidence_spec_sha256"] == _sha(
+        values["causal_evidence_spec_payload"])
+    assert result["causal_chronology_sha256"] == expected["provenance"]["chronology"]

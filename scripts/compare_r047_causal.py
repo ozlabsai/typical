@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.singleton_option_scorer import source_sha256, validate_runtime_fingerprint
+
 from scripts.eval_r047_executor import (
     _canonical_json,
     causal_parity_subset,
@@ -576,6 +578,8 @@ ASSIGNMENT_FIELDS = {
     "panel_preflight_sha256", "inventory_manifest_sha256",
     "arm_preflight_sha256", "evaluator_sha256", "comparator_sha256",
     "precheck_sha256", "bootstrap_seed", "bootstrap_replicates",
+    "scalar_scorer_sha256", "launcher_sha256", "protocol_amendment_sha256",
+    "superseded_preparation_receipt_sha256", "atomic_publisher_sha256",
 }
 
 
@@ -624,21 +628,43 @@ def _load_evaluator_report(payload, expected_sha256, name, predictions_payload,
             or isinstance(report.get("adapter_tree_files"), bool)
             or report["adapter_tree_files"] <= 0):
         raise ValueError(f"{name} evaluator adapter-tree receipt is invalid")
-    parity = report.get("batch_scalar_parity")
-    parity_fields = {"status", "rows", "subset_ids_sha256", "exact_discrete_outputs",
-                     "max_abs_probability_delta", "tolerance", "selection"}
+    parity = report.get("scalar_repeatability")
+    parity_fields = {"status", "rows", "selection", "subset_sha256",
+                     "exact_discrete_match", "max_probability_delta",
+                     "probability_tolerance", "execution_mode",
+                     "effective_batch_rows", "base_weight_dtype", "attention_interface", "max_length"}
     if (not isinstance(parity, dict) or set(parity) != parity_fields
-            or parity.get("status") != "pass" or parity.get("exact_discrete_outputs") is not True
+            or parity.get("status") != "pass" or parity.get("exact_discrete_match") is not True
             or not isinstance(parity.get("rows"), int) or isinstance(parity.get("rows"), bool)
-            or parity["rows"] <= 0 or not _valid_sha(parity.get("subset_ids_sha256"))
-            or parity.get("tolerance") != 1e-5
-            or not isinstance(parity.get("max_abs_probability_delta"), (int, float))
-            or not math.isfinite(parity["max_abs_probability_delta"])
-            or parity["max_abs_probability_delta"] > 1e-5):
-        raise ValueError(f"{name} evaluator batched/scalar parity contract failed")
+            or parity["rows"] <= 0 or not _valid_sha(parity.get("subset_sha256"))
+            or parity.get("probability_tolerance") != 1e-5
+            or not isinstance(parity.get("max_probability_delta"), (int, float))
+            or isinstance(parity.get("max_probability_delta"), bool)
+            or not math.isfinite(parity["max_probability_delta"])
+            or parity["max_probability_delta"] < 0
+            or parity["max_probability_delta"] > 1e-5
+            or parity.get("selection") != (
+                "first_frozen_row_per_arity_language_order_role_family_primitive")
+            or parity.get("execution_mode") != "scalar"
+            or not isinstance(parity.get("effective_batch_rows"), int)
+            or isinstance(parity.get("effective_batch_rows"), bool)
+            or parity["effective_batch_rows"] != 1
+            or parity.get("base_weight_dtype") != "bfloat16"
+            or parity.get("attention_interface") != "sdpa"
+            or type(parity.get("max_length")) is not int or parity["max_length"] != 8192
+            or "scalar_scorer_parity" in report or "batch_scalar_parity" in report):
+        raise ValueError(f"{name} evaluator scalar repeatability contract failed")
     if (parity["rows"] != expected["parity_rows"]
-            or parity["subset_ids_sha256"] != expected["parity_subset_ids_sha256"]):
-        raise ValueError(f"{name} evaluator parity subset differs from frozen panel")
+            or parity["subset_sha256"] != expected["parity_subset_ids_sha256"]):
+        raise ValueError(f"{name} evaluator repeatability subset differs from frozen panel")
+    if report.get("scalar_scorer_sha256") != expected["scalar_scorer_sha256"]:
+        raise ValueError(f"{name} evaluator scalar scorer source hash mismatch")
+    histogram = report.get("forward_batch_histogram")
+    if (not isinstance(histogram, dict) or set(histogram) != {"1"}
+            or type(histogram["1"]) is not int
+            or histogram["1"] != expected["rows"] + 2 * parity["rows"]):
+        raise ValueError(f"{name} evaluator forward batch histogram is invalid")
+    validate_runtime_fingerprint(report.get("runtime_fingerprint"))
     return report
 
 
@@ -680,7 +706,7 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
         raise ValueError("invalid frozen slot assignment") from error
     if set(assignment) != ASSIGNMENT_FIELDS:
         raise ValueError("slot assignment schema differs from the frozen contract")
-    if (assignment["schema_version"] != "r047-causal-slot-assignment-v1"
+    if (assignment["schema_version"] != "r047-causal-slot-assignment-v2"
             or assignment["control_slot"] != "slot_b"
             or assignment["treatment_slot"] != "slot_a"
             or assignment["control_train_sha256"] != FROZEN_CONTROL_TRAIN_SHA256
@@ -698,6 +724,11 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
         Path(__file__).with_name("eval_r047_executor.py").read_bytes())
     precheck_sha256 = _sha(
         Path(__file__).with_name("precheck_r047_causal.py").read_bytes())
+    launcher_sha256 = _sha(
+        Path(__file__).with_name("launch_r047_m1_arm.py").read_bytes())
+    scalar_scorer_sha256 = source_sha256()
+    atomic_publisher_sha256 = _sha(
+        Path(__file__).with_name("atomic_publish.py").read_bytes())
     if (assignment["bootstrap_seed"] != FROZEN_BOOTSTRAP_SEED
             or assignment["bootstrap_replicates"] != MIN_BOOTSTRAP_REPLICATES
             or seed != assignment["bootstrap_seed"]
@@ -709,6 +740,17 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
         raise ValueError("running evaluator differs from frozen preassignment")
     if assignment["precheck_sha256"] != precheck_sha256:
         raise ValueError("running precheck differs from frozen preassignment")
+    if assignment["launcher_sha256"] != launcher_sha256:
+        raise ValueError("running launcher differs from frozen preassignment")
+    if assignment["scalar_scorer_sha256"] != scalar_scorer_sha256:
+        raise ValueError(
+            "scalar scorer source hash mismatch: running source differs from frozen preassignment")
+    if assignment["atomic_publisher_sha256"] != atomic_publisher_sha256:
+        raise ValueError("running atomic publisher differs from frozen preassignment")
+    from scripts.prepare_r047_m1 import _protocol_amendment_bindings
+    if any(assignment[field] != value
+           for field, value in _protocol_amendment_bindings().items()):
+        raise ValueError("protocol lineage differs from frozen preassignment")
     if _require_frozen_panel and (
             assignment["panel_preflight_sha256"] != FROZEN_PANEL_PREFLIGHT_SHA256
             or assignment["inventory_manifest_sha256"]
@@ -762,6 +804,7 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
               "panel_preflight_sha256": assignment["panel_preflight_sha256"],
               "inventory_manifest_sha256": assignment["inventory_manifest_sha256"],
               "evaluator_sha256": assignment["evaluator_sha256"],
+              "scalar_scorer_sha256": assignment["scalar_scorer_sha256"],
               "parity_rows": len(parity_rows),
               "parity_subset_ids_sha256": parity_subset_ids_sha256,
               "rows": expected_rows, "clusters": expected_clusters}
@@ -805,11 +848,24 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
             assignment["panel_sha256"], panel_manifest_sha256,
             reference_expectation),
     }
-    parity_signatures = {(report["batch_scalar_parity"]["rows"],
-                          report["batch_scalar_parity"]["subset_ids_sha256"])
+    parity_signatures = {(report["scalar_repeatability"]["rows"],
+                          report["scalar_repeatability"]["subset_sha256"])
                          for report in reports.values()}
     if len(parity_signatures) != 1:
         raise ValueError("evaluator reports used different parity subsets")
+    execution_signatures = {
+        (report["scalar_repeatability"]["execution_mode"],
+         report["scalar_repeatability"]["effective_batch_rows"],
+         report["scalar_repeatability"]["base_weight_dtype"],
+         report["scalar_repeatability"]["attention_interface"],
+         report["scalar_repeatability"]["max_length"])
+        for report in reports.values()}
+    if len(execution_signatures) != 1:
+        raise ValueError("evaluator reports used different execution signatures")
+    runtime_signatures = {_canonical_json(report["runtime_fingerprint"])
+                          for report in reports.values()}
+    if len(runtime_signatures) != 1:
+        raise ValueError("evaluator reports used different runtime fingerprints")
     model_tree_signatures = {(report["model_tree_sha256"], report["model_tree_files"])
                              for report in reports.values()}
     if len(model_tree_signatures) != 1:
@@ -871,6 +927,121 @@ def compare_payloads(*, slot_a_predictions, slot_b_predictions, reference_predic
     }
 
 
+def _require_exact_receipt(payload, digest, generated, label):
+    """Require a caller-supplied immutable receipt to equal a fresh recomputation."""
+    if not _valid_sha(digest) or _sha(payload) != digest:
+        raise ValueError(f"{label} receipt hash mismatch")
+    from scripts import precheck_r047_causal as precheck
+    if payload != precheck._receipt_payload(generated):
+        raise ValueError(f"{label} receipt differs from fresh precheck")
+
+
+def compare_bound_payloads(
+        *, slot_a_predictions, slot_b_predictions, reference_predictions,
+        slot_a_report, slot_b_report, reference_report, panel_payload,
+        panel_manifest_payload, panel_preflight_payload, inventory_manifest_payload,
+        arm_preflight_payload, reference_provenance_payload, assignment_payload,
+        recipe_payload, preparation_receipt_payload, reference_receipt_payload,
+        control_receipt_payload, slot_a_run_receipt, slot_b_run_receipt,
+        slot_a_launch_intent_payload, slot_a_launch_completion_payload,
+        slot_b_launch_intent_payload, slot_b_launch_completion_payload,
+        slot_a_report_sha256, slot_b_report_sha256, reference_report_sha256,
+        slot_a_run_receipt_sha256, slot_b_run_receipt_sha256,
+        slot_a_launch_intent_sha256, slot_a_launch_completion_sha256,
+        slot_b_launch_intent_sha256, slot_b_launch_completion_sha256,
+        panel_manifest_sha256, assignment_sha256, preparation_receipt_sha256,
+        reference_receipt_sha256, control_receipt_sha256,
+        replicates=MIN_BOOTSTRAP_REPLICATES, seed=FROZEN_BOOTSTRAP_SEED,
+        _require_frozen_panel=True, _require_frozen_assignment=True):
+    """Official comparison: revalidate the full reference-first launch chronology."""
+    # Lazy import prevents the comparator/precheck module cycle at import time.
+    from scripts import precheck_r047_causal as precheck
+
+    reference_inputs = {
+        "assignment_payload": assignment_payload,
+        "assignment_sha256": assignment_sha256,
+        "reference_predictions": reference_predictions,
+        "reference_report": reference_report,
+        "reference_report_sha256": reference_report_sha256,
+        "reference_provenance_payload": reference_provenance_payload,
+        "recipe_payload": recipe_payload,
+        "preparation_receipt_payload": preparation_receipt_payload,
+        "preparation_receipt_sha256": preparation_receipt_sha256,
+        "panel_payload": panel_payload,
+        "panel_manifest_payload": panel_manifest_payload,
+        "panel_manifest_sha256": panel_manifest_sha256,
+        "panel_preflight_payload": panel_preflight_payload,
+        "inventory_manifest_payload": inventory_manifest_payload,
+        "arm_preflight_payload": arm_preflight_payload,
+        "_require_frozen_panel": _require_frozen_panel,
+        "_require_frozen_assignment": _require_frozen_assignment,
+    }
+    reference, context, _, _ = precheck._reference_precheck(**reference_inputs)
+    _require_exact_receipt(
+        reference_receipt_payload, reference_receipt_sha256, reference, "reference")
+    control = precheck.precheck_control(
+        **reference_inputs,
+        reference_receipt_payload=reference_receipt_payload,
+        reference_receipt_sha256=reference_receipt_sha256,
+        slot_b_predictions=slot_b_predictions,
+        slot_b_report=slot_b_report,
+        slot_b_report_sha256=slot_b_report_sha256,
+        slot_b_run_receipt=slot_b_run_receipt,
+        slot_b_run_receipt_sha256=slot_b_run_receipt_sha256,
+        slot_b_launch_intent_payload=slot_b_launch_intent_payload,
+        slot_b_launch_intent_sha256=slot_b_launch_intent_sha256,
+        slot_b_launch_completion_payload=slot_b_launch_completion_payload,
+        slot_b_launch_completion_sha256=slot_b_launch_completion_sha256)
+    _require_exact_receipt(
+        control_receipt_payload, control_receipt_sha256, control, "control")
+    precheck.validate_launch_chain(
+        context=context, slot="slot_a", role="treatment",
+        prerequisites={"reference_receipt_sha256": reference_receipt_sha256,
+                       "control_receipt_sha256": control_receipt_sha256},
+        run_receipt_sha256=slot_a_run_receipt_sha256,
+        launch_intent_payload=slot_a_launch_intent_payload,
+        launch_intent_sha256=slot_a_launch_intent_sha256,
+        launch_completion_payload=slot_a_launch_completion_payload,
+        launch_completion_sha256=slot_a_launch_completion_sha256)
+
+    result = compare_payloads(
+        slot_a_predictions=slot_a_predictions,
+        slot_b_predictions=slot_b_predictions,
+        reference_predictions=reference_predictions,
+        slot_a_report=slot_a_report, slot_b_report=slot_b_report,
+        reference_report=reference_report,
+        panel_payload=panel_payload, panel_manifest_payload=panel_manifest_payload,
+        panel_preflight_payload=panel_preflight_payload,
+        inventory_manifest_payload=inventory_manifest_payload,
+        arm_preflight_payload=arm_preflight_payload,
+        reference_provenance_payload=reference_provenance_payload,
+        assignment_payload=assignment_payload,
+        slot_a_run_receipt=slot_a_run_receipt,
+        slot_b_run_receipt=slot_b_run_receipt,
+        slot_a_report_sha256=slot_a_report_sha256,
+        slot_b_report_sha256=slot_b_report_sha256,
+        reference_report_sha256=reference_report_sha256,
+        slot_a_run_receipt_sha256=slot_a_run_receipt_sha256,
+        slot_b_run_receipt_sha256=slot_b_run_receipt_sha256,
+        panel_manifest_sha256=panel_manifest_sha256,
+        assignment_sha256=assignment_sha256,
+        replicates=replicates, seed=seed,
+        _require_frozen_panel=_require_frozen_panel)
+    if result.get("schema_version") != "r047-causal-comparison-v2":
+        raise ValueError("internal metric comparison schema differs from expected v2")
+    result["schema_version"] = "r047-causal-comparison-v3"
+    result["provenance"]["chronology"] = {
+        "preparation_receipt_sha256": preparation_receipt_sha256,
+        "reference_receipt_sha256": reference_receipt_sha256,
+        "slot_b_launch_intent_sha256": slot_b_launch_intent_sha256,
+        "slot_b_launch_completion_sha256": slot_b_launch_completion_sha256,
+        "control_receipt_sha256": control_receipt_sha256,
+        "slot_a_launch_intent_sha256": slot_a_launch_intent_sha256,
+        "slot_a_launch_completion_sha256": slot_a_launch_completion_sha256,
+    }
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--slot-a-predictions", required=True)
@@ -886,6 +1057,14 @@ def main(argv=None):
     parser.add_argument("--slot-b-run-receipt", required=True)
     parser.add_argument("--slot-a-run-receipt-sha256", required=True)
     parser.add_argument("--slot-b-run-receipt-sha256", required=True)
+    parser.add_argument("--slot-a-launch-intent", required=True)
+    parser.add_argument("--slot-a-launch-intent-sha256", required=True)
+    parser.add_argument("--slot-a-launch-completion", required=True)
+    parser.add_argument("--slot-a-launch-completion-sha256", required=True)
+    parser.add_argument("--slot-b-launch-intent", required=True)
+    parser.add_argument("--slot-b-launch-intent-sha256", required=True)
+    parser.add_argument("--slot-b-launch-completion", required=True)
+    parser.add_argument("--slot-b-launch-completion-sha256", required=True)
     parser.add_argument("--panel", required=True)
     parser.add_argument("--panel-manifest", required=True)
     parser.add_argument("--panel-preflight", required=True)
@@ -895,11 +1074,18 @@ def main(argv=None):
     parser.add_argument("--panel-manifest-sha256", required=True)
     parser.add_argument("--assignment", required=True)
     parser.add_argument("--assignment-sha256", required=True)
+    parser.add_argument("--recipe", required=True)
+    parser.add_argument("--preparation-receipt", required=True)
+    parser.add_argument("--preparation-receipt-sha256", required=True)
+    parser.add_argument("--reference-receipt", required=True)
+    parser.add_argument("--reference-receipt-sha256", required=True)
+    parser.add_argument("--control-receipt", required=True)
+    parser.add_argument("--control-receipt-sha256", required=True)
     parser.add_argument("--bootstrap-replicates", type=int, default=MIN_BOOTSTRAP_REPLICATES)
     parser.add_argument("--bootstrap-seed", type=int, default=470047)
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
-    result = compare_payloads(
+    result = compare_bound_payloads(
         slot_a_predictions=Path(args.slot_a_predictions).read_bytes(),
         slot_b_predictions=Path(args.slot_b_predictions).read_bytes(),
         reference_predictions=Path(args.reference_predictions).read_bytes(),
@@ -913,15 +1099,32 @@ def main(argv=None):
         arm_preflight_payload=Path(args.arm_preflight).read_bytes(),
         reference_provenance_payload=Path(args.reference_provenance).read_bytes(),
         assignment_payload=Path(args.assignment).read_bytes(),
+        recipe_payload=Path(args.recipe).read_bytes(),
+        preparation_receipt_payload=Path(args.preparation_receipt).read_bytes(),
+        reference_receipt_payload=Path(args.reference_receipt).read_bytes(),
+        control_receipt_payload=Path(args.control_receipt).read_bytes(),
         slot_a_run_receipt=Path(args.slot_a_run_receipt).read_bytes(),
         slot_b_run_receipt=Path(args.slot_b_run_receipt).read_bytes(),
+        slot_a_launch_intent_payload=Path(args.slot_a_launch_intent).read_bytes(),
+        slot_a_launch_completion_payload=Path(
+            args.slot_a_launch_completion).read_bytes(),
+        slot_b_launch_intent_payload=Path(args.slot_b_launch_intent).read_bytes(),
+        slot_b_launch_completion_payload=Path(
+            args.slot_b_launch_completion).read_bytes(),
         slot_a_report_sha256=args.slot_a_report_sha256,
         slot_b_report_sha256=args.slot_b_report_sha256,
         reference_report_sha256=args.reference_report_sha256,
         slot_a_run_receipt_sha256=args.slot_a_run_receipt_sha256,
         slot_b_run_receipt_sha256=args.slot_b_run_receipt_sha256,
+        slot_a_launch_intent_sha256=args.slot_a_launch_intent_sha256,
+        slot_a_launch_completion_sha256=args.slot_a_launch_completion_sha256,
+        slot_b_launch_intent_sha256=args.slot_b_launch_intent_sha256,
+        slot_b_launch_completion_sha256=args.slot_b_launch_completion_sha256,
         panel_manifest_sha256=args.panel_manifest_sha256,
         assignment_sha256=args.assignment_sha256,
+        preparation_receipt_sha256=args.preparation_receipt_sha256,
+        reference_receipt_sha256=args.reference_receipt_sha256,
+        control_receipt_sha256=args.control_receipt_sha256,
         replicates=args.bootstrap_replicates, seed=args.bootstrap_seed)
     output = Path(args.out)
     output.parent.mkdir(parents=True, exist_ok=True)

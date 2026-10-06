@@ -11,8 +11,10 @@ from scripts import compare_r047_causal as comparator
 from scripts import eval_r047_executor as evaluator
 
 
-REFERENCE_SCHEMA = "r047-causal-reference-precheck-v1"
-CONTROL_SCHEMA = "r047-causal-control-precheck-v1"
+REFERENCE_SCHEMA = "r047-causal-reference-precheck-v2"
+CONTROL_SCHEMA = "r047-causal-control-precheck-v2"
+INTENT_SCHEMA = "r047-m1-launch-intent-v2"
+COMPLETION_SCHEMA = "r047-m1-launch-completion-v2"
 CONTROL_CEILING = .95
 PREPARATION_FIELDS = {
     "schema_version", "status", "recipe_sha256", "reference_provenance_sha256",
@@ -21,7 +23,9 @@ PREPARATION_FIELDS = {
     "source_checkpoint_provenance_sha256", "panel_sha256",
     "arm_preflight_sha256", "trainer_sha256", "evaluator_sha256",
     "comparator_sha256", "precheck_sha256", "preparer_sha256",
-    "finalizer_sha256",
+    "finalizer_sha256", "scalar_scorer_sha256", "launcher_sha256",
+    "atomic_publisher_sha256",
+    "superseded_preparation_receipt_sha256", "protocol_amendment_sha256",
 }
 
 
@@ -36,6 +40,25 @@ def _receipt_payload(receipt):
 def _with_binding(receipt):
     receipt["binding_sha256"] = _sha(evaluator._canonical_json(receipt).encode())
     return receipt
+
+
+def launch_command_plan(*, slot, role, assignment_sha, assignment, recipe,
+                        train_sha, inventory_sha, parent, source_sha, prerequisites):
+    """Describe the frozen invocation without local paths or launcher imports."""
+    return {
+        "schema_version": "r047-m1-trainer-command-plan-v2",
+        "slot": slot, "role": role,
+        "assignment_sha256": assignment_sha,
+        "recipe_sha256": assignment["recipe_sha256"],
+        "train_sha256": train_sha, "model_revision": assignment["model_revision"],
+        "model_inventory_sha256": inventory_sha,
+        "parent_adapter_sha256": parent["parent_adapter_sha256"],
+        "parent_adapter_tree_sha256": parent["parent_adapter_tree_sha256"],
+        "source_checkpoint_provenance_sha256": source_sha,
+        "trainer_sha256": recipe["trainer_sha256"],
+        "trainer_config": recipe["trainer_config"],
+        "validation": [], "prerequisites": prerequisites,
+    }
 
 
 def _validate_frozen_recipe(recipe, assignment):
@@ -95,7 +118,7 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
         raise ValueError("invalid frozen slot assignment") from error
     if not isinstance(assignment, dict) or set(assignment) != comparator.ASSIGNMENT_FIELDS:
         raise ValueError("slot assignment schema differs from the frozen contract")
-    if (assignment.get("schema_version") != "r047-causal-slot-assignment-v1"
+    if (assignment.get("schema_version") != "r047-causal-slot-assignment-v2"
             or assignment.get("control_slot") != "slot_b"
             or assignment.get("treatment_slot") != "slot_a"):
         raise ValueError("invalid pre-frozen control/treatment slot assignment")
@@ -136,6 +159,11 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
     comparator_sha256 = _sha(Path(comparator.__file__).read_bytes())
     evaluator_sha256 = _sha(Path(evaluator.__file__).read_bytes())
     precheck_sha256 = _sha(Path(__file__).read_bytes())
+    launcher_sha256 = _sha(Path(__file__).with_name("launch_r047_m1_arm.py").read_bytes())
+    scalar_scorer_sha256 = _sha(
+        Path(__file__).with_name("singleton_option_scorer.py").read_bytes())
+    atomic_publisher_sha256 = _sha(
+        Path(__file__).with_name("atomic_publish.py").read_bytes())
     if (assignment["bootstrap_seed"] != comparator.FROZEN_BOOTSTRAP_SEED
             or assignment["bootstrap_replicates"] != comparator.MIN_BOOTSTRAP_REPLICATES):
         raise ValueError("slot assignment bootstrap differs from the frozen contract")
@@ -146,6 +174,12 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
     if ("precheck_sha256" in assignment
             and assignment["precheck_sha256"] != precheck_sha256):
         raise ValueError("running precheck differs from frozen preassignment")
+    if assignment["launcher_sha256"] != launcher_sha256:
+        raise ValueError("running launcher differs from frozen preassignment")
+    if assignment["scalar_scorer_sha256"] != scalar_scorer_sha256:
+        raise ValueError("running scalar scorer differs from frozen preassignment")
+    if assignment["atomic_publisher_sha256"] != atomic_publisher_sha256:
+        raise ValueError("running atomic publisher differs from frozen preassignment")
     if _require_frozen_panel and (
             assignment["panel_preflight_sha256"]
             != comparator.FROZEN_PANEL_PREFLIGHT_SHA256
@@ -197,8 +231,14 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
     if (not comparator._valid_sha(preparation_receipt_sha256)
             or _sha(preparation_receipt_payload) != preparation_receipt_sha256):
         raise ValueError("preparation receipt hash mismatch")
+    from scripts.prepare_r047_m1 import _protocol_amendment_bindings
+
+    preparation_lineage = _protocol_amendment_bindings()
+    if any(assignment[field] != value for field, value in preparation_lineage.items()):
+        raise ValueError(
+            "slot assignment/preparation receipt protocol lineage differs from current authority")
     expected_preparation = {
-        "schema_version": "r047-m1-preparation-receipt-v1",
+        "schema_version": "r047-m1-preparation-receipt-v2",
         "status": "complete",
         "recipe_sha256": assignment["recipe_sha256"],
         "reference_provenance_sha256": assignment["reference_provenance_sha256"],
@@ -220,6 +260,12 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
             Path(__file__).with_name("prepare_r047_m1.py").read_bytes()),
         "finalizer_sha256": _sha(
             Path(__file__).with_name("finalize_r047_m1.py").read_bytes()),
+        "scalar_scorer_sha256": assignment["scalar_scorer_sha256"],
+        "launcher_sha256": assignment["launcher_sha256"],
+        "atomic_publisher_sha256": assignment["atomic_publisher_sha256"],
+        "superseded_preparation_receipt_sha256": assignment[
+            "superseded_preparation_receipt_sha256"],
+        "protocol_amendment_sha256": assignment["protocol_amendment_sha256"],
     }
     if (not isinstance(preparation, dict)
             or set(preparation) != PREPARATION_FIELDS
@@ -239,6 +285,7 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
         "panel_preflight_sha256": assignment["panel_preflight_sha256"],
         "inventory_manifest_sha256": assignment["inventory_manifest_sha256"],
         "evaluator_sha256": assignment["evaluator_sha256"],
+        "scalar_scorer_sha256": assignment["scalar_scorer_sha256"],
         "parity_rows": len(parity_rows),
         "parity_subset_ids_sha256": _sha(
             ("\n".join(row["id"] for row in parity_rows) + "\n").encode()),
@@ -252,6 +299,11 @@ def _assignment_context(*, assignment_payload, assignment_sha256, panel_payload,
         "evaluator_sha256": evaluator_sha256,
         "precheck_sha256": precheck_sha256,
         "preparation_receipt_sha256": preparation_receipt_sha256,
+        "launcher_sha256": assignment["launcher_sha256"],
+        "scalar_scorer_sha256": assignment["scalar_scorer_sha256"],
+        "atomic_publisher_sha256": assignment["atomic_publisher_sha256"],
+        "preparation_lineage": preparation_lineage,
+        "recipe": recipe,
         "panel_rows": panel_rows,
         "panel_manifest_sha256": panel_manifest_sha256,
         "reference_provenance": reference_provenance,
@@ -315,6 +367,10 @@ def _reference_precheck(*, reference_predictions, reference_report,
             "recipe_sha256": assignment["recipe_sha256"],
             "preparation_receipt_sha256": context[
                 "preparation_receipt_sha256"],
+            "launcher_sha256": context["launcher_sha256"],
+            "scalar_scorer_sha256": context["scalar_scorer_sha256"],
+            "atomic_publisher_sha256": context["atomic_publisher_sha256"],
+            **context["preparation_lineage"],
             "evaluator_sha256": context["evaluator_sha256"],
             "comparator_sha256": context["comparator_sha256"],
             "precheck_sha256": context["precheck_sha256"],
@@ -351,9 +407,73 @@ def precheck_reference(*, reference_predictions, reference_report,
         _require_frozen_assignment=_require_frozen_assignment)[0]
 
 
+def validate_launch_chain(*, context, slot, role, prerequisites, run_receipt_sha256,
+                          launch_intent_payload, launch_intent_sha256,
+                          launch_completion_payload, launch_completion_sha256):
+    """Validate one role-agnostic launch chain against frozen preparation authority."""
+    assignment = context["assignment"]
+    provenance = context["reference_provenance"]
+    if (role not in {"control", "treatment"}
+            or assignment.get(f"{role}_slot") != slot
+            or not isinstance(prerequisites, dict) or not prerequisites
+            or any(not comparator._valid_sha(value) for value in prerequisites.values())):
+        raise ValueError(f"{slot} launch role/prerequisites differ from frozen chronology")
+    train_sha256 = assignment[f"{role}_train_sha256"]
+    plan = launch_command_plan(
+        slot=slot, role=role, assignment_sha=context["assignment_sha256"],
+        assignment=assignment, recipe=context["recipe"],
+        train_sha=train_sha256,
+        inventory_sha=assignment["model_inventory_sha256"],
+        parent={"parent_adapter_sha256": assignment["parent_adapter_sha256"],
+                "parent_adapter_tree_sha256": provenance["adapter_tree_sha256"]},
+        source_sha=provenance["source_checkpoint_provenance_sha256"],
+        prerequisites=prerequisites)
+    plan_sha = _sha(evaluator._canonical_json(plan).encode())
+    expected_intent = {
+        "schema_version": INTENT_SCHEMA, "status": "invoking_trainer",
+        "slot": slot, "role": role, "command_plan_sha256": plan_sha,
+        "assignment_sha256": context["assignment_sha256"],
+        "recipe_sha256": assignment["recipe_sha256"],
+        "train_sha256": train_sha256,
+        "model_inventory_sha256": assignment["model_inventory_sha256"],
+        "parent_adapter_sha256": assignment["parent_adapter_sha256"],
+        "parent_adapter_tree_sha256": provenance["adapter_tree_sha256"],
+        "source_checkpoint_provenance_sha256": provenance[
+            "source_checkpoint_provenance_sha256"],
+        "preparation_receipt_sha256": context["preparation_receipt_sha256"],
+        "launcher_sha256": context["launcher_sha256"],
+        "prerequisite_receipt_sha256": prerequisites,
+    }
+    expected_completion = {
+        "schema_version": COMPLETION_SCHEMA, "status": "trainer_completed",
+        "slot": slot, "role": role, "command_plan_sha256": plan_sha,
+        "launch_intent_sha256": launch_intent_sha256,
+        "run_receipt_sha256": run_receipt_sha256,
+        "prerequisite_receipt_sha256": prerequisites,
+    }
+    for label, payload, digest, expected in (
+            ("intent", launch_intent_payload, launch_intent_sha256,
+             expected_intent),
+            ("completion", launch_completion_payload,
+             launch_completion_sha256, expected_completion)):
+        if not comparator._valid_sha(digest) or _sha(payload) != digest:
+            raise ValueError(f"{slot} launch {label} hash mismatch")
+        try:
+            value = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"invalid {slot} launch {label} JSON") from error
+        if not isinstance(value, dict) or value != expected:
+            raise ValueError(f"{slot} launch {label} differs from frozen launch chain")
+    return {"launch_intent_sha256": launch_intent_sha256,
+            "launch_completion_sha256": launch_completion_sha256}
+
+
 def precheck_control(*, reference_receipt_payload, reference_receipt_sha256,
                      slot_b_predictions, slot_b_report, slot_b_report_sha256,
-                     slot_b_run_receipt, slot_b_run_receipt_sha256, **reference_inputs):
+                     slot_b_run_receipt, slot_b_run_receipt_sha256,
+                     slot_b_launch_intent_payload, slot_b_launch_intent_sha256,
+                     slot_b_launch_completion_payload, slot_b_launch_completion_sha256,
+                     **reference_inputs):
     """Revalidate the reference, then reject an uninformative slot-B control ceiling."""
     reference, context, reference_records, reference_report = _reference_precheck(
         **reference_inputs)
@@ -373,6 +493,14 @@ def precheck_control(*, reference_receipt_payload, reference_receipt_sha256,
     }
     run_receipt = comparator._load_run_receipt(
         slot_b_run_receipt, slot_b_run_receipt_sha256, "slot_b", receipt_expectation)
+    validate_launch_chain(
+        context=context, slot="slot_b", role="control",
+        prerequisites={"reference_receipt_sha256": reference_receipt_sha256},
+        run_receipt_sha256=slot_b_run_receipt_sha256,
+        launch_intent_payload=slot_b_launch_intent_payload,
+        launch_intent_sha256=slot_b_launch_intent_sha256,
+        launch_completion_payload=slot_b_launch_completion_payload,
+        launch_completion_sha256=slot_b_launch_completion_sha256)
     records = comparator._read_payload(slot_b_predictions)
     comparator._bind_predictions_to_panel(records, context["panel_rows"])
     comparator.validate_panel_coverage(records)
@@ -412,6 +540,8 @@ def precheck_control(*, reference_receipt_payload, reference_receipt_sha256,
             "assignment_sha256": context["assignment_sha256"],
             "reference_receipt_sha256": reference_receipt_sha256,
             "slot_b_run_receipt_sha256": slot_b_run_receipt_sha256,
+            "slot_b_launch_intent_sha256": slot_b_launch_intent_sha256,
+            "slot_b_launch_completion_sha256": slot_b_launch_completion_sha256,
             "slot_b_report_sha256": slot_b_report_sha256,
             "slot_b_predictions_sha256": _sha(slot_b_predictions),
             "slot_b_adapter_sha256": run_receipt["adapter_sha256"],
@@ -427,6 +557,11 @@ def precheck_control(*, reference_receipt_payload, reference_receipt_sha256,
             "inventory_manifest_sha256": assignment["inventory_manifest_sha256"],
             "arm_preflight_sha256": assignment["arm_preflight_sha256"],
             "recipe_sha256": assignment["recipe_sha256"],
+            "preparation_receipt_sha256": context["preparation_receipt_sha256"],
+            "launcher_sha256": context["launcher_sha256"],
+            "scalar_scorer_sha256": context["scalar_scorer_sha256"],
+            "atomic_publisher_sha256": context["atomic_publisher_sha256"],
+            **context["preparation_lineage"],
             "evaluator_sha256": context["evaluator_sha256"],
             "comparator_sha256": context["comparator_sha256"],
             "precheck_sha256": context["precheck_sha256"],
@@ -530,6 +665,10 @@ def main(argv=None):
     control.add_argument("--slot-b-report-sha256", required=True)
     control.add_argument("--slot-b-run-receipt", required=True)
     control.add_argument("--slot-b-run-receipt-sha256", required=True)
+    control.add_argument("--slot-b-launch-intent", required=True)
+    control.add_argument("--slot-b-launch-intent-sha256", required=True)
+    control.add_argument("--slot-b-launch-completion", required=True)
+    control.add_argument("--slot-b-launch-completion-sha256", required=True)
     control.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     inputs = _reference_cli_inputs(args)
@@ -544,7 +683,11 @@ def main(argv=None):
             slot_b_report=Path(args.slot_b_report).read_bytes(),
             slot_b_report_sha256=args.slot_b_report_sha256,
             slot_b_run_receipt=Path(args.slot_b_run_receipt).read_bytes(),
-            slot_b_run_receipt_sha256=args.slot_b_run_receipt_sha256)
+            slot_b_run_receipt_sha256=args.slot_b_run_receipt_sha256,
+            slot_b_launch_intent_payload=Path(args.slot_b_launch_intent).read_bytes(),
+            slot_b_launch_intent_sha256=args.slot_b_launch_intent_sha256,
+            slot_b_launch_completion_payload=Path(args.slot_b_launch_completion).read_bytes(),
+            slot_b_launch_completion_sha256=args.slot_b_launch_completion_sha256)
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0
 

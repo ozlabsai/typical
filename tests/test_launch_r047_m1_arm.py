@@ -36,6 +36,7 @@ def _write(path, payload):
 def _fixture(tmp_path, monkeypatch):
     artifacts = causal_fixtures._artifacts()
     assignment = json.loads(artifacts["assignment"])
+    provenance = json.loads(artifacts["reference_provenance"])
     recipe = {
         "schema_version": finalizer.RECIPE_SCHEMA_VERSION,
         "trainer_sha256": _sha(b"trainer"),
@@ -45,10 +46,10 @@ def _fixture(tmp_path, monkeypatch):
             "treatment": assignment["treatment_train_sha256"],
         },
         "model_inventory_sha256": assignment["model_inventory_sha256"],
-        "parent_adapter_sha256": "1" * 64,
-        "parent_adapter_config_sha256": "2" * 64,
-        "parent_adapter_tree_sha256": "3" * 64,
-        "parent_adapter_tree_files": 2,
+        "parent_adapter_sha256": assignment["parent_adapter_sha256"],
+        "parent_adapter_config_sha256": provenance["adapter_config_sha256"],
+        "parent_adapter_tree_sha256": provenance["adapter_tree_sha256"],
+        "parent_adapter_tree_files": provenance["adapter_tree_files"],
         "image_tree_sha256": "4" * 64,
         "image_tree_files": 1,
     }
@@ -73,8 +74,11 @@ def _fixture(tmp_path, monkeypatch):
         "preparation_receipt_sha256": _sha(preparation),
     }
     reference = precheck.precheck_reference(**reference_args)
+    launch_chain = precheck_fixtures._launch_chain_inputs(
+        artifacts, reference, recipe_payload, preparation)
     control = precheck.precheck_control(**{
         **reference_args,
+        **launch_chain,
         "reference_receipt_payload": precheck._receipt_payload(reference),
         "reference_receipt_sha256": _sha(precheck._receipt_payload(reference)),
         "slot_b_predictions": artifacts["predictions"]["slot_b"],
@@ -109,6 +113,10 @@ def _fixture(tmp_path, monkeypatch):
                                  artifacts["reports"]["slot_b"]),
         "slot_b_run_receipt": _write(tmp_path / "slot-b-run-receipt.json",
                                       slot_b_receipt_payload),
+        "slot_b_launch_intent": _write(tmp_path / "slot-b-launch-intent.json",
+                                        launch_chain["slot_b_launch_intent_payload"]),
+        "slot_b_launch_completion": _write(tmp_path / "slot-b-launch-completion.json",
+                                            launch_chain["slot_b_launch_completion_payload"]),
         "control_receipt": _write(tmp_path / "control-receipt.json",
                                   precheck._receipt_payload(control)),
     }
@@ -180,8 +188,25 @@ class Completed:
 def test_control_launch_reruns_reference_and_executes_exact_frozen_command(tmp_path, monkeypatch):
     fixture = _fixture(tmp_path, monkeypatch)
     calls = []
+
+    def run(command, cwd):
+        run_out = Path(command[command.index("--out") + 1])
+        intent_path = run_out.parent / "launch-intent.json"
+        assert intent_path.is_file()
+        intent = json.loads(intent_path.read_text())
+        preparation = json.loads(fixture[0]["preparation_receipt"].read_bytes())
+        assert intent["schema_version"] == "r047-m1-launch-intent-v2"
+        assert intent["preparation_receipt_sha256"] == _sha(
+            fixture[0]["preparation_receipt"].read_bytes())
+        assert intent["launcher_sha256"] == preparation["launcher_sha256"] == _sha(
+            Path(launcher.__file__).read_bytes())
+        assert intent["prerequisite_receipt_sha256"] == {
+            "reference_receipt_sha256": _sha(fixture[0]["reference_receipt"].read_bytes())}
+        calls.append((command, cwd))
+        return Completed()
+
     result = launcher.launch(**_arguments(tmp_path, fixture),
-                             _run=lambda command, cwd: calls.append((command, cwd)) or Completed())
+                             _run=run)
     assert len(calls) == 1
     command = calls[0][0]
     assert command[1] == str(fixture[2]["trainer"].resolve())
@@ -190,7 +215,10 @@ def test_control_launch_reruns_reference_and_executes_exact_frozen_command(tmp_p
     assert command[command.index("--pair-flip-weight") + 1] == "1.0"
     assert "--val" not in command
     completion = json.loads(Path(result["completion"]).read_text())
+    assert completion["schema_version"] == "r047-m1-launch-completion-v2"
     assert completion["status"] == "trainer_completed"
+    assert completion["launch_intent_sha256"] == _sha(Path(result["intent"]).read_bytes())
+    assert completion["run_receipt_sha256"] == _sha(Path(result["run_receipt"]).read_bytes())
     assert set(completion["prerequisite_receipt_sha256"]) == {"reference_receipt_sha256"}
 
 
@@ -256,3 +284,49 @@ def test_no_overwrite_even_after_complete_run(tmp_path, monkeypatch):
     launcher.launch(**args, _run=lambda *_: Completed())
     with pytest.raises(ValueError, match="overwrite"):
         launcher.launch(**args, _run=lambda *_: Completed())
+
+
+@pytest.mark.parametrize("receipt", ["reference", "control"])
+def test_v1_prerequisite_receipts_fail_before_trainer(tmp_path, monkeypatch, receipt):
+    fixture = _fixture(tmp_path, monkeypatch)
+    args = _arguments(tmp_path, fixture, "slot_a" if receipt == "control" else "slot_b")
+    path = fixture[0]["reference_receipt"] if receipt == "reference" else fixture[1]["control_receipt"]
+    value = json.loads(path.read_bytes())
+    value["schema_version"] = f"r047-causal-{receipt}-precheck-v1"
+    value.pop("binding_sha256")
+    precheck._with_binding(value)
+    path.write_bytes(_payload(value))
+    calls = []
+    with pytest.raises(ValueError, match=f"immutable {receipt} receipt"):
+        launcher.launch(**args, _run=lambda *_: calls.append(True) or Completed())
+    assert not calls
+
+
+@pytest.mark.parametrize("artifact", ["slot_b_launch_intent", "slot_b_launch_completion"])
+def test_treatment_requires_exact_control_launch_chain(tmp_path, monkeypatch, artifact):
+    fixture = _fixture(tmp_path, monkeypatch)
+    args = _arguments(tmp_path, fixture, "slot_a")
+    incomplete = dict(fixture[1])
+    del incomplete[artifact]
+    with pytest.raises(ValueError, match="complete immutable control evidence"):
+        launcher.launch(**{**args, "control_paths": incomplete}, _run=lambda *_: Completed())
+    path = fixture[1][artifact]
+    value = json.loads(path.read_bytes())
+    value["command_plan_sha256"] = "f" * 64
+    path.write_bytes(_payload(value))
+    calls = []
+    with pytest.raises(ValueError, match="frozen launch chain"):
+        launcher.launch(**args, _run=lambda *_: calls.append(True) or Completed())
+    assert not calls
+
+
+def test_running_launcher_must_match_preparation_before_trainer(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path, monkeypatch)
+    original_hash = launcher.file_hash
+    monkeypatch.setattr(launcher, "file_hash", lambda path: (
+        "f" * 64 if Path(path) == Path(launcher.__file__) else original_hash(path)))
+    calls = []
+    with pytest.raises(ValueError, match="running launcher"):
+        launcher.launch(**_arguments(tmp_path, fixture),
+                        _run=lambda *_: calls.append(True) or Completed())
+    assert not calls

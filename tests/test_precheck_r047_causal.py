@@ -11,6 +11,7 @@ import test_compare_r047_causal as fixtures  # noqa: E402
 
 from scripts import compare_r047_causal as comparator  # noqa: E402
 from scripts import precheck_r047_causal as precheck  # noqa: E402
+from scripts import prepare_r047_m1 as preparer  # noqa: E402
 from scripts.eval_r047_executor import _canonical_json  # noqa: E402
 from scripts.precheck_r047_causal import (  # noqa: E402
     precheck_control,
@@ -33,7 +34,7 @@ def _preparation_payload(artifacts, recipe_payload=fixtures.RECIPE_PAYLOAD):
     provenance = json.loads(artifacts["reference_provenance"])
     recipe = json.loads(recipe_payload)
     value = {
-        "schema_version": "r047-m1-preparation-receipt-v1",
+        "schema_version": "r047-m1-preparation-receipt-v2",
         "status": "complete",
         "recipe_sha256": assignment["recipe_sha256"],
         "reference_provenance_sha256": assignment["reference_provenance_sha256"],
@@ -55,6 +56,12 @@ def _preparation_payload(artifacts, recipe_payload=fixtures.RECIPE_PAYLOAD):
             Path(precheck.__file__).with_name("prepare_r047_m1.py").read_bytes()),
         "finalizer_sha256": _sha(
             Path(precheck.__file__).with_name("finalize_r047_m1.py").read_bytes()),
+        "scalar_scorer_sha256": assignment["scalar_scorer_sha256"],
+        "launcher_sha256": assignment["launcher_sha256"],
+        "atomic_publisher_sha256": assignment["atomic_publisher_sha256"],
+        "superseded_preparation_receipt_sha256": assignment[
+            "superseded_preparation_receipt_sha256"],
+        "protocol_amendment_sha256": assignment["protocol_amendment_sha256"],
     }
     return _payload(value)
 
@@ -82,9 +89,60 @@ def _reference_args(artifacts, recipe_payload=fixtures.RECIPE_PAYLOAD):
     }
 
 
+def _launch_chain_inputs(artifacts, reference_receipt,
+                         recipe_payload=fixtures.RECIPE_PAYLOAD,
+                         preparation_receipt_payload=None):
+    assignment = json.loads(artifacts["assignment"])
+    provenance = json.loads(artifacts["reference_provenance"])
+    preparation_payload = (preparation_receipt_payload
+                           or _preparation_payload(artifacts, recipe_payload))
+    preparation = json.loads(preparation_payload)
+    prerequisites = {"reference_receipt_sha256": _sha(_payload(reference_receipt))}
+    plan = precheck.launch_command_plan(
+        slot="slot_b", role="control", assignment_sha=_sha(artifacts["assignment"]),
+        assignment=assignment, recipe=json.loads(recipe_payload),
+        train_sha=assignment["control_train_sha256"],
+        inventory_sha=assignment["model_inventory_sha256"],
+        parent={"parent_adapter_sha256": assignment["parent_adapter_sha256"],
+                "parent_adapter_tree_sha256": provenance["adapter_tree_sha256"]},
+        source_sha=provenance["source_checkpoint_provenance_sha256"],
+        prerequisites=prerequisites)
+    plan_sha = _sha(_canonical_json(plan).encode())
+    intent = {
+        "schema_version": precheck.INTENT_SCHEMA, "status": "invoking_trainer",
+        "slot": "slot_b", "role": "control", "command_plan_sha256": plan_sha,
+        "assignment_sha256": _sha(artifacts["assignment"]),
+        "recipe_sha256": assignment["recipe_sha256"],
+        "train_sha256": assignment["control_train_sha256"],
+        "model_inventory_sha256": assignment["model_inventory_sha256"],
+        "parent_adapter_sha256": assignment["parent_adapter_sha256"],
+        "parent_adapter_tree_sha256": provenance["adapter_tree_sha256"],
+        "source_checkpoint_provenance_sha256": provenance[
+            "source_checkpoint_provenance_sha256"],
+        "preparation_receipt_sha256": _sha(preparation_payload),
+        "launcher_sha256": preparation["launcher_sha256"],
+        "prerequisite_receipt_sha256": prerequisites,
+    }
+    intent_payload = _payload(intent)
+    completion = {
+        "schema_version": precheck.COMPLETION_SCHEMA, "status": "trainer_completed",
+        "slot": "slot_b", "role": "control", "command_plan_sha256": plan_sha,
+        "launch_intent_sha256": _sha(intent_payload),
+        "run_receipt_sha256": _sha(artifacts["receipts"]["slot_b"]),
+        "prerequisite_receipt_sha256": prerequisites,
+    }
+    return {
+        "slot_b_launch_intent_payload": intent_payload,
+        "slot_b_launch_intent_sha256": _sha(intent_payload),
+        "slot_b_launch_completion_payload": _payload(completion),
+        "slot_b_launch_completion_sha256": _sha(_payload(completion)),
+    }
+
+
 def _control_args(artifacts, reference_receipt):
     return {
         **_reference_args(artifacts),
+        **_launch_chain_inputs(artifacts, reference_receipt),
         "reference_receipt_payload": _payload(reference_receipt),
         "reference_receipt_sha256": _sha(_payload(reference_receipt)),
         "slot_b_predictions": artifacts["predictions"]["slot_b"],
@@ -151,6 +209,16 @@ def test_reference_then_control_happy_path_binds_metrics_and_provenance():
     assert control["metrics"]["K2"]["clauses"]["macro_balanced_accuracy"] == .5
     assert control["metrics"]["K3"]["clauses"]["macro_balanced_accuracy"] == .5
     assert control["artifacts"]["reference_receipt_sha256"] == _sha(_payload(reference))
+    chain = _launch_chain_inputs(artifacts, reference)
+    assert reference["schema_version"] == precheck.REFERENCE_SCHEMA
+    assert control["schema_version"] == precheck.CONTROL_SCHEMA
+    for field in ("scalar_scorer_sha256", "launcher_sha256", "atomic_publisher_sha256",
+                  "superseded_preparation_receipt_sha256", "protocol_amendment_sha256"):
+        assert reference["artifacts"][field] == json.loads(
+            _preparation_payload(artifacts))[field]
+        assert control["artifacts"][field] == reference["artifacts"][field]
+    for field in ("slot_b_launch_intent_sha256", "slot_b_launch_completion_sha256"):
+        assert control["artifacts"][field] == chain[field]
 
 
 def test_reference_rejects_tampering_and_fully_rehashed_role_train_swap():
@@ -254,6 +322,121 @@ def test_assignment_precheck_source_hash_is_bound():
             "assignment_payload": payload,
             "assignment_sha256": _sha(payload),
         })
+
+
+@pytest.mark.parametrize("field, value", [
+    ("schema_version", "r047-m1-preparation-receipt-v1"),
+    ("scalar_scorer_sha256", "f" * 64),
+    ("launcher_sha256", "f" * 64),
+    ("atomic_publisher_sha256", "f" * 64),
+    ("superseded_preparation_receipt_sha256", "f" * 64),
+    ("protocol_amendment_sha256", "f" * 64),
+])
+def test_reference_rejects_v1_or_stale_preparation_sources(field, value):
+    artifacts = fixtures._artifacts()
+    args = _reference_args(artifacts)
+    preparation = json.loads(args["preparation_receipt_payload"])
+    preparation[field] = value
+    payload = _payload(preparation)
+    with pytest.raises(ValueError, match="preparation receipt"):
+        precheck_reference(**{
+            **args, "preparation_receipt_payload": payload,
+            "preparation_receipt_sha256": _sha(payload),
+        })
+
+
+def test_reference_recomputes_amendment_hash_from_current_file(tmp_path, monkeypatch):
+    artifacts = fixtures._artifacts()
+    args = _reference_args(artifacts)
+    changed_amendment = tmp_path / "amendment.md"
+    changed_amendment.write_text("changed amendment\n")
+    monkeypatch.setattr(preparer, "PROTOCOL_AMENDMENT_PATH", changed_amendment)
+    with pytest.raises(ValueError, match="preparation receipt"):
+        precheck_reference(**args)
+
+
+@pytest.mark.parametrize("field, match", [
+    ("scalar_scorer_sha256", "running scalar scorer"),
+    ("launcher_sha256", "running launcher"),
+    ("atomic_publisher_sha256", "running atomic publisher"),
+    ("protocol_amendment_sha256", "protocol lineage"),
+    ("superseded_preparation_receipt_sha256", "protocol lineage"),
+])
+def test_rehashed_assignment_and_preparation_cannot_redefine_source_authority(field, match):
+    artifacts = fixtures._artifacts()
+    assignment = json.loads(artifacts["assignment"])
+    assignment[field] = "f" * 64
+    assignment_payload = _payload(assignment)
+    changed = {**artifacts, "assignment": assignment_payload}
+    with pytest.raises(ValueError, match=match):
+        precheck_reference(**_reference_args(changed))
+
+
+def test_control_rejects_v1_reference_receipt():
+    artifacts = fixtures._artifacts()
+    reference = precheck_reference(**_reference_args(artifacts))
+    args = _control_args(artifacts, reference)
+    reference["schema_version"] = "r047-causal-reference-precheck-v1"
+    reference.pop("binding_sha256")
+    precheck._with_binding(reference)
+    payload = _payload(reference)
+    with pytest.raises(ValueError, match="reference receipt"):
+        precheck_control(**{**args, "reference_receipt_payload": payload,
+                            "reference_receipt_sha256": _sha(payload)})
+
+
+@pytest.mark.parametrize("artifact, field, value", [
+    ("intent", "schema_version", "r047-m1-launch-intent-v1"),
+    ("completion", "schema_version", "r047-m1-launch-completion-v1"),
+    ("intent", "slot", "slot_a"),
+    ("completion", "slot", "slot_a"),
+    ("intent", "role", "treatment"),
+    ("completion", "role", "treatment"),
+    ("intent", "status", "trainer_completed"),
+    ("completion", "status", "invoking_trainer"),
+    ("intent", "command_plan_sha256", "f" * 64),
+    ("completion", "command_plan_sha256", "f" * 64),
+    ("intent", "assignment_sha256", "f" * 64),
+    ("intent", "recipe_sha256", "f" * 64),
+    ("intent", "train_sha256", "f" * 64),
+    ("intent", "preparation_receipt_sha256", "f" * 64),
+    ("intent", "launcher_sha256", "f" * 64),
+    ("intent", "prerequisite_receipt_sha256", {}),
+    ("intent", "prerequisite_receipt_sha256", {"reference_receipt_sha256": "f" * 64}),
+    ("completion", "prerequisite_receipt_sha256", {}),
+    ("completion", "launch_intent_sha256", "f" * 64),
+    ("completion", "run_receipt_sha256", "f" * 64),
+    ("intent", "extra", True),
+    ("completion", "extra", True),
+])
+def test_control_rejects_rehashed_substituted_launch_chain(artifact, field, value):
+    artifacts = fixtures._artifacts()
+    reference = precheck_reference(**_reference_args(artifacts))
+    args = _control_args(artifacts, reference)
+    payload_key = f"slot_b_launch_{artifact}_payload"
+    value_object = json.loads(args[payload_key])
+    value_object[field] = value
+    args[payload_key] = _payload(value_object)
+    args[f"slot_b_launch_{artifact}_sha256"] = _sha(args[payload_key])
+    with pytest.raises(ValueError, match=f"launch {artifact}"):
+        precheck_control(**args)
+
+
+@pytest.mark.parametrize("artifact", ["intent", "completion"])
+def test_control_requires_nonempty_hash_bound_launch_chain(artifact):
+    artifacts = fixtures._artifacts()
+    reference = precheck_reference(**_reference_args(artifacts))
+    args = _control_args(artifacts, reference)
+    args[f"slot_b_launch_{artifact}_payload"] += b"\n"
+    with pytest.raises(ValueError, match=f"launch {artifact} hash"):
+        precheck_control(**args)
+    args[f"slot_b_launch_{artifact}_payload"] = b""
+    args[f"slot_b_launch_{artifact}_sha256"] = _sha(b"")
+    with pytest.raises(ValueError, match=f"launch {artifact} JSON"):
+        precheck_control(**args)
+    del args[f"slot_b_launch_{artifact}_payload"]
+    with pytest.raises(TypeError, match=f"slot_b_launch_{artifact}_payload"):
+        precheck_control(**args)
 
 
 @pytest.mark.parametrize("kind", ["model", "report", "prediction"])

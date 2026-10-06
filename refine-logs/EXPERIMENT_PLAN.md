@@ -296,6 +296,52 @@ complete truth cube remain in one semantic cluster. Resample whole clusters with
 for exactly 20,000 paired-bootstrap replicates with seed `470047`; never row-bootstrap or pool K=2
 with K=3.
 
+**Reference-only evaluator amendment (2026-10-06, before candidate exposure).** The first frozen
+R044-R reference attempt failed closed before publishing an output directory. The 152-row parity
+subset reproduced six discrete/tie changes and a maximum probability delta of `.147969` between
+BF16 singleton and multi-row execution. A same-token-length co-row changed one frozen prediction
+from `p(yes)=.46879065` to `.5`, falsifying padding as the explanation and establishing
+batch-shape-dependent BF16 execution. This is consistent with PyTorch's numerical-accuracy contract,
+which does not guarantee that batched computation matches per-slice computation
+(`https://docs.pytorch.org/docs/stable/notes/numerical_accuracy.html#batched-computations-or-slice-computations`).
+No control or treatment adapter had been trained or evaluated, so this amendment cannot use a
+candidate outcome.
+
+Canonical causal scoring is therefore the exact JevBench serving primitive: BF16 base weights,
+Hugging Face's SDPA attention interface, one `[1,L]` input per forward, no attention mask,
+`use_cache=False`, `logits_to_keep=1`, and the last returned logit reduced in float32. R047 and the
+JevBench adapter share this implementation rather than maintaining near-duplicate forward paths.
+On the unchanged 152-row subset, the actual model must run once in canonical order and once in
+reverse order, with exact discrete agreement and maximum probability delta at most `1e-5` after
+matching by row ID. A profiler canary must observe the scaled-dot-product-attention dispatcher, and
+the report records the observed singleton-forward histogram, output dtype, base/LoRA parameter dtype
+inventories, library/CUDA/cuDNN/driver/GPU versions, attention configuration, deterministic flags,
+TF32 flags, and SDP backend flags. The comparator requires exact runtime-fingerprint equality for
+reference, control, and treatment and rejects the former batched or near-duplicate-scorer receipt
+schemas. Assignment v2 and preparation receipt v2 freeze the scorer, trusted launcher, atomic
+no-replace publisher, amendment, and superseded preparation hashes. Reference and control prechecks
+bind that authority; both candidate arms must carry exact launcher intent/completion chains.
+Official comparison v3 freshly reconstructs the reference and control receipts, validates treatment
+chronology, and records the full evidence DAG. Final Hebrew/multimodal retention cannot trust a
+reported pass flag: it must reload the raw causal evidence, rerun the bound comparator, and require
+byte-identical official comparison output before promotion.
+
+Float32 remains diagnostic only because adopting it after observing the BF16 failure would change
+the estimand: on the diagnostic row it changed singleton `p(yes)` from `.46879065` to `.52106184`.
+The original recipe, reference-provenance, assignment, and preparation-receipt hashes are
+superseded. Revised evaluator, comparator, precheck, recipe, assignment, and preparation hashes must
+be committed before the reference rerun; the old failed attempt remains an incident artifact and
+may not satisfy any launch gate. The frozen panel, parent/model trees, arms, trainer configuration,
+bootstrap, causal thresholds, and retention gates do not change.
+
+**Implementation verification (2026-10-06).** The local repository suite passes `589` tests with
+`11` skipped after the amendment. Direct JevBench CLI execution, native macOS atomic no-replace
+publication, two-publisher races, scorer/launcher/source substitution, old schemas, missing or
+swapped launch evidence, forged precheck receipts, direct-finalizer bypass, fabricated comparison
+gates/metrics/provenance, and comparison-to-retention recomputation all have fail-closed coverage.
+This is source-level evidence only; the actual Gemma-4/A100 profiler, dtype inventory, 152-row
+canonical/reverse canary, and complete reference evaluation remain required before candidate launch.
+
 **Mechanism gate:** treatment minus control must pass separately on both unseen K=2 and K=3
 co-primary strata (an intersection-union decision), satisfying all of:
 

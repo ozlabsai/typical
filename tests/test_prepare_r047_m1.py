@@ -115,6 +115,18 @@ def test_prepare_emits_exact_pretraining_consumer_artifacts(tmp_path, monkeypatc
     assert assignment["reference_provenance_sha256"] == result["reference_provenance_sha256"]
     assert recipe["arm_preflight_sha256"] == assignment["arm_preflight_sha256"]
     assert preparation["status"] == "complete"
+    assert preparer.PREPARATION_NAME == "r047-preparation-receipt-v2.json"
+    assert preparation["schema_version"] == "r047-m1-preparation-receipt-v2"
+    for field, filename in (("scalar_scorer_sha256", "singleton_option_scorer.py"),
+                            ("launcher_sha256", "launch_r047_m1_arm.py"),
+                            ("atomic_publisher_sha256", "atomic_publish.py")):
+        assert preparation[field] == hashlib.sha256(
+            Path(preparer.__file__).with_name(filename).read_bytes()).hexdigest()
+        assert assignment[field] == preparation[field]
+    assert preparation["superseded_preparation_receipt_sha256"] == (
+        "5619af841c44bdd210cfef7cf122979b96c2b04e314b83769fb82204c532c070")
+    assert preparation["protocol_amendment_sha256"] == hashlib.sha256(
+        preparer.PROTOCOL_AMENDMENT_PATH.read_bytes()).hexdigest()
     assert preparation["recipe_sha256"] == result["recipe_sha256"]
     assert preparation["reference_provenance_sha256"] == result[
         "reference_provenance_sha256"]
@@ -175,3 +187,32 @@ def test_prepare_late_failure_is_atomic_and_rerunnable(tmp_path, monkeypatch):
     monkeypatch.setattr(preparer, "_validate_assignment", validate_assignment)
     result = preparer.prepare(**args)
     assert result["assignment"] == str(args["out"] / preparer.ASSIGNMENT_NAME)
+
+
+@pytest.mark.parametrize("missing", [
+    "singleton_option_scorer.py", "launch_r047_m1_arm.py", "atomic_publish.py"])
+def test_prepare_requires_fixed_sibling_source_implementations(tmp_path, monkeypatch, missing):
+    args, _ = _fixture(tmp_path, monkeypatch)
+    script = _write(tmp_path / "scripts" / "prepare_r047_m1.py", "# preparer\n")
+    for filename in ("singleton_option_scorer.py", "launch_r047_m1_arm.py",
+                     "atomic_publish.py"):
+        if filename != missing:
+            _write(script.with_name(filename), "# source\n")
+    monkeypatch.setattr(preparer, "__file__", str(script))
+    with pytest.raises(ValueError, match="implementation must be a nonempty regular file"):
+        preparer.prepare(**args)
+    assert not args["out"].exists()
+    assert not list(args["out"].parent.glob(f".{args['out'].name}.tmp-*"))
+
+
+@pytest.mark.parametrize("payload", [None, ""])
+def test_prepare_requires_nonempty_protocol_amendment(tmp_path, monkeypatch, payload):
+    args, _ = _fixture(tmp_path, monkeypatch)
+    amendment = tmp_path / "amendment.md"
+    if payload is not None:
+        _write(amendment, payload)
+    monkeypatch.setattr(preparer, "PROTOCOL_AMENDMENT_PATH", amendment)
+    with pytest.raises(ValueError, match="protocol amendment must be a nonempty regular file"):
+        preparer.prepare(**args)
+    assert not args["out"].exists()
+    assert not list(args["out"].parent.glob(f".{args['out'].name}.tmp-*"))

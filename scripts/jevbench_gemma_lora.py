@@ -11,12 +11,20 @@ import argparse
 import datetime as dt
 import hashlib
 import json
-import math
 import random
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.singleton_option_scorer import (
+    probabilities_from_option_scores,
+    singleton_option_probabilities,
+    validate_native_probs,
+)
 
 
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -76,37 +84,6 @@ def render_prompt(task) -> tuple[str, list[str]]:
     lines.extend(f"{LETTERS[i]}. {description}" for i, (_, description) in enumerate(items))
     lines += ["", "Answer with the letter of exactly one option, and nothing else:"]
     return "\n".join(lines), [label for label, _ in items]
-
-
-def validate_native_probs(probs: dict, labels: list[str]) -> dict[str, float]:
-    if not isinstance(probs, dict) or list(probs) != labels:
-        raise ValueError("probability keys/order must exactly match task labels")
-    clean = {}
-    for label, value in probs.items():
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"probability for {label!r} is not numeric")
-        value = float(value)
-        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
-            raise ValueError(f"probability for {label!r} is not finite in [0,1]")
-        clean[label] = value
-    if not math.isclose(sum(clean.values()), 1.0, rel_tol=0.0, abs_tol=1e-9):
-        raise ValueError("probabilities do not sum to one")
-    return clean
-
-
-def probabilities_from_option_scores(labels: list[str], scores: list[float]) -> dict[str, float]:
-    """Stable softmax with an exact final residual for JSON-safe native probabilities."""
-    if len(labels) != len(scores) or not labels:
-        raise ValueError("labels and scores must be non-empty and aligned")
-    if any(not math.isfinite(float(score)) for score in scores):
-        raise ValueError("option scores must be finite")
-    peak = max(float(score) for score in scores)
-    weights = [math.exp(float(score) - peak) for score in scores]
-    total = sum(weights)
-    values = [weight / total for weight in weights]
-    if len(values) > 1:
-        values[-1] = 1.0 - sum(values[:-1])
-    return validate_native_probs(dict(zip(labels, values)), labels)
 
 
 class GemmaLoraAdapter:
@@ -193,11 +170,9 @@ class GemmaLoraAdapter:
         prompt, labels = render_prompt(task)
         ids, tokens = self._input_ids(prompt)
         with torch.inference_mode():
-            output = self._model(input_ids=ids.to(self.device), use_cache=False, logits_to_keep=1)
-            logits = output.logits[0, -1].float()
-            scores = [float(torch.logsumexp(logits[group.to(self.device)], dim=0).item())
-                      for group in self._groups[:len(labels)]]
-        return probabilities_from_option_scores(labels, scores), tokens
+            probabilities = singleton_option_probabilities(
+                self._model, ids.to(self.device), self._groups, labels)
+        return probabilities, tokens
 
     def run(self, task):
         from jevbench.adapters.base import DecisionResult

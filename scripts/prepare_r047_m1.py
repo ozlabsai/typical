@@ -13,6 +13,7 @@ from pathlib import Path
 from scripts import compare_r047_causal as comparator
 from scripts import eval_r047_executor as evaluator
 from scripts import finalize_r047_m1 as finalizer
+from scripts.atomic_publish import publish_directory_noreplace
 from scripts.build_r047_model_inventory import FROZEN_BASE_REVISION, verify_inventory
 from scripts.preflight_r043_assets import file_hash
 
@@ -22,7 +23,12 @@ FROZEN_R044_CHECKPOINT_PROVENANCE_SHA256 = (
 RECIPE_NAME = "recipe.json"
 REFERENCE_NAME = "r047-reference-provenance-v1.json"
 ASSIGNMENT_NAME = "slot-assignment.json"
-PREPARATION_NAME = "r047-preparation-receipt-v1.json"
+PREPARATION_NAME = "r047-preparation-receipt-v2.json"
+SUPERSEDED_PREPARATION_RECEIPT_SHA256 = (
+    "5619af841c44bdd210cfef7cf122979b96c2b04e314b83769fb82204c532c070")
+PROTOCOL_AMENDMENT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "refine-logs" / "R047_REFERENCE_EVALUATOR_INCIDENT.md")
 
 
 def _write_new(path, value):
@@ -38,6 +44,14 @@ def _nonempty_hash(path, label):
     if not path.is_file() or path.stat().st_size <= 0:
         raise ValueError(f"{label} must be a nonempty regular file")
     return file_hash(path)
+
+
+def _protocol_amendment_bindings():
+    return {
+        "superseded_preparation_receipt_sha256": SUPERSEDED_PREPARATION_RECEIPT_SHA256,
+        "protocol_amendment_sha256": _nonempty_hash(
+            PROTOCOL_AMENDMENT_PATH, "protocol amendment"),
+    }
 
 
 def _reference_provenance(parent_binding, model_inventory_sha256,
@@ -59,9 +73,9 @@ def _reference_provenance(parent_binding, model_inventory_sha256,
 
 def _assignment(*, control_sha256, treatment_sha256, recipe_sha256,
                 reference_provenance_sha256, parent_adapter_sha256,
-                model_inventory_sha256, evaluation_binding):
+                model_inventory_sha256, evaluation_binding, source_binding):
     return {
-        "schema_version": "r047-causal-slot-assignment-v1",
+        "schema_version": "r047-causal-slot-assignment-v2",
         "control_slot": "slot_b",
         "treatment_slot": "slot_a",
         "control_train_sha256": control_sha256,
@@ -73,6 +87,7 @@ def _assignment(*, control_sha256, treatment_sha256, recipe_sha256,
         "model_inventory_sha256": model_inventory_sha256,
         "recipe_sha256": recipe_sha256,
         **evaluation_binding,
+        **source_binding,
         "bootstrap_seed": comparator.FROZEN_BOOTSTRAP_SEED,
         "bootstrap_replicates": comparator.MIN_BOOTSTRAP_REPLICATES,
     }
@@ -80,7 +95,7 @@ def _assignment(*, control_sha256, treatment_sha256, recipe_sha256,
 
 def _validate_assignment(value):
     if (set(value) != comparator.ASSIGNMENT_FIELDS
-            or value["schema_version"] != "r047-causal-slot-assignment-v1"
+            or value["schema_version"] != "r047-causal-slot-assignment-v2"
             or value["control_slot"] != "slot_b"
             or value["treatment_slot"] != "slot_a"
             or value["control_train_sha256"] != finalizer.KNOWN_ARM_SHA256["control"]
@@ -101,7 +116,7 @@ def prepare(*, out, model_inventory_path, model_path, parent_adapter,
             trainer_path, panel_path, panel_manifest_path, panel_preflight_path,
             inventory_manifest_path, evaluator_path, comparator_path, precheck_path,
             arm_preflight_path, source_checkpoint_provenance):
-    """Validate frozen inputs, then write the three pre-training artifacts once."""
+    """Validate frozen inputs, then write the four pre-training artifacts once."""
     out = Path(out)
     if out.exists():
         raise ValueError("R047-M1 preparation artifacts already exist")
@@ -144,6 +159,18 @@ def prepare(*, out, model_inventory_path, model_path, parent_adapter,
     reference = _reference_provenance(
         parent_binding, model_inventory_sha256, source_checkpoint_provenance)
     evaluator.validate_reference_provenance(json.dumps(reference).encode())
+    source_binding = {
+        "scalar_scorer_sha256": _nonempty_hash(
+            Path(__file__).with_name("singleton_option_scorer.py"),
+            "singleton scalar scorer implementation"),
+        "launcher_sha256": _nonempty_hash(
+            Path(__file__).with_name("launch_r047_m1_arm.py"),
+            "launcher implementation"),
+        "atomic_publisher_sha256": _nonempty_hash(
+            Path(__file__).with_name("atomic_publish.py"),
+            "atomic publisher implementation"),
+        **_protocol_amendment_bindings(),
+    }
 
     with tempfile.TemporaryDirectory(prefix=f".{out.name}.tmp-", dir=out.parent) as temporary:
         staging = Path(temporary)
@@ -163,11 +190,12 @@ def prepare(*, out, model_inventory_path, model_path, parent_adapter,
             parent_adapter_sha256=parent_binding["parent_adapter_sha256"],
             model_inventory_sha256=model_inventory_sha256,
             evaluation_binding={**evaluation_binding,
-                                "arm_preflight_sha256": arm_preflight_sha256})
+                                "arm_preflight_sha256": arm_preflight_sha256},
+            source_binding=source_binding)
         _validate_assignment(assignment)
         _write_new(assignment_path, assignment)
         preparation = {
-            "schema_version": "r047-m1-preparation-receipt-v1",
+            "schema_version": "r047-m1-preparation-receipt-v2",
             "status": "complete",
             "recipe_sha256": file_hash(recipe_path),
             "reference_provenance_sha256": file_hash(reference_path),
@@ -187,9 +215,10 @@ def prepare(*, out, model_inventory_path, model_path, parent_adapter,
             "precheck_sha256": evaluation_binding["precheck_sha256"],
             "preparer_sha256": file_hash(Path(__file__)),
             "finalizer_sha256": file_hash(Path(finalizer.__file__)),
+            **source_binding,
         }
         _write_new(preparation_path, preparation)
-        staging.replace(out)
+        publish_directory_noreplace(staging, out)
     recipe_path = out / RECIPE_NAME
     reference_path = out / REFERENCE_NAME
     assignment_path = out / ASSIGNMENT_NAME

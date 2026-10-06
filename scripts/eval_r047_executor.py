@@ -761,56 +761,25 @@ def m0_gate(report, required_kinds, threshold=0.98):
             "required_kinds": list(required_kinds), "failures": failures}
 
 
-def score_causal_rows_batched(model, tokenizer, groups, rows, device, max_length,
-                              max_batch_tokens=32768, max_batch_rows=64):
-    """Score standalone text rows in stable bounded batches using the legacy letter logits."""
-    import torch
-    import torch.nn.functional as functional
-    from torch.nn.utils.rnn import pad_sequence
+def score_causal_rows_scalar(model, tokenizer, groups, rows, device, max_length,
+                             observations=None):
+    """Score causal rows with one model forward per row, preserving input order."""
+    from scripts.singleton_option_scorer import singleton_option_probabilities
     from scripts.train_gemma_decision_lora import encode, flatten_row
 
-    if max_batch_tokens <= 0 or max_batch_rows <= 0:
-        raise ValueError("causal batch limits must be positive")
-    predictions, batch = [], []
-
-    def flush():
-        if not batch:
-            return
-        ids = pad_sequence([item[1][0] for item in batch], batch_first=True,
-                           padding_value=tokenizer.pad_token_id)
-        mask = ids.ne(tokenizer.pad_token_id)
-        positions = torch.tensor([len(item[1][0]) - 1 for item in batch])
-        unique_positions = torch.unique(positions, sorted=True)
-        output = model(input_ids=ids.to(device), attention_mask=mask.to(device), use_cache=False,
-                       logits_to_keep=unique_positions.to(device))
-        offsets = {position.item(): index for index, position in enumerate(unique_positions)}
-        for index, (row_id, (_, _, labels)) in enumerate(batch):
-            logits = output.logits[index, offsets[positions[index].item()]].float()
-            scores = torch.stack([torch.logsumexp(logits[token_ids.to(device)], dim=0)
-                                  for token_ids in groups[:len(labels)]])
-            values = functional.softmax(scores, dim=0).tolist()
-            probabilities = {label: float(value) for label, value in zip(labels, values)}
-            predictions.append({"id": row_id, "probabilities": probabilities,
-                                "semantic_margin": math.log(
-                                    max(probabilities["yes"], 1e-12)
-                                    / max(probabilities["no"], 1e-12))})
-        batch.clear()
-
+    predictions = []
     for row in rows:
         examples = flatten_row(row)
         if len(examples) != 1 or examples[0].get("image"):
-            raise ValueError(f"{row.get('id')}: causal batched scorer needs one text question")
-        encoded = encode(examples[0], tokenizer, max_length, shuffle=False, include_labels=True)
-        proposed_rows = len(batch) + 1
-        proposed_length = max([len(item[1][0]) for item in batch] + [len(encoded[0])])
-        if batch and (proposed_rows > max_batch_rows
-                      or proposed_rows * proposed_length > max_batch_tokens):
-            flush()
-        if len(encoded[0]) > max_batch_tokens:
-            raise ValueError(
-                f"{row.get('id')}: encoded length exceeds causal max-batch-tokens")
-        batch.append((row["id"], encoded))
-    flush()
+            raise ValueError(f"{row.get('id')}: causal scalar scorer needs one text question")
+        ids, _, labels = encode(
+            examples[0], tokenizer, max_length, shuffle=False, include_labels=True)
+        ids = ids.unsqueeze(0).to(device)
+        probabilities = singleton_option_probabilities(model, ids, groups, labels, observations)
+        predictions.append({"id": row["id"], "probabilities": probabilities,
+                            "semantic_margin": math.log(
+                                max(probabilities["yes"], 1e-12)
+                                / max(probabilities["no"], 1e-12))})
     return predictions
 
 
@@ -827,31 +796,36 @@ def causal_parity_subset(rows):
     return selected
 
 
-def audit_causal_batch_parity(rows, batched, scalar, tolerance=1e-5):
-    """Require actual-model batched scoring to preserve scalar decisions and probabilities."""
+def audit_causal_scalar_repeatability(rows, production, reverse, tolerance=1e-5):
+    """Compare actual-model canonical and reverse-order singleton passes by row ID."""
     if tolerance != 1e-5:
         raise ValueError("causal parity tolerance is frozen at 1e-5")
     expected_ids = [row["id"] for row in rows]
-    if ([item.get("id") for item in batched] != expected_ids
-            or [item.get("id") for item in scalar] != expected_ids):
-        raise ValueError("causal parity predictions do not preserve frozen subset order")
+    if ([item.get("id") for item in production] != expected_ids
+            or [item.get("id") for item in reverse] != list(reversed(expected_ids))
+            or len(set(expected_ids)) != len(expected_ids)):
+        raise ValueError("causal repeatability predictions require canonical and reverse order")
     maximum = 0.0
-    for left, right in zip(batched, scalar):
+    reverse_by_id = {item["id"]: item for item in reverse}
+    for left in production:
+        right = reverse_by_id[left["id"]]
         left_no, left_yes = _probabilities(left, left["id"])
         right_no, right_yes = _probabilities(right, right["id"])
         left_label = "yes" if left_yes > left_no else "no" if left_no > left_yes else "tie"
         right_label = "yes" if right_yes > right_no else "no" if right_no > right_yes else "tie"
         if left_label != right_label:
-            raise ValueError(f"{left['id']}: batched/scalar discrete prediction differs")
+            raise ValueError(f"{left['id']}: repeatability discrete prediction differs")
         maximum = max(maximum, abs(left_no - right_no), abs(left_yes - right_yes))
     if maximum > tolerance:
-        raise ValueError(f"batched/scalar probability delta {maximum} exceeds {tolerance}")
+        raise ValueError(f"repeatability probability delta {maximum} exceeds {tolerance}")
     subset_hash = hashlib.sha256(
         ("\n".join(expected_ids) + "\n").encode()).hexdigest()
-    return {"status": "pass", "rows": len(rows), "subset_ids_sha256": subset_hash,
-            "exact_discrete_outputs": True, "max_abs_probability_delta": maximum,
-            "tolerance": tolerance,
-            "selection": "first_frozen_row_per_arity_language_order_role_family_primitive"}
+    return {"status": "pass", "rows": len(rows),
+            "selection": "first_frozen_row_per_arity_language_order_role_family_primitive",
+            "subset_sha256": subset_hash, "exact_discrete_match": True,
+            "max_probability_delta": maximum, "probability_tolerance": tolerance,
+            "execution_mode": "scalar", "effective_batch_rows": 1,
+            "base_weight_dtype": "bfloat16", "attention_interface": "sdpa", "max_length": 8192}
 
 
 def main(argv=None):
@@ -873,14 +847,19 @@ def main(argv=None):
     parser.add_argument("--reference-provenance")
     parser.add_argument("--reference-source-provenance")
     parser.add_argument("--base-model-inventory")
-    parser.add_argument("--max-batch-tokens", type=int, default=32768)
-    parser.add_argument("--max-batch-rows", type=int, default=64)
+    parser.add_argument("--max-batch-rows", type=int, default=1)
     args = parser.parse_args(argv)
+
+    if args.causal_standalone and args.max_batch_rows != 1:
+        parser.error("causal standalone scoring requires --max-batch-rows 1")
+    if args.causal_standalone and args.max_length != 8192:
+        parser.error("causal standalone scoring requires --max-length 8192")
 
     import torch
     from peft import PeftModel
     from transformers import AutoModelForImageTextToText, AutoTokenizer
-    from scripts.score_action_panel import score_group
+    from scripts.singleton_option_scorer import (
+        ForwardObservations, collect_runtime_fingerprint, source_sha256)
     from scripts.train_gemma_decision_lora import letter_token_groups
 
     rows = _read(args.data)
@@ -931,28 +910,33 @@ def main(argv=None):
     groups = letter_token_groups(tokenizer)
     model = AutoModelForImageTextToText.from_pretrained(
         args.model, dtype=torch.bfloat16, local_files_only=True, attn_implementation="sdpa")
+    if (next(model.parameters()).dtype != torch.bfloat16
+            or getattr(model.config, "_attn_implementation", None) != "sdpa"):
+        raise ValueError("causal model did not load with bfloat16 and SDPA")
     if args.adapter:
         model = PeftModel.from_pretrained(model, args.adapter, local_files_only=True)
     model.to("cuda").eval()
     predictions = []
-    parity_report = None
-    with torch.no_grad():
+    repeatability_report = None
+    observations = ForwardObservations(require_sdpa=args.causal_standalone)
+    with torch.inference_mode():
         if args.causal_standalone:
             parity_rows = causal_parity_subset(selected)
-            parity_batched = score_causal_rows_batched(
+            if len(parity_rows) != 152:
+                raise ValueError("causal repeatability canary requires the frozen 152-row subset")
+            parity_production = score_causal_rows_scalar(
                 model, tokenizer, groups, parity_rows, torch.device("cuda"), args.max_length,
-                args.max_batch_tokens, args.max_batch_rows)
-            parity_scalar = []
-            for row in parity_rows:
-                probabilities = score_group(
-                    model, tokenizer, groups, row, torch.device("cuda"), args.max_length)["q00"]
-                parity_scalar.append({"id": row["id"], "probabilities": probabilities})
-            parity_report = audit_causal_batch_parity(
-                parity_rows, parity_batched, parity_scalar)
-            predictions = score_causal_rows_batched(
+                observations)
+            parity_reverse = score_causal_rows_scalar(
+                model, tokenizer, groups, list(reversed(parity_rows)), torch.device("cuda"),
+                args.max_length, observations)
+            repeatability_report = audit_causal_scalar_repeatability(
+                parity_rows, parity_production, parity_reverse)
+            predictions = score_causal_rows_scalar(
                 model, tokenizer, groups, selected, torch.device("cuda"), args.max_length,
-                args.max_batch_tokens, args.max_batch_rows)
+                observations)
         else:
+            from scripts.score_action_panel import score_group
             for row in selected:
                 projected_by_parent = row_clause_views(row)
                 for view in row["paired_views"]:
@@ -966,6 +950,8 @@ def main(argv=None):
                                                 max(probabilities["yes"], 1e-12)
                                                 / max(probabilities["no"], 1e-12))})
     if args.causal_standalone:
+        if [item.get("id") for item in predictions] != [row.get("id") for row in rows]:
+            raise ValueError("causal singleton scorer changed the frozen panel row order")
         predictions = seal_causal_predictions(rows, predictions)
         report = causal_coverage_report(predictions)
         prediction_payload = "".join(
@@ -998,7 +984,11 @@ def main(argv=None):
             "evaluator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "adapter_tree_sha256": adapter_tree_sha256,
             "adapter_tree_files": adapter_tree_files,
-            "batch_scalar_parity": parity_report,
+            "scalar_repeatability": repeatability_report,
+            "scalar_scorer_sha256": source_sha256(),
+            "forward_batch_histogram": observations.report(),
+            "runtime_fingerprint": collect_runtime_fingerprint(
+                model, observations, torch.device("cuda")),
         })
         if run_receipt_payload is not None:
             report.update({

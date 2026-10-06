@@ -9,7 +9,7 @@ import torch
 from scripts.build_r045_compositional_transfer import _pair
 from scripts.eval_r047_executor import (
     audit,
-    audit_causal_batch_parity,
+    audit_causal_scalar_repeatability,
     causal_parity_subset,
     causal_coverage_report,
     clause_view,
@@ -17,7 +17,7 @@ from scripts.eval_r047_executor import (
     execute_program,
     m0_gate,
     row_clause_views,
-    score_causal_rows_batched,
+    score_causal_rows_scalar,
     seal_causal_predictions,
     validate_sealed_causal_predictions,
     validate_causal_panel_payload,
@@ -169,8 +169,18 @@ def test_causal_seal_rejects_missing_semantic_binding():
             [row], [{"id": row["id"], "probabilities": {"no": .1, "yes": .9}}])
 
 
-def test_causal_batched_scorer_is_stable_across_batch_boundaries(monkeypatch):
+@pytest.mark.parametrize("shape", [(2, 3), (0, 3), (1, 0), (3,)])
+def test_shared_causal_scorer_rejects_non_singleton_inputs(shape):
+    from scripts.singleton_option_scorer import singleton_option_probabilities
+
+    with pytest.raises(ValueError, match="B=1"):
+        singleton_option_probabilities(
+            object(), torch.zeros(shape, dtype=torch.long), [torch.tensor([0])], ["no"])
+
+
+def test_causal_production_scorer_uses_singleton_forwards_and_is_order_invariant(monkeypatch):
     import scripts.train_gemma_decision_lora as trainer
+    from scripts.singleton_option_scorer import ForwardObservations
 
     rows = [{"id": "row-a", "token": 1, "length": 2},
             {"id": "row-b", "token": 2, "length": 3},
@@ -184,27 +194,87 @@ def test_causal_batched_scorer_is_stable_across_batch_boundaries(monkeypatch):
     monkeypatch.setattr(trainer, "encode", fake_encode)
 
     class Model:
-        def __call__(self, input_ids, attention_mask, use_cache, logits_to_keep):
-            logits = torch.zeros((len(input_ids), len(logits_to_keep), 4))
-            for index in range(len(input_ids)):
-                position = int(attention_mask[index].sum()) - 1
-                offset = int((logits_to_keep == position).nonzero()[0])
-                token = int(input_ids[index, 0])
-                logits[index, offset, 1 if token == 1 else 0] = 2
+        def __init__(self):
+            self.batch_sizes = []
+
+        def __call__(self, input_ids, use_cache, logits_to_keep):
+            self.batch_sizes.append(input_ids.shape[0])
+            assert input_ids.shape[0] == 1
+            assert use_cache is False and logits_to_keep == 1
+            logits = torch.zeros((1, 1, 4))
+            token = int(input_ids[0, 0])
+            logits[0, 0, 1 if token == 1 else 0] = 2
+            # A batch-size-sensitive model would alter the logits outside singleton calls.
+            logits[0, 0, 2] = float(input_ids.shape[0] - 1)
             return SimpleNamespace(logits=logits)
 
     class Tokenizer:
         pad_token_id = 0
 
     groups = [torch.tensor([0]), torch.tensor([1])]
-    together = score_causal_rows_batched(
-        Model(), Tokenizer(), groups, rows, torch.device("cpu"), 10,
-        max_batch_tokens=6, max_batch_rows=2)
-    singly = score_causal_rows_batched(
-        Model(), Tokenizer(), groups, rows, torch.device("cpu"), 10,
-        max_batch_tokens=10, max_batch_rows=1)
-    assert together == singly
-    assert [item["id"] for item in together] == [row["id"] for row in rows]
+    model = Model()
+    observations = ForwardObservations()
+    all_rows = score_causal_rows_scalar(
+        model, Tokenizer(), groups, rows, torch.device("cpu"), 10, observations)
+    left = score_causal_rows_scalar(
+        model, Tokenizer(), groups, rows[:1], torch.device("cpu"), 10)
+    right = score_causal_rows_scalar(
+        model, Tokenizer(), groups, rows[1:], torch.device("cpu"), 10)
+    reversed_rows = score_causal_rows_scalar(
+        model, Tokenizer(), groups, list(reversed(rows)), torch.device("cpu"), 10)
+    assert all_rows == left + right
+    assert {item["id"]: item for item in all_rows} == {
+        item["id"]: item for item in reversed_rows}
+    repeatability = audit_causal_scalar_repeatability(rows, all_rows, reversed_rows)
+    assert repeatability["status"] == "pass" and repeatability["max_probability_delta"] == 0.0
+    with pytest.raises(ValueError, match="canonical and reverse order"):
+        audit_causal_scalar_repeatability(rows, all_rows, all_rows)
+    assert model.batch_sizes == [1] * 9
+    assert observations.report() == {"1": 3}
+    assert observations.logits_dtypes == {"float32"}
+
+
+def test_profiler_canary_fails_when_sdpa_dispatch_is_absent(monkeypatch):
+    from contextlib import nullcontext
+    from scripts.singleton_option_scorer import ForwardObservations, singleton_option_probabilities
+
+    profiler = SimpleNamespace(key_averages=lambda: [SimpleNamespace(key="aten::matmul")])
+    monkeypatch.setattr(torch.profiler, "profile", lambda **kwargs: nullcontext(profiler))
+    ids = SimpleNamespace(ndim=2, shape=(1, 3), device=SimpleNamespace(type="cuda"))
+    observations = ForwardObservations(require_sdpa=True)
+    with pytest.raises(ValueError, match="did not observe scaled_dot_product_attention"):
+        singleton_option_probabilities(
+            lambda **kwargs: SimpleNamespace(logits=torch.zeros(1, 1, 2)), ids,
+            [torch.tensor([0]), torch.tensor([1])], ["no", "yes"], observations)
+    assert observations.report() == {"1": 1}
+    assert not observations.sdpa_observed
+
+
+def test_runtime_fingerprint_collects_real_parameter_dtypes_without_gpu(monkeypatch):
+    import scripts.singleton_option_scorer as scorer
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(2, 3, dtype=torch.bfloat16))
+            self.lora_A = torch.nn.Parameter(torch.ones(2, 2, dtype=torch.float32))
+            self.config = SimpleNamespace(
+                get_text_config=lambda: SimpleNamespace(_attn_implementation="sdpa"))
+
+    monkeypatch.setattr(scorer, "version", lambda package: "1.2.3")
+    monkeypatch.setattr(torch.version, "cuda", "12.8")
+    monkeypatch.setattr(torch.backends.cudnn, "version", lambda: 91002)
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda device: "Test GPU")
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: (9, 0))
+    monkeypatch.setattr(scorer.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout="560.1\n"))
+    observations = scorer.ForwardObservations(require_sdpa=True)
+    observations.sdpa_observed = True
+    observations.logits_dtypes = {"bfloat16"}
+    result = scorer.collect_runtime_fingerprint(Model(), observations, "cuda")
+    assert result["base_parameter_dtype_counts"] == {"bfloat16": 6}
+    assert result["adapter_parameter_dtype_counts"] == {"float32": 4}
+    assert result["driver_version"] == "560.1"
+    assert result["gpu_capability"] == [9, 0]
 
 
 def test_causal_panel_manifest_binding_and_frozen_contract(tmp_path):
@@ -228,7 +298,7 @@ def test_causal_panel_manifest_binding_and_frozen_contract(tmp_path):
             payload, json.dumps(changed).encode(), require_frozen=False)
 
 
-def test_run_receipt_and_batch_scalar_parity_contracts():
+def test_run_receipt_and_scalar_repeatability_contracts():
     sha = hashlib.sha256(b"x").hexdigest()
     receipt = {"schema_version": "r047-causal-run-receipt-v1", "slot": "slot_a",
                "status": "complete", "checkpoint_step": 400, "train_sha256": sha,
@@ -248,16 +318,40 @@ def test_run_receipt_and_batch_scalar_parity_contracts():
     rows = [{"id": "a"}, {"id": "b"}]
     same = [{"id": "a", "probabilities": {"no": .1, "yes": .9}},
             {"id": "b", "probabilities": {"no": .8, "yes": .2}}]
-    report = audit_causal_batch_parity(rows, same, copy.deepcopy(same))
-    assert report["exact_discrete_outputs"] and report["max_abs_probability_delta"] == 0
+    report = audit_causal_scalar_repeatability(rows, same, list(reversed(copy.deepcopy(same))))
+    assert report["exact_discrete_match"] and report["max_probability_delta"] == 0
+    assert report["execution_mode"] == "scalar"
+    assert report["effective_batch_rows"] == 1
+    assert report["base_weight_dtype"] == "bfloat16"
+    assert report["attention_interface"] == "sdpa" and report["max_length"] == 8192
     changed = copy.deepcopy(same)
     changed[0]["probabilities"] = {"no": .10002, "yes": .89998}
     with pytest.raises(ValueError, match="probability delta"):
-        audit_causal_batch_parity(rows, same, changed)
+        audit_causal_scalar_repeatability(rows, same, list(reversed(changed)))
     changed = copy.deepcopy(same)
     changed[0]["probabilities"] = {"no": .9, "yes": .1}
     with pytest.raises(ValueError, match="discrete prediction differs"):
-        audit_causal_batch_parity(rows, same, changed)
+        audit_causal_scalar_repeatability(rows, same, list(reversed(changed)))
+
+
+def test_causal_cli_rejects_multirow_batches():
+    from scripts.eval_r047_executor import main
+
+    with pytest.raises(SystemExit) as error:
+        main(["--model", "model", "--model-revision", "revision",
+              "--data", "panel.jsonl", "--out", "out", "--causal-standalone",
+              "--max-batch-rows", "2"])
+    assert error.value.code == 2
+
+
+def test_causal_cli_rejects_nonfrozen_max_length():
+    from scripts.eval_r047_executor import main
+
+    with pytest.raises(SystemExit) as error:
+        main(["--model", "model", "--model-revision", "revision",
+              "--data", "panel.jsonl", "--out", "out", "--causal-standalone",
+              "--max-length", "4096"])
+    assert error.value.code == 2
 
 
 def test_model_inventory_verifies_actual_tree_and_revision(tmp_path):

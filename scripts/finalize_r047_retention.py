@@ -35,7 +35,7 @@ from scripts.preflight_r043_assets import file_hash, tree_hash
 
 MANIFEST_SCHEMA = "r047-retention-manifest-v1"
 EVALUATION_RECEIPT_SCHEMA = "r047-retention-evaluation-receipt-v1"
-FINAL_RECEIPT_SCHEMA = "r047-retention-final-v1"
+FINAL_RECEIPT_SCHEMA = "r047-retention-final-v2"
 ROLES = ("reference", "control", "treatment")
 SUITES = ("retention", "action", "renderer", "mmhe", "pair")
 RETENTION_SUITES = ("wf", "wh", "replay")
@@ -43,6 +43,23 @@ ACTION_MODES = ("raw", "calibrated")
 RENDERER_CELLS = ("bare_no", "bare_yes", "canonical_no", "canonical_yes")
 MM_SUITES = ("he", "en", "real", "mismatch", "gold_dropped")
 PAIR_METRICS = ("accuracy", "exact_action_accuracy", "twin_both_correct")
+
+CAUSAL_EVIDENCE_KEYS = {
+    "assignment", "recipe", "preparation_receipt", "reference_receipt",
+    "control_receipt", "reference_predictions", "reference_report",
+    "slot_a_predictions", "slot_a_report", "slot_a_run_receipt",
+    "slot_b_predictions", "slot_b_report", "slot_b_run_receipt",
+    "panel", "panel_manifest", "panel_preflight", "inventory_manifest",
+    "arm_preflight", "reference_provenance", "slot_a_launch_intent",
+    "slot_a_launch_completion", "slot_b_launch_intent",
+    "slot_b_launch_completion",
+}
+CAUSAL_CHRONOLOGY_KEYS = {
+    "preparation_receipt_sha256", "reference_receipt_sha256",
+    "slot_b_launch_intent_sha256", "slot_b_launch_completion_sha256",
+    "control_receipt_sha256", "slot_a_launch_intent_sha256",
+    "slot_a_launch_completion_sha256",
+}
 
 INPUT_KEYS = {
     "retention_wf", "retention_wh", "retention_replay",
@@ -209,7 +226,7 @@ def _validate_assignment(payload, manifest):
     if _sha(payload) != manifest["causal_assignment_sha256"]:
         raise ValueError("causal assignment hash differs from retention manifest")
     if (set(assignment) != causal_comparator.ASSIGNMENT_FIELDS
-            or assignment.get("schema_version") != "r047-causal-slot-assignment-v1"
+            or assignment.get("schema_version") != "r047-causal-slot-assignment-v2"
             or assignment.get("control_slot") != "slot_b"
             or assignment.get("treatment_slot") != "slot_a"
             or assignment.get("control_train_sha256") != FROZEN_CONTROL_TRAIN_SHA256
@@ -671,7 +688,97 @@ def _validate_receipt(receipt, *, role, suite, manifest_sha256, manifest, bindin
         raise ValueError(f"{role}/{suite} evaluation receipt mismatch: {failures}")
 
 
-def _validate_causal_comparison(payload, assignment, assignment_sha256, bindings):
+def _official_json_payload(value):
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _load_causal_evidence(spec_payload):
+    """Read the exact, closed set of artifacts needed for causal recomputation."""
+    spec = _load_object(spec_payload, "causal evidence spec")
+    if set(spec) != CAUSAL_EVIDENCE_KEYS:
+        raise ValueError("causal evidence spec is incomplete or contains unknown keys")
+    if any(type(path) is not str or not path for path in spec.values()):
+        raise ValueError("causal evidence spec paths must be nonempty strings")
+    return spec, {key: _read(path, f"causal evidence {key}")
+                  for key, path in spec.items()}
+
+
+def _recompute_causal_comparison(*, evidence, assignment_payload,
+                                 recipe_payload, reference_provenance_payload,
+                                 control_run_receipt_payload,
+                                 treatment_run_receipt_payload,
+                                 compare_bound_payloads):
+    exact_inputs = {
+        "assignment": assignment_payload,
+        "recipe": recipe_payload,
+        "reference_provenance": reference_provenance_payload,
+        "slot_b_run_receipt": control_run_receipt_payload,
+        "slot_a_run_receipt": treatment_run_receipt_payload,
+    }
+    failures = [key for key, expected in exact_inputs.items()
+                if evidence[key] != expected]
+    if failures:
+        raise ValueError(
+            f"causal evidence differs from retention inputs: {failures}")
+
+    digest = {key: _sha(payload) for key, payload in evidence.items()}
+    return compare_bound_payloads(
+        slot_a_predictions=evidence["slot_a_predictions"],
+        slot_b_predictions=evidence["slot_b_predictions"],
+        reference_predictions=evidence["reference_predictions"],
+        slot_a_report=evidence["slot_a_report"],
+        slot_b_report=evidence["slot_b_report"],
+        reference_report=evidence["reference_report"],
+        panel_payload=evidence["panel"],
+        panel_manifest_payload=evidence["panel_manifest"],
+        panel_preflight_payload=evidence["panel_preflight"],
+        inventory_manifest_payload=evidence["inventory_manifest"],
+        arm_preflight_payload=evidence["arm_preflight"],
+        reference_provenance_payload=evidence["reference_provenance"],
+        assignment_payload=evidence["assignment"],
+        recipe_payload=evidence["recipe"],
+        preparation_receipt_payload=evidence["preparation_receipt"],
+        reference_receipt_payload=evidence["reference_receipt"],
+        control_receipt_payload=evidence["control_receipt"],
+        slot_a_run_receipt=evidence["slot_a_run_receipt"],
+        slot_b_run_receipt=evidence["slot_b_run_receipt"],
+        slot_a_launch_intent_payload=evidence["slot_a_launch_intent"],
+        slot_a_launch_completion_payload=evidence["slot_a_launch_completion"],
+        slot_b_launch_intent_payload=evidence["slot_b_launch_intent"],
+        slot_b_launch_completion_payload=evidence["slot_b_launch_completion"],
+        slot_a_report_sha256=digest["slot_a_report"],
+        slot_b_report_sha256=digest["slot_b_report"],
+        reference_report_sha256=digest["reference_report"],
+        slot_a_run_receipt_sha256=digest["slot_a_run_receipt"],
+        slot_b_run_receipt_sha256=digest["slot_b_run_receipt"],
+        slot_a_launch_intent_sha256=digest["slot_a_launch_intent"],
+        slot_a_launch_completion_sha256=digest["slot_a_launch_completion"],
+        slot_b_launch_intent_sha256=digest["slot_b_launch_intent"],
+        slot_b_launch_completion_sha256=digest["slot_b_launch_completion"],
+        panel_manifest_sha256=digest["panel_manifest"],
+        assignment_sha256=digest["assignment"],
+        preparation_receipt_sha256=digest["preparation_receipt"],
+        reference_receipt_sha256=digest["reference_receipt"],
+        control_receipt_sha256=digest["control_receipt"],
+    )
+
+
+def _causal_chronology(evidence):
+    return {
+        "preparation_receipt_sha256": _sha(evidence["preparation_receipt"]),
+        "reference_receipt_sha256": _sha(evidence["reference_receipt"]),
+        "slot_b_launch_intent_sha256": _sha(evidence["slot_b_launch_intent"]),
+        "slot_b_launch_completion_sha256": _sha(
+            evidence["slot_b_launch_completion"]),
+        "control_receipt_sha256": _sha(evidence["control_receipt"]),
+        "slot_a_launch_intent_sha256": _sha(evidence["slot_a_launch_intent"]),
+        "slot_a_launch_completion_sha256": _sha(
+            evidence["slot_a_launch_completion"]),
+    }
+
+
+def _validate_causal_comparison(payload, assignment, assignment_sha256, bindings,
+                                chronology):
     report = _load_object(payload, "causal comparison")
     provenance = report.get("provenance")
     preassignment = report.get("preassignment")
@@ -683,15 +790,17 @@ def _validate_causal_comparison(payload, assignment, assignment_sha256, bindings
         "pre_frozen_slot_assignment": True,
         "evaluator_sha256": assignment["evaluator_sha256"],
         "comparator_sha256": assignment["comparator_sha256"],
+        "precheck_sha256": assignment["precheck_sha256"],
         "bootstrap_seed": assignment["bootstrap_seed"],
         "bootstrap_replicates": assignment["bootstrap_replicates"],
     }
-    if (report.get("schema_version") != "r047-causal-comparison-v2"
+    if (report.get("schema_version") != "r047-causal-comparison-v3"
             or not isinstance(report.get("co_primary_gate"), dict)
             or type(report["co_primary_gate"].get("passed")) is not bool
             or preassignment != expected_preassignment
             or not isinstance(provenance, dict)
             or provenance.get("assignment") != assignment
+            or provenance.get("chronology") != chronology
             or not isinstance(receipt_hashes, dict)):
         raise ValueError("causal comparison provenance is invalid")
     for role in ("control", "treatment"):
@@ -705,7 +814,7 @@ def _validate_causal_comparison(payload, assignment, assignment_sha256, bindings
 
 def finalize(*, manifest_payload, manifest_sha256, assignment_payload, recipe_payload,
              model_inventory_payload, model_path, input_paths, code_paths,
-             causal_comparison_payload, role_bundles,
+             causal_comparison_payload, causal_evidence_spec_payload, role_bundles,
              source_checkpoint_provenance_payload):
     """Revalidate all postrun evidence and return the sole R047-M2 promotion receipt."""
     if _sha(manifest_payload) != manifest_sha256:
@@ -751,8 +860,29 @@ def finalize(*, manifest_payload, manifest_sha256, assignment_payload, recipe_pa
             report_hashes[role][suite] = _sha(report_payload)
             receipt_hashes[role][suite] = _sha(receipt_payload)
 
+    _, causal_evidence = _load_causal_evidence(causal_evidence_spec_payload)
+    recomputed = _recompute_causal_comparison(
+        evidence=causal_evidence, assignment_payload=assignment_payload,
+        recipe_payload=recipe_payload,
+        reference_provenance_payload=_read(
+            role_bundles["reference"]["provenance"], "reference provenance"),
+        control_run_receipt_payload=_read(
+            role_bundles["control"]["provenance"], "control provenance"),
+        treatment_run_receipt_payload=_read(
+            role_bundles["treatment"]["provenance"], "treatment provenance"),
+        compare_bound_payloads=causal_comparator.compare_bound_payloads)
+    official_causal_payload = _official_json_payload(recomputed)
+    if causal_comparison_payload != official_causal_payload:
+        raise ValueError(
+            "causal comparison differs from exact official recomputation")
+    chronology = recomputed.get("provenance", {}).get("chronology")
+    if (not isinstance(chronology, dict)
+            or set(chronology) != CAUSAL_CHRONOLOGY_KEYS
+            or chronology != _causal_chronology(causal_evidence)):
+        raise ValueError("causal comparison chronology differs from supplied evidence")
     causal = _validate_causal_comparison(
-        causal_comparison_payload, assignment, manifest["causal_assignment_sha256"], bindings)
+        official_causal_payload, assignment, manifest["causal_assignment_sha256"],
+        bindings, chronology)
     parent = parsed["reference"]
     arm_results = {}
     for role in ("control", "treatment"):
@@ -784,6 +914,8 @@ def finalize(*, manifest_payload, manifest_sha256, assignment_payload, recipe_pa
         "manifest_sha256": manifest_sha256,
         "causal_assignment_sha256": manifest["causal_assignment_sha256"],
         "causal_comparison_sha256": causal_sha,
+        "causal_evidence_spec_sha256": _sha(causal_evidence_spec_payload),
+        "causal_chronology_sha256": chronology,
         "causal_primary_pass": causal["co_primary_gate"]["passed"],
         "model_inventory_sha256": manifest["model_inventory_sha256"],
         "adapter_provenance_sha256": {role: bindings[role]["provenance_sha256"]
@@ -845,6 +977,7 @@ def main(argv=None):
     finish.add_argument("--causal-assignment", required=True)
     finish.add_argument("--causal-recipe", required=True)
     finish.add_argument("--causal-comparison", required=True)
+    finish.add_argument("--causal-evidence-spec", required=True)
     finish.add_argument("--reference-source-provenance", required=True)
     finish.add_argument("--bundle-spec", required=True)
     finish.add_argument("--out", required=True)
@@ -892,6 +1025,8 @@ def main(argv=None):
             model_inventory_payload=inventory_payload, model_path=args.model,
             input_paths=input_paths, code_paths=code_paths,
             causal_comparison_payload=_read(args.causal_comparison, "causal comparison"),
+            causal_evidence_spec_payload=_read(
+                args.causal_evidence_spec, "causal evidence spec"),
             role_bundles=bundle_spec,
             source_checkpoint_provenance_payload=_read(
                 args.reference_source_provenance, "reference source provenance"))
