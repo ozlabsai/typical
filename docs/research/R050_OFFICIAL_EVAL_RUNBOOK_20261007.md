@@ -79,9 +79,11 @@ cd "$TYPICAL_REPO"
 uv sync --frozen --group dev
 cd "$WORKFLOWEVALS"
 uv sync --frozen
-cd "$JEVBENCH"
-uv sync --frozen
 ```
+
+JevBench does not carry a `uv.lock` and is data/harness input to the pinned Typical runner; do not
+create an evaluator-local lock or environment for it. Every Jev command below runs from the Typical
+checkout through Typical's frozen UV environment.
 
 The wrapper scans all regular files and directories in each checkout after pipeline quiescence,
 including WorkflowEvals files created by the patch. It excludes only `.git`, virtual environments,
