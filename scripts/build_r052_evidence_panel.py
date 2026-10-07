@@ -929,6 +929,7 @@ def _build_cases(
             question_base = {
                 "text": item["text"],
                 "options": item["options"],
+                "decision_type": item["decision_type"],
                 "policy_role": item["policy_role"],
             }
             content_hash = scoring.sha256_json(question_base)

@@ -28,8 +28,8 @@ from urllib.parse import urlparse
 
 import numpy as np
 
-SCHEMA_VERSION = "r052-evidence-panel-v2"
-RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v2"
+SCHEMA_VERSION = "r052-evidence-panel-v3"
+RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v3"
 SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v2"
 SOURCE_LICENSE_POLICY = "approved-evaluation-and-redistribution-v1"
 CHUNKING_RECEIPT_VERSION = "r052-case-chunking-receipt-v1"
@@ -161,6 +161,7 @@ QUESTION_KEYS = {
     "question_key",
     "text",
     "options",
+    "decision_type",
     "policy_role",
     "twin_anchor",
     "decisive_chunk_keys",
@@ -576,6 +577,7 @@ def question_hash_payload(question: dict[str, Any]) -> dict[str, Any]:
     return {
         "text": question["text"],
         "options": question["options"],
+        "decision_type": question["decision_type"],
         "policy_role": question["policy_role"],
     }
 
@@ -1099,6 +1101,8 @@ def validate_panel(
             question_map[question_key] = question
             _require_text(question["text"], f"{question_label}.text")
             _require_text(question["policy_role"], f"{question_label}.policy_role")
+            if question["decision_type"] not in {"choice", "noul", "score"}:
+                raise ValueError(f"{question_label}.decision_type is invalid")
             if (
                 not isinstance(question["options"], list)
                 or len(question["options"]) < 2
@@ -1351,6 +1355,7 @@ def validate_panel(
 
             if (
                 len(left_question["options"]) != len(right_question["options"])
+                or left_question["decision_type"] != right_question["decision_type"]
                 or left_question["policy_role"] != right_question["policy_role"]
                 or left_question["causal_proof"]["full_outcome"]
                 != right_question["causal_proof"]["full_outcome"]
@@ -1693,6 +1698,7 @@ class LocalEmbeddingGemma2Provider:
         return (
             "task: question answering | query: "
             f"{question['text']}\noptions: {options}\npolicy role: {question['policy_role']}"
+            f"\ndecision type: {question['decision_type']}"
         )
 
     @staticmethod
@@ -1786,7 +1792,14 @@ def bm25_rank(
     question: dict[str, Any], candidates: list[dict[str, Any]]
 ) -> list[tuple[str, float]]:
     query = tokenize(
-        " ".join([question["text"], question["policy_role"], *question["options"]])
+        " ".join(
+            [
+                question["text"],
+                question["decision_type"],
+                question["policy_role"],
+                *question["options"],
+            ]
+        )
     )
     documents = [tokenize(chunk["text"]) for chunk in candidates]
     document_frequency = Counter(token for doc in documents for token in set(doc))
@@ -2048,11 +2061,13 @@ def score_method(
             record = {
                 "case_key": case["case_key"],
                 "question_key": question["question_key"],
+                "decision_type": question["decision_type"],
                 "ranking": ranking_keys,
                 "decisive": question["decisive_chunk_keys"],
                 "distractors": question["known_distractor_chunk_keys"],
                 "slices": {
                     "language": [case["language"]],
+                    "decision_type": [question["decision_type"]],
                     "context_length": [
                         "long" if case["context_tokens"] >= 8192 else "short"
                     ],

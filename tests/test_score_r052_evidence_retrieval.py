@@ -85,6 +85,7 @@ def _question(
         "question_key": key,
         "text": text,
         "options": ["allow", "deny"],
+        "decision_type": "choice",
         "policy_role": "authorization",
         "twin_anchor": anchor,
         "decisive_chunk_keys": decisive,
@@ -483,6 +484,7 @@ def test_evidence_union_is_selected_by_rank_but_reassembled_in_source_order(pane
         ]
     assert result["union_contract"]["reassembled_in_original_case_order"] is True
     assert result["slices"]["context_length"]["long"]["decisive_recall@1"] == 1.0
+    assert result["slices"]["decision_type"]["choice"]["decisive_recall@1"] == 1.0
     assert result["slices"]["decisive_modality"]["image"]["decisive_recall@1"] == 1.0
 
 
@@ -877,10 +879,14 @@ def test_fixed_chunking_requires_exact_512_max_and_64_overlap(panel):
         )
 
 
-def test_v1_panel_and_source_manifest_require_explicit_migration(panel):
+def test_prior_panel_and_source_manifest_require_explicit_migration(panel):
     old_panel = copy.deepcopy(panel)
     old_panel["schema_version"] = "r052-evidence-panel-v1"
-    with pytest.raises(ValueError, match="r052-evidence-panel-v2"):
+    with pytest.raises(ValueError, match="r052-evidence-panel-v3"):
+        _validate(old_panel)
+
+    old_panel["schema_version"] = "r052-evidence-panel-v2"
+    with pytest.raises(ValueError, match="r052-evidence-panel-v3"):
         _validate(old_panel)
 
     source, _ = _source_manifest()
