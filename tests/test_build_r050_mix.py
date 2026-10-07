@@ -180,6 +180,30 @@ def test_ids_hashes_and_eval_files_exclude_whole_executable_orbits_and_replay(tm
     assert receipt["quarantine"]["selected_hash_overlap"] == 0
 
 
+def test_quarantine_uses_semantic_identity_not_shared_grammar_stratum(tmp_path):
+    paths = _fixture(tmp_path)
+    locked = copy.deepcopy(paths["rows"]["executable"][0])
+    locked["id"] = "locked-eval"
+    locked["state"] = "independent locked evaluation case"
+    locked["meta"]["semantic_group_id"] = "locked-eval-group"
+    locked["meta"]["semantic_signature"] = _sha(b"locked-eval-semantics")
+    locked["meta"]["grammar_signature"] = "shared-structural-stratum"
+    for row in paths["rows"]["executable"]:
+        row["meta"]["grammar_signature"] = "shared-structural-stratum"
+    _update_panel_manifest(paths, paths["rows"]["executable"])
+    locked_path = _write(tmp_path / "locked-grammar.jsonl", [locked])
+
+    receipt = _build(paths, tmp_path / "mix", locked_eval_paths=[locked_path])
+
+    assert receipt["strata"]["executable"]["optimizer_slots"] == 8
+    assert receipt["quarantine"]["excluded"]["executable"] == {
+        "units": 0,
+        "optimizer_slots": 0,
+    }
+    assert "shared-structural-stratum" not in row_hashes(locked)
+    assert locked["meta"]["semantic_signature"] in row_hashes(locked)
+
+
 def test_existing_paired_schema_remains_one_optimizer_slot(tmp_path):
     paths = _fixture(tmp_path)
     paired = paths["rows"]["broad"][-2]

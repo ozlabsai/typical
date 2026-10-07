@@ -29,6 +29,13 @@ SCHEMA = "r050_training_mix_v1"
 STRATA = ("executable", "broad", "hebrew", "multimodal")
 DEFAULT_WEIGHTS = dict(zip(STRATA, ("1/2", "1/4", "1/8", "1/8")))
 ORBIT_SIZE = 8
+PROTECTED_METADATA_HASH_KEYS = frozenset({
+    "semantic_signature",
+    "latent_signature",
+    "exact_cluster_signature",
+    "encoder_semantic_signature",
+    "encoder_endpoint_signature",
+})
 
 
 def _json(value: Any, *, sort_keys: bool = False) -> bytes:
@@ -71,10 +78,12 @@ def _children(row):
 
 
 def row_hashes(row: dict[str, Any]) -> set[str]:
-    """Hashes accepted by --locked-hash: full rows, ID-free decisions, signatures.
+    """Hashes accepted by --locked-hash: rows, decisions, semantic identities.
 
     ID-free decision hashes include targets and preserve option insertion order.
     Image byte hashes and complete source-file hashes are also quarantined.
+    Structural grammar labels are deliberately excluded: they are experimental
+    strata expected to recur across otherwise disjoint train/evaluation cases.
     """
     hashes = set()
     for view in _children(row):
@@ -86,7 +95,7 @@ def row_hashes(row: dict[str, Any]) -> set[str]:
         if content:
             hashes.add(_sha(_json(content)))
         for key, value in (view.get("meta") or {}).items():
-            if key.endswith(("_signature", "_sha256")) and isinstance(value, str):
+            if key in PROTECTED_METADATA_HASH_KEYS and isinstance(value, str):
                 try:
                     hashes.add(_checked_hash(value))
                 except ValueError:
