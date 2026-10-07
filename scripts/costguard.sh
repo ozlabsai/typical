@@ -5,6 +5,7 @@ set -u
 
 POD_ID=${COSTGUARD_POD_ID:-ujiq3ud4vnhf80}
 INTERVAL_SECONDS=${COSTGUARD_INTERVAL_SECONDS:-1800}
+HOLD_MINUTES=${COSTGUARD_HOLD_MINUTES:-$(( INTERVAL_SECONDS / 60 + 5 ))}
 SSH_KEY=${COSTGUARD_SSH_KEY:-/Users/guynachshon/.runpod/ssh/RunPod-Key-Go}
 SCRIPT_DIR=${0:A:h}
 ROOT_DIR=${SCRIPT_DIR:h}
@@ -53,7 +54,7 @@ check_pod() {
   fi
   volume_in_gb=$(jq -r '.volumeInGb // "UNKNOWN"' <<< "$pod_json")
 
-  if [[ -f "$HOLD_FILE" ]] && find "$HOLD_FILE" -mmin -25 -print -quit | grep -q .; then
+  if [[ -f "$HOLD_FILE" ]] && find "$HOLD_FILE" -mmin -"$HOLD_MINUTES" -print -quit | grep -q .; then
     log "pod=$POD_ID state=RUNNING action=hold reason=recent_costguard_hold"
     return
   fi
