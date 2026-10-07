@@ -353,6 +353,8 @@ def _validate_source_manifest(
         declared_hashes.add(declared_hash)
         if scoring.artifact_sha256(path) != declared_hash:
             raise ValueError(f"source artifact {name} hash mismatch")
+        if declaration["role"] in {"raw_source", "extracted_text"}:
+            scoring.validate_reviewed_text_artifact(path, f"source artifact {name}")
         if _contains_forbidden_bytes(path):
             raise ValueError(
                 f"source artifact {name} contains benchmark lineage markers"

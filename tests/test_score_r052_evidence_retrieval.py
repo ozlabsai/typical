@@ -699,6 +699,20 @@ def test_source_snapshots_bind_raw_extraction_metadata_and_case_family(panel, tm
             SOURCE_ARTIFACT_PATHS,
         )
 
+    upstream_pdf = tmp_path / "upstream.pdf"
+    upstream_pdf.write_bytes(b"%PDF-1.7\nnot a reviewed text snapshot\n")
+    binary_paths = dict(SOURCE_ARTIFACT_PATHS)
+    binary_paths["raw-en"] = upstream_pdf
+    binary_manifest = copy.deepcopy(manifest)
+    binary_manifest["artifacts"]["raw-en"]["sha256"] = scorer.file_sha256(upstream_pdf)
+    with pytest.raises(ValueError, match="reviewed UTF-8 text snapshot"):
+        scorer.validate_source_snapshot_manifest(
+            panel,
+            binary_manifest,
+            scorer.sha256_json(binary_manifest),
+            binary_paths,
+        )
+
     mismatched = copy.deepcopy(panel)
     mismatched["cases"][0]["source_snapshot_sha256"] = SOURCE_ARTIFACT_HASHES[
         "boundary-receipt"

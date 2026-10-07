@@ -309,6 +309,23 @@ def _safe_source_artifact(path: Path, label: str) -> Path:
     return resolved
 
 
+def validate_reviewed_text_artifact(path: Path, label: str) -> None:
+    """Require a reviewed text snapshot rather than an upstream binary document."""
+    if not path.is_file():
+        raise ValueError(f"{label} must be one reviewed UTF-8 text file")
+    raw = path.read_bytes()
+    if raw.startswith(b"%PDF-") or b"\x00" in raw:
+        raise ValueError(
+            f"{label} must be a reviewed UTF-8 text snapshot, not a PDF or binary"
+        )
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} must be valid UTF-8 text") from exc
+    if not text.strip():
+        raise ValueError(f"{label} must contain non-empty reviewed text")
+
+
 def _artifact_contains_forbidden_lineage(path: Path) -> bool:
     files = (
         [path]
@@ -434,6 +451,8 @@ def validate_source_snapshot_manifest(
         )
         if artifact_sha256(path) != digest:
             raise ValueError(f"source snapshot artifact {name} hash mismatch")
+        if role in {"raw_source", "extracted_text"}:
+            validate_reviewed_text_artifact(path, f"source snapshot artifact {name}")
         if _artifact_contains_forbidden_lineage(path):
             raise ValueError(
                 f"source snapshot artifact {name} contains benchmark lineage"

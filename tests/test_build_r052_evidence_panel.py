@@ -382,6 +382,19 @@ def test_can_finalize_provider_free_panel_for_bm25_preflight(tmp_path):
     assert receipt["counts"]["providers"] == 0
 
 
+def test_rejects_upstream_pdf_as_redistributable_raw_source(tmp_path):
+    fixture = _fixture(tmp_path)
+    upstream_pdf = tmp_path / "upstream.pdf"
+    upstream_pdf.write_bytes(b"%PDF-1.7\nnot a reviewed text snapshot\n")
+    manifest = deepcopy(fixture["source_manifest"])
+    manifest["artifacts"]["raw-en"] = _artifact_declaration(upstream_pdf, "raw_source")
+    paths = dict(fixture["artifact_paths"])
+    paths["raw-en"] = upstream_pdf
+
+    with pytest.raises(ValueError, match="reviewed UTF-8 text snapshot"):
+        builder._validate_source_manifest(manifest, paths)
+
+
 def test_rejects_tampered_audit_binding_before_publication(tmp_path):
     fixture = _fixture(tmp_path)
     tampered = deepcopy(fixture["audit_results"])
