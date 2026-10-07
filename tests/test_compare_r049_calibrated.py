@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.build_r048_action_panel as r048_builder
 from scripts.build_r048_action_panel import build, write_corpus
 from scripts.compare_r049_calibrated import (
     compare_files,
@@ -115,7 +116,7 @@ def test_perfect_gain_passes_internal_stage1_gate():
 
     report = _compare(rows, control, candidate)
 
-    assert report["schema"] == "r049_calibrated_comparison_v4"
+    assert report["schema"] == "r049_calibrated_comparison_v5"
     delta = report["overall"]["paired_delta"]["equal_semantic_cluster"]
     assert delta["complete_outcome_accuracy"] == 1.0
     assert delta["categorical_brier_absolute_improvement"] == 2.0
@@ -233,12 +234,19 @@ def _write_jsonl(path, rows):
     )
 
 
-def test_file_comparison_binds_manifest_hashes_and_is_deterministic(tmp_path):
+def _small_canonical(monkeypatch):
+    counts = {"train": 224, "cal": 224, "eval": 224}
+    monkeypatch.setattr(r048_builder, "DEFAULT_ROWS", counts)
+    return counts
+
+
+def test_file_comparison_binds_manifest_hashes_and_is_deterministic(tmp_path, monkeypatch):
+    counts = _small_canonical(monkeypatch)
     artifact = tmp_path / "panel"
     write_corpus(
         artifact,
         seed=17,
-        row_counts={"train": 224, "cal": 224, "eval": 224},
+        row_counts=counts,
     )
     panel = artifact / "eval.jsonl"
     rows = [json.loads(line) for line in panel.read_text().splitlines()]
@@ -303,12 +311,13 @@ def test_file_comparison_requires_externally_frozen_panel_hash(tmp_path):
         )
 
 
-def test_file_comparison_rejects_panel_version_stripping(tmp_path):
+def test_file_comparison_rejects_panel_version_stripping(tmp_path, monkeypatch):
+    counts = _small_canonical(monkeypatch)
     artifact = tmp_path / "panel"
     write_corpus(
         artifact,
         seed=17,
-        row_counts={"train": 224, "cal": 224, "eval": 224},
+        row_counts=counts,
     )
     panel = artifact / "eval.jsonl"
     rows = [json.loads(line) for line in panel.read_text().splitlines()]
@@ -341,12 +350,13 @@ def test_file_comparison_rejects_panel_version_stripping(tmp_path):
         )
 
 
-def test_file_comparison_rejects_rewritten_subset_manifest(tmp_path):
+def test_file_comparison_rejects_rewritten_subset_manifest(tmp_path, monkeypatch):
+    counts = _small_canonical(monkeypatch)
     artifact = tmp_path / "panel"
     write_corpus(
         artifact,
         seed=17,
-        row_counts={"train": 224, "cal": 224, "eval": 224},
+        row_counts=counts,
     )
     manifest_path = artifact / "manifest.json"
     frozen_manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
@@ -374,8 +384,24 @@ def test_file_comparison_rejects_rewritten_subset_manifest(tmp_path):
             bootstrap_replicates=100,
         )
 
+    rewritten_manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="output row count is not canonical"):
+        compare_files(
+            panel,
+            control_path,
+            candidate_path,
+            manifest_path=manifest_path,
+            manifest_sha256=rewritten_manifest_sha,
+            expected_hashes={"panel": panel_sha},
+            bootstrap_replicates=100,
+        )
 
-def test_canonical_r048_signature_tampering_is_rejected():
+    with pytest.raises(ValueError, match="requires exactly 224 rows"):
+        compare_rows(rows, predictions, predictions, bootstrap_replicates=100)
+
+
+def test_canonical_r048_signature_tampering_is_rejected(monkeypatch):
+    _small_canonical(monkeypatch)
     rows = build("eval", 224, seed=48)
     for row in rows:
         row["meta"]["semantic_signature"] = "tampered"

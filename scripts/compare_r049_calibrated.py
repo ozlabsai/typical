@@ -27,7 +27,7 @@ import scripts.build_r048_action_panel as r048_builder
 from scripts.score_exact_policy_panel import NLL_PROBABILITY_FLOOR, classify
 
 
-SCHEMA = "r049_calibrated_comparison_v4"
+SCHEMA = "r049_calibrated_comparison_v5"
 DEFAULT_BOOTSTRAP_SEED = 490_049
 DEFAULT_BOOTSTRAP_REPLICATES = 20_000
 MIN_BOOTSTRAP_REPLICATES = 100
@@ -119,9 +119,14 @@ def _validate_panel(rows: list[dict[str, Any]]) -> tuple[list[str], bool]:
         if versions != {r048_builder.PANEL_VERSION}:
             raise ValueError("panel versions must match the canonical R048 version")
         splits = {row.get("meta", {}).get("split") for row in rows}
-        if len(splits) != 1 or None in splits:
-            raise ValueError("canonical R048 comparison requires exactly one split")
-        r048_builder.validate_split(rows, str(next(iter(splits))), len(rows))
+        if splits != {"eval"}:
+            raise ValueError("canonical R048 comparison requires the eval split")
+        expected_rows = r048_builder.DEFAULT_ROWS["eval"]
+        if len(rows) != expected_rows:
+            raise ValueError(
+                f"canonical R048 eval requires exactly {expected_rows} rows"
+            )
+        r048_builder.validate_split(rows, "eval", expected_rows)
     identifiers = []
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
@@ -894,6 +899,20 @@ def _verify_manifest(
     outputs = manifest.get("outputs")
     if not isinstance(outputs, dict):
         raise ValueError("panel manifest needs an outputs object")
+    if (manifest.get("row_counts") != r048_builder.DEFAULT_ROWS
+            or manifest.get("cluster_size") != r048_builder.CLUSTER_SIZE
+            or set(outputs) != set(r048_builder.SPLITS)):
+        raise ValueError("panel manifest differs from the canonical corpus cardinality")
+    for split, expected_rows in r048_builder.DEFAULT_ROWS.items():
+        output = outputs.get(split)
+        if (not isinstance(output, dict)
+                or output.get("rows") != expected_rows):
+            raise ValueError("panel manifest output row count is not canonical")
+        _checked_hash(output.get("sha256"), f"manifest {split} sha256")
+    audit = manifest.get("audit")
+    if (not isinstance(audit, dict)
+            or audit.get("all_protected_fingerprints_disjoint") is not True):
+        raise ValueError("panel manifest lacks the canonical disjointness audit")
     matches = [outputs[key] for key in (panel_path.name, panel_path.stem) if key in outputs]
     if len(matches) != 1 or not isinstance(matches[0], dict):
         raise ValueError("panel manifest must identify the panel by filename or stem")
