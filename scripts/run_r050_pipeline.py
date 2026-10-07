@@ -54,7 +54,7 @@ FROZEN_CODE_SHA256 = {
     "score_exact_policy_panel.py": "64be9dd52f9e5d32cc883b4167dff6278a3b4993bd207bbd3aa81897145aeaba",
     "singleton_option_scorer.py": "2bd954ec37121d50beea3cc238c71d4c57429f5d8466898521c3e3631a4aad2c",
     "soft_action_executor.py": "3b8ea41646f2d4c45e1c5cac47298867c8ee5cd00b6f97b6b8b0b59b58d191be",
-    "train_gemma_decision_lora.py": "74077c28e7f195fe61f2454d38fba6c7baa3338bb5d90c588346fefce30a570c",
+    "train_gemma_decision_lora_r050.py": "74077c28e7f195fe61f2454d38fba6c7baa3338bb5d90c588346fefce30a570c",
 }
 # The orchestrator cannot contain its own digest.  Its hash remains a mandatory
 # external binding; every child and transitive local dependency is literal here.
@@ -463,7 +463,7 @@ class Pipeline:
         self._validate_code_receipt(receipt, (
             "run_r050_headroom.py", "build_r050_headroom.py", "build_r048_action_panel.py",
             "score_exact_policy_panel.py", "singleton_option_scorer.py",
-            "exact_policy_executor.py", "train_gemma_decision_lora.py",
+            "exact_policy_executor.py", "train_gemma_decision_lora_r050.py",
             "build_r047_model_inventory.py", "preflight_r043_assets.py",
             "build_r050_replay_pools.py"))
         sufficient = report.get("headroom_sufficient")
@@ -493,7 +493,7 @@ class Pipeline:
             raise ValueError("gradient probe CPU thread contract is invalid")
         bindings = value.get("bindings", {})
         expected = {
-            "trainer_sha256": self.config.code_hashes["train_gemma_decision_lora.py"],
+            "trainer_sha256": self.config.code_hashes["train_gemma_decision_lora_r050.py"],
             "probe_sha256": self.config.code_hashes["probe_r050_gradient_scale.py"],
             "panel_builder_sha256": self.config.code_hashes["build_r048_action_panel.py"],
         }
@@ -523,7 +523,7 @@ class Pipeline:
             bindings = recipe.get("bindings", {})
             expected_code = {
                 "panel_builder": self.config.code_hashes["build_r048_action_panel.py"],
-                "trainer": self.config.code_hashes["train_gemma_decision_lora.py"],
+                "trainer": self.config.code_hashes["train_gemma_decision_lora_r050.py"],
                 "gradient_probe_code": self.config.code_hashes["probe_r050_gradient_scale.py"],
             }
             if any(bindings.get(name, {}).get("sha256") != digest
@@ -568,7 +568,7 @@ class Pipeline:
             "run_r050_eval.py", "run_r050_headroom.py", "build_r048_action_panel.py",
             "score_exact_policy_panel.py", "compare_r049_calibrated.py",
             "singleton_option_scorer.py", "exact_policy_executor.py",
-            "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+            "train_gemma_decision_lora_r050.py", "build_r047_model_inventory.py",
             "preflight_r043_assets.py", "run_r050_arm.py"))
         completion_sha = self._training_evidence(arm)["completion_sha256"]
         if receipt.get("arm_completion", {}).get("sha256") != completion_sha:
@@ -612,7 +612,7 @@ class Pipeline:
             directory, _runtime_contracts()["retention_completion_schema"])
         self._validate_code_receipt(receipt, (
             "run_r050_retention.py", "singleton_option_scorer.py",
-            "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+            "train_gemma_decision_lora_r050.py", "build_r047_model_inventory.py",
             "preflight_r043_assets.py", "run_r050_eval.py", "run_r050_arm.py",
             "build_r050_replay_pools.py"))
         report = _read_json(directory / "report.json", "retention report")
@@ -670,7 +670,7 @@ class Pipeline:
             "--panel-manifest", c.panel_manifest,
             "--panel-builder", c.scripts / "build_r048_action_panel.py",
             "--parent-adapter", c.parent_adapter,
-            "--trainer", c.scripts / "train_gemma_decision_lora.py",
+            "--trainer", c.scripts / "train_gemma_decision_lora_r050.py",
             "--probe", c.scripts / "probe_r050_gradient_scale.py", "--out", suite_out,
             "--expected-mix-sha256", c.mix_sha256,
             "--expected-mix-manifest-sha256", c.mix_manifest_sha256,
@@ -679,7 +679,7 @@ class Pipeline:
             "--expected-panel-sha256", c.train_panel_sha256,
             "--expected-panel-manifest-sha256", c.panel_manifest_sha256,
             "--expected-builder-sha256", c.code_hashes["build_r048_action_panel.py"],
-            "--expected-trainer-sha256", c.code_hashes["train_gemma_decision_lora.py"],
+            "--expected-trainer-sha256", c.code_hashes["train_gemma_decision_lora_r050.py"],
             "--expected-probe-sha256", c.code_hashes["probe_r050_gradient_scale.py"],
             "--expected-parent-tree-sha256", c.parent_tree_sha256,
             "--expected-parent-tree-files", c.parent_tree_files, "--assignment-seed", 50050),

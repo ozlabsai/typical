@@ -95,7 +95,7 @@ class FakeGPU:
                          "run_r050_headroom.py", "build_r050_headroom.py",
                          "build_r048_action_panel.py", "score_exact_policy_panel.py",
                          "singleton_option_scorer.py", "exact_policy_executor.py",
-                         "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+                         "train_gemma_decision_lora_r050.py", "build_r047_model_inventory.py",
                          "preflight_r043_assets.py", "build_r050_replay_pools.py")},
                      {"headroom_sufficient": self.headroom})
             returncode = 0 if self.headroom else 2
@@ -103,7 +103,7 @@ class FakeGPU:
             thread_contract = {"before": 128, "requested": 1, "during": 1, "after": 128}
             _write_json(output, {"schema_version": "r050-gradient-scale-probe-v1",
                                  "status": "complete", "bindings": {
-                                     "trainer_sha256": self.config.code_hashes["train_gemma_decision_lora.py"],
+                                     "trainer_sha256": self.config.code_hashes["train_gemma_decision_lora_r050.py"],
                                      "probe_sha256": self.config.code_hashes["probe_r050_gradient_scale.py"],
                                      "panel_builder_sha256": self.config.code_hashes["build_r048_action_panel.py"],
                                  }, "configuration": {"cpu_intraop_threads": 1},
@@ -118,7 +118,7 @@ class FakeGPU:
                           "objective": {"objective": self.objectives[arm_id]},
                           "bindings": {
                               "panel_builder": {"sha256": self.config.code_hashes["build_r048_action_panel.py"]},
-                              "trainer": {"sha256": self.config.code_hashes["train_gemma_decision_lora.py"]},
+                              "trainer": {"sha256": self.config.code_hashes["train_gemma_decision_lora_r050.py"]},
                               "gradient_probe_code": {"sha256": self.config.code_hashes["probe_r050_gradient_scale.py"]},
                           }}
                 path = _write_json(output / f"{arm_id}.json", recipe)
@@ -158,7 +158,7 @@ class FakeGPU:
                     "run_r050_eval.py", "run_r050_headroom.py", "build_r048_action_panel.py",
                     "score_exact_policy_panel.py", "compare_r049_calibrated.py",
                     "singleton_option_scorer.py", "exact_policy_executor.py",
-                    "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+                    "train_gemma_decision_lora_r050.py", "build_r047_model_inventory.py",
                     "preflight_r043_assets.py", "run_r050_arm.py")})
             _write_json(output / "complete.json", {
                 "schema": "r050_full_eval_completion_v1", "status": "complete",
@@ -188,7 +188,7 @@ class FakeGPU:
             _publish(output, pipeline._runtime_contracts()["retention_completion_schema"],
                      {"promotion_pass": passed}, {"code_sha256": self._code(
                          "run_r050_retention.py", "singleton_option_scorer.py",
-                         "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+                         "train_gemma_decision_lora_r050.py", "build_r047_model_inventory.py",
                          "preflight_r043_assets.py", "run_r050_eval.py", "run_r050_arm.py",
                          "build_r050_replay_pools.py")}, {"promotion_pass": passed})
             returncode = 0 if passed else 2
@@ -439,7 +439,7 @@ def test_frozen_code_trust_covers_current_transitive_child_closure():
         "probe_r050_gradient_scale.py", "run_r050_arm.py", "run_r050_eval.py",
         "run_r050_headroom.py", "run_r050_retention.py", "score_exact_policy_panel.py",
         "singleton_option_scorer.py", "soft_action_executor.py",
-        "train_gemma_decision_lora.py",
+        "train_gemma_decision_lora_r050.py",
     }
     assert set(pipeline.FROZEN_CODE_SHA256) == expected
     scripts = Path(pipeline.__file__).parent
