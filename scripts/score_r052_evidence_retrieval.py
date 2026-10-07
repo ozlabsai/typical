@@ -28,11 +28,11 @@ from urllib.parse import urlparse
 
 import numpy as np
 
-SCHEMA_VERSION = "r052-evidence-panel-v3"
+SCHEMA_VERSION = "r052-evidence-panel-v4"
 RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v3"
-SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v2"
+SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v3"
 SOURCE_LICENSE_POLICY = "approved-evaluation-and-redistribution-v1"
-CHUNKING_RECEIPT_VERSION = "r052-case-chunking-receipt-v1"
+CHUNKING_RECEIPT_VERSION = "r052-case-chunking-receipt-v2"
 MODEL_ID = "google/embeddinggemma-2"
 MODEL_REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b"
 TRANSFORMERS_VERSION = "5.19.0"
@@ -106,8 +106,8 @@ SOURCE_LICENSE_KEYS = {
 }
 SOURCE_ARTIFACT_KEYS = {"role", "sha256"}
 SOURCE_SNAPSHOT_KEYS = {
-    "raw_artifact",
-    "extraction_artifact",
+    "reviewed_text_artifact",
+    "acquisition_receipt_artifact",
     "source_family",
     "upstream_url",
     "upstream_revision",
@@ -121,8 +121,8 @@ SOURCE_SNAPSHOT_KEYS = {
 }
 SOURCE_ARTIFACT_ROLES = frozenset(
     {
-        "raw_source",
-        "extracted_text",
+        "reviewed_source_text",
+        "source_acquisition_receipt",
         "image",
         "translation_alignment_receipt",
         "image_control_receipt",
@@ -139,9 +139,11 @@ CHUNKING_RECEIPT_KEYS = {
     "boundary_receipt_artifact_sha256",
     "semantic_verification",
     "ordered_spans",
+    "ordered_derivations",
     "receipt_sha256",
 }
 CHUNK_SPAN_KEYS = {"chunk_key", "token_start", "token_end"}
+CHUNK_DERIVATION_KEYS = {"chunk_key", "derivation"}
 CHUNK_KEYS = {
     "chunk_key",
     "kind",
@@ -154,9 +156,29 @@ CHUNK_KEYS = {
     "content_sha256",
     "token_start",
     "token_end",
+    "derivation",
 }
 MEDIA_KEYS = {"mime_type", "data_base64", "sha256"}
 IMAGE_CONTROL_KEYS = {"group_key", "variant"}
+SOURCE_SLICE_DERIVATION_KEYS = {
+    "kind",
+    "source_artifact_sha256",
+    "char_start",
+    "char_end",
+    "slice_sha256",
+}
+NON_SOURCE_DERIVATION_KEYS = {"kind"}
+TRANSLATED_DERIVATION_KEYS = {
+    "kind",
+    "source_twin_chunk_key",
+    "source_twin_content_sha256",
+    "alignment_receipt_artifact_sha256",
+}
+IMAGE_DERIVATION_KEYS = {
+    "kind",
+    "image_artifact_sha256",
+    "control_receipt_artifact_sha256",
+}
 QUESTION_KEYS = {
     "question_key",
     "text",
@@ -387,6 +409,10 @@ def validate_source_snapshot_manifest(
     if not isinstance(manifest, dict):
         raise TypeError("trusted source snapshot manifest must be an object")
     _exact_keys(manifest, SOURCE_MANIFEST_KEYS, "trusted source snapshot manifest")
+    if manifest["schema_version"] == "r052-source-provenance-manifest-v2":
+        raise ValueError(
+            "source manifest v2 requires migration to v3 reviewed-source provenance"
+        )
     if (
         manifest["schema_version"] != SOURCE_MANIFEST_VERSION
         or manifest["license_policy"] != SOURCE_LICENSE_POLICY
@@ -452,44 +478,52 @@ def validate_source_snapshot_manifest(
         )
         if artifact_sha256(path) != digest:
             raise ValueError(f"source snapshot artifact {name} hash mismatch")
-        if role in {"raw_source", "extracted_text"}:
+        if role in {"reviewed_source_text", "source_acquisition_receipt"}:
             validate_reviewed_text_artifact(path, f"source snapshot artifact {name}")
         if _artifact_contains_forbidden_lineage(path):
             raise ValueError(
                 f"source snapshot artifact {name} contains benchmark lineage"
             )
-        by_hash[digest] = declaration
+        by_hash[digest] = {**declaration, "name": name, "path": path}
 
     snapshots = manifest["snapshots"]
     if not isinstance(snapshots, dict) or not snapshots:
         raise ValueError("source snapshots must be a non-empty object")
-    snapshot_by_raw_hash: dict[str, dict[str, Any]] = {}
-    used_raw: set[str] = set()
-    used_extractions: set[str] = set()
+    snapshot_by_reviewed_hash: dict[str, dict[str, Any]] = {}
+    used_reviewed: set[str] = set()
+    used_acquisition_receipts: set[str] = set()
     used_policies: set[str] = set()
     for name, snapshot in snapshots.items():
         _require_text(name, "source snapshot name")
         if not isinstance(snapshot, dict):
             raise TypeError(f"source snapshot {name} must be an object")
         _exact_keys(snapshot, SOURCE_SNAPSHOT_KEYS, f"source snapshot {name}")
-        raw_name = _require_text(
-            snapshot["raw_artifact"], f"source snapshot {name} raw_artifact"
+        reviewed_name = _require_text(
+            snapshot["reviewed_text_artifact"],
+            f"source snapshot {name} reviewed_text_artifact",
         )
-        extraction_name = _require_text(
-            snapshot["extraction_artifact"],
-            f"source snapshot {name} extraction_artifact",
+        acquisition_name = _require_text(
+            snapshot["acquisition_receipt_artifact"],
+            f"source snapshot {name} acquisition_receipt_artifact",
         )
-        if raw_name in used_raw or extraction_name in used_extractions:
-            raise ValueError("source snapshots have duplicate raw/extraction bindings")
         if (
-            raw_name not in artifacts
-            or artifacts[raw_name]["role"] != "raw_source"
-            or extraction_name not in artifacts
-            or artifacts[extraction_name]["role"] != "extracted_text"
+            reviewed_name in used_reviewed
+            or acquisition_name in used_acquisition_receipts
         ):
-            raise ValueError("source snapshot raw/extraction artifact roles mismatch")
-        used_raw.add(raw_name)
-        used_extractions.add(extraction_name)
+            raise ValueError(
+                "source snapshots have duplicate reviewed/acquisition bindings"
+            )
+        if (
+            reviewed_name not in artifacts
+            or artifacts[reviewed_name]["role"] != "reviewed_source_text"
+            or acquisition_name not in artifacts
+            or artifacts[acquisition_name]["role"] != "source_acquisition_receipt"
+        ):
+            raise ValueError(
+                "source snapshot reviewed/acquisition artifact roles mismatch"
+            )
+        used_reviewed.add(reviewed_name)
+        used_acquisition_receipts.add(acquisition_name)
         family = snapshot["source_family"]
         policy_name = snapshot["license_policy"]
         if (
@@ -529,18 +563,25 @@ def validate_source_snapshot_manifest(
             raise ValueError(
                 "source snapshot must be authored, independent, and exclude third-party images"
             )
-        raw_hash = artifacts[raw_name]["sha256"]
-        snapshot_by_raw_hash[raw_hash] = snapshot
+        reviewed_hash = artifacts[reviewed_name]["sha256"]
+        snapshot_by_reviewed_hash[reviewed_hash] = snapshot
 
-    declared_raw = {
-        name for name, item in artifacts.items() if item["role"] == "raw_source"
+    declared_reviewed = {
+        name
+        for name, item in artifacts.items()
+        if item["role"] == "reviewed_source_text"
     }
-    declared_extractions = {
-        name for name, item in artifacts.items() if item["role"] == "extracted_text"
+    declared_acquisition_receipts = {
+        name
+        for name, item in artifacts.items()
+        if item["role"] == "source_acquisition_receipt"
     }
-    if used_raw != declared_raw or used_extractions != declared_extractions:
+    if (
+        used_reviewed != declared_reviewed
+        or used_acquisition_receipts != declared_acquisition_receipts
+    ):
         raise ValueError(
-            "source snapshots must bind every raw/extraction artifact exactly"
+            "source snapshots must bind every reviewed/acquisition artifact exactly"
         )
     if used_policies != set(license_policies):
         raise ValueError("source snapshots must use every declared license policy")
@@ -548,12 +589,12 @@ def validate_source_snapshot_manifest(
     case_hashes = [case["source_snapshot_sha256"] for case in panel["cases"]]
     for value in case_hashes:
         _require_sha(value, "case source_snapshot_sha256")
-    if set(case_hashes) != set(snapshot_by_raw_hash):
+    if set(case_hashes) != set(snapshot_by_reviewed_hash):
         raise ValueError(
             "case source snapshot bindings must cover source snapshots exactly"
         )
     for case in panel["cases"]:
-        snapshot = snapshot_by_raw_hash[case["source_snapshot_sha256"]]
+        snapshot = snapshot_by_reviewed_hash[case["source_snapshot_sha256"]]
         if snapshot["source_family"] != case["source_family"]:
             raise ValueError("case source family mismatches its source snapshot")
     return expected_sha256, by_hash
@@ -570,7 +611,116 @@ def chunk_hash_payload(chunk: dict[str, Any]) -> dict[str, Any]:
         "media": None
         if media is None
         else {"mime_type": media["mime_type"], "sha256": media["sha256"]},
+        "derivation": chunk["derivation"],
     }
+
+
+def _validate_chunk_derivation(
+    case: dict[str, Any],
+    chunk: dict[str, Any],
+    source_artifacts_by_hash: dict[str, dict[str, Any]],
+    chunks_by_key: dict[str, tuple[dict[str, Any], dict[str, Any]]],
+) -> None:
+    derivation = chunk["derivation"]
+    if not isinstance(derivation, dict):
+        raise TypeError("chunk derivation must be an object")
+    kind = derivation.get("kind")
+    if chunk["kind"] == "global_policy":
+        _exact_keys(derivation, NON_SOURCE_DERIVATION_KEYS, "policy derivation")
+        if kind != "non_source_global_policy":
+            raise ValueError("global policy requires explicit non-source derivation")
+        return
+
+    if chunk["modality"] == "image":
+        _exact_keys(derivation, IMAGE_DERIVATION_KEYS, "image derivation")
+        if kind != "image_control":
+            raise ValueError("image chunks require image-control derivation")
+        image_hash = derivation["image_artifact_sha256"]
+        if chunk["media"] is None:
+            if image_hash is not None:
+                raise ValueError("missing image control cannot bind image bytes")
+        else:
+            image_hash = _require_sha(image_hash, "image derivation artifact sha256")
+            image_artifact = source_artifacts_by_hash.get(image_hash)
+            if (
+                image_artifact is None
+                or image_artifact["role"] != "image"
+                or chunk["media"]["sha256"] != image_hash
+            ):
+                raise ValueError(
+                    "image derivation does not bind supplied image artifact"
+                )
+        control_hash = _require_sha(
+            derivation["control_receipt_artifact_sha256"],
+            "image control receipt artifact sha256",
+        )
+        control_artifact = source_artifacts_by_hash.get(control_hash)
+        if (
+            control_artifact is None
+            or control_artifact["role"] != "image_control_receipt"
+        ):
+            raise ValueError("image derivation does not bind a control receipt")
+        return
+
+    if case["language"] == "he":
+        _exact_keys(derivation, TRANSLATED_DERIVATION_KEYS, "translated derivation")
+        if kind != "translated_twin":
+            raise ValueError("Hebrew text chunks require translated-twin derivation")
+        source_key = _require_text(
+            derivation["source_twin_chunk_key"], "translated source twin chunk key"
+        )
+        source = chunks_by_key.get(source_key)
+        if source is None:
+            raise ValueError(
+                "translated derivation references unknown source twin chunk"
+            )
+        source_case, source_chunk = source
+        if (
+            source_case["language"] != "en"
+            or source_case["twin_group_key"] != case["twin_group_key"]
+            or source_chunk["twin_anchor"] != chunk["twin_anchor"]
+            or source_chunk["kind"] != chunk["kind"]
+            or source_chunk["modality"] != "text"
+            or not isinstance(source_chunk["derivation"], dict)
+            or source_chunk["derivation"].get("kind") != "source_text_slice"
+            or derivation["source_twin_content_sha256"]
+            != source_chunk["content_sha256"]
+        ):
+            raise ValueError(
+                "translated derivation does not bind its English source twin"
+            )
+        alignment_hash = _require_sha(
+            derivation["alignment_receipt_artifact_sha256"],
+            "translation alignment receipt artifact sha256",
+        )
+        alignment = source_artifacts_by_hash.get(alignment_hash)
+        if alignment is None or alignment["role"] != "translation_alignment_receipt":
+            raise ValueError("translated derivation does not bind an alignment receipt")
+        return
+
+    _exact_keys(derivation, SOURCE_SLICE_DERIVATION_KEYS, "source slice derivation")
+    if kind != "source_text_slice":
+        raise ValueError("English evidence text requires source-slice derivation")
+    source_hash = _require_sha(
+        derivation["source_artifact_sha256"], "source slice artifact sha256"
+    )
+    if source_hash != case["source_snapshot_sha256"]:
+        raise ValueError("source slice does not bind the case reviewed source")
+    artifact = source_artifacts_by_hash.get(source_hash)
+    if artifact is None or artifact["role"] != "reviewed_source_text":
+        raise ValueError("source slice must bind a reviewed-source-text artifact")
+    start, end = derivation["char_start"], derivation["char_end"]
+    if type(start) is not int or type(end) is not int or start < 0 or end <= start:
+        raise ValueError("source slice character offsets are invalid")
+    text = artifact["path"].read_text(encoding="utf-8")
+    if end > len(text):
+        raise ValueError("source slice character offsets are out of range")
+    exact_slice = text[start:end]
+    if chunk["text"] != exact_slice:
+        raise ValueError("chunk text does not exactly equal its reviewed source slice")
+    slice_hash = _require_sha(derivation["slice_sha256"], "source slice sha256")
+    if slice_hash != sha256_bytes(exact_slice.encode("utf-8")):
+        raise ValueError("source slice sha256 mismatch")
 
 
 def question_hash_payload(question: dict[str, Any]) -> dict[str, Any]:
@@ -668,8 +818,9 @@ def validate_case_chunking_receipt(
     source_artifacts_by_hash: dict[str, dict[str, Any]],
     tokenizer_artifact_sha256: str,
     chunker_artifact_sha256: str,
+    chunks_by_key: dict[str, tuple[dict[str, Any], dict[str, Any]]] | None = None,
 ) -> None:
-    """Validate frozen spans and artifact bindings, never their semantic quality."""
+    """Replay source derivations; token boundaries remain externally computed."""
     receipt = case["chunking_receipt"]
     if not isinstance(receipt, dict):
         raise TypeError("case chunking_receipt must be an object")
@@ -683,9 +834,12 @@ def validate_case_chunking_receipt(
         or type(receipt["fallback_overlap_tokens"]) is not int
     ):
         raise ValueError("chunking receipt must freeze 512-token/64-overlap contract")
-    if receipt["semantic_verification"] != "not_performed_by_scorer":
+    if (
+        receipt["semantic_verification"]
+        != "external_tokenizer_and_chunker_not_recomputed"
+    ):
         raise ValueError(
-            "chunking receipt must disclose that semantics are not scorer-verified"
+            "chunking receipt must disclose the external tokenizer/chunker boundary"
         )
     if (
         receipt["tokenizer_artifact_sha256"] != tokenizer_artifact_sha256
@@ -713,14 +867,57 @@ def validate_case_chunking_receipt(
     if any(span["token_end"] - span["token_start"] > 512 for span in spans):
         raise ValueError("chunking receipt contains a chunk exceeding 512 tokens")
 
+    derivations = receipt["ordered_derivations"]
+    expected_derivations = [
+        {"chunk_key": chunk["chunk_key"], "derivation": chunk["derivation"]}
+        for chunk in case["chunks"]
+    ]
+    if not isinstance(derivations, list) or len(derivations) != len(
+        expected_derivations
+    ):
+        raise ValueError("chunking receipt must cover every derivation exactly once")
+    for record in derivations:
+        if not isinstance(record, dict):
+            raise TypeError("chunking receipt derivations must be objects")
+        _exact_keys(record, CHUNK_DERIVATION_KEYS, "chunking receipt derivation")
+    if derivations != expected_derivations:
+        raise ValueError("chunking receipt derivations do not match panel chunks")
+
+    if chunks_by_key is None:
+        chunks_by_key = {chunk["chunk_key"]: (case, chunk) for chunk in case["chunks"]}
+    for chunk in case["chunks"]:
+        _validate_chunk_derivation(case, chunk, source_artifacts_by_hash, chunks_by_key)
+    source_slices = [
+        chunk["derivation"]
+        for chunk in case["chunks"]
+        if chunk["derivation"]["kind"] == "source_text_slice"
+    ]
+    if case["language"] == "en":
+        if not source_slices:
+            raise ValueError("English case must derive text from its reviewed source")
+        artifact = source_artifacts_by_hash[case["source_snapshot_sha256"]]
+        reviewed_text = artifact["path"].read_text(encoding="utf-8")
+        if source_slices[0]["char_start"] != 0 or source_slices[-1]["char_end"] != len(
+            reviewed_text
+        ):
+            raise ValueError(
+                "reviewed source slices must cover the artifact without gaps"
+            )
+        if any(
+            previous["char_end"] != current["char_start"]
+            for previous, current in pairwise(source_slices)
+        ):
+            raise ValueError("reviewed source slices must be contiguous without gaps")
+
     mode = receipt["mode"]
     boundary_digest = receipt["boundary_receipt_artifact_sha256"]
     if mode == "fixed_512_overlap_64":
         if boundary_digest is not None:
             raise ValueError("fixed chunking cannot claim a semantic boundary receipt")
-        for previous, current in pairwise(spans):
-            if previous["token_end"] - current["token_start"] != 64:
-                raise ValueError("fallback chunks must overlap by exactly 64 tokens")
+        raise ValueError(
+            "fixed 512/64 chunking fails closed because the external tokenizer "
+            "boundary cannot be deterministically recomputed"
+        )
     elif mode == "semantic_sections":
         digest = _require_sha(
             boundary_digest, "semantic boundary receipt artifact sha256"
@@ -967,6 +1164,16 @@ def validate_panel(
     )
     tokenizer_artifact_sha256 = artifact_sha256(contamination_tokenizer_artifact)
     chunker_artifact_sha256 = artifact_sha256(contamination_chunker_artifact)
+    chunks_by_key: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for candidate_case in panel["cases"]:
+        for candidate_chunk in candidate_case["chunks"]:
+            candidate_key = candidate_chunk.get("chunk_key")
+            if isinstance(candidate_key, str):
+                if candidate_key in chunks_by_key:
+                    raise ValueError(
+                        "chunk_key values must be globally unique for derivation references"
+                    )
+                chunks_by_key[candidate_key] = (candidate_case, candidate_chunk)
 
     case_keys: set[str] = set()
     twin_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1083,6 +1290,7 @@ def validate_panel(
             source_artifacts_by_hash,
             tokenizer_artifact_sha256,
             chunker_artifact_sha256,
+            chunks_by_key,
         )
 
         question_keys: set[str] = set()

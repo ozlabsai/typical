@@ -27,6 +27,7 @@ import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import date
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -36,8 +37,8 @@ try:
 except ModuleNotFoundError:  # Supports ``uv run python scripts/build_...py``.
     import score_r052_evidence_retrieval as scoring
 
-SPEC_VERSION = "r052-authored-dossier-spec-v2"
-SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v2"
+SPEC_VERSION = "r052-authored-dossier-spec-v3"
+SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v3"
 ANNOTATION_VERSION = "r052-authored-causal-annotations-v1"
 AUDIT_INPUT_VERSION = "r052-contamination-audit-input-v1"
 AUDIT_RESULTS_VERSION = "r052-external-contamination-results-v1"
@@ -85,6 +86,7 @@ CHUNK_SPEC_KEYS = {
     "twin_anchor",
     "media_artifact",
     "image_control",
+    "derivation",
 }
 IMAGE_SPEC_KEYS = {"group_ref", "variant", "mapping_receipt_artifact"}
 QUESTION_SPEC_KEYS = {
@@ -116,8 +118,8 @@ SOURCE_LICENSE_KEYS = {
 }
 SOURCE_ARTIFACT_KEYS = {"role", "sha256"}
 SOURCE_SNAPSHOT_KEYS = {
-    "raw_artifact",
-    "extraction_artifact",
+    "reviewed_text_artifact",
+    "acquisition_receipt_artifact",
     "source_family",
     "upstream_url",
     "upstream_revision",
@@ -185,8 +187,8 @@ ALLOWED_LICENSES = {
     "first_party": {"LicenseRef-First-Party"},
 }
 ARTIFACT_ROLES = {
-    "raw_source",
-    "extracted_text",
+    "reviewed_source_text",
+    "source_acquisition_receipt",
     "image",
     "translation_alignment_receipt",
     "image_control_receipt",
@@ -300,6 +302,10 @@ def _validate_source_manifest(
     if not isinstance(manifest, dict):
         raise TypeError("source manifest must be an object")
     _exact_keys(manifest, SOURCE_MANIFEST_KEYS, "source manifest")
+    if manifest["schema_version"] == "r052-source-provenance-manifest-v2":
+        raise ValueError(
+            "source manifest v2 requires migration to v3 reviewed-source provenance"
+        )
     if (
         manifest["schema_version"] != SOURCE_MANIFEST_VERSION
         or manifest["license_policy"] != LICENSE_POLICY
@@ -357,7 +363,10 @@ def _validate_source_manifest(
         declared_hashes.add(declared_hash)
         if scoring.artifact_sha256(path) != declared_hash:
             raise ValueError(f"source artifact {name} hash mismatch")
-        if declaration["role"] in {"raw_source", "extracted_text"}:
+        if declaration["role"] in {
+            "reviewed_source_text",
+            "source_acquisition_receipt",
+        }:
             scoring.validate_reviewed_text_artifact(path, f"source artifact {name}")
         if _contains_forbidden_bytes(path):
             raise ValueError(
@@ -374,17 +383,19 @@ def _validate_source_manifest(
         if not isinstance(snapshot, dict):
             raise TypeError(f"source snapshot {name} must be an object")
         _exact_keys(snapshot, SOURCE_SNAPSHOT_KEYS, f"source snapshot {name}")
-        raw_name = snapshot["raw_artifact"]
-        extracted_name = snapshot["extraction_artifact"]
+        reviewed_name = snapshot["reviewed_text_artifact"]
+        acquisition_name = snapshot["acquisition_receipt_artifact"]
         if (
-            raw_name not in artifacts
-            or artifacts[raw_name]["role"] != "raw_source"
-            or extracted_name not in artifacts
-            or artifacts[extracted_name]["role"] != "extracted_text"
-            or raw_name == extracted_name
+            reviewed_name not in artifacts
+            or artifacts[reviewed_name]["role"] != "reviewed_source_text"
+            or acquisition_name not in artifacts
+            or artifacts[acquisition_name]["role"] != "source_acquisition_receipt"
+            or reviewed_name == acquisition_name
         ):
-            raise ValueError("source snapshot must bind raw_source and extracted_text")
-        used_snapshot_artifacts.extend((raw_name, extracted_name))
+            raise ValueError(
+                "source snapshot must bind reviewed text and acquisition receipt"
+            )
+        used_snapshot_artifacts.extend((reviewed_name, acquisition_name))
         policy_name = snapshot["license_policy"]
         if policy_name not in license_policies:
             raise ValueError("source snapshot references an unknown license policy")
@@ -420,14 +431,14 @@ def _validate_source_manifest(
     expected_snapshot_artifacts = {
         name
         for name, declaration in artifacts.items()
-        if declaration["role"] in {"raw_source", "extracted_text"}
+        if declaration["role"] in {"reviewed_source_text", "source_acquisition_receipt"}
     }
     if (
         len(used_snapshot_artifacts) != len(set(used_snapshot_artifacts))
         or set(used_snapshot_artifacts) != expected_snapshot_artifacts
     ):
         raise ValueError(
-            "raw/extracted source artifacts must occur exactly once across snapshots"
+            "reviewed/acquisition artifacts must occur exactly once across snapshots"
         )
     if {snapshot["license_policy"] for snapshot in snapshots.values()} != set(
         license_policies
@@ -480,7 +491,10 @@ def _validate_spec(
             raise ValueError(f"{label} must reference a declared source snapshot")
         snapshot = snapshots[snapshot_name]
         used_artifacts.update(
-            (snapshot["raw_artifact"], snapshot["extraction_artifact"])
+            (
+                snapshot["reviewed_text_artifact"],
+                snapshot["acquisition_receipt_artifact"],
+            )
         )
         if profile == "production" and snapshot["source_family"] not in {
             "public_domain",
@@ -523,6 +537,10 @@ def _validate_spec(
                 raise ValueError(
                     "fixed chunking cannot claim a semantic-boundary receipt"
                 )
+            raise ValueError(
+                "fixed 512/64 chunking fails closed because the external tokenizer "
+                "boundary cannot be deterministically recomputed"
+            )
         else:
             raise ValueError(
                 "chunking mode must freeze semantic sections or 512/64 fallback"
@@ -565,6 +583,9 @@ def _validate_spec(
                 _text(chunk["twin_anchor"], f"{chunk_label}.twin_anchor")
             media_name = chunk["media_artifact"]
             control = chunk["image_control"]
+            derivation = chunk["derivation"]
+            if not isinstance(derivation, dict):
+                raise TypeError(f"{chunk_label}.derivation must be an object")
             if chunk["modality"] == "text":
                 if media_name is not None or control is not None:
                     raise ValueError("text chunks cannot carry media or image controls")
@@ -597,6 +618,71 @@ def _validate_spec(
                     )
                 if media_name is not None:
                     used_artifacts.add(media_name)
+            if chunk["kind"] == "global_policy":
+                _exact_keys(derivation, {"kind"}, f"{chunk_label}.derivation")
+                if derivation["kind"] != "non_source_global_policy":
+                    raise ValueError(
+                        "global policy requires explicit non-source derivation"
+                    )
+            elif chunk["modality"] == "image":
+                _exact_keys(
+                    derivation,
+                    {"kind", "image_artifact", "control_receipt_artifact"},
+                    f"{chunk_label}.derivation",
+                )
+                if (
+                    derivation["kind"] != "image_control"
+                    or derivation["image_artifact"] != media_name
+                    or derivation["control_receipt_artifact"]
+                    != control["mapping_receipt_artifact"]
+                ):
+                    raise ValueError(
+                        "image derivation must exactly bind image/control artifacts"
+                    )
+            elif case["language"] == "en":
+                _exact_keys(
+                    derivation,
+                    {"kind", "source_artifact", "char_start", "char_end"},
+                    f"{chunk_label}.derivation",
+                )
+                if (
+                    derivation["kind"] != "source_text_slice"
+                    or derivation["source_artifact"]
+                    != snapshot["reviewed_text_artifact"]
+                    or type(derivation["char_start"]) is not int
+                    or type(derivation["char_end"]) is not int
+                    or derivation["char_start"] < 0
+                    or derivation["char_end"] <= derivation["char_start"]
+                ):
+                    raise ValueError(
+                        "English text derivation must bind a valid reviewed-source slice"
+                    )
+            else:
+                _exact_keys(
+                    derivation,
+                    {
+                        "kind",
+                        "source_twin_case_ref",
+                        "source_twin_chunk_ref",
+                        "alignment_receipt_artifact",
+                    },
+                    f"{chunk_label}.derivation",
+                )
+                if (
+                    derivation["kind"] != "translated_twin"
+                    or derivation["alignment_receipt_artifact"] != alignment
+                ):
+                    raise ValueError(
+                        "Hebrew text derivation must bind its twin/alignment receipt"
+                    )
+                _text(
+                    derivation["source_twin_case_ref"],
+                    f"{chunk_label}.derivation.source_twin_case_ref",
+                )
+                _text(
+                    derivation["source_twin_chunk_ref"],
+                    f"{chunk_label}.derivation.source_twin_chunk_ref",
+                )
         if max(chunk["token_end"] for chunk in chunks) != context_tokens:
             raise ValueError("context_tokens must equal the final chunk token_end")
         if not any(chunk["kind"] == "global_policy" for chunk in chunks):
@@ -674,6 +760,29 @@ def _validate_spec(
                 raise ValueError("question chunk references are invalid")
     if {case["source_snapshot"] for case in cases} != set(snapshots):
         raise ValueError("authored cases must cover every declared source snapshot")
+    cases_by_ref = {case["case_ref"]: case for case in cases}
+    for case in cases:
+        for chunk in case["chunks"]:
+            derivation = chunk["derivation"]
+            if derivation["kind"] != "translated_twin":
+                continue
+            source_case = cases_by_ref.get(derivation["source_twin_case_ref"])
+            if (
+                source_case is None
+                or source_case["language"] != "en"
+                or source_case["twin_ref"] != case["twin_ref"]
+            ):
+                raise ValueError("translated chunk source case is not its English twin")
+            source_chunks = {item["chunk_ref"]: item for item in source_case["chunks"]}
+            source_chunk = source_chunks.get(derivation["source_twin_chunk_ref"])
+            if (
+                source_chunk is None
+                or source_chunk["twin_anchor"] != chunk["twin_anchor"]
+                or source_chunk["kind"] != chunk["kind"]
+                or source_chunk["modality"] != "text"
+                or source_chunk["derivation"]["kind"] != "source_text_slice"
+            ):
+                raise ValueError("translated chunk source twin binding is invalid")
     if used_artifacts != set(sources):
         raise ValueError("authored cases must consume every declared source artifact")
     if profile == "production":
@@ -853,14 +962,20 @@ def _build_cases(
     tokenizer_artifact_sha256: str,
     chunker_artifact_sha256: str,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    cases: list[dict[str, Any]] = []
+    cases_by_index: dict[int, dict[str, Any]] = {}
     case_ref_to_key: dict[str, str] = {}
+    built_chunks: dict[tuple[str, str], dict[str, Any]] = {}
     used_annotations: set[tuple[str, str]] = set()
     sources = source_manifest["artifacts"]
     snapshots = source_manifest["snapshots"]
-    for case_index, authored in enumerate(spec["cases"]):
+    authored_cases = list(enumerate(spec["cases"]))
+    for case_index, authored in sorted(
+        authored_cases, key=lambda item: item[1]["language"] == "he"
+    ):
         source_declaration = snapshots[authored["source_snapshot"]]
-        raw_declaration = sources[source_declaration["raw_artifact"]]
+        reviewed_name = source_declaration["reviewed_text_artifact"]
+        reviewed_declaration = sources[reviewed_name]
+        reviewed_text = source_artifact_paths[reviewed_name].read_text(encoding="utf-8")
         twin_key = (
             None
             if authored["twin_ref"] is None
@@ -874,6 +989,7 @@ def _build_cases(
         )
         chunks: list[dict[str, Any]] = []
         chunk_ref_to_key: dict[str, str] = {}
+        source_slices: list[tuple[int, int]] = []
         for chunk_index, item in enumerate(authored["chunks"]):
             media = (
                 None
@@ -892,16 +1008,74 @@ def _build_cases(
                     ),
                     "variant": control["variant"],
                 }
+            authored_derivation = item["derivation"]
+            derivation_kind = authored_derivation["kind"]
+            if derivation_kind == "source_text_slice":
+                start = authored_derivation["char_start"]
+                end = authored_derivation["char_end"]
+                if end > len(reviewed_text):
+                    raise ValueError("reviewed source slice is out of range")
+                exact_text = reviewed_text[start:end]
+                if item["text"] != exact_text:
+                    raise ValueError(
+                        "authored chunk text does not exactly match reviewed source slice"
+                    )
+                source_slices.append((start, end))
+                output_derivation = {
+                    "kind": "source_text_slice",
+                    "source_artifact_sha256": reviewed_declaration["sha256"],
+                    "char_start": start,
+                    "char_end": end,
+                    "slice_sha256": _sha_bytes(exact_text.encode("utf-8")),
+                }
+                output_text = exact_text
+            elif derivation_kind == "non_source_global_policy":
+                output_derivation = {"kind": "non_source_global_policy"}
+                output_text = item["text"]
+            elif derivation_kind == "translated_twin":
+                source_identity = (
+                    authored_derivation["source_twin_case_ref"],
+                    authored_derivation["source_twin_chunk_ref"],
+                )
+                source_twin = built_chunks.get(source_identity)
+                if source_twin is None:
+                    raise ValueError(
+                        "translated chunk source twin must be a built English chunk"
+                    )
+                alignment_name = authored_derivation["alignment_receipt_artifact"]
+                output_derivation = {
+                    "kind": "translated_twin",
+                    "source_twin_chunk_key": source_twin["chunk_key"],
+                    "source_twin_content_sha256": source_twin["content_sha256"],
+                    "alignment_receipt_artifact_sha256": sources[alignment_name][
+                        "sha256"
+                    ],
+                }
+                output_text = item["text"]
+            elif derivation_kind == "image_control":
+                image_name = authored_derivation["image_artifact"]
+                control_name = authored_derivation["control_receipt_artifact"]
+                output_derivation = {
+                    "kind": "image_control",
+                    "image_artifact_sha256": None
+                    if image_name is None
+                    else sources[image_name]["sha256"],
+                    "control_receipt_artifact_sha256": sources[control_name]["sha256"],
+                }
+                output_text = item["text"]
+            else:  # Defensive: _validate_spec rejects this before building.
+                raise ValueError("unknown chunk derivation kind")
             partial = {
                 "kind": item["kind"],
                 "modality": item["modality"],
-                "text": item["text"],
+                "text": output_text,
                 "media": media,
                 "immutable": item["kind"] == "global_policy",
                 "twin_anchor": item["twin_anchor"],
                 "image_control": output_control,
                 "token_start": item["token_start"],
                 "token_end": item["token_end"],
+                "derivation": output_derivation,
             }
             content_hash = scoring.sha256_json(scoring.chunk_hash_payload(partial))
             chunk_key = _sha_json(
@@ -914,6 +1088,19 @@ def _build_cases(
             chunk_ref_to_key[item["chunk_ref"]] = chunk_key
             chunks.append(
                 {"chunk_key": chunk_key, **partial, "content_sha256": content_hash}
+            )
+            built_chunks[(authored["case_ref"], item["chunk_ref"])] = chunks[-1]
+        if authored["language"] == "en" and (
+            not source_slices
+            or source_slices[0][0] != 0
+            or source_slices[-1][1] != len(reviewed_text)
+            or any(
+                previous[1] != current[0]
+                for previous, current in pairwise(source_slices)
+            )
+        ):
+            raise ValueError(
+                "English reviewed source slices must cover the artifact without gaps"
             )
         questions: list[dict[str, Any]] = []
         for question_index, item in enumerate(authored["questions"]):
@@ -982,12 +1169,19 @@ def _build_cases(
             "boundary_receipt_artifact_sha256": None
             if boundary_name is None
             else sources[boundary_name]["sha256"],
-            "semantic_verification": "not_performed_by_scorer",
+            "semantic_verification": "external_tokenizer_and_chunker_not_recomputed",
             "ordered_spans": [
                 {
                     "chunk_key": chunk["chunk_key"],
                     "token_start": chunk["token_start"],
                     "token_end": chunk["token_end"],
+                }
+                for chunk in chunks
+            ],
+            "ordered_derivations": [
+                {
+                    "chunk_key": chunk["chunk_key"],
+                    "derivation": chunk["derivation"],
                 }
                 for chunk in chunks
             ],
@@ -997,7 +1191,7 @@ def _build_cases(
             "language": authored["language"],
             "twin_group_key": twin_key,
             "source_family": source_declaration["source_family"],
-            "source_snapshot_sha256": raw_declaration["sha256"],
+            "source_snapshot_sha256": reviewed_declaration["sha256"],
             "source_domain": authored["source_domain"],
             "context_tokens": authored["context_tokens"],
             "chunking_receipt": {
@@ -1025,10 +1219,12 @@ def _build_cases(
             }
         )
         case_ref_to_key[authored["case_ref"]] = case["case_key"]
-        cases.append(case)
+        cases_by_index[case_index] = case
     if used_annotations != set(annotations):
         raise ValueError("causal annotations must cover authored questions exactly")
-    return cases, case_ref_to_key
+    return [
+        cases_by_index[index] for index in range(len(spec["cases"]))
+    ], case_ref_to_key
 
 
 def build_audit_input(

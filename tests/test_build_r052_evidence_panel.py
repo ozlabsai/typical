@@ -34,13 +34,13 @@ def _license_policy() -> dict:
     }
 
 
-def _snapshot(raw: str, extracted: str) -> dict:
+def _snapshot(reviewed: str, acquisition: str) -> dict:
     return {
-        "raw_artifact": raw,
-        "extraction_artifact": extracted,
+        "reviewed_text_artifact": reviewed,
+        "acquisition_receipt_artifact": acquisition,
         "source_family": "first_party",
-        "upstream_url": f"https://example.invalid/snapshots/{raw}",
-        "upstream_revision": f"immutable-{raw}-v1",
+        "upstream_url": f"https://example.invalid/snapshots/{reviewed}",
+        "upstream_revision": f"immutable-{reviewed}-v1",
         "upstream_date": "2026-10-08",
         "untouched_split": "authored-test-eval-v1",
         "license_policy": "first-party",
@@ -64,6 +64,7 @@ def _case(language: str, suffix: str, source: str, image_a: str, image_b: str) -
             "twin_anchor": "policy",
             "media_artifact": None,
             "image_control": None,
+            "derivation": {"kind": "non_source_global_policy"},
         },
         {
             "chunk_ref": "decisive-text",
@@ -75,6 +76,21 @@ def _case(language: str, suffix: str, source: str, image_a: str, image_b: str) -
             "twin_anchor": "decisive-text",
             "media_artifact": None,
             "image_control": None,
+            "derivation": (
+                {
+                    "kind": "translated_twin",
+                    "source_twin_case_ref": "case-en",
+                    "source_twin_chunk_ref": "decisive-text",
+                    "alignment_receipt_artifact": "alignment-receipt",
+                }
+                if hebrew
+                else {
+                    "kind": "source_text_slice",
+                    "source_artifact": "source-en",
+                    "char_start": 0,
+                    "char_end": len("The approval remains valid."),
+                }
+            ),
         },
     ]
     for index, (variant, media) in enumerate(
@@ -94,6 +110,11 @@ def _case(language: str, suffix: str, source: str, image_a: str, image_b: str) -
                     "group_ref": f"seal-{suffix}",
                     "variant": variant,
                     "mapping_receipt_artifact": "control-receipt",
+                },
+                "derivation": {
+                    "kind": "image_control",
+                    "image_artifact": media,
+                    "control_receipt_artifact": "control-receipt",
                 },
             }
         )
@@ -128,8 +149,10 @@ def _case(language: str, suffix: str, source: str, image_a: str, image_b: str) -
 def _fixture(tmp_path: Path) -> dict:
     artifact_paths = {}
     for name, text in {
-        "source-en": "An independently authored English operations dossier.",
-        "source-he": "תיק תפעולי עברי שנכתב באופן עצמאי.",
+        "source-en": "The approval remains valid.",
+        "source-he": "האישור בתוקף.",
+        "acquisition-en": "Canonical acquisition record; no upstream PDF redistributed.",
+        "acquisition-he": "Canonical acquisition record; no upstream PDF redistributed in HE.",
         "alignment-receipt": "Human reviewer aligned the two authored cases.",
         "control-receipt": "Human reviewer designated real, shuffled, and absent controls.",
         "boundary-receipt": "Human author marked semantic section boundaries.",
@@ -137,23 +160,16 @@ def _fixture(tmp_path: Path) -> dict:
         path = tmp_path / f"{name}.txt"
         path.write_text(text)
         artifact_paths[name] = path
-    for name, content in {
-        "raw-en": b"independently authored raw English source\n",
-        "raw-he": b"independently authored raw Hebrew source\n",
-    }.items():
-        path = tmp_path / f"{name}.pdf"
-        path.write_bytes(content)
-        artifact_paths[name] = path
     for name, color in (("real-image", "red"), ("shuffled-image", "blue")):
         path = tmp_path / f"{name}.png"
         Image.new("RGB", (2, 2), color=color).save(path)
         artifact_paths[name] = path
 
     roles = {
-        "raw-en": "raw_source",
-        "raw-he": "raw_source",
-        "source-en": "extracted_text",
-        "source-he": "extracted_text",
+        "source-en": "reviewed_source_text",
+        "source-he": "reviewed_source_text",
+        "acquisition-en": "source_acquisition_receipt",
+        "acquisition-he": "source_acquisition_receipt",
         "alignment-receipt": "translation_alignment_receipt",
         "control-receipt": "image_control_receipt",
         "boundary-receipt": "chunk_boundary_receipt",
@@ -170,8 +186,8 @@ def _fixture(tmp_path: Path) -> dict:
             for name, role in roles.items()
         },
         "snapshots": {
-            "snapshot-en": _snapshot("raw-en", "source-en"),
-            "snapshot-he": _snapshot("raw-he", "source-he"),
+            "snapshot-en": _snapshot("source-en", "acquisition-en"),
+            "snapshot-he": _snapshot("source-he", "acquisition-he"),
         },
     }
     spec = {
@@ -318,7 +334,7 @@ def test_builds_deterministic_scorer_valid_bundle_and_preserves_order(tmp_path):
 
     assert [case["language"] for case in panel["cases"]] == ["en", "he"]
     assert panel["cases"][0]["source_snapshot_sha256"] == scorer.artifact_sha256(
-        fixture["artifact_paths"]["raw-en"]
+        fixture["artifact_paths"]["source-en"]
     )
     assert panel["cases"][0]["chunking_receipt"][
         "tokenizer_artifact_sha256"
@@ -383,16 +399,33 @@ def test_can_finalize_provider_free_panel_for_bm25_preflight(tmp_path):
     assert receipt["counts"]["providers"] == 0
 
 
-def test_rejects_upstream_pdf_as_redistributable_raw_source(tmp_path):
+def test_rejects_binary_pdf_as_reviewed_source_text(tmp_path):
     fixture = _fixture(tmp_path)
     upstream_pdf = tmp_path / "upstream.pdf"
     upstream_pdf.write_bytes(b"%PDF-1.7\nnot a reviewed text snapshot\n")
     manifest = deepcopy(fixture["source_manifest"])
-    manifest["artifacts"]["raw-en"] = _artifact_declaration(upstream_pdf, "raw_source")
+    manifest["artifacts"]["source-en"] = _artifact_declaration(
+        upstream_pdf, "reviewed_source_text"
+    )
     paths = dict(fixture["artifact_paths"])
-    paths["raw-en"] = upstream_pdf
+    paths["source-en"] = upstream_pdf
 
     with pytest.raises(ValueError, match="reviewed UTF-8 text snapshot"):
+        builder._validate_source_manifest(manifest, paths)
+
+
+def test_rejects_pdf_bytes_as_acquisition_receipt(tmp_path):
+    fixture = _fixture(tmp_path)
+    upstream_pdf = tmp_path / "upstream.pdf"
+    upstream_pdf.write_bytes(b"%PDF-1.7\nupstream bytes must not be redistributed\n")
+    manifest = deepcopy(fixture["source_manifest"])
+    manifest["artifacts"]["acquisition-en"] = _artifact_declaration(
+        upstream_pdf, "source_acquisition_receipt"
+    )
+    paths = dict(fixture["artifact_paths"])
+    paths["acquisition-en"] = upstream_pdf
+
+    with pytest.raises(ValueError, match="not a PDF or binary"):
         builder._validate_source_manifest(manifest, paths)
 
 
@@ -407,10 +440,50 @@ def test_rejects_semantic_chunk_gaps_that_fake_long_context(tmp_path):
         )
 
 
+def test_builder_rejects_invented_text_and_reviewed_source_slice_gaps(tmp_path):
+    fixture = _fixture(tmp_path)
+    invented = deepcopy(fixture["spec"])
+    invented["cases"][0]["chunks"][1]["text"] = "invented evidence"
+    with pytest.raises(ValueError, match="exactly match reviewed source slice"):
+        builder.build_audit_input(
+            invented,
+            fixture["source_manifest"],
+            fixture["annotation_map"],
+            fixture["resolved"],
+            scorer.artifact_sha256(fixture["tokenizer"]),
+            scorer.artifact_sha256(fixture["chunker"]),
+            spec_sha256="0" * 64,
+            source_manifest_sha256=fixture["hashes"]["source_manifest_sha256"],
+            annotations_sha256=fixture["hashes"]["causal_annotations_sha256"],
+        )
+
+    gap = deepcopy(fixture["spec"])
+    gap["cases"][0]["chunks"][1]["derivation"]["char_start"] = 1
+    gap["cases"][0]["chunks"][1]["text"] = "he approval remains valid."
+    with pytest.raises(ValueError, match="without gaps"):
+        builder.build_audit_input(
+            gap,
+            fixture["source_manifest"],
+            fixture["annotation_map"],
+            fixture["resolved"],
+            scorer.artifact_sha256(fixture["tokenizer"]),
+            scorer.artifact_sha256(fixture["chunker"]),
+            spec_sha256="0" * 64,
+            source_manifest_sha256=fixture["hashes"]["source_manifest_sha256"],
+            annotations_sha256=fixture["hashes"]["causal_annotations_sha256"],
+        )
+
+
 def test_rejects_dossier_without_global_policy_context(tmp_path):
     fixture = _fixture(tmp_path)
     spec = deepcopy(fixture["spec"])
     spec["cases"][0]["chunks"][0]["kind"] = "distractor"
+    spec["cases"][0]["chunks"][0]["derivation"] = {
+        "kind": "source_text_slice",
+        "source_artifact": "source-en",
+        "char_start": 0,
+        "char_end": 5,
+    }
 
     with pytest.raises(ValueError, match="global policy context"):
         builder._validate_spec(
@@ -513,7 +586,7 @@ def test_test_fixture_requires_explicit_opt_in_and_production_rejects_small_pane
         builder._validate_spec(production, fixture["source_manifest"], False)
 
 
-def test_fixed_fallback_enforces_512_token_64_overlap(tmp_path):
+def test_fixed_fallback_fails_closed_at_external_tokenizer_boundary(tmp_path):
     fixture = _fixture(tmp_path)
     spec = deepcopy(fixture["spec"])
     case = spec["cases"][0]
@@ -521,7 +594,7 @@ def test_fixed_fallback_enforces_512_token_64_overlap(tmp_path):
         "mode": "fixed_512_overlap_64",
         "boundary_receipt_artifact": None,
     }
-    with pytest.raises(ValueError, match="overlap by exactly 64"):
+    with pytest.raises(ValueError, match="external tokenizer boundary"):
         builder._validate_spec(spec, fixture["source_manifest"], True)
 
 

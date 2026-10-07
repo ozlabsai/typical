@@ -11,11 +11,15 @@ from scripts import score_r052_evidence_retrieval as scorer
 TEST_ARTIFACT = Path(__file__).resolve()
 TEST_ARTIFACT_SHA256 = scorer.file_sha256(TEST_ARTIFACT)
 SOURCE_ARTIFACT_PATHS = {
-    "raw-en": Path("pyproject.toml").resolve(),
-    "raw-he": Path("uv.lock").resolve(),
-    "extraction-en": Path("site/style.css").resolve(),
-    "extraction-he": Path("site/exhibits.css").resolve(),
+    "reviewed-en": Path("pyproject.toml").resolve(),
+    "reviewed-he": Path("uv.lock").resolve(),
+    "acquisition-en": Path("site/style.css").resolve(),
+    "acquisition-he": Path("site/exhibits.css").resolve(),
     "boundary-receipt": Path("site/package.json").resolve(),
+    "alignment-receipt": Path("site/js/vendor/ScrollTrigger.min.js").resolve(),
+    "control-receipt": Path("site/js/vendor/gsap.min.js").resolve(),
+    "real-image": Path("site/favicon.png").resolve(),
+    "shuffled-image": Path("site/og.png").resolve(),
 }
 SOURCE_ARTIFACT_HASHES = {
     name: scorer.artifact_sha256(path) for name, path in SOURCE_ARTIFACT_PATHS.items()
@@ -46,6 +50,19 @@ def _media(value: bytes) -> dict:
     }
 
 
+def _artifact_media(name: str) -> dict:
+    import base64
+    import mimetypes
+
+    path = SOURCE_ARTIFACT_PATHS[name]
+    raw = path.read_bytes()
+    return {
+        "mime_type": mimetypes.guess_type(path.name)[0],
+        "data_base64": base64.b64encode(raw).decode(),
+        "sha256": scorer.sha256_bytes(raw),
+    }
+
+
 def _chunk(
     key: str,
     kind: str,
@@ -54,6 +71,7 @@ def _chunk(
     *,
     media: dict | None = None,
     control: dict | None = None,
+    derivation: dict | None = None,
 ) -> dict:
     chunk = {
         "chunk_key": key,
@@ -67,6 +85,7 @@ def _chunk(
         "content_sha256": "",
         "token_start": 0,
         "token_end": 1,
+        "derivation": derivation,
     }
     chunk["content_sha256"] = scorer.sha256_json(scorer.chunk_hash_payload(chunk))
     return chunk
@@ -109,7 +128,11 @@ def _question(
     return question
 
 
-def _case(language: str, twin_group: str) -> dict:
+def _case(
+    language: str,
+    twin_group: str,
+    english_chunks: dict[str, dict] | None = None,
+) -> dict:
     suffix = language
     control_group = _sha("image-control-" + language)
     control = lambda variant: {"group_key": control_group, "variant": variant}
@@ -131,32 +154,83 @@ def _case(language: str, twin_group: str) -> dict:
             "q_text": "האם קיים אישור חתום?",
         },
     }[language]
+    reviewed_en = SOURCE_ARTIFACT_PATHS["reviewed-en"].read_text(encoding="utf-8")
+    split = len(reviewed_en) // 2
+    if language == "en":
+        translations["evidence"] = reviewed_en[:split]
+        translations["distractor"] = reviewed_en[split:]
+
+    def text_derivation(anchor: str, start: int, end: int) -> dict:
+        if language == "en":
+            exact = reviewed_en[start:end]
+            return {
+                "kind": "source_text_slice",
+                "source_artifact_sha256": SOURCE_ARTIFACT_HASHES["reviewed-en"],
+                "char_start": start,
+                "char_end": end,
+                "slice_sha256": scorer.sha256_bytes(exact.encode("utf-8")),
+            }
+        assert english_chunks is not None
+        source = english_chunks[anchor]
+        return {
+            "kind": "translated_twin",
+            "source_twin_chunk_key": source["chunk_key"],
+            "source_twin_content_sha256": source["content_sha256"],
+            "alignment_receipt_artifact_sha256": SOURCE_ARTIFACT_HASHES[
+                "alignment-receipt"
+            ],
+        }
+
+    def image_derivation(name: str | None) -> dict:
+        return {
+            "kind": "image_control",
+            "image_artifact_sha256": None
+            if name is None
+            else SOURCE_ARTIFACT_HASHES[name],
+            "control_receipt_artifact_sha256": SOURCE_ARTIFACT_HASHES[
+                "control-receipt"
+            ],
+        }
+
     chunks = [
-        _chunk(f"policy-{suffix}", "global_policy", translations["policy"], "policy"),
         _chunk(
-            f"evidence-{suffix}", "evidence", translations["evidence"], "text-evidence"
+            f"policy-{suffix}",
+            "global_policy",
+            translations["policy"],
+            "policy",
+            derivation={"kind": "non_source_global_policy"},
+        ),
+        _chunk(
+            f"evidence-{suffix}",
+            "evidence",
+            translations["evidence"],
+            "text-evidence",
+            derivation=text_derivation("text-evidence", 0, split),
         ),
         _chunk(
             f"distractor-{suffix}",
             "distractor",
             translations["distractor"],
             "text-distractor",
+            derivation=text_derivation("text-distractor", split, len(reviewed_en)),
         ),
         _chunk(
             f"real-{suffix}",
             "evidence",
             translations["image"],
             "image-real",
-            media=_media(b"real-image"),
+            media=_artifact_media("real-image"),
             control=control("real"),
+            derivation=image_derivation("real-image"),
         ),
         _chunk(
             f"shuffled-{suffix}",
             "distractor",
             translations["image"],
             "image-shuffled",
-            media=_media(b"shuffled-image"),
+            media=_artifact_media("shuffled-image"),
             control=control("shuffled"),
+            derivation=image_derivation("shuffled-image"),
         ),
         _chunk(
             f"missing-{suffix}",
@@ -164,6 +238,7 @@ def _case(language: str, twin_group: str) -> dict:
             translations["image"],
             "image-missing",
             control=control("missing"),
+            derivation=image_derivation(None),
         ),
     ]
     boundaries = [0, 1365, 2730, 4096, 5461, 7680]
@@ -181,13 +256,17 @@ def _case(language: str, twin_group: str) -> dict:
         "tokenizer_artifact_sha256": TEST_ARTIFACT_SHA256,
         "chunker_artifact_sha256": TEST_ARTIFACT_SHA256,
         "boundary_receipt_artifact_sha256": SOURCE_ARTIFACT_HASHES["boundary-receipt"],
-        "semantic_verification": "not_performed_by_scorer",
+        "semantic_verification": "external_tokenizer_and_chunker_not_recomputed",
         "ordered_spans": [
             {
                 "chunk_key": chunk["chunk_key"],
                 "token_start": chunk["token_start"],
                 "token_end": chunk["token_end"],
             }
+            for chunk in chunks
+        ],
+        "ordered_derivations": [
+            {"chunk_key": chunk["chunk_key"], "derivation": chunk["derivation"]}
             for chunk in chunks
         ],
     }
@@ -197,7 +276,7 @@ def _case(language: str, twin_group: str) -> dict:
         "language": language,
         "twin_group_key": twin_group,
         "source_family": "synthetic",
-        "source_snapshot_sha256": SOURCE_ARTIFACT_HASHES[f"raw-{language}"],
+        "source_snapshot_sha256": SOURCE_ARTIFACT_HASHES[f"reviewed-{language}"],
         "source_domain": "general",
         "context_tokens": 8192,
         "chunking_receipt": chunking_receipt,
@@ -243,7 +322,10 @@ def _case(language: str, twin_group: str) -> dict:
 
 
 def make_panel() -> dict:
-    cases = [_case("en", _sha("twins")), _case("he", _sha("twins"))]
+    twin_group = _sha("twins")
+    english = _case("en", twin_group)
+    english_chunks = {chunk["twin_anchor"]: chunk for chunk in english["chunks"]}
+    cases = [english, _case("he", twin_group, english_chunks)]
     query_vectors = {}
     document_vectors = {}
     for case in cases:
@@ -301,10 +383,16 @@ def _source_manifest() -> tuple[dict, str]:
     artifacts = {
         name: {
             "role": (
-                "raw_source"
-                if name.startswith("raw-")
-                else "extracted_text"
-                if name.startswith("extraction-")
+                "reviewed_source_text"
+                if name.startswith("reviewed-")
+                else "source_acquisition_receipt"
+                if name.startswith("acquisition-")
+                else "translation_alignment_receipt"
+                if name == "alignment-receipt"
+                else "image_control_receipt"
+                if name == "control-receipt"
+                else "image"
+                if name.endswith("-image")
                 else "chunk_boundary_receipt"
             ),
             "sha256": SOURCE_ARTIFACT_HASHES[name],
@@ -324,8 +412,8 @@ def _source_manifest() -> tuple[dict, str]:
     }
     snapshots = {
         f"fixture-{language}": {
-            "raw_artifact": f"raw-{language}",
-            "extraction_artifact": f"extraction-{language}",
+            "reviewed_text_artifact": f"reviewed-{language}",
+            "acquisition_receipt_artifact": f"acquisition-{language}",
             "source_family": "synthetic",
             "upstream_url": f"https://example.invalid/r052/source-{language}",
             "upstream_revision": _sha(f"revision-{language}"),
@@ -616,7 +704,7 @@ def test_causal_context_hashes_are_recomputed_from_ordered_content(panel):
     chunk = changed["cases"][0]["chunks"][1]
     chunk["text"] += " changed"
     chunk["content_sha256"] = scorer.sha256_json(scorer.chunk_hash_payload(chunk))
-    with pytest.raises(ValueError, match="context hashes"):
+    with pytest.raises(ValueError, match="exactly equal its reviewed source slice"):
         _validate(changed)
 
 
@@ -667,21 +755,26 @@ def test_provider_artifacts_are_optional_for_bm25_and_exact_for_selected(panel):
         _validate_selection(panel, set(), {"fixture-dense": TEST_ARTIFACT})
 
 
-def test_source_snapshots_bind_raw_extraction_metadata_and_case_family(panel, tmp_path):
+def test_source_snapshots_bind_reviewed_acquisition_metadata_and_case_family(
+    panel, tmp_path
+):
     manifest, digest = _source_manifest()
     _, by_hash = scorer.validate_source_snapshot_manifest(
         panel, manifest, digest, SOURCE_ARTIFACT_PATHS
     )
-    assert by_hash[panel["cases"][0]["source_snapshot_sha256"]]["role"] == "raw_source"
+    assert (
+        by_hash[panel["cases"][0]["source_snapshot_sha256"]]["role"]
+        == "reviewed_source_text"
+    )
 
     missing_path = dict(SOURCE_ARTIFACT_PATHS)
-    missing_path.pop("raw-en")
+    missing_path.pop("reviewed-en")
     with pytest.raises(ValueError, match="cover manifest exactly"):
         scorer.validate_source_snapshot_manifest(panel, manifest, digest, missing_path)
 
     duplicate = copy.deepcopy(manifest)
-    duplicate["artifacts"]["extraction-he"]["sha256"] = duplicate["artifacts"][
-        "extraction-en"
+    duplicate["artifacts"]["reviewed-he"]["sha256"] = duplicate["artifacts"][
+        "reviewed-en"
     ]["sha256"]
     with pytest.raises(ValueError, match="duplicate artifact hashes"):
         scorer.validate_source_snapshot_manifest(
@@ -692,8 +785,10 @@ def test_source_snapshots_bind_raw_extraction_metadata_and_case_family(panel, tm
         )
 
     duplicate_binding = copy.deepcopy(manifest)
-    duplicate_binding["snapshots"]["fixture-he"]["raw_artifact"] = "raw-en"
-    with pytest.raises(ValueError, match="duplicate raw/extraction bindings"):
+    duplicate_binding["snapshots"]["fixture-he"]["reviewed_text_artifact"] = (
+        "reviewed-en"
+    )
+    with pytest.raises(ValueError, match="duplicate reviewed/acquisition bindings"):
         scorer.validate_source_snapshot_manifest(
             panel,
             duplicate_binding,
@@ -704,9 +799,11 @@ def test_source_snapshots_bind_raw_extraction_metadata_and_case_family(panel, tm
     upstream_pdf = tmp_path / "upstream.pdf"
     upstream_pdf.write_bytes(b"%PDF-1.7\nnot a reviewed text snapshot\n")
     binary_paths = dict(SOURCE_ARTIFACT_PATHS)
-    binary_paths["raw-en"] = upstream_pdf
+    binary_paths["reviewed-en"] = upstream_pdf
     binary_manifest = copy.deepcopy(manifest)
-    binary_manifest["artifacts"]["raw-en"]["sha256"] = scorer.file_sha256(upstream_pdf)
+    binary_manifest["artifacts"]["reviewed-en"]["sha256"] = scorer.file_sha256(
+        upstream_pdf
+    )
     with pytest.raises(ValueError, match="reviewed UTF-8 text snapshot"):
         scorer.validate_source_snapshot_manifest(
             panel,
@@ -734,11 +831,11 @@ def test_source_snapshots_bind_raw_extraction_metadata_and_case_family(panel, tm
     hostile = tmp_path / "extracted.txt"
     hostile.write_text("copied from a JevBench example")
     hostile_manifest = copy.deepcopy(manifest)
-    hostile_manifest["artifacts"]["extraction-en"]["sha256"] = scorer.artifact_sha256(
+    hostile_manifest["artifacts"]["reviewed-en"]["sha256"] = scorer.artifact_sha256(
         hostile
     )
     hostile_paths = dict(SOURCE_ARTIFACT_PATHS)
-    hostile_paths["extraction-en"] = hostile
+    hostile_paths["reviewed-en"] = hostile
     with pytest.raises(ValueError, match="contains benchmark lineage"):
         scorer.validate_source_snapshot_manifest(
             panel,
@@ -801,12 +898,108 @@ def _rehash_chunking_receipt(receipt: dict) -> None:
     )
 
 
-def test_chunking_receipt_enforces_frozen_span_and_semantic_disclosure(panel):
-    source, _ = _source_manifest()
-    by_hash = {
-        declaration["sha256"]: declaration
-        for declaration in source["artifacts"].values()
+def _replace_chunk_derivation(case: dict, index: int, derivation: dict) -> None:
+    chunk = case["chunks"][index]
+    chunk["derivation"] = derivation
+    chunk["content_sha256"] = scorer.sha256_json(scorer.chunk_hash_payload(chunk))
+    case["chunking_receipt"]["ordered_derivations"][index]["derivation"] = derivation
+    _rehash_chunking_receipt(case["chunking_receipt"])
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda case, derivation: derivation.update(
+                char_end=len(
+                    SOURCE_ARTIFACT_PATHS["reviewed-en"].read_text(encoding="utf-8")
+                )
+                + 1
+            ),
+            "out of range",
+        ),
+        (
+            lambda case, derivation: derivation.update(slice_sha256="0" * 64),
+            "slice sha256 mismatch",
+        ),
+        (
+            lambda case, derivation: derivation.update(
+                source_artifact_sha256=SOURCE_ARTIFACT_HASHES["reviewed-he"]
+            ),
+            "does not bind the case reviewed source",
+        ),
+    ],
+)
+def test_source_slice_derivation_rejects_wrong_bindings(panel, mutate, message):
+    changed = copy.deepcopy(panel)
+    case = changed["cases"][0]
+    derivation = copy.deepcopy(case["chunks"][1]["derivation"])
+    mutate(case, derivation)
+    _replace_chunk_derivation(case, 1, derivation)
+    with pytest.raises(ValueError, match=message):
+        _validate(changed)
+
+
+def test_rejects_invented_chunk_text_even_when_content_hash_is_recomputed(panel):
+    changed = copy.deepcopy(panel)
+    chunk = changed["cases"][0]["chunks"][1]
+    chunk["text"] = "invented evidence not present in the reviewed source"
+    chunk["content_sha256"] = scorer.sha256_json(scorer.chunk_hash_payload(chunk))
+    with pytest.raises(ValueError, match="exactly equal its reviewed source slice"):
+        _validate(changed)
+
+
+def test_rejects_hebrew_source_slice_masquerading_as_translation(panel):
+    changed = copy.deepcopy(panel)
+    case = changed["cases"][1]
+    source_text = SOURCE_ARTIFACT_PATHS["reviewed-he"].read_text(encoding="utf-8")
+    derivation = {
+        "kind": "source_text_slice",
+        "source_artifact_sha256": SOURCE_ARTIFACT_HASHES["reviewed-he"],
+        "char_start": 0,
+        "char_end": 1,
+        "slice_sha256": scorer.sha256_bytes(source_text[:1].encode("utf-8")),
     }
+    _replace_chunk_derivation(case, 1, derivation)
+    with pytest.raises(ValueError, match="translated derivation keys"):
+        _validate(changed)
+
+
+def test_cross_case_derivation_keys_are_globally_unambiguous(panel):
+    changed = copy.deepcopy(panel)
+    changed["cases"][1]["chunks"][0]["chunk_key"] = changed["cases"][0]["chunks"][0][
+        "chunk_key"
+    ]
+    with pytest.raises(ValueError, match="globally unique"):
+        _validate(changed)
+
+
+def test_image_derivation_binds_image_and_control_receipts(panel):
+    changed = copy.deepcopy(panel)
+    case = changed["cases"][0]
+    derivation = copy.deepcopy(case["chunks"][3]["derivation"])
+    derivation["image_artifact_sha256"] = SOURCE_ARTIFACT_HASHES["shuffled-image"]
+    _replace_chunk_derivation(case, 3, derivation)
+    with pytest.raises(ValueError, match="supplied image artifact"):
+        _validate(changed)
+
+
+def test_rejects_chunking_receipt_derivation_tampering(panel):
+    changed = copy.deepcopy(panel)
+    receipt = changed["cases"][0]["chunking_receipt"]
+    tampered = copy.deepcopy(receipt["ordered_derivations"][1]["derivation"])
+    tampered["slice_sha256"] = "0" * 64
+    receipt["ordered_derivations"][1]["derivation"] = tampered
+    _rehash_chunking_receipt(receipt)
+    with pytest.raises(ValueError, match="derivations do not match panel chunks"):
+        _validate(changed)
+
+
+def test_chunking_receipt_enforces_frozen_span_and_semantic_disclosure(panel):
+    source, digest = _source_manifest()
+    _, by_hash = scorer.validate_source_snapshot_manifest(
+        panel, source, digest, SOURCE_ARTIFACT_PATHS
+    )
     case = panel["cases"][0]
     scorer.validate_case_chunking_receipt(
         case, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
@@ -832,7 +1025,7 @@ def test_chunking_receipt_enforces_frozen_span_and_semantic_disclosure(panel):
     overclaim = copy.deepcopy(case)
     overclaim["chunking_receipt"]["semantic_verification"] = "verified"
     _rehash_chunking_receipt(overclaim["chunking_receipt"])
-    with pytest.raises(ValueError, match="not scorer-verified"):
+    with pytest.raises(ValueError, match="external tokenizer/chunker boundary"):
         scorer.validate_case_chunking_receipt(
             overclaim, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
         )
@@ -843,12 +1036,11 @@ def test_chunking_receipt_enforces_frozen_span_and_semantic_disclosure(panel):
         )
 
 
-def test_fixed_chunking_requires_exact_512_max_and_64_overlap(panel):
-    source, _ = _source_manifest()
-    by_hash = {
-        declaration["sha256"]: declaration
-        for declaration in source["artifacts"].values()
-    }
+def test_fixed_chunking_fails_closed_without_tokenizer_recomputation(panel):
+    source, digest = _source_manifest()
+    _, by_hash = scorer.validate_source_snapshot_manifest(
+        panel, source, digest, SOURCE_ARTIFACT_PATHS
+    )
     case = copy.deepcopy(panel["cases"][0])
     starts = [index * 448 for index in range(len(case["chunks"]))]
     for chunk, start in zip(case["chunks"], starts, strict=True):
@@ -866,14 +1058,7 @@ def test_fixed_chunking_requires_exact_512_max_and_64_overlap(panel):
         for chunk in case["chunks"]
     ]
     _rehash_chunking_receipt(receipt)
-    scorer.validate_case_chunking_receipt(
-        case, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
-    )
-
-    receipt["ordered_spans"][1]["token_start"] += 1
-    case["chunks"][1]["token_start"] += 1
-    _rehash_chunking_receipt(receipt)
-    with pytest.raises(ValueError, match="exactly 64"):
+    with pytest.raises(ValueError, match="external tokenizer boundary"):
         scorer.validate_case_chunking_receipt(
             case, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
         )
@@ -882,12 +1067,22 @@ def test_fixed_chunking_requires_exact_512_max_and_64_overlap(panel):
 def test_prior_panel_and_source_manifest_require_explicit_migration(panel):
     old_panel = copy.deepcopy(panel)
     old_panel["schema_version"] = "r052-evidence-panel-v1"
-    with pytest.raises(ValueError, match="r052-evidence-panel-v3"):
+    with pytest.raises(ValueError, match="r052-evidence-panel-v4"):
         _validate(old_panel)
 
     old_panel["schema_version"] = "r052-evidence-panel-v2"
-    with pytest.raises(ValueError, match="r052-evidence-panel-v3"):
+    with pytest.raises(ValueError, match="r052-evidence-panel-v4"):
         _validate(old_panel)
+
+    source, _ = _source_manifest()
+    source["schema_version"] = "r052-source-provenance-manifest-v2"
+    with pytest.raises(ValueError, match="v2 requires migration to v3"):
+        scorer.validate_source_snapshot_manifest(
+            panel,
+            source,
+            scorer.sha256_json(source),
+            SOURCE_ARTIFACT_PATHS,
+        )
 
     source, _ = _source_manifest()
     source["schema_version"] = "r052-source-provenance-manifest-v1"
