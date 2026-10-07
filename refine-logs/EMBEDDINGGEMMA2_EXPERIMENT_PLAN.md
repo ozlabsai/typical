@@ -54,16 +54,16 @@ English/Hebrew and real-image controls. Google's generic embedding results do no
 claim. B1/B2 and the oracle-headroom condition are designed to falsify them before any integration or
 training.
 
-**Current runtime evidence:** this repository's frozen UV environment resolves Transformers `5.17.0`
-and has no `transformers.models.embedding_gemma2` module, so the local provider fails closed before
-model loading. Compatible Transformers `5.19.0` is now released; its wheel SHA256 is
+**Current runtime evidence:** the main repository's frozen UV environment resolves Transformers
+`5.17.0`, while the isolated R052 environment pins compatible Transformers `5.19.0`; its wheel SHA256 is
 `afcd2dd5f603ed28c1e1fcb00a338ccbb4ef5f878ed289635df8b58187afb518` and release source commit is
-`c4c4605f961877852b89b97478536bb3a26b6fd1`. P0 must use a separate exact UV lock rather than mutate
-the project lock. That runtime is now frozen at `runtimes/r052-embeddinggemma2/uv.lock`, SHA256
-`1efdac9dfe879bf76da25c9a6abb3d6303fc62863cea7f048ec8d493a85425ac`; an isolated `uv run
---frozen` import verified Transformers `5.19.0` exposes `EmbeddingGemma2Model`. The remaining run
-blockers are R050 ownership of the GPU, gated checkpoint access, and completing the natural audited
-panel—not an unreleased runtime.
+`c4c4605f961877852b89b97478536bb3a26b6fd1`. The separate runtime lock SHA256 is
+`1efdac9dfe879bf76da25c9a6abb3d6303fc62863cea7f048ec8d493a85425ac`. On 2026-10-08 the exact
+checkpoint became public and ungated. A local CPU/FP32 smoke loaded revision `914f7f8…`, verified the
+15-file snapshot (tree SHA256 `5d8ab1c…`; weights SHA256 `197a3296…`), and produced a finite,
+unit-normalized 768d Hebrew-query vector that was bitwise identical on repeat. P0 therefore passes.
+The paid GPU remains stopped; the remaining run blocker is the reviewed natural panel, not runtime or
+weight access.
 
 **Current panel evidence:** commit `5623b91` pins and independently re-verifies ten long natural
 NTSB/GovInfo reports (10,523–37,579 extracted words each) with immutable upstream URLs, raw and
@@ -148,6 +148,12 @@ Compare:
 4. EmbeddingGemma 2 at 256 dimensions after required renormalization;
 5. gold decisive-exhibit oracle.
 
+Retrieval-only option serialization is canonical by stable semantic `option_id`, so presentation
+permutations must produce identical query text and rankings. At a fixed final evidence-token budget,
+ablate question-only, question-plus-all-options, and per-option-query unions, plus the official
+question-answering versus fact-checking task prefixes. A per-option union advances only if it adds at
+least three recall points or two downstream exact-action points.
+
 Metrics: decisive recall@1/@2/@4, MRR, distractor false-positive rate, early/middle/late evidence
 slices, source/domain slices, Hebrew/English twin rank agreement, correct-versus-shuffled image
 margin, and wall time/VRAM.
@@ -214,15 +220,15 @@ regression, and the same calibration/latency gates. Otherwise keep the frozen ro
 
 | Run | Goal | Decision gate | Estimated compute | Status |
 |---|---|---|---:|---|
-| R052-P0 | pinned-model/runtime preflight | deterministic finite normalized vectors | CPU metadata + <15 GPU min | READY in isolated Transformers 5.19 lock after R050; gated weights required |
+| R052-P0 | pinned-model/runtime preflight | deterministic finite normalized vectors | CPU metadata only | PASS: exact public checkpoint cached; CPU/FP32 Hebrew smoke finite, normalized, deterministic |
 | R052-R | retrieval-only diagnostic | B1 recall and cross-modal/cross-lingual gates | <1 A100-hour | SOURCE/BUILDER READY; authored review and audit pending |
 | R052-D | downstream no-training causal ablation | B2 exact-action and oracle-headroom gates | 1–2 A100-hours | BLOCKED on R052-R |
 | R052-I | frozen-router integration | B3 quality, retention, latency | 1–3 A100-hours | BLOCKED on R052-D |
 | R052-L | optional router LoRA | B4 incremental gain | 2–4 A100-hours | CONDITIONAL |
 
-The live R050 evaluator owns the current GPU. R052 must not co-run with it because saturated compute
-would alter latency and extend the frozen evaluation. The model can be staged only after R050's
-artifacts are complete and durable.
+R050 is complete and its pod is stopped; no GPU spend is accruing. R052 must restart paid compute
+only when the reviewed panel and a ready-to-run job exist. The exact open model is already staged in
+the local Hugging Face cache.
 
 ## Why this precedes attention surgery
 
@@ -238,6 +244,7 @@ decision remains wrong, train the typed policy executor rather than the router.
 - [x] Open local model identified and exact revision pinned
 - [x] Hosted API and training-use boundary documented
 - [x] Immutable natural long-source acquisition and panel machinery verified
+- [x] Exact public checkpoint staged and local deterministic P0 smoke passed
 - [ ] 40-case/60-question panel authored, human-reviewed where required, and contamination-audited
 - [ ] Retrieval baselines and oracle run
 - [ ] Retrieve-then-decide causal ablation passes
