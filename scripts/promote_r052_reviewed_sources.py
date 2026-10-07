@@ -17,6 +17,7 @@ import hashlib
 import json
 import re
 import shutil
+import stat
 import tempfile
 import unicodedata
 from collections.abc import Mapping
@@ -476,6 +477,24 @@ def _write(path: Path, payload: bytes) -> str:
     return sha256_bytes(payload)
 
 
+def _directory_identity(path: Path) -> tuple[int, int]:
+    """Return a directory's stable filesystem identity without following symlinks."""
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise PromotionError(
+            "output directory identity changed during promotion"
+        ) from error
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise PromotionError("output directory identity changed during promotion")
+    return metadata.st_dev, metadata.st_ino
+
+
+def _require_directory_identity(path: Path, expected: tuple[int, int]) -> None:
+    if _directory_identity(path) != expected:
+        raise PromotionError("output directory identity changed during promotion")
+
+
 def promote(
     acquisition_manifest_path: Path,
     acquisition_manifest_sha256: str,
@@ -703,28 +722,24 @@ def promote(
         promotion_hash = _write(temporary / "promotion-receipt.json", promotion_payload)
 
         try:
-            shutil.copytree(temporary, output_dir, dirs_exist_ok=False)
+            output_dir.mkdir()
         except FileExistsError as error:
             raise PromotionError(
                 "output directory already exists; promotion never overwrites"
             ) from error
-        except Exception:
-            if output_dir.exists() and not output_dir.is_symlink():
-                shutil.rmtree(output_dir, ignore_errors=True)
-            raise
+        published_identity = _directory_identity(output_dir)
+        shutil.copytree(temporary, output_dir, dirs_exist_ok=True)
+        _require_directory_identity(output_dir, published_identity)
         completion_marker = {
             "schema_version": COMPLETION_MARKER_VERSION,
             "source_manifest_sha256": output_manifest_hash,
             "promotion_receipt_sha256": promotion_hash,
         }
-        try:
-            _write(
-                output_dir / "PROMOTION_COMPLETE.json",
-                canonical_json(completion_marker),
-            )
-        except Exception:
-            shutil.rmtree(output_dir, ignore_errors=True)
-            raise
+        _write(
+            output_dir / "PROMOTION_COMPLETE.json",
+            canonical_json(completion_marker),
+        )
+        _require_directory_identity(output_dir, published_identity)
         return promotion_receipt
     finally:
         shutil.rmtree(temporary, ignore_errors=True)

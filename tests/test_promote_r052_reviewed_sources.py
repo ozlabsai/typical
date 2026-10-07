@@ -626,20 +626,22 @@ def test_existing_empty_output_directory_is_not_race_overwritten(tmp_path):
 
 def test_concurrent_empty_output_reservation_is_not_overwritten(tmp_path, monkeypatch):
     fixture = _fixture(tmp_path)
-    real_copytree = promoter.shutil.copytree
+    output = fixture["output"]
+    real_mkdir = Path.mkdir
 
-    def reserve_before_copy(source, destination, *, dirs_exist_ok):
-        destination.mkdir()
-        (destination / "owned-by-racer.txt").write_text("keep")
-        return real_copytree(source, destination, dirs_exist_ok=dirs_exist_ok)
+    def reserve_before_publish(path, *args, **kwargs):
+        if path == output and not path.exists():
+            real_mkdir(path, *args, **kwargs)
+            (path / "owned-by-racer.txt").write_text("keep")
+        return real_mkdir(path, *args, **kwargs)
 
-    monkeypatch.setattr(promoter.shutil, "copytree", reserve_before_copy)
+    monkeypatch.setattr(Path, "mkdir", reserve_before_publish)
     with pytest.raises(promoter.PromotionError, match="never overwrites"):
         _promote(fixture)
     assert (fixture["output"] / "owned-by-racer.txt").read_text() == "keep"
 
 
-def test_reserved_output_is_cleaned_if_completion_marker_fails(tmp_path, monkeypatch):
+def test_completion_failure_leaves_owned_incomplete_output(tmp_path, monkeypatch):
     fixture = _fixture(tmp_path)
     real_write = promoter._write
 
@@ -651,4 +653,39 @@ def test_reserved_output_is_cleaned_if_completion_marker_fails(tmp_path, monkeyp
     monkeypatch.setattr(promoter, "_write", fail_completion)
     with pytest.raises(OSError, match="injected completion failure"):
         _promote(fixture)
-    assert not fixture["output"].exists()
+    assert fixture["output"].is_dir()
+    assert not (fixture["output"] / "PROMOTION_COMPLETE.json").exists()
+
+
+def test_replaced_output_cannot_be_reported_as_success(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    real_write = promoter._write
+
+    def replace_before_completion(path, payload):
+        if path.name == "PROMOTION_COMPLETE.json":
+            promoter.shutil.rmtree(path.parent)
+            path.parent.mkdir()
+            (path.parent / "owned-by-racer.txt").write_text("keep")
+        return real_write(path, payload)
+
+    monkeypatch.setattr(promoter, "_write", replace_before_completion)
+    with pytest.raises(promoter.PromotionError, match="identity changed"):
+        _promote(fixture)
+    assert (fixture["output"] / "owned-by-racer.txt").read_text() == "keep"
+    assert not (fixture["output"] / "source-manifest-v4.json").exists()
+
+
+def test_copy_failure_never_deletes_replacement_directory(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+
+    def replace_then_fail(_source, destination, *, dirs_exist_ok):
+        assert dirs_exist_ok is True
+        promoter.shutil.rmtree(destination)
+        destination.mkdir()
+        (destination / "owned-by-racer.txt").write_text("keep")
+        raise OSError("injected copy failure after replacement")
+
+    monkeypatch.setattr(promoter.shutil, "copytree", replace_then_fail)
+    with pytest.raises(OSError, match="injected copy failure"):
+        _promote(fixture)
+    assert (fixture["output"] / "owned-by-racer.txt").read_text() == "keep"
