@@ -2,7 +2,7 @@
 
 | Run ID | Purpose | System / variant | Split | Decisive metrics | Priority | Status | Notes |
 |---|---|---|---|---|---|---|---|
-| R052-P0 | runtime and integrity preflight | pinned `google/embeddinggemma-2` `914f7f8…` | non-benchmark smoke | deterministic finite normalized vectors; hashes | MUST | READY AFTER R050 + GATED WEIGHT ACCESS | Use a separate exact UV lock for released Transformers 5.19.0; do not mutate the project 5.17.0 lock. BF16/FP32 only |
+| R052-P0 | runtime and integrity preflight | pinned `google/embeddinggemma-2` `914f7f8…` | non-benchmark smoke | deterministic finite normalized vectors; hashes | MUST | READY AFTER R050 + GATED WEIGHT ACCESS | Frozen runtime: `runtimes/r052-embeddinggemma2/uv.lock` SHA256 `1efdac9d…`; verified Transformers 5.19.0 provider import. Do not mutate the project 5.17.0 lock. BF16/FP32 only |
 | R052-R0 | lexical baseline | BM25, fixed chunks/top-k | untouched long/HE/MM panel | recall@k, MRR, distractor FPR | MUST | BLOCKED ON PANEL | matched retrieval budget |
 | R052-R1 | native representation baseline | frozen Typical/Gemma pooled states | same | recall@k, MRR, latency | MUST | BLOCKED ON PANEL | no training |
 | R052-R2 | open multimodal retrieval | EmbeddingGemma 2 768d | same | slice recall@k; HE twin agreement; image margin | MUST | BLOCKED ON PANEL | exact revision pinned |

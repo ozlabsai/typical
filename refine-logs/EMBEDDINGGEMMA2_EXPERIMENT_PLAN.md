@@ -59,8 +59,11 @@ and has no `transformers.models.embedding_gemma2` module, so the local provider 
 model loading. Compatible Transformers `5.19.0` is now released; its wheel SHA256 is
 `afcd2dd5f603ed28c1e1fcb00a338ccbb4ef5f878ed289635df8b58187afb518` and release source commit is
 `c4c4605f961877852b89b97478536bb3a26b6fd1`. P0 must use a separate exact UV lock rather than mutate
-the project lock. The remaining run blockers are R050 ownership of the GPU, gated checkpoint access,
-and the natural audited panel—not an unreleased runtime.
+the project lock. That runtime is now frozen at `runtimes/r052-embeddinggemma2/uv.lock`, SHA256
+`1efdac9dfe879bf76da25c9a6abb3d6303fc62863cea7f048ec8d493a85425ac`; an isolated `uv run
+--frozen` import verified Transformers `5.19.0` exposes `EmbeddingGemma2Model`. The remaining run
+blockers are R050 ownership of the GPU, gated checkpoint access, and the natural audited panel—not
+an unreleased runtime.
 
 Two secondary uses are conditional on B1/B2 succeeding: contamination-safe diversity sampling and
 hard-negative mining for R051/RLCD (never embedding vectors as answer labels), and HE↔EN plus
