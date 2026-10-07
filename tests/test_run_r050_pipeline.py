@@ -2,6 +2,7 @@ import hashlib
 import fcntl
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -321,7 +322,7 @@ def test_control_is_unblinded_from_recipe_after_every_eval_and_argv_is_exact(mon
                for call in compare_calls)
     first = fake.calls[0]
     assert first[1]["check"] is False and "shell" not in first[1]
-    assert first[0] == [str(config.python.resolve()),
+    assert first[0] == [str(config.python.absolute()),
                         str((config.scripts / "run_r050_headroom.py").resolve()),
                         "--data", str(config.headroom_data), "--manifest", str(config.headroom_manifest),
                         "--model", str(config.model), "--inventory", str(config.model_inventory),
@@ -331,6 +332,22 @@ def test_control_is_unblinded_from_recipe_after_every_eval_and_argv_is_exact(mon
                         "--expected-inventory-sha256", config.model_inventory_sha256,
                         "--expected-adapter-tree-sha256", config.parent_tree_sha256,
                         "--expected-adapter-tree-files", str(config.parent_tree_files)]
+
+
+def test_child_command_preserves_virtualenv_interpreter_symlink(tmp_path):
+    config = _config(tmp_path)
+    target = tmp_path / "system-python"
+    target.write_text("interpreter fixture\n")
+    interpreter = tmp_path / "venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(target)
+    config = replace(config, python=interpreter)
+
+    command = pipeline.Pipeline(config)._command("run_r050_headroom.py")
+
+    assert command[0] == str(interpreter.absolute())
+    assert Path(command[0]).is_symlink()
+    assert config.binding()["python"] == str(interpreter.absolute())
 
 
 @pytest.mark.parametrize(

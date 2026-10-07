@@ -225,7 +225,10 @@ class PipelineConfig:
                                   for name, path in sorted(self.retention_suites.items())},
             "retention_suite_hashes": dict(sorted(self.retention_suite_hashes.items())),
             "code_hashes": dict(sorted(self.code_hashes.items())),
-            "python": str(self.python.resolve()),
+            # The virtualenv symlink path is part of the runtime identity.  Two
+            # environments may resolve to one system binary but have different
+            # site-packages and must not share a resumability binding.
+            "python": str(self.python.absolute()),
         }
 
 
@@ -412,7 +415,7 @@ class Pipeline:
         return evidence
 
     def _invoke(self, stage: str, command: list[str]) -> int:
-        if (not command or Path(command[0]).resolve() != self.config.python.resolve()
+        if (not command or Path(command[0]).absolute() != self.config.python.absolute()
                 or any(token in " ".join(command[1:]).casefold() for token in OFFICIAL_EVALUATORS)):
             raise ValueError("invalid or forbidden R050 subprocess command")
         self.logs.mkdir(parents=True, exist_ok=True)
@@ -610,7 +613,10 @@ class Pipeline:
                 "report_sha256": file_hash(directory / "report.json"), "passed": passed}
 
     def _command(self, script: str, *arguments: Any) -> list[str]:
-        return [str(self.config.python.resolve()), str((self.config.scripts / script).resolve()),
+        # Do not resolve the interpreter symlink: a UV virtual environment uses
+        # it to select the environment's site-packages.  Resolving it invokes
+        # the system interpreter and silently drops packages such as torch.
+        return [str(self.config.python.absolute()), str((self.config.scripts / script).resolve()),
                 *map(str, arguments)]
 
     def execute(self, binding: dict[str, Any]) -> dict[str, Any]:
