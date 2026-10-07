@@ -395,6 +395,17 @@ def test_rejects_upstream_pdf_as_redistributable_raw_source(tmp_path):
         builder._validate_source_manifest(manifest, paths)
 
 
+def test_rejects_semantic_chunk_gaps_that_fake_long_context(tmp_path):
+    fixture = _fixture(tmp_path)
+    spec = deepcopy(fixture["spec"])
+    spec["cases"][0]["chunks"][1]["token_start"] = 6
+
+    with pytest.raises(ValueError, match="cover the entire dossier contiguously"):
+        builder._validate_spec(
+            spec, fixture["source_manifest"], allow_test_profile=True
+        )
+
+
 def test_rejects_tampered_audit_binding_before_publication(tmp_path):
     fixture = _fixture(tmp_path)
     tampered = deepcopy(fixture["audit_results"])

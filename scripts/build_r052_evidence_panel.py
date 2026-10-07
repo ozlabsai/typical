@@ -599,8 +599,16 @@ def _validate_spec(
             raise ValueError(
                 "all semantic or fallback chunks may contain at most 512 tokens"
             )
-        if chunking["mode"] == "fixed_512_overlap_64":
-            spans = [(chunk["token_start"], chunk["token_end"]) for chunk in chunks]
+        spans = [(chunk["token_start"], chunk["token_end"]) for chunk in chunks]
+        if chunking["mode"] == "semantic_sections":
+            if spans[0][0] != 0 or any(
+                start != spans[index - 1][1]
+                for index, (start, _) in enumerate(spans[1:], start=1)
+            ):
+                raise ValueError(
+                    "semantic-section chunks must cover the entire dossier contiguously"
+                )
+        else:
             for index, (start, end) in enumerate(spans):
                 if end - start > 512:
                     raise ValueError(
