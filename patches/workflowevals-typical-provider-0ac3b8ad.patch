@@ -12,10 +12,10 @@ index 271828ac01b9a956b7f87d050568de1ffcae0863..249650b73cec99971350618eb481a2b9
  # HF_TOKEN=
  # Optional TypeSafe endpoint override:
 diff --git a/README.md b/README.md
-index 5f63244bbb3ba82d17e40a6b914a3d5b0111f63f..360dfb78976071e299ed15f93fc0701a777c6b45 100644
+index 5f63244bbb3ba82d17e40a6b914a3d5b0111f63f..8a5fca26acbe4f201bc374028386bcaf95b01141 100644
 --- a/README.md
 +++ b/README.md
-@@ -16,11 +16,30 @@ uv run python run.py invoice_processing --limit 5
+@@ -16,11 +16,31 @@ uv run python run.py invoice_processing --limit 5
  
  The default model is `typesafe:jev-1.13.0`. Override it with `--model provider:model`
  using the provider's exact model ID, such as `--model openai:gpt-6-astra`. Supported
@@ -42,13 +42,14 @@ index 5f63244bbb3ba82d17e40a6b914a3d5b0111f63f..360dfb78976071e299ed15f93fc0701a
 +Set it to the host root: the SDK appends `/v1/systemone`, so do not append `/v1`.
 +Typical reads only `TYPICAL_API_KEY`, never `TYPESAFE_API_KEY`, and defaults to
 +`--questions all --thinking off`. No Typical prices are assumed: costs remain unknown
-+until measured rates are deliberately added to `core/pricing.json`.
++until measured rates are deliberately added to `core/pricing.json`. Typical calls
++disable SDK retries so endpoint failures remain visible in benchmark results.
 +
  `core/pricing.json` uses the same exact `provider:model` keys. Missing rates produce
  unknown cost.
  
 diff --git a/core/clients.py b/core/clients.py
-index 1186248317541990a82ee34a1f7c0764e4eab5d4..c7a3b4a2147234e4bc22a35950e0c08027de03da 100644
+index 1186248317541990a82ee34a1f7c0764e4eab5d4..a9c6cf3c375844a4f3c0f9e3b14c6f66f7ccf8a0 100644
 --- a/core/clients.py
 +++ b/core/clients.py
 @@ -1,3 +1,5 @@
@@ -57,15 +58,23 @@ index 1186248317541990a82ee34a1f7c0764e4eab5d4..c7a3b4a2147234e4bc22a35950e0c080
  import httpx
  import httpx2
  from pydantic_ai.direct import model_request_sync
-@@ -82,9 +84,21 @@ class ConfiguredProvider:
+@@ -82,25 +84,43 @@ class ConfiguredProvider:
  class QuestionClient:
  
      def __init__(self, config):
 -        self.typesafe = config.provider == "typesafe"
+-        retry = RetryPolicy(max_retries=5, backoff_initial=2.0, backoff_max=60.0, timeout=None)
+-        if self.typesafe:
+-            self.client = TypeSafeClient(base_url=config.base_url, timeout=config.timeout_s, retry=retry)
+-        else:
+-            self.client = SystemOneAdapterClient(
+-                structured_outputs=True,
+-                llm_answer_mode="probabilities",
+-                normalize_probabilities=True,
+-                n_retry_malformed_structure=config.malformed_retries,
+-                retry=retry,
 +        self.native = config.provider in ("typesafe", "typical")
 +        self.typical = config.provider == "typical"
-         retry = RetryPolicy(max_retries=5, backoff_initial=2.0, backoff_max=60.0, timeout=None)
--        if self.typesafe:
 +        if self.typical:
 +            api_key = os.getenv("TYPICAL_API_KEY")
 +            if not api_key or not api_key.strip():
@@ -75,14 +84,20 @@ index 1186248317541990a82ee34a1f7c0764e4eab5d4..c7a3b4a2147234e4bc22a35950e0c080
 +                model=config.model,
 +                base_url=config.base_url,
 +                timeout=config.timeout_s,
-+                retry=retry,
-+            )
-+        elif self.native:
-             self.client = TypeSafeClient(base_url=config.base_url, timeout=config.timeout_s, retry=retry)
-         else:
-             self.client = SystemOneAdapterClient(
-@@ -96,11 +110,16 @@ class QuestionClient:
++                retry=RetryPolicy(max_retries=0),
              )
++        else:
++            retry = RetryPolicy(max_retries=5, backoff_initial=2.0, backoff_max=60.0, timeout=None)
++            if self.native:
++                self.client = TypeSafeClient(base_url=config.base_url, timeout=config.timeout_s, retry=retry)
++            else:
++                self.client = SystemOneAdapterClient(
++                    structured_outputs=True,
++                    llm_answer_mode="probabilities",
++                    normalize_probabilities=True,
++                    n_retry_malformed_structure=config.malformed_retries,
++                    retry=retry,
++                )
  
      def system_one(self, *, model, state, questions) -> SystemOneResponse:
 -        return self.client.system_one(
@@ -215,10 +230,10 @@ index 0000000000000000000000000000000000000000..59fc4ae5f9b8e708c62144aa41de8d73
 +"""WorkflowEvals unit tests."""
 diff --git a/tests/test_typical_provider.py b/tests/test_typical_provider.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..102ce59049249809547b0f88c185627ba1507b83
+index 0000000000000000000000000000000000000000..1fe2f74af8531853d3006b233f284166b761a700
 --- /dev/null
 +++ b/tests/test_typical_provider.py
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,148 @@
 +from __future__ import annotations
 +
 +import json
@@ -324,6 +339,7 @@ index 0000000000000000000000000000000000000000..102ce59049249809547b0f88c185627b
 +            timeout=config.timeout_s,
 +            retry=ANY,
 +        )
++        self.assertEqual(sdk.call_args.kwargs["retry"].max_retries, 0)
 +        adapter.assert_not_called()
 +        sdk.return_value.system_one.assert_called_once_with(
 +            state={"ticket": "example"},
@@ -331,6 +347,23 @@ index 0000000000000000000000000000000000000000..102ce59049249809547b0f88c185627b
 +            model=MODEL,
 +        )
 +        self.assertIs(result, sdk.return_value.system_one.return_value)
++
++    def test_typesafe_keeps_existing_retry_policy(self):
++        env = {
++            "TYPESAFE_API_KEY": "jev-secret",
++            "TYPESAFE_BASE_URL": "https://api.typesafe.ai",
++        }
++        with patch.dict(os.environ, env, clear=True):
++            config = configuration("typesafe:jev-1.13.0")
++            with patch("core.clients.TypeSafeClient") as sdk:
++                QuestionClient(config)
++
++        sdk.assert_called_once_with(
++            base_url="https://api.typesafe.ai",
++            timeout=config.timeout_s,
++            retry=ANY,
++        )
++        self.assertEqual(sdk.call_args.kwargs["retry"].max_retries, 5)
 +
 +    def test_response_model_must_exactly_match_request_model(self):
 +        env = {"TYPICAL_API_KEY": "typical-secret"}

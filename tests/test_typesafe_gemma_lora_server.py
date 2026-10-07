@@ -31,6 +31,7 @@ from scripts.serve_typesafe_gemma_lora import (
     _require_safe_bind,
     build_startup_receipt,
     create_app,
+    main as serve_main,
     write_startup_receipt,
 )
 
@@ -380,6 +381,7 @@ def test_startup_receipt_binds_artifacts_code_and_runtime(tmp_path):
     (base / "config.json").write_text('{"model":"gemma"}\n')
     (adapter / "adapter_config.json").write_text('{"rank":32}\n')
     (adapter / "adapter_model.safetensors").write_bytes(b"weights")
+    base_hash = artifact_identity(str(base), "base-rev")["canonical_sha256"]
     adapter_hash = artifact_identity(str(adapter), None)["canonical_sha256"]
     model_id = f"typical-r050-sha256-{adapter_hash[:16]}"
 
@@ -387,8 +389,10 @@ def test_startup_receipt_binds_artifacts_code_and_runtime(tmp_path):
         model_id=model_id,
         base_model=str(base),
         base_revision="base-rev",
+        expected_model_tree_sha256=base_hash,
         adapter=str(adapter),
         adapter_revision=None,
+        expected_adapter_tree_sha256=adapter_hash,
         max_context=32768,
         dtype="bfloat16",
         device="cuda",
@@ -424,18 +428,71 @@ def test_startup_receipt_rejects_model_id_not_bound_to_adapter(tmp_path):
     adapter.mkdir()
     (base / "config.json").write_text("base")
     (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+    base_hash = artifact_identity(str(base), "rev")["canonical_sha256"]
+    adapter_hash = artifact_identity(str(adapter), None)["canonical_sha256"]
     with pytest.raises(ValueError, match="adapter sha256 prefix"):
         build_startup_receipt(
             model_id="typical-r050-sha256-0000000000000000",
             base_model=str(base),
             base_revision="rev",
+            expected_model_tree_sha256=base_hash,
             adapter=str(adapter),
             adapter_revision=None,
+            expected_adapter_tree_sha256=adapter_hash,
             max_context=16384,
             dtype="bfloat16",
             device="cuda",
             attn_implementation="sdpa",
         )
+
+
+def test_server_remote_sources_reject_tree_hash_flags():
+    with pytest.raises(ValueError, match="remote model cannot use an expected tree sha256"):
+        build_startup_receipt(
+            model_id="typical-r050-sha256-0000000000000000",
+            base_model="google/gemma-4-12b-it",
+            base_revision="base-commit",
+            expected_model_tree_sha256="0" * 64,
+            adapter="org/winner-adapter",
+            adapter_revision="adapter-commit",
+            expected_adapter_tree_sha256=None,
+            max_context=16384,
+            dtype="bfloat16",
+            device="cuda",
+            attn_implementation="sdpa",
+        )
+
+
+def test_server_hash_mismatch_fails_before_model_load(monkeypatch, tmp_path):
+    base, adapter = tmp_path / "base", tmp_path / "adapter"
+    base.mkdir()
+    adapter.mkdir()
+    (base / "config.json").write_text("base")
+    (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+    adapter_hash = artifact_identity(str(adapter), None)["tree_sha256"]
+    loaded = []
+
+    def forbidden_load(self):
+        loaded.append(True)
+        raise AssertionError("model load must not run")
+
+    monkeypatch.setattr(GemmaDecisionRuntime, "load", forbidden_load)
+    receipt = tmp_path / "startup.json"
+    monkeypatch.setattr(sys, "argv", [
+        "serve_typesafe_gemma_lora.py",
+        "--model", str(base),
+        "--model-revision", "base-rev",
+        "--expected-model-tree-sha256", "0" * 64,
+        "--adapter", str(adapter),
+        "--expected-adapter-tree-sha256", adapter_hash,
+        "--model-id", f"typical-r050-sha256-{adapter_hash[:16]}",
+        "--receipt", str(receipt),
+        "--max-context", "16384",
+    ])
+    with pytest.raises(SystemExit, match="model tree sha256 mismatch"):
+        serve_main()
+    assert loaded == []
+    assert not receipt.exists()
 
 
 @pytest.mark.parametrize("state", ["שלום עולם", {"טקסט": "בדיקה"}, ["א", {"ב": 2}]])

@@ -6,16 +6,16 @@ repository.
 
 - Required upstream commit: `0ac3b8ad845429f0d8e064ecfb2430a47c5a25cb`
 - Patch: `workflowevals-typical-provider-0ac3b8ad.patch`
-- Patch SHA-256: `622c550c33a78f4452d7e961d75269fb93674d3ef110edd990c16b495f179bf7`
-- Patch size: 16,321 bytes, 351 lines
+- Patch SHA-256: `07106bf888aa53a2770b83503c58635708db32042ecb4b034a41963b1ba43908`
+- Patch size: 17,920 bytes, 384 lines
 
 The patch adds an honestly identified `typical` provider using the native
 `TypeSafeClient` protocol. It keeps TypeSafe's Jev-only model restriction,
 requires a dedicated Typical endpoint and credential, passes an immutable
 literal model identifier, rejects response model substitution, defaults to
-joint questions with thinking off, and deliberately adds no pricing claim.
-It also adds eight standard-library unit tests covering those contracts and
-configuration serialization.
+joint questions with thinking off, disables retries so failures remain visible,
+and deliberately adds no pricing claim. It also adds nine standard-library unit
+tests covering those contracts and configuration serialization.
 
 ## Reproduce verification
 
@@ -33,7 +33,7 @@ git diff --check
 ```
 
 The first command must print the required upstream commit, and the second must
-print nothing. The test command must run eight passing tests. `uv run --frozen`
+print nothing. The test command must run nine passing tests. `uv run --frozen`
 must leave `uv.lock` unchanged.
 
 ## Integrity constraints
@@ -47,6 +47,9 @@ must leave `uv.lock` unchanged.
   `TYPESAFE_API_KEY`.
 - The endpoint must echo the requested literal model exactly in
   `response.model`; a mismatch fails the call.
+- Typical must receive `RetryPolicy(max_retries=0)` so transport and server
+  failures cannot be hidden by implicit retries. TypeSafe Jev keeps the upstream
+  five-retry policy.
 - Do not add a `typical:*` entry to `core/pricing.json` without measured,
   reviewable pricing evidence.
 

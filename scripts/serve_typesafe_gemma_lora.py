@@ -28,7 +28,8 @@ from scripts.gemma_decision_runtime import (
     Option,
     OptionScores,
     Overlength,
-    artifact_identity,
+    bind_artifact,
+    runtime_environment_identity,
 )
 from scripts.preflight_r043_assets import file_hash
 from scripts.singleton_option_scorer import validate_native_probs
@@ -101,15 +102,28 @@ def build_startup_receipt(
     model_id: str,
     base_model: str,
     base_revision: str,
+    expected_model_tree_sha256: str | None,
     adapter: str,
     adapter_revision: str | None,
+    expected_adapter_tree_sha256: str | None,
     max_context: int,
     dtype: str,
     device: str,
     attn_implementation: str,
 ) -> dict[str, Any]:
     """Bind the served name to artifacts, exact code, and inference configuration."""
-    adapter_artifact = artifact_identity(adapter, adapter_revision)
+    model_artifact = bind_artifact(
+        base_model,
+        base_revision,
+        expected_model_tree_sha256,
+        name="model",
+    )
+    adapter_artifact = bind_artifact(
+        adapter,
+        adapter_revision,
+        expected_adapter_tree_sha256,
+        name="adapter",
+    )
     match = MODEL_ID_PATTERN.search(model_id)
     if match is None or not adapter_artifact["canonical_sha256"].startswith(match.group(1)):
         raise ValueError("model_id must end with an adapter sha256 prefix of at least 12 hex digits")
@@ -119,7 +133,7 @@ def build_startup_receipt(
         "base_model": {
             "source": _source(base_model),
             "revision": base_revision,
-            "artifact": artifact_identity(base_model, base_revision),
+            "artifact": model_artifact,
         },
         "adapter": {
             "source": _source(adapter),
@@ -136,7 +150,11 @@ def build_startup_receipt(
             "runtime_sha256": _sha256_file(Path(__file__).with_name("gemma_decision_runtime.py")),
             "server_sha256": _sha256_file(Path(__file__)),
             "scorer_sha256": _sha256_file(Path(__file__).with_name("singleton_option_scorer.py")),
+            "training_helper_sha256": _sha256_file(
+                Path(__file__).with_name("train_gemma_decision_lora.py")
+            ),
         },
+        "environment": runtime_environment_identity(),
     }
     encoded = json.dumps(receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     receipt["receipt_sha256"] = hashlib.sha256(encoded.encode()).hexdigest()
@@ -311,8 +329,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", required=True, help="pinned Gemma model path or repository")
     parser.add_argument("--model-revision", required=True)
+    parser.add_argument("--expected-model-tree-sha256")
     parser.add_argument("--adapter", required=True, help="winner LoRA path or repository")
     parser.add_argument("--adapter-revision")
+    parser.add_argument("--expected-adapter-tree-sha256")
     parser.add_argument("--model-id", required=True, help="immutable identifier returned by the API")
     parser.add_argument("--receipt", type=Path, required=True, help="immutable startup receipt JSON")
     parser.add_argument("--max-context", type=int, required=True)
@@ -353,8 +373,10 @@ def main() -> None:
             model_id=args.model_id,
             base_model=args.model,
             base_revision=args.model_revision,
+            expected_model_tree_sha256=args.expected_model_tree_sha256,
             adapter=args.adapter,
             adapter_revision=args.adapter_revision,
+            expected_adapter_tree_sha256=args.expected_adapter_tree_sha256,
             max_context=args.max_context,
             dtype=args.dtype,
             device=args.device,

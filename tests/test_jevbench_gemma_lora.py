@@ -1,3 +1,4 @@
+import json
 import math
 import subprocess
 import sys
@@ -9,11 +10,16 @@ import pytest
 from scripts.jevbench_gemma_lora import (
     GemmaLoraAdapter,
     InvalidTask,
+    bind_artifact,
+    code_hashes,
+    harness_code_hashes,
+    main,
     probabilities_from_option_scores,
     render_prompt,
     task_items,
     validate_native_probs,
 )
+from scripts.preflight_r043_assets import file_hash, tree_hash
 
 
 JEVBENCH = Path(".context/jevbench-v154").resolve()
@@ -163,3 +169,110 @@ def test_current_jevbench_runner_accepts_the_native_result(monkeypatch, tmp_path
                     default_reserve_usd=0.0).run_task(current)
     assert record["ok"] and record["valid"] and record["strict_valid"] and record["correct"]
     assert record["probs"] == {"א": 0.25, "ב": 0.75}
+    raw_files = list((tmp_path / "raw").glob("*.json"))
+    assert len(raw_files) == 1
+    assert json.loads(raw_files[0].read_text())["response"] == {
+        "model": "base+adapter",
+        "probabilities": {"א": 0.25, "ב": 0.75},
+        "usage": {"input_tokens": 17, "output_tokens": 0},
+        "runtime": {
+            "input_tokens": 17,
+            "max_context": 32768,
+            "truncated": False,
+            "probability_origin": "native-option-logits",
+        },
+    }
+
+
+def test_local_manifest_artifact_uses_canonical_r050_tree_hash(tmp_path):
+    artifact = tmp_path / "adapter"
+    artifact.mkdir()
+    (artifact / "adapter_config.json").write_text('{"rank":32}\n')
+    (artifact / "nested").mkdir()
+    (artifact / "nested" / "adapter_model.safetensors").write_bytes(b"weights")
+    digest, files = tree_hash(artifact)
+
+    bound = bind_artifact(str(artifact), "winner-rev", digest, name="adapter")
+
+    assert bound == {
+        "kind": "tree",
+        "canonical_sha256": digest,
+        "tree_sha256": digest,
+        "files": files,
+        "bytes": sum(path.stat().st_size for path in artifact.rglob("*") if path.is_file()),
+    }
+    with pytest.raises(ValueError, match="local adapter requires"):
+        bind_artifact(str(artifact), "winner-rev", None, name="adapter")
+    with pytest.raises(ValueError, match="adapter tree sha256 mismatch"):
+        bind_artifact(str(artifact), "winner-rev", "0" * 64, name="adapter")
+
+
+def test_remote_artifact_records_pinned_identity_not_a_tree_hash():
+    bound = bind_artifact("org/pinned-model", "commit-sha", None, name="model")
+    assert bound["kind"] == "pinned-identity"
+    assert bound["canonical_sha256"] == bound["identity_sha256"]
+    assert "tree_sha256" not in bound and bound["files"] is None
+    with pytest.raises(ValueError, match="remote model cannot use an expected tree sha256"):
+        bind_artifact("org/pinned-model", "commit-sha", "0" * 64, name="model")
+    with pytest.raises(ValueError, match="remote model requires a pinned revision"):
+        bind_artifact("org/pinned-model", None, None, name="model")
+
+
+def test_manifest_code_hashes_bind_runner_runtime_scorer_and_hash_helper():
+    scripts = Path("scripts").resolve()
+    expected_names = {
+        "jevbench_gemma_lora.py",
+        "gemma_decision_runtime.py",
+        "singleton_option_scorer.py",
+        "preflight_r043_assets.py",
+        "train_gemma_decision_lora.py",
+    }
+    hashes = code_hashes()
+    assert set(hashes) == expected_names
+    assert hashes == {name: file_hash(scripts / name) for name in expected_names}
+
+
+def test_harness_code_hashes_bind_executed_jevbench_modules(tmp_path):
+    names = (
+        "jevbench/__init__.py",
+        "jevbench/budget.py",
+        "jevbench/tasks.py",
+        "jevbench/runner.py",
+        "jevbench/scoring.py",
+        "jevbench/adapters/base.py",
+    )
+    for index, name in enumerate(names):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# harness module {index}\n")
+    assert harness_code_hashes(tmp_path) == {
+        name: file_hash(tmp_path / name) for name in names
+    }
+
+
+def test_hash_mismatch_fails_main_before_model_load(monkeypatch, tmp_path):
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text('{"model":"gemma"}\n')
+    loaded = []
+
+    def forbidden_load(self):
+        loaded.append(True)
+        raise AssertionError("model load must not run")
+
+    monkeypatch.setattr(GemmaLoraAdapter, "load", forbidden_load)
+    monkeypatch.setattr(sys, "argv", [
+        "jevbench_gemma_lora.py",
+        "--jevbench-dir", str(tmp_path / "missing-jevbench"),
+        "--task-file", str(tmp_path / "missing-tasks.jsonl"),
+        "--model", str(model),
+        "--model-revision", "base-rev",
+        "--expected-model-tree-sha256", "0" * 64,
+        "--out", str(tmp_path / "out"),
+        "--max-context", "16384",
+    ])
+
+    with pytest.raises(ValueError, match="model tree sha256 mismatch"):
+        main()
+    assert loaded == []
+    assert not (tmp_path / "out").exists()

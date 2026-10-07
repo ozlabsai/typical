@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
+import re
 import threading
 import time
+import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +28,39 @@ SYSTEM = (
 JsonContent = str | dict[str, Any] | list[Any]
 Option = tuple[str, Any]
 QUESTION_TYPES = frozenset(("noul", "choice", "score"))
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+RUNTIME_DEPENDENCIES = (
+    "accelerate",
+    "peft",
+    "safetensors",
+    "tokenizers",
+    "torch",
+    "transformers",
+)
+
+
+def runtime_environment_identity() -> dict[str, Any]:
+    """Bind inference to the repository lock and its directly used ML stack."""
+    lock_path = Path(__file__).resolve().parents[1] / "uv.lock"
+    lock = tomllib.loads(lock_path.read_text())
+    versions = {
+        package.get("name"): package.get("version")
+        for package in lock.get("package", [])
+        if isinstance(package, dict)
+    }
+    locked = {name: versions.get(name) for name in RUNTIME_DEPENDENCIES}
+    if any(not isinstance(version, str) or not version for version in locked.values()):
+        raise ValueError("uv.lock lacks a required inference dependency")
+    installed = {name: importlib.metadata.version(name) for name in RUNTIME_DEPENDENCIES}
+    if installed != locked:
+        raise ValueError("installed inference dependencies differ from uv.lock")
+    return {
+        "uv_lock_sha256": file_hash(lock_path),
+        "dependencies": {
+            name: {"locked": locked[name], "installed": installed[name]}
+            for name in RUNTIME_DEPENDENCIES
+        },
+    }
 
 
 class Overlength(ValueError):
@@ -139,6 +175,33 @@ def artifact_identity(value: str, revision: str | None) -> dict[str, Any]:
         "files": None,
         "bytes": None,
     }
+
+
+def bind_artifact(
+    value: str,
+    revision: str | None,
+    expected_tree_sha256: str | None,
+    *,
+    name: str,
+) -> dict[str, Any]:
+    """Fail closed on local tree drift; keep remote identities revision-pinned."""
+    path = Path(value)
+    if path.exists():
+        if not path.is_dir():
+            raise ValueError(f"local {name} must be a directory tree")
+        if expected_tree_sha256 is None:
+            raise ValueError(f"local {name} requires --expected-{name}-tree-sha256")
+        if SHA256_RE.fullmatch(expected_tree_sha256) is None:
+            raise ValueError(f"expected {name} tree sha256 must be 64 lowercase hex digits")
+        artifact = artifact_identity(value, revision)
+        if artifact["tree_sha256"] != expected_tree_sha256:
+            raise ValueError(f"{name} tree sha256 mismatch")
+        return artifact
+    if not revision:
+        raise ValueError(f"remote {name} requires a pinned revision")
+    if expected_tree_sha256 is not None:
+        raise ValueError(f"remote {name} cannot use an expected tree sha256")
+    return artifact_identity(value, revision)
 
 
 class GemmaDecisionRuntime:

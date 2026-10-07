@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import hashlib
 import json
 import random
 import subprocess
@@ -23,8 +22,11 @@ from scripts.gemma_decision_runtime import (
     LETTERS,
     GemmaDecisionRuntime,
     Overlength,
+    bind_artifact,
     render_decision_prompt,
+    runtime_environment_identity,
 )
+from scripts.preflight_r043_assets import file_hash
 from scripts.singleton_option_scorer import (
     probabilities_from_option_scores,
     validate_native_probs,
@@ -107,8 +109,10 @@ class GemmaLoraAdapter(GemmaDecisionRuntime):
             return result
         result.probs = validate_native_probs(probs, list(task.labels))
         result.usage = {"input_tokens": tokens, "output_tokens": 0}
-        result.raw = {"runtime": {"input_tokens": tokens, "max_context": self.max_context,
-                                  "truncated": False, "probability_origin": "native-option-logits"}}
+        runtime = {"input_tokens": tokens, "max_context": self.max_context,
+                   "truncated": False, "probability_origin": "native-option-logits"}
+        result.raw = {"model": self.model_name, "probabilities": result.probs,
+                      "usage": result.usage, "runtime": runtime}
         result.status = 200
         result.ok = True
         return result
@@ -117,29 +121,28 @@ class GemmaLoraAdapter(GemmaDecisionRuntime):
         return 0.0
 
 
-def _artifact_hash(value: str | None, revision: str | None) -> dict | None:
-    if value is None:
-        return None
-    path = Path(value)
-    digest = hashlib.sha256()
-    if path.is_file():
-        paths = [path]
-        root = path.parent
-        kind = "file"
-    elif path.is_dir():
-        paths = sorted(item for item in path.rglob("*") if item.is_file())
-        root = path
-        kind = "tree"
-    else:
-        blob = json.dumps({"source": value, "revision": revision}, sort_keys=True).encode()
-        return {"sha256": hashlib.sha256(blob).hexdigest(), "kind": "pinned-identity"}
-    for item in paths:
-        digest.update(item.relative_to(root).as_posix().encode())
-        digest.update(b"\0")
-        with item.open("rb") as source:
-            for chunk in iter(lambda: source.read(1 << 20), b""):
-                digest.update(chunk)
-    return {"sha256": digest.hexdigest(), "kind": kind}
+def code_hashes() -> dict[str, str]:
+    root = Path(__file__).parent
+    names = (
+        "jevbench_gemma_lora.py",
+        "gemma_decision_runtime.py",
+        "singleton_option_scorer.py",
+        "preflight_r043_assets.py",
+        "train_gemma_decision_lora.py",
+    )
+    return {name: file_hash(root / name) for name in names}
+
+
+def harness_code_hashes(root: Path) -> dict[str, str]:
+    names = (
+        "jevbench/__init__.py",
+        "jevbench/budget.py",
+        "jevbench/tasks.py",
+        "jevbench/runner.py",
+        "jevbench/scoring.py",
+        "jevbench/adapters/base.py",
+    )
+    return {name: file_hash(root / name) for name in names}
 
 
 def _git_commit(path: Path) -> str:
@@ -153,8 +156,10 @@ def main() -> None:
     parser.add_argument("--task-file", type=Path, action="append", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--model-revision", required=True)
+    parser.add_argument("--expected-model-tree-sha256")
     parser.add_argument("--adapter")
     parser.add_argument("--adapter-revision")
+    parser.add_argument("--expected-adapter-tree-sha256")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--max-context", type=int, required=True,
                         help="explicit input-token cap; prompts over it fail with status 422")
@@ -166,8 +171,31 @@ def main() -> None:
     args = parser.parse_args()
     if args.adapter and not Path(args.adapter).exists() and not args.adapter_revision:
         parser.error("a remote --adapter requires --adapter-revision")
+    if not args.adapter and args.expected_adapter_tree_sha256:
+        parser.error("--expected-adapter-tree-sha256 requires --adapter")
+
+    # Hash all local weights before importing the harness, creating output, or
+    # allowing Runner to trigger a model load.
+    model_artifact = bind_artifact(
+        args.model,
+        args.model_revision,
+        args.expected_model_tree_sha256,
+        name="model",
+    )
+    adapter_artifact = (
+        bind_artifact(
+            args.adapter,
+            args.adapter_revision,
+            args.expected_adapter_tree_sha256,
+            name="adapter",
+        )
+        if args.adapter else None
+    )
+    frozen_code = code_hashes()
+    frozen_environment = runtime_environment_identity()
 
     sys.path.insert(0, str(args.jevbench_dir.resolve()))
+    frozen_harness_code = harness_code_hashes(args.jevbench_dir.resolve())
     from jevbench.budget import Ledger
     from jevbench.runner import Runner
     from jevbench.tasks import dataset_hash, load_jsonl, sha256_file
@@ -206,15 +234,24 @@ def main() -> None:
         statuses[record["status"]] = statuses.get(record["status"], 0) + 1
         code = str(record["status_code"])
         status_codes[code] = status_codes.get(code, 0) + 1
+    if code_hashes() != frozen_code:
+        raise ValueError("Jev runner code changed during evaluation")
+    if harness_code_hashes(args.jevbench_dir.resolve()) != frozen_harness_code:
+        raise ValueError("JevBench harness code changed during evaluation")
+    if runtime_environment_identity() != frozen_environment:
+        raise ValueError("Typical runtime environment changed during evaluation")
     manifest = {
         "adapter": adapter.name,
         "model": args.model,
         "model_revision": args.model_revision,
-        "model_artifact": _artifact_hash(args.model, args.model_revision),
+        "model_artifact": model_artifact,
         "lora_adapter": args.adapter,
         "lora_revision": args.adapter_revision,
-        "lora_artifact": _artifact_hash(args.adapter, args.adapter_revision),
+        "lora_artifact": adapter_artifact,
+        "code": frozen_code,
         "harness_commit": _git_commit(args.jevbench_dir),
+        "harness_code": frozen_harness_code,
+        "environment": frozen_environment,
         "task_inputs": inputs,
         "selected_dataset_hash": dataset_hash(tasks),
         "max_context": args.max_context,
