@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 REVISION=707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7
 MODEL=${R050_MODEL:-/workspace/g1/hf-gemma/hub/models--google--gemma-4-12B-it/snapshots/$REVISION}
