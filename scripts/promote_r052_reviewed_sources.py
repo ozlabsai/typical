@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Promote externally reviewed R052 acquisitions into source manifest v3.
+r"""Promote externally reviewed R052 acquisitions into source manifest v3.
 
 This bridge verifies bytes and enforces a closed review-receipt contract.  It
 does not determine whether the retained text is actually government-authored
 or whether a human review was competently performed; those are externally
 authored assertions bound by the supplied review receipt.
+
+The production size floor counts deterministic Unicode ``\w+`` spans.  It is
+only a readiness guard and is not a model-tokenizer or context-window check.
 """
 
 from __future__ import annotations
@@ -12,13 +15,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
 import tempfile
 import unicodedata
 from collections.abc import Mapping
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -31,19 +33,56 @@ except ModuleNotFoundError:  # Supports ``uv run python scripts/promote_...py``.
 
 REVIEW_SCHEMA_VERSION = "r052-reviewed-source-review-v1"
 ACQUISITION_RECEIPT_VERSION = "r052-source-acquisition-receipt-v1"
+ACQUISITION_BINDING_VERSION = "r052-reviewed-source-acquisition-binding-v1"
 PROMOTION_RECEIPT_VERSION = "r052-reviewed-source-promotion-receipt-v1"
+COMPLETION_MARKER_VERSION = "r052-reviewed-source-promotion-complete-v1"
 SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v3"
 SOURCE_LICENSE_POLICY = "approved-evaluation-and-redistribution-v1"
 MANIFEST_LICENSE_ID = "LicenseRef-USGov-Public-Domain"
-MIN_NON_WHITESPACE_CHARS = 256
+PRODUCTION_MIN_REVIEWED_WORD_TOKENS = 8_192
+MIN_REVIEWED_WORD_TOKENS = PRODUCTION_MIN_REVIEWED_WORD_TOKENS
+WORD_TOKEN_COUNT_METHOD = "python-re-unicode-word-v1-not-model-tokenizer"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+REVIEWER_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]{0,126}[A-Za-z0-9])?$")
+UNICODE_WORD_RE = re.compile(r"\w+", re.UNICODE)
 FORBIDDEN_MARKERS = tuple(
     marker.encode() for marker in scorer.FORBIDDEN_LINEAGE_MARKERS
+)
+BOMS = (
+    b"\xef\xbb\xbf",
+    b"\xff\xfe\x00\x00",
+    b"\x00\x00\xfe\xff",
+    b"\xff\xfe",
+    b"\xfe\xff",
+    b"+/v8",
+    b"+/v9",
+    b"+/v+",
+    b"+/v/",
+    b"\xf7\x64\x4c",
+    b"\xdd\x73\x66\x73",
+    b"\x0e\xfe\xff",
+    b"\xfb\xee\x28",
+    b"\x84\x31\x95\x33",
+)
+BINARY_SIGNATURES = (
+    b"\x89PNG\r\n\x1a\n",
+    b"GIF87a",
+    b"GIF89a",
+    b"PK\x03\x04",
+    b"\x7fELF",
+    b"\xff\xd8\xff",
+    b"\x1f\x8b",
+    b"MZ",
+    b"SQLite format 3\x00",
+    b"Rar!\x1a\x07",
+    b"7z\xbc\xaf\x27\x1c",
+    b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",
 )
 
 REVIEW_KEYS = {
     "schema_version",
     "acquisition_manifest_sha256",
+    "acquisition_receipt_sha256",
     "review_date",
     "reviewers",
     "adjudicator_id",
@@ -74,6 +113,14 @@ REVIEW_SOURCE_KEYS = {
     "unresolved_concerns",
 }
 RANGE_KEYS = {"char_start", "char_end"}
+ACQUISITION_RECEIPT_KEYS = {
+    "schema_version",
+    "mode",
+    "manifest_sha256",
+    "verified",
+}
+ACQUISITION_VERIFIED_KEYS = {"id", "raw_sha256", "text_sha256"}
+ACQUISITION_MODES = {"fetch", "offline", "verify-only"}
 
 
 class PromotionError(ValueError):
@@ -106,6 +153,20 @@ def _sha(value: Any, label: str) -> str:
 def _text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise PromotionError(f"{label} must be non-empty text")
+    return value
+
+
+def _reviewer_id(value: Any, label: str) -> str:
+    value = _text(value, label)
+    if (
+        value != value.strip()
+        or unicodedata.normalize("NFKC", value) != value
+        or REVIEWER_ID_RE.fullmatch(value) is None
+        or any(unicodedata.category(char).startswith("C") for char in value)
+    ):
+        raise PromotionError(
+            f"{label} must be a normalized 1-128 character ASCII identifier"
+        )
     return value
 
 
@@ -172,7 +233,14 @@ def _read_hashed_json(
 
 
 def _validate_text_payload(payload: bytes, label: str) -> str:
-    if payload.lstrip().startswith(b"%PDF-") or b"\x00" in payload:
+    prefix = payload[:1024].lstrip(b" \t\r\n\f\v")
+    if (
+        payload.startswith(BOMS)
+        or prefix.startswith(BOMS)
+        or b"%PDF-" in payload[:1024]
+        or prefix.startswith(BINARY_SIGNATURES)
+        or b"\x00" in payload
+    ):
         raise PromotionError(f"{label} must be extracted text, not PDF/binary data")
     try:
         text = payload.decode("utf-8")
@@ -186,6 +254,40 @@ def _validate_text_payload(payload: bytes, label: str) -> str:
         raise PromotionError(f"{label} must contain non-empty text")
     _reject_markers(payload, label)
     return text
+
+
+def _validate_acquisition_receipt(
+    receipt: Any, manifest: Mapping[str, Any], manifest_sha256: str
+) -> None:
+    if not isinstance(receipt, dict):
+        raise PromotionError("acquisition receipt must be an object")
+    _exact_keys(receipt, ACQUISITION_RECEIPT_KEYS, "acquisition receipt")
+    if receipt["schema_version"] != ACQUISITION_RECEIPT_VERSION:
+        raise PromotionError(
+            f"acquisition receipt schema must be {ACQUISITION_RECEIPT_VERSION}"
+        )
+    if not isinstance(receipt["mode"], str) or receipt["mode"] not in ACQUISITION_MODES:
+        raise PromotionError("acquisition receipt mode is invalid")
+    if receipt["manifest_sha256"] != manifest_sha256:
+        raise PromotionError("acquisition receipt manifest hash mismatch")
+    verified = receipt["verified"]
+    snapshots = manifest["snapshots"]
+    if not isinstance(verified, list) or len(verified) != len(snapshots):
+        raise PromotionError("acquisition receipt must verify all ten snapshots")
+    for index, (record, snapshot) in enumerate(zip(verified, snapshots, strict=True)):
+        label = f"acquisition receipt verified[{index}]"
+        if not isinstance(record, dict):
+            raise PromotionError(f"{label} must be an object")
+        _exact_keys(record, ACQUISITION_VERIFIED_KEYS, label)
+        expected = {
+            "id": snapshot["id"],
+            "raw_sha256": snapshot["raw_pdf"]["sha256"],
+            "text_sha256": snapshot["extracted_text"]["sha256"],
+        }
+        if record != expected:
+            raise PromotionError(
+                f"{label} does not exactly match acquisition manifest hashes"
+            )
 
 
 def _validate_review_policy(
@@ -223,6 +325,7 @@ def _validate_review_receipt(
     receipt: Any,
     manifest: Mapping[str, Any],
     manifest_sha256: str,
+    acquisition_receipt_sha256: str,
     source_texts: Mapping[str, str],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     if not isinstance(receipt, dict):
@@ -232,20 +335,27 @@ def _validate_review_receipt(
         raise PromotionError(f"review receipt schema must be {REVIEW_SCHEMA_VERSION}")
     if receipt["acquisition_manifest_sha256"] != manifest_sha256:
         raise PromotionError("review receipt acquisition-manifest hash mismatch")
+    if receipt["acquisition_receipt_sha256"] != acquisition_receipt_sha256:
+        raise PromotionError("review receipt acquisition-receipt hash mismatch")
     try:
         parsed_date = date.fromisoformat(receipt["review_date"])
     except (TypeError, ValueError) as error:
         raise PromotionError("review_date must be an ISO YYYY-MM-DD date") from error
     if parsed_date.isoformat() != receipt["review_date"]:
         raise PromotionError("review_date must use canonical YYYY-MM-DD form")
+    if parsed_date > datetime.now(tz=UTC).date():
+        raise PromotionError("review_date may not be in the future")
 
     reviewers = receipt["reviewers"]
     if not isinstance(reviewers, list) or len(reviewers) != 2:
         raise PromotionError("review receipt must identify exactly two reviewers")
-    reviewer_ids = [_text(value, "reviewer id") for value in reviewers]
-    adjudicator_id = _text(receipt["adjudicator_id"], "adjudicator id")
-    if len({*reviewer_ids, adjudicator_id}) != 3:
-        raise PromotionError("reviewer and adjudicator IDs must be distinct")
+    reviewer_ids = [_reviewer_id(value, "reviewer id") for value in reviewers]
+    adjudicator_id = _reviewer_id(receipt["adjudicator_id"], "adjudicator id")
+    normalized_ids = {value.casefold() for value in [*reviewer_ids, adjudicator_id]}
+    if len(normalized_ids) != 3:
+        raise PromotionError(
+            "reviewer and adjudicator IDs must be distinct after casefolding"
+        )
 
     policies = receipt["license_policies"]
     acquired_policies = manifest["license_policies"]
@@ -315,6 +425,13 @@ def _validate_review_receipt(
                 raise PromotionError(
                     f"{label} ranges must be ordered and non-overlapping"
                 )
+            source_text = source_texts[source_id]
+            if (start != 0 and source_text[start - 1] != "\n") or (
+                end != text_length and source_text[end - 1] != "\n"
+            ):
+                raise PromotionError(
+                    f"{label} ranges must align to complete LF-delimited lines"
+                )
             normalized.append({"char_start": start, "char_end": end})
             previous_end = end
         by_id[source_id] = {**source, "retained_ranges": normalized}
@@ -359,12 +476,14 @@ def _write(path: Path, payload: bytes) -> str:
 def promote(
     acquisition_manifest_path: Path,
     acquisition_manifest_sha256: str,
+    acquisition_receipt_path: Path,
+    acquisition_receipt_sha256: str,
     extracted_text_dir: Path,
     review_receipt_path: Path,
     review_receipt_sha256: str,
     output_dir: Path,
 ) -> dict[str, Any]:
-    """Validate inputs and atomically publish a new reviewed-source directory."""
+    """Validate inputs and publish behind an exclusive completion marker."""
     output_dir = Path(output_dir)
     if output_dir.exists() or output_dir.is_symlink():
         raise PromotionError(
@@ -384,6 +503,14 @@ def promote(
     except acquisition.SnapshotError as error:
         raise PromotionError(str(error)) from error
 
+    acquisition_receipt, _, acquisition_receipt_digest = _read_hashed_json(
+        Path(acquisition_receipt_path),
+        acquisition_receipt_sha256,
+        "acquisition receipt",
+        require_canonical=True,
+    )
+    _validate_acquisition_receipt(acquisition_receipt, manifest, manifest_digest)
+
     text_root = Path(extracted_text_dir)
     _reject_symlink_components(text_root, "extracted text directory")
     if not text_root.is_dir():
@@ -402,24 +529,51 @@ def promote(
         require_canonical=True,
     )
     source_reviews, output_policies = _validate_review_receipt(
-        review, manifest, manifest_digest, source_texts
+        review,
+        manifest,
+        manifest_digest,
+        acquisition_receipt_digest,
+        source_texts,
     )
 
     reviewed_payloads: dict[str, bytes] = {}
+    reviewed_metadata: dict[str, dict[str, Any]] = {}
     for snapshot in snapshots:
         source_id = snapshot["id"]
-        reviewed = "".join(
-            source_texts[source_id][item["char_start"] : item["char_end"]]
-            for item in source_reviews[source_id]["retained_ranges"]
-        )
-        if len("".join(reviewed.split())) < MIN_NON_WHITESPACE_CHARS:
+        segments: list[str] = []
+        mappings: list[dict[str, int]] = []
+        output_offset = 0
+        for retained_range in source_reviews[source_id]["retained_ranges"]:
+            segment = source_texts[source_id][
+                retained_range["char_start"] : retained_range["char_end"]
+            ]
+            output_end = output_offset + len(segment)
+            mappings.append(
+                {
+                    "source_char_start": retained_range["char_start"],
+                    "source_char_end": retained_range["char_end"],
+                    "output_char_start": output_offset,
+                    "output_char_end": output_end,
+                }
+            )
+            segments.append(segment)
+            output_offset = output_end
+        reviewed = "".join(segments)
+        word_count = len(UNICODE_WORD_RE.findall(reviewed))
+        if word_count < MIN_REVIEWED_WORD_TOKENS:
             raise PromotionError(
                 f"{source_id} retained text has fewer than "
-                f"{MIN_NON_WHITESPACE_CHARS} non-whitespace characters"
+                f"{MIN_REVIEWED_WORD_TOKENS} deterministic Unicode-word tokens"
             )
         payload = reviewed.encode("utf-8")
         _validate_text_payload(payload, f"{source_id} retained text")
         reviewed_payloads[source_id] = payload
+        reviewed_metadata[source_id] = {
+            "range_mappings": mappings,
+            "reviewed_character_count": len(reviewed),
+            "reviewed_unicode_word_token_count": word_count,
+            "word_token_count_method": WORD_TOKEN_COUNT_METHOD,
+        }
     reviewed_hashes = [sha256_bytes(value) for value in reviewed_payloads.values()]
     if len(reviewed_hashes) != len(set(reviewed_hashes)):
         raise PromotionError("reviewed source artifacts must have unique hashes")
@@ -429,7 +583,6 @@ def promote(
     temporary = Path(
         tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent)
     )
-    published = False
     try:
         artifact_declarations: dict[str, dict[str, str]] = {}
         artifact_paths: dict[str, str] = {}
@@ -445,12 +598,14 @@ def promote(
                 temporary / reviewed_relative, reviewed_payloads[source_id]
             )
             acquisition_record = {
-                "schema_version": ACQUISITION_RECEIPT_VERSION,
+                "schema_version": ACQUISITION_BINDING_VERSION,
                 "snapshot_id": source_id,
                 "acquisition_manifest_sha256": manifest_digest,
+                "acquisition_receipt_sha256": acquisition_receipt_digest,
                 "extracted_text_sha256": snapshot["extracted_text"]["sha256"],
                 "review_receipt_sha256": review_digest,
                 "retained_ranges": source_reviews[source_id]["retained_ranges"],
+                **reviewed_metadata[source_id],
                 "reviewed_text_sha256": reviewed_hash,
                 "upstream_url": snapshot["upstream_url"],
                 "upstream_revision": snapshot["upstream_revision"],
@@ -491,6 +646,7 @@ def promote(
             source_records[source_id] = {
                 "input_extracted_text_sha256": sha256_bytes(source_payloads[source_id]),
                 "retained_ranges": source_reviews[source_id]["retained_ranges"],
+                **reviewed_metadata[source_id],
                 "reviewed_text_artifact": reviewed_name,
                 "reviewed_text_sha256": reviewed_hash,
                 "acquisition_receipt_artifact": acquisition_name,
@@ -512,6 +668,7 @@ def promote(
         promotion_receipt = {
             "schema_version": PROMOTION_RECEIPT_VERSION,
             "acquisition_manifest_sha256": manifest_digest,
+            "acquisition_receipt_sha256": acquisition_receipt_digest,
             "review_receipt_sha256": review_digest,
             "source_manifest_sha256": output_manifest_hash,
             "semantic_review_verified_by_tool": False,
@@ -521,24 +678,42 @@ def promote(
         promotion_payload = canonical_json(promotion_receipt)
         _reject_markers(output_manifest_payload, "generated source manifest")
         _reject_markers(promotion_payload, "generated promotion receipt")
-        _write(temporary / "promotion-receipt.json", promotion_payload)
+        promotion_hash = _write(temporary / "promotion-receipt.json", promotion_payload)
 
-        if output_dir.exists() or output_dir.is_symlink():
+        try:
+            shutil.copytree(temporary, output_dir, dirs_exist_ok=False)
+        except FileExistsError as error:
             raise PromotionError(
                 "output directory already exists; promotion never overwrites"
+            ) from error
+        except Exception:
+            if output_dir.exists() and not output_dir.is_symlink():
+                shutil.rmtree(output_dir, ignore_errors=True)
+            raise
+        completion_marker = {
+            "schema_version": COMPLETION_MARKER_VERSION,
+            "source_manifest_sha256": output_manifest_hash,
+            "promotion_receipt_sha256": promotion_hash,
+        }
+        try:
+            _write(
+                output_dir / "PROMOTION_COMPLETE.json",
+                canonical_json(completion_marker),
             )
-        os.rename(temporary, output_dir)
-        published = True
+        except Exception:
+            shutil.rmtree(output_dir, ignore_errors=True)
+            raise
         return promotion_receipt
     finally:
-        if not published:
-            shutil.rmtree(temporary, ignore_errors=True)
+        shutil.rmtree(temporary, ignore_errors=True)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--acquisition-manifest", type=Path, required=True)
     parser.add_argument("--acquisition-manifest-sha256", required=True)
+    parser.add_argument("--acquisition-receipt", type=Path, required=True)
+    parser.add_argument("--acquisition-receipt-sha256", required=True)
     parser.add_argument("--extracted-text-dir", type=Path, required=True)
     parser.add_argument("--review-receipt", type=Path, required=True)
     parser.add_argument("--review-receipt-sha256", required=True)
@@ -551,6 +726,8 @@ def main() -> None:
     receipt = promote(
         args.acquisition_manifest,
         args.acquisition_manifest_sha256,
+        args.acquisition_receipt,
+        args.acquisition_receipt_sha256,
         args.extracted_text_dir,
         args.review_receipt,
         args.review_receipt_sha256,
