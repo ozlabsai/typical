@@ -14,6 +14,7 @@ import math
 import os
 import sys
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ STRATUM_KEYS = (
     "field_count",
 )
 PROBE_VARIANTS = tuple(product((0, 1), ("en", "he"), ("no_yes", "yes_no")))
+CPU_INTRAOP_THREADS = 1
 
 
 def _sha256(payload: bytes) -> str:
@@ -257,6 +259,24 @@ def parameter_digest(names: list[str], parameters: list[torch.nn.Parameter]) -> 
     return digest.hexdigest()
 
 
+@contextmanager
+def single_threaded_cpu_probe():
+    """Bound small per-tensor CPU ops without leaking global Torch state."""
+    before = torch.get_num_threads()
+    contract = {"before": before, "requested": CPU_INTRAOP_THREADS}
+    try:
+        torch.set_num_threads(CPU_INTRAOP_THREADS)
+        contract["during"] = torch.get_num_threads()
+        if contract["during"] != CPU_INTRAOP_THREADS:
+            raise RuntimeError("Torch did not apply the probe CPU intra-op thread limit")
+        yield contract
+    finally:
+        torch.set_num_threads(before)
+        contract["after"] = torch.get_num_threads()
+        if contract["after"] != before:
+            raise RuntimeError("Torch did not restore the CPU intra-op thread count")
+
+
 def _accumulate_gradients(loss, parameters, buffers, scale, retain_graph):
     if loss.ndim != 0 or not loss.requires_grad or not torch.isfinite(loss):
         raise ValueError("probe loss components must be finite differentiable scalars")
@@ -331,37 +351,50 @@ def probe_gradient_norms(model, examples, tokenizer, option_groups, device, max_
         raise ValueError("probe microbatch must be a positive integer")
     if not examples:
         raise ValueError("gradient probe needs selected examples")
-    names, parameters = trainable_parameters(model)
-    before = parameter_digest(names, parameters)
-    buffers = {
-        name: [torch.zeros_like(parameter, device="cpu", dtype=torch.float32)
-               for parameter in parameters]
-        for name in ("field_ce", "outcome_nll", "outcome_brier")
-    }
-    try:
-        for start in range(0, len(examples), microbatch):
-            batch = examples[start:start + microbatch]
-            _, _, _, components = trainer.loss_for_examples(
-                model, batch, tokenizer, option_groups, max_length, device,
-                shuffle=False, action_loss_weight=0.0, action_temperature=1.0,
-                exact_policy_outcome_loss="nll",
-                return_exact_policy_components=True)
-            scale = len(batch) / len(examples)
-            _accumulate_gradients(
-                components["field_ce"], parameters, buffers["field_ce"], scale, True)
-            _accumulate_gradients(
-                components["outcome_nll"], parameters, buffers["outcome_nll"], scale, True)
-            _accumulate_gradients(
-                components["outcome_brier"], parameters, buffers["outcome_brier"], scale, False)
-    finally:
-        after = parameter_digest(names, parameters)
-        if before != after:
-            raise RuntimeError("gradient probe mutated trainable parameters")
-    return gradient_statistics(buffers, target_ratio), before
+    with single_threaded_cpu_probe() as thread_contract:
+        names, parameters = trainable_parameters(model)
+        before = parameter_digest(names, parameters)
+        buffers = {
+            name: [torch.zeros_like(parameter, device="cpu", dtype=torch.float32)
+                   for parameter in parameters]
+            for name in ("field_ce", "outcome_nll", "outcome_brier")
+        }
+        try:
+            for start in range(0, len(examples), microbatch):
+                batch = examples[start:start + microbatch]
+                _, _, _, components = trainer.loss_for_examples(
+                    model, batch, tokenizer, option_groups, max_length, device,
+                    shuffle=False, action_loss_weight=0.0, action_temperature=1.0,
+                    exact_policy_outcome_loss="nll",
+                    return_exact_policy_components=True)
+                scale = len(batch) / len(examples)
+                _accumulate_gradients(
+                    components["field_ce"], parameters, buffers["field_ce"], scale, True)
+                _accumulate_gradients(
+                    components["outcome_nll"], parameters, buffers["outcome_nll"], scale, True)
+                _accumulate_gradients(
+                    components["outcome_brier"], parameters, buffers["outcome_brier"], scale, False)
+        finally:
+            after = parameter_digest(names, parameters)
+            if before != after:
+                raise RuntimeError("gradient probe mutated trainable parameters")
+        report = gradient_statistics(buffers, target_ratio)
+    report["cpu_thread_contract"] = thread_contract
+    return report, before
 
 
 def build_receipt(*, selection, gradient_report, parameter_sha256, bindings,
                   configuration, environment):
+    thread_contract = gradient_report.get("cpu_thread_contract")
+    if (configuration.get("cpu_intraop_threads") != CPU_INTRAOP_THREADS
+            or not isinstance(thread_contract, dict)
+            or thread_contract.get("requested") != CPU_INTRAOP_THREADS
+            or thread_contract.get("during") != CPU_INTRAOP_THREADS
+            or type(thread_contract.get("before")) is not int
+            or thread_contract["before"] <= 0
+            or thread_contract.get("after") != thread_contract["before"]
+            or environment.get("cpu_thread_contract") != thread_contract):
+        raise ValueError("gradient probe receipt needs the restored single-thread CPU contract")
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "complete",
@@ -479,6 +512,7 @@ def main(argv=None):
             "action_temperature": 1.0,
             "option_shuffle": False,
             "optimizer_created": False,
+            "cpu_intraop_threads": CPU_INTRAOP_THREADS,
         },
         environment={
             "torch_version": torch.__version__,
@@ -486,6 +520,7 @@ def main(argv=None):
             "cuda_device": torch.cuda.get_device_name(device),
             "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
             "cublas_workspace_config": os.environ["CUBLAS_WORKSPACE_CONFIG"],
+            "cpu_thread_contract": gradient_report["cpu_thread_contract"],
         },
     )
     _write_new(args.out, receipt)

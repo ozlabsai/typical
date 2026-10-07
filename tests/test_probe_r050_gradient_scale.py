@@ -147,8 +147,10 @@ class TinyProbeModel(torch.nn.Module):
 def test_gradient_probe_uses_shared_components_without_mutating_parameters(monkeypatch):
     model = TinyProbeModel()
     before = model.theta.detach().clone()
+    threads_before = torch.get_num_threads()
 
     def fake_loss(current, batch, *_args, **kwargs):
+        assert torch.get_num_threads() == probe.CPU_INTRAOP_THREADS
         assert kwargs["return_exact_policy_components"] is True
         assert kwargs["action_loss_weight"] == 0.0
         scale = torch.tensor(float(len(batch))) / len(batch)
@@ -170,10 +172,16 @@ def test_gradient_probe_uses_shared_components_without_mutating_parameters(monke
     assert report["norms"]["field_ce"] == pytest.approx((20.0) ** 0.5)
     assert report["norms"]["outcome_nll"] == pytest.approx((18.0) ** 0.5)
     assert report["norms"]["outcome_brier"] == pytest.approx((5.0) ** 0.5)
+    assert report["cpu_thread_contract"] == {
+        "before": threads_before, "requested": 1, "during": 1,
+        "after": threads_before,
+    }
+    assert torch.get_num_threads() == threads_before
 
 
 def test_gradient_probe_detects_parameter_mutation(monkeypatch):
     model = TinyProbeModel()
+    threads_before = torch.get_num_threads()
 
     def mutating_loss(current, *_args, **_kwargs):
         with torch.no_grad():
@@ -189,17 +197,39 @@ def test_gradient_probe_detects_parameter_mutation(monkeypatch):
     with pytest.raises(RuntimeError, match="mutated"):
         probe.probe_gradient_norms(
             model, [object()], object(), object(), torch.device("cpu"), 100)
+    assert torch.get_num_threads() == threads_before
+
+
+def test_gradient_probe_restores_cpu_threads_when_loss_raises(monkeypatch):
+    model = TinyProbeModel()
+    threads_before = torch.get_num_threads()
+
+    def failing_loss(*_args, **_kwargs):
+        assert torch.get_num_threads() == probe.CPU_INTRAOP_THREADS
+        raise RuntimeError("fixture failure")
+
+    monkeypatch.setattr(probe.trainer, "loss_for_examples", failing_loss)
+    with pytest.raises(RuntimeError, match="fixture failure"):
+        probe.probe_gradient_norms(
+            model, [object()], object(), object(), torch.device("cpu"), 100)
+    assert torch.get_num_threads() == threads_before
 
 
 def test_receipt_is_deterministic_and_contains_no_timestamp():
+    thread_contract = {"before": 128, "requested": 1, "during": 1, "after": 128}
     kwargs = {
         "selection": {"records": []},
-        "gradient_report": {"coefficients": {"lambda_nll": 1.0}},
+        "gradient_report": {"coefficients": {"lambda_nll": 1.0},
+                            "cpu_thread_contract": thread_contract},
         "parameter_sha256": "a" * 64,
         "bindings": {"panel": "b" * 64},
-        "configuration": {"target_ratio": 0.25},
-        "environment": {"torch_version": "test"},
+        "configuration": {"target_ratio": 0.25, "cpu_intraop_threads": 1},
+        "environment": {"torch_version": "test", "cpu_thread_contract": thread_contract},
     }
 
     assert probe.build_receipt(**kwargs) == probe.build_receipt(**copy.deepcopy(kwargs))
     assert "timestamp" not in probe.build_receipt(**kwargs)
+    invalid = copy.deepcopy(kwargs)
+    invalid["configuration"]["cpu_intraop_threads"] = 128
+    with pytest.raises(ValueError, match="single-thread"):
+        probe.build_receipt(**invalid)

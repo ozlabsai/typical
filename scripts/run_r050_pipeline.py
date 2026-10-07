@@ -46,7 +46,7 @@ FROZEN_CODE_SHA256 = {
     "exact_policy_executor.py": "34a6f967f311f5243a5eb4949a8d576c2bafcb49923d4d1d804de652bd84cc06",
     "preflight_r043_assets.py": "d37172c19ac0477d49b32e9804e5800d7060cb95edda2853f036bac7f9a0e03b",
     "prepare_r050_arms.py": "5f3c38074f9d571e81d1df6a08c3fc556da6dfa002b2f54b7f3d86c27d67dd6c",
-    "probe_r050_gradient_scale.py": "39a337801b57ab547e69303e57216d4815200b934f052b979b43dbea749829df",
+    "probe_r050_gradient_scale.py": "493e7418397655a118159d5edca039a8d79e80490825eda9077c4844d2707899",
     "run_r050_arm.py": "30c8455bb8bcf12ea061fc1872d0cac902c7b182fd9cbfbf0d1d2f6d0fc36747",
     "run_r050_eval.py": "184b03bf54e6b0c5964ea8b2e81f06e9d5f1bf1010d05bf6d2d5d5d83a0a118a",
     "run_r050_headroom.py": "43c6161c56a25457999c20f0718192c993da4405dbb1ddf22889618ad876b935",
@@ -480,6 +480,17 @@ class Pipeline:
         value = _read_json(path, "gradient probe receipt")
         if value.get("schema_version") != "r050-gradient-scale-probe-v1" or value.get("status") != "complete":
             raise ValueError("gradient probe receipt is not complete")
+        configuration = value.get("configuration", {})
+        thread_contract = value.get("gradient_report", {}).get("cpu_thread_contract")
+        if (configuration.get("cpu_intraop_threads") != 1
+                or not isinstance(thread_contract, dict)
+                or thread_contract.get("requested") != 1
+                or thread_contract.get("during") != 1
+                or type(thread_contract.get("before")) is not int
+                or thread_contract["before"] <= 0
+                or thread_contract.get("after") != thread_contract["before"]
+                or value.get("environment", {}).get("cpu_thread_contract") != thread_contract):
+            raise ValueError("gradient probe CPU thread contract is invalid")
         bindings = value.get("bindings", {})
         expected = {
             "trainer_sha256": self.config.code_hashes["train_gemma_decision_lora.py"],

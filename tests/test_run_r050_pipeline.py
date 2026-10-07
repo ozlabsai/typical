@@ -100,12 +100,15 @@ class FakeGPU:
                      {"headroom_sufficient": self.headroom})
             returncode = 0 if self.headroom else 2
         elif script == "probe_r050_gradient_scale.py":
+            thread_contract = {"before": 128, "requested": 1, "during": 1, "after": 128}
             _write_json(output, {"schema_version": "r050-gradient-scale-probe-v1",
                                  "status": "complete", "bindings": {
                                      "trainer_sha256": self.config.code_hashes["train_gemma_decision_lora.py"],
                                      "probe_sha256": self.config.code_hashes["probe_r050_gradient_scale.py"],
                                      "panel_builder_sha256": self.config.code_hashes["build_r048_action_panel.py"],
-                                 }})
+                                 }, "configuration": {"cpu_intraop_threads": 1},
+                                 "gradient_report": {"cpu_thread_contract": thread_contract},
+                                 "environment": {"cpu_thread_contract": thread_contract}})
         elif script == "prepare_r050_arms.py":
             output.mkdir(parents=True)
             arms = []
@@ -348,6 +351,21 @@ def test_child_command_preserves_virtualenv_interpreter_symlink(tmp_path):
     assert command[0] == str(interpreter.absolute())
     assert Path(command[0]).is_symlink()
     assert config.binding()["python"] == str(interpreter.absolute())
+
+
+def test_probe_evidence_requires_restored_single_thread_contract(tmp_path):
+    config = _config(tmp_path)
+    config.out.mkdir()
+    output = config.out / "gradient-probe.json"
+    fake = FakeGPU(config)
+    fake([str(config.python), str(config.scripts / "probe_r050_gradient_scale.py"),
+          "--out", str(output)], check=False)
+    receipt = json.loads(output.read_text())
+    receipt["gradient_report"]["cpu_thread_contract"]["after"] = 1
+    _write_json(output, receipt)
+
+    with pytest.raises(ValueError, match="CPU thread contract"):
+        pipeline.Pipeline(config)._probe_evidence()
 
 
 @pytest.mark.parametrize(
