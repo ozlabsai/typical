@@ -53,9 +53,12 @@ PRODUCTION_MINIMUMS = {
     "twin_groups": 10,
     "hebrew_questions": 10,
     "image_questions": 10,
+    "choice_questions": 10,
+    "noul_questions": 10,
+    "score_questions": 10,
     "position_questions": 10,
     "long_source_domains": 5,
-    "retrievable_chunks_per_long_case": 8,
+    "retrievable_chunks_per_long_case": 15,
 }
 
 SPEC_KEYS = {"schema_version", "panel_profile", "benchmark_derived", "cases"}
@@ -595,6 +598,10 @@ def _validate_spec(
                     used_artifacts.add(media_name)
         if max(chunk["token_end"] for chunk in chunks) != context_tokens:
             raise ValueError("context_tokens must equal the final chunk token_end")
+        if not any(chunk["kind"] == "global_policy" for chunk in chunks):
+            raise ValueError(
+                "each dossier must include immutable global policy context"
+            )
         if any(chunk["token_end"] - chunk["token_start"] > 512 for chunk in chunks):
             raise ValueError(
                 "all semantic or fallback chunks may contain at most 512 tokens"
@@ -687,6 +694,7 @@ def _validate_production_contract(cases: Sequence[Mapping[str, Any]]) -> None:
         len(case["questions"]) for case in cases if case["language"] == "he"
     )
     image_questions = 0
+    typed_role_counts = {role: 0 for role in ("choice", "noul", "score")}
     position_counts = {"early": 0, "middle": 0, "late": 0}
     for case in cases:
         chunks = {chunk["chunk_ref"]: chunk for chunk in case["chunks"]}
@@ -697,6 +705,9 @@ def _validate_production_contract(cases: Sequence[Mapping[str, Any]]) -> None:
             and chunk["image_control"]["variant"] == "real"
         }
         for question in case["questions"]:
+            role = question["policy_role"].casefold()
+            if role in typed_role_counts:
+                typed_role_counts[role] += 1
             if real_refs.intersection(question["decisive_chunk_refs"]):
                 image_questions += 1
             if case["context_tokens"] >= LONG_CONTEXT_TOKENS:
@@ -724,6 +735,7 @@ def _validate_production_contract(cases: Sequence[Mapping[str, Any]]) -> None:
         "twin_groups": len(twins),
         "hebrew_questions": hebrew_questions,
         "image_questions": image_questions,
+        **{f"{role}_questions": count for role, count in typed_role_counts.items()},
         "long_source_domains": len({case["source_domain"] for case in long_english}),
     }
     for key in (
@@ -733,6 +745,9 @@ def _validate_production_contract(cases: Sequence[Mapping[str, Any]]) -> None:
         "twin_groups",
         "hebrew_questions",
         "image_questions",
+        "choice_questions",
+        "noul_questions",
+        "score_questions",
         "long_source_domains",
     ):
         if observed[key] < PRODUCTION_MINIMUMS[key]:

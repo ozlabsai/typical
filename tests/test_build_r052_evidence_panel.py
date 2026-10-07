@@ -406,6 +406,17 @@ def test_rejects_semantic_chunk_gaps_that_fake_long_context(tmp_path):
         )
 
 
+def test_rejects_dossier_without_global_policy_context(tmp_path):
+    fixture = _fixture(tmp_path)
+    spec = deepcopy(fixture["spec"])
+    spec["cases"][0]["chunks"][0]["kind"] = "distractor"
+
+    with pytest.raises(ValueError, match="global policy context"):
+        builder._validate_spec(
+            spec, fixture["source_manifest"], allow_test_profile=True
+        )
+
+
 def test_rejects_tampered_audit_binding_before_publication(tmp_path):
     fixture = _fixture(tmp_path)
     tampered = deepcopy(fixture["audit_results"])
