@@ -62,8 +62,20 @@ model loading. Compatible Transformers `5.19.0` is now released; its wheel SHA25
 the project lock. That runtime is now frozen at `runtimes/r052-embeddinggemma2/uv.lock`, SHA256
 `1efdac9dfe879bf76da25c9a6abb3d6303fc62863cea7f048ec8d493a85425ac`; an isolated `uv run
 --frozen` import verified Transformers `5.19.0` exposes `EmbeddingGemma2Model`. The remaining run
-blockers are R050 ownership of the GPU, gated checkpoint access, and the natural audited panel—not
-an unreleased runtime.
+blockers are R050 ownership of the GPU, gated checkpoint access, and completing the natural audited
+panel—not an unreleased runtime.
+
+**Current panel evidence:** commit `5623b91` pins and independently re-verifies ten long natural
+NTSB/GovInfo reports (10,523–37,579 extracted words each) with immutable upstream URLs, raw and
+extracted-text hashes, and an exact `pdftotext 26.04.0` recipe. Its acquisition-manifest SHA256 is
+`6b1d9a30fed29dcf665cc2caa84e96afc023855a5cdf81ba4d7e425e58216b43`; a fresh local verification
+passes 10/10. Raw PDFs remain local and non-redistributable. Only reviewed US-government staff text
+may enter the panel, and third-party passages and images remain excluded. Commit `b876cf9` adds the
+two-stage `prepare-audit`/`finalize` builder, while commit `59fa20b` binds scoring to exact source,
+chunk, translation-alignment, image-control, causal-annotation, and contamination receipts. The
+combined acquisition/builder/scorer suite passes 58 tests with one intentional missing-provider
+skip. This establishes reproducible machinery and source inputs, not a quality result or semantic
+ground-truth claim.
 
 Two secondary uses are conditional on B1/B2 succeeding: contamination-safe diversity sampling and
 hard-negative mining for R051/RLCD (never embedding vectors as answer labels), and HE↔EN plus
@@ -113,9 +125,12 @@ compositional policy execution.
 
 ### B1 — decisive-evidence retrieval diagnostic (MUST-RUN)
 
-Panel: the untouched R051 long/dispersed-evidence panel plus paired natural Hebrew and real-image
-causal controls. Each dossier must identify the minimal decisive exhibit and prove that removing it
-flips a field or complete policy outcome.
+Panel: a minimum 40-case/60-question independent panel: ten long English dossiers with three typed
+questions each, ten HE↔EN twin groups, and ten real-image cases with real/shuffled/missing controls
+and at least five textual distractors. The ten acquired long sources span five domains and seed the
+English dossiers; they do not replace reviewed Hebrew translations, first-party causal charts, or
+externally authored annotations. Each dossier must expose at least eight retrievable chunks, identify
+the minimal decisive exhibit, and prove that removing it flips a field or complete policy outcome.
 
 Chunking is frozen before scoring: semantic section boundaries when present; otherwise 512-token
 chunks with 64-token overlap. Every question is embedded separately with its options and policy role.
@@ -197,7 +212,7 @@ regression, and the same calibration/latency gates. Otherwise keep the frozen ro
 | Run | Goal | Decision gate | Estimated compute | Status |
 |---|---|---|---:|---|
 | R052-P0 | pinned-model/runtime preflight | deterministic finite normalized vectors | CPU metadata + <15 GPU min | READY in isolated Transformers 5.19 lock after R050; gated weights required |
-| R052-R | retrieval-only diagnostic | B1 recall and cross-modal/cross-lingual gates | <1 A100-hour | BLOCKED on natural panel |
+| R052-R | retrieval-only diagnostic | B1 recall and cross-modal/cross-lingual gates | <1 A100-hour | SOURCE/BUILDER READY; authored review and audit pending |
 | R052-D | downstream no-training causal ablation | B2 exact-action and oracle-headroom gates | 1–2 A100-hours | BLOCKED on R052-R |
 | R052-I | frozen-router integration | B3 quality, retention, latency | 1–3 A100-hours | BLOCKED on R052-D |
 | R052-L | optional router LoRA | B4 incremental gain | 2–4 A100-hours | CONDITIONAL |
@@ -219,7 +234,8 @@ decision remains wrong, train the typed policy executor rather than the router.
 
 - [x] Open local model identified and exact revision pinned
 - [x] Hosted API and training-use boundary documented
-- [ ] Natural long/evidence panel built and contamination-audited
+- [x] Immutable natural long-source acquisition and panel machinery verified
+- [ ] 40-case/60-question panel authored, human-reviewed where required, and contamination-audited
 - [ ] Retrieval baselines and oracle run
 - [ ] Retrieve-then-decide causal ablation passes
 - [ ] Hebrew and multimodal preservation gates pass
