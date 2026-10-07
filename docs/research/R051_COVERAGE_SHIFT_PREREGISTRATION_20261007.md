@@ -110,6 +110,33 @@ at the same slot positions; only executable blocks may differ. The builder must 
 the source and ordered-payload hashes rather than regenerating these protected rows. Image bytes
 are copied into a new tree and rehashed; mutable hard links are forbidden.
 
+Frozen protected identities:
+
+| Artifact | SHA-256 |
+|---|---|
+| R050 training mix | `499dd9c9a8341e55d1d965bbd1ffc45c893880fcdab4d35d295d06324c1c2003` |
+| R050 mix manifest | `2b52da6fac16a803d5dd2fa14bcc54c68693f01754b3039561386602f287b53d` |
+| Hebrew replay source | `9b840968df4b8a4c9999f231e2e41324b6f02dd8852d6ce2ca2e8e458f5b1d97` |
+| Multimodal replay source | `c3097083caa6ea57996222de51e0dd0d021460860d23ea8e00d155aadfe7f50e` |
+| 400-image tree | `fe221501247fc3e41f0d48df5339b99a602636806a7375204827f46de1f147c9` |
+| Ordered broad payload | `6d63c21eb820ea9ce40c60399ba85ee4fbfc7c6e73e9791de61d99c095f638c2` |
+| Ordered Hebrew payload | `483407e28701af1d2149451098736ba4583a1e9d62092826ea26aee61021c2d1` |
+| Ordered multimodal payload | `2203502d8421d299d4b561c4ad81a1dfd959ea82157a4ed8e500da2f7117f0d5` |
+
+Training-only hard-root selection scores one canonical view for every newly generated candidate
+root using the frozen parent. It ranks wrong complete outcomes first, then complete-outcome NLL,
+mean gold-label NLL, and semantic-group ID. Select 200 hard roots and 600 deterministically
+stratified roots, capped at 20 per source-family/domain/policy-template cell and 80 per source
+family. Add both option-order siblings only after root selection. The score receipt binds the
+parent model/adapter trees, candidate-pool hash, scorer code, runtime, and exact root inventory; it
+rejects benchmark paths or IDs, missing/duplicate roots, or any identity drift.
+
+Whole-state hashes are insufficient for long dossiers because they miss benchmark text embedded
+inside otherwise novel context. R051 therefore requires exact raw and normalized field hashes,
+substantial normalized-substring detection, sliding token-shingle/MinHash checks, upstream lineage
+exclusion, and document/source IDs kept wholly within one split. All siblings and exhibits from a
+dossier share a split; validation is also disjoint by generator family and policy template.
+
 ## Frozen internal gate
 
 Arm B advances only if every condition holds on untouched internal panels:
