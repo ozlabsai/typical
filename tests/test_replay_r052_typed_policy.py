@@ -995,7 +995,7 @@ def test_json_and_collection_bounds_and_recursion_are_fail_closed(monkeypatch):
     monkeypatch.setattr(replay, "MAX_JSON_OBJECTS", 50_000)
     panel, ledger, rubric = _fixture()
     monkeypatch.setattr(replay, "MAX_RULES", 1)
-    with pytest.raises(replay.PolicyError, match="outputs|rules"):
+    with pytest.raises(replay.PolicyError, match="outputs|rules|rule work cap"):
         _run((panel, ledger, rubric))
     monkeypatch.setattr(replay, "MAX_RULES", 32)
     monkeypatch.setattr(replay, "MAX_BINDINGS", 0)
@@ -1003,7 +1003,7 @@ def test_json_and_collection_bounds_and_recursion_are_fail_closed(monkeypatch):
         _run(_fixture())
     monkeypatch.setattr(replay, "MAX_BINDINGS", 16_384)
     monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 0)
-    with pytest.raises(replay.PolicyError, match="presentations"):
+    with pytest.raises(replay.PolicyError, match="presentation"):
         _run(_fixture())
     monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 2_048)
     monkeypatch.setattr(replay, "MAX_INPUT_BYTES", 2)
@@ -1039,6 +1039,26 @@ def test_runtime_and_schema_group_bounds_match_and_maximum_is_valid():
         "maxItems"
     ]
     assert schema_max == replay.MAX_GROUPS == 64
+    assert (
+        schema["$defs"]["semanticGroup"]["properties"]["facts"]["maxProperties"]
+        == replay.MAX_GROUP_FACTS
+        == 256
+    )
+    assert (
+        schema["$defs"]["semanticGroup"]["properties"]["decisions"]["maxItems"]
+        == schema["$defs"]["presentation"]["properties"]["ablations"]["maxItems"]
+        == schema["$defs"]["presentation"]["properties"]["question_bindings"][
+            "maxProperties"
+        ]
+        == replay.MAX_DECISIONS_PER_PRESENTATION
+        == 3
+    )
+    assert (
+        schema["x-max-chunks-per-presentation"]
+        == replay.MAX_CHUNKS_PER_PRESENTATION
+        == 128
+    )
+    assert schema["x-replay-work-units-max"] == replay.MAX_REPLAY_WORK_UNITS
 
     base_panel, base_ledger, base_rubric = _fixture()
     cases = []
@@ -1092,21 +1112,140 @@ def test_runtime_and_schema_group_bounds_match_and_maximum_is_valid():
     assert len(receipt["semantic_groups"]) == replay.MAX_GROUPS
 
 
-def test_replay_work_budget_rejects_max_product_but_minimum_passes():
+def test_replay_work_budget_rejects_audit_shape_but_minimum_passes(monkeypatch):
     panel, ledger, rubric = _fixture()
     cases, _ = replay._panel_index(panel)
-    replay._validate_replay_work_budget(rubric["semantic_groups"], cases)
+    replay._validate_replay_work_budget(rubric["semantic_groups"], cases, {})
     assert _run((panel, ledger, rubric))["semantic_groups"]
 
-    maximal = deepcopy(rubric["semantic_groups"][0])
-    maximal["facts"] = {
-        f"f{index:04d}": {"type": "boolean", "unit": None}
-        for index in range(replay.MAX_FACTS)
+    chunk_keys = [f"c{index}" for index in range(4_096)]
+    distractors = chunk_keys[2:]
+    audit_case = {
+        "chunks": [{"chunk_key": key} for key in chunk_keys],
+        "questions": [
+            {
+                "question_key": f"q{index}",
+                "known_distractor_chunk_keys": distractors,
+            }
+            for index in range(32)
+        ],
     }
-    presentation = maximal["presentations"][0]
-    maximal["presentations"] = [presentation] * replay.MAX_PRESENTATIONS
+    audit_group = {
+        "facts": {"f0001": {"type": "boolean", "unit": None}},
+        "decisions": [{"decision_id": f"d{index}", "rules": []} for index in range(32)],
+        "presentations": [
+            {
+                "case_key": "audit",
+                "question_bindings": {
+                    f"d{index}": {"question_key": f"q{index}"} for index in range(32)
+                },
+                "ablations": [
+                    {
+                        "decision_id": f"d{index}",
+                        "remove_chunk_keys": ["c1"],
+                    }
+                    for index in range(32)
+                ],
+                "views": {
+                    name: chunk_keys
+                    for name in (
+                        "full",
+                        "removed",
+                        "decisive_only",
+                        "distractor_only",
+                    )
+                },
+            }
+        ],
+    }
+    assert len(audit_group["facts"]) == 1
+    assert len(audit_group["decisions"]) == 32
+    assert len(distractors) == 4_094
+    with pytest.raises(replay.PolicyError, match="decision work cap"):
+        replay._validate_replay_work_budget([audit_group], {"audit": audit_case}, {})
+    monkeypatch.setattr(replay, "MAX_DECISIONS_PER_PRESENTATION", 32)
+    monkeypatch.setattr(replay, "MAX_CHUNKS_PER_PRESENTATION", 4_096)
     with pytest.raises(replay.PolicyError, match="derived-work budget"):
-        replay._validate_replay_work_budget([maximal], cases)
+        replay._validate_replay_work_budget([audit_group], {"audit": audit_case}, {})
+
+
+def test_replay_work_budget_accepts_realistic_40_case_60_question_shape():
+    cases = {}
+    groups = []
+    total_questions = 0
+    for group_index, decision_count in enumerate((1, 2)):
+        decisions = [
+            {
+                "decision_id": f"d{group_index}.{decision_index}",
+                "rules": [
+                    {
+                        "when": {
+                            "op": "const",
+                            "type": "boolean",
+                            "unit": None,
+                            "value": value,
+                        }
+                    }
+                    for value in (True, False)
+                ],
+            }
+            for decision_index in range(decision_count)
+        ]
+        presentations = []
+        for case_index in range(20):
+            case_key = f"case.{group_index}.{case_index}"
+            chunk_keys = [f"{case_key}.c{index}" for index in range(16)]
+            questions = []
+            question_bindings = {}
+            ablations = []
+            for decision in decisions:
+                decision_id = decision["decision_id"]
+                question_key = f"{case_key}.{decision_id}"
+                questions.append(
+                    {
+                        "question_key": question_key,
+                        "known_distractor_chunk_keys": chunk_keys[4:],
+                    }
+                )
+                question_bindings[decision_id] = {"question_key": question_key}
+                ablations.append(
+                    {"decision_id": decision_id, "remove_chunk_keys": chunk_keys[1:3]}
+                )
+                total_questions += 1
+            cases[case_key] = {
+                "chunks": [{"chunk_key": key} for key in chunk_keys],
+                "questions": questions,
+            }
+            presentations.append(
+                {
+                    "case_key": case_key,
+                    "question_bindings": question_bindings,
+                    "ablations": ablations,
+                    "views": {
+                        "full": chunk_keys,
+                        "removed": chunk_keys[:1] + chunk_keys[3:],
+                        "decisive_only": chunk_keys[:4],
+                        "distractor_only": chunk_keys[:1] + chunk_keys[4:],
+                    },
+                }
+            )
+        groups.append(
+            {
+                "facts": {
+                    f"f{group_index}{index:03d}": {
+                        "type": "boolean",
+                        "unit": None,
+                    }
+                    for index in range(16)
+                },
+                "decisions": decisions,
+                "presentations": presentations,
+            }
+        )
+
+    assert len(cases) == 40
+    assert total_questions == 60
+    replay._validate_replay_work_budget(groups, cases, {})
 
 
 def test_fact_environments_are_scoped_to_semantic_group_declarations():

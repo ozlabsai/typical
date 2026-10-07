@@ -57,14 +57,17 @@ MAX_CASES = 512
 MAX_CASE_ITEMS = 4_096
 MAX_OPTIONS = 32
 MAX_FACTS = 8_192
+MAX_GROUP_FACTS = 256
 MAX_BINDINGS = 16_384
 MAX_GROUPS = 64
 MAX_PRESENTATIONS = 2_048
 MAX_RULES = 32
-MAX_REPLAY_WORK_UNITS = 2_000_000
-MAX_CACHED_ENVIRONMENT_ENTRIES = 4 * MAX_FACTS
+MAX_CHUNKS_PER_PRESENTATION = 128
+MAX_DECISIONS_PER_PRESENTATION = 3
+MAX_REPLAY_WORK_UNITS = 5_000_000
+MAX_CACHED_ENVIRONMENT_ENTRIES = 4 * MAX_GROUP_FACTS
 EXPECTED_SCHEMA_SHA256 = (
-    "5054b4cc025aff8f298d0bc818786862622737d03f3bb32c34fb79ba81d1f56c"
+    "57ac51e1df0c2dd543ea007a6237f81580cc533efe43a8c0322600a0bc5d985f"
 )
 
 
@@ -677,38 +680,156 @@ def _index_observations(
     }
 
 
+def _ast_work_units(node: Any) -> int:
+    """Count AST object visits without recursion, failing at the runtime cap."""
+    stack = [node]
+    nodes = 0
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            nodes += 1
+            if nodes > MAX_AST_NODES:
+                raise PolicyError("policy AST exceeds the node bound")
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return nodes
+
+
 def _validate_replay_work_budget(
-    groups: list[Any], cases: dict[str, dict[str, Any]]
+    groups: list[Any],
+    cases: dict[str, dict[str, Any]],
+    observation_index: dict[str, dict[str, tuple[tuple[str, TypedValue], ...]]],
 ) -> None:
     """Reject multiplicative replay shapes before evaluating any policy rule."""
     work_units = 0
+
+    def add(units: int) -> None:
+        nonlocal work_units
+        work_units += units
+        if work_units > MAX_REPLAY_WORK_UNITS:
+            raise PolicyError("policy replay exceeds the total derived-work budget")
+
+    presentation_count = 0
     for group in groups:
         if not isinstance(group, dict):
             raise PolicyError("semantic groups must be objects")
         facts = group.get("facts")
+        decisions = group.get("decisions")
         presentations = group.get("presentations")
-        if not isinstance(facts, dict) or not isinstance(presentations, list):
+        if (
+            not isinstance(facts, dict)
+            or not isinstance(decisions, list)
+            or not isinstance(presentations, list)
+        ):
             raise PolicyError("semantic group work shape is invalid")
+        if len(facts) > MAX_GROUP_FACTS:
+            raise PolicyError("semantic group exceeds the fact work cap")
+        if len(decisions) > MAX_DECISIONS_PER_PRESENTATION:
+            raise PolicyError("semantic group exceeds the decision work cap")
+        if len(presentations) > MAX_PRESENTATIONS:
+            raise PolicyError("semantic group exceeds the presentation work cap")
         fact_count = len(facts)
+        decision_costs: dict[str, int] = {}
+        for decision in decisions:
+            if not isinstance(decision, dict) or not isinstance(
+                decision.get("rules"), list
+            ):
+                raise PolicyError("decision work shape is invalid")
+            if len(decision["rules"]) > MAX_RULES:
+                raise PolicyError("decision exceeds the rule work cap")
+            decision_id = _identifier(decision.get("decision_id"), "decision work id")
+            if decision_id in decision_costs:
+                raise PolicyError("decision work ids must be unique")
+            decision_costs[decision_id] = len(decision["rules"]) + sum(
+                _ast_work_units(rule.get("when"))
+                for rule in decision["rules"]
+                if isinstance(rule, dict)
+            )
+            if len(decision["rules"]) != sum(
+                isinstance(rule, dict) for rule in decision["rules"]
+            ):
+                raise PolicyError("decision rules must be objects")
+
         for presentation in presentations:
+            presentation_count += 1
+            if presentation_count > MAX_PRESENTATIONS:
+                raise PolicyError("policy rubric exceeds the presentation work cap")
             if not isinstance(presentation, dict):
                 raise PolicyError("presentations must be objects")
-            case = cases.get(presentation.get("case_key"))
+            case_key = _identifier(
+                presentation.get("case_key"), "presentation work case key"
+            )
+            case = cases.get(case_key)
             question_bindings = presentation.get("question_bindings")
             ablations = presentation.get("ablations")
+            views = presentation.get("views")
             if (
                 case is None
                 or not isinstance(question_bindings, dict)
                 or not isinstance(ablations, list)
+                or not isinstance(views, dict)
             ):
                 raise PolicyError("presentation work shape is invalid")
+            if len(case["chunks"]) > MAX_CHUNKS_PER_PRESENTATION:
+                raise PolicyError("presentation exceeds the chunk work cap")
+            if (
+                len(question_bindings) > MAX_DECISIONS_PER_PRESENTATION
+                or len(ablations) > MAX_DECISIONS_PER_PRESENTATION
+            ):
+                raise PolicyError("presentation exceeds the decision work cap")
+            by_chunk = observation_index.get(case_key, {})
+
+            def environment_cost(
+                chunk_keys: Any,
+                *,
+                _by_chunk: dict[str, tuple[tuple[str, TypedValue], ...]] = by_chunk,
+                _fact_count: int = fact_count,
+            ) -> int:
+                if not isinstance(chunk_keys, list):
+                    raise PolicyError("view work shape is invalid")
+                # _fact_environment initializes and finalizes every fact, visits each
+                # visible chunk, and appends/compares every visible observation.
+                observations = sum(len(_by_chunk.get(key, ())) for key in chunk_keys)
+                return 2 * _fact_count + len(chunk_keys) + 2 * observations
+
+            cached_views: set[frozenset[Any]] = set()
+            for name in ("full", "removed", "decisive_only", "distractor_only"):
+                chunk_keys = views.get(name)
+                if not isinstance(chunk_keys, list):
+                    raise PolicyError("presentation views have invalid work shape")
+                if len(chunk_keys) > MAX_CHUNKS_PER_PRESENTATION:
+                    raise PolicyError("view exceeds the chunk work cap")
+                try:
+                    cache_key = frozenset(chunk_keys)
+                except TypeError as exc:
+                    raise PolicyError(
+                        "view chunk keys must be scalar identifiers"
+                    ) from exc
+                if cache_key not in cached_views:
+                    add(environment_cost(chunk_keys))
+                    cached_views.add(cache_key)
+            # Each decision is evaluated against all four named views, even when two
+            # views share a cached environment.
+            add(4 * sum(decision_costs.values()))
+            # Receipt serialization visits full plus all four named fact states.
+            add(5 * fact_count)
+
+            full = views.get("full")
+            if not isinstance(full, list):
+                raise PolicyError("full view has invalid work shape")
             for ablation in ablations:
                 if not isinstance(ablation, dict):
                     raise PolicyError("ablations must be objects")
                 decision_id = ablation.get("decision_id")
+                decision_cost = decision_costs.get(decision_id)
                 binding = question_bindings.get(decision_id)
                 remove = ablation.get("remove_chunk_keys")
-                if not isinstance(binding, dict) or not isinstance(remove, list):
+                if (
+                    decision_cost is None
+                    or not isinstance(binding, dict)
+                    or not isinstance(remove, list)
+                ):
                     raise PolicyError("ablation work shape is invalid")
                 question_key = binding.get("question_key")
                 matches = [
@@ -724,12 +845,26 @@ def _validate_replay_work_budget(
                 distractors = matches[0].get("known_distractor_chunk_keys")
                 if not isinstance(distractors, list):
                     raise PolicyError("question distractor work shape is invalid")
-                # Four frozen views plus each immediate-subset and distractor check.
-                work_units += fact_count * (4 + len(remove) + len(distractors))
-                if work_units > MAX_REPLAY_WORK_UNITS:
+                if len(remove) > MAX_REMOVAL_CHUNKS:
+                    raise PolicyError("ablation exceeds the removal work cap")
+                if len(distractors) > MAX_CHUNKS_PER_PRESENTATION:
+                    raise PolicyError("question exceeds the distractor work cap")
+                try:
+                    remove_set = set(remove)
+                except TypeError as exc:
                     raise PolicyError(
-                        "policy replay exceeds the total derived-work budget"
-                    )
+                        "ablation removal keys must be scalar identifiers"
+                    ) from exc
+                for restored in remove:
+                    visible = [
+                        key for key in full if key not in remove_set or key == restored
+                    ]
+                    add(environment_cost(visible) + decision_cost)
+                for distractor in distractors:
+                    visible = [key for key in full if key != distractor]
+                    add(environment_cost(visible) + decision_cost)
+                # Two causal-context hashes scan the ordered full chunk list.
+                add(2 * len(case["chunks"]))
 
 
 def _as_bool(value: Any) -> bool | Signal:
@@ -1282,8 +1417,8 @@ def replay(
     groups = rubric["semantic_groups"]
     if not isinstance(groups, list) or not groups or len(groups) > MAX_GROUPS:
         raise PolicyError("policy rubric semantic_groups must be non-empty")
-    _validate_replay_work_budget(groups, cases)
     observation_index = _index_observations(facts, bindings)
+    _validate_replay_work_budget(groups, cases, observation_index)
     panel_questions = {
         (case_key, question["question_key"])
         for case_key, case in cases.items()
@@ -1307,7 +1442,7 @@ def replay(
         if (
             not isinstance(group_facts_raw, dict)
             or not group_facts_raw
-            or len(group_facts_raw) > MAX_FACTS
+            or len(group_facts_raw) > MAX_GROUP_FACTS
         ):
             raise PolicyError("semantic group facts must be a non-empty object")
         group_facts: set[str] = set()
@@ -1328,7 +1463,7 @@ def replay(
         if (
             not isinstance(decisions_raw, list)
             or not decisions_raw
-            or len(decisions_raw) > MAX_RULES
+            or len(decisions_raw) > MAX_DECISIONS_PER_PRESENTATION
         ):
             raise PolicyError("semantic group decisions must be a non-empty array")
         decisions: dict[str, dict[str, Any]] = {}
