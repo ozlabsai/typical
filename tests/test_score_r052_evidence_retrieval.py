@@ -10,6 +10,16 @@ from scripts import score_r052_evidence_retrieval as scorer
 
 TEST_ARTIFACT = Path(__file__).resolve()
 TEST_ARTIFACT_SHA256 = scorer.file_sha256(TEST_ARTIFACT)
+SOURCE_ARTIFACT_PATHS = {
+    "raw-en": Path("pyproject.toml").resolve(),
+    "raw-he": Path("uv.lock").resolve(),
+    "extraction-en": Path("site/style.css").resolve(),
+    "extraction-he": Path("site/exhibits.css").resolve(),
+    "boundary-receipt": Path("site/package.json").resolve(),
+}
+SOURCE_ARTIFACT_HASHES = {
+    name: scorer.artifact_sha256(path) for name, path in SOURCE_ARTIFACT_PATHS.items()
+}
 
 
 def _sha(value: str | bytes) -> str:
@@ -155,18 +165,41 @@ def _case(language: str, twin_group: str) -> dict:
             control=control("missing"),
         ),
     ]
-    boundaries = [0, 1365, 2730, 4096, 5461, 6826, 8192]
+    boundaries = [0, 1365, 2730, 4096, 5461, 7680]
     for index, chunk in enumerate(chunks):
         chunk["token_start"] = boundaries[index]
-        chunk["token_end"] = boundaries[index + 1]
+        chunk["token_end"] = (
+            8192 if index == len(chunks) - 1 else boundaries[index] + 512
+        )
         chunk["content_sha256"] = scorer.sha256_json(scorer.chunk_hash_payload(chunk))
+    chunking_receipt = {
+        "schema_version": scorer.CHUNKING_RECEIPT_VERSION,
+        "mode": "semantic_sections",
+        "max_chunk_tokens": 512,
+        "fallback_overlap_tokens": 64,
+        "tokenizer_artifact_sha256": TEST_ARTIFACT_SHA256,
+        "chunker_artifact_sha256": TEST_ARTIFACT_SHA256,
+        "boundary_receipt_artifact_sha256": SOURCE_ARTIFACT_HASHES["boundary-receipt"],
+        "semantic_verification": "not_performed_by_scorer",
+        "ordered_spans": [
+            {
+                "chunk_key": chunk["chunk_key"],
+                "token_start": chunk["token_start"],
+                "token_end": chunk["token_end"],
+            }
+            for chunk in chunks
+        ],
+    }
+    chunking_receipt["receipt_sha256"] = scorer.sha256_json(chunking_receipt)
     result = {
         "case_key": _sha("case-" + language),
         "language": language,
         "twin_group_key": twin_group,
         "source_family": "synthetic",
+        "source_snapshot_sha256": SOURCE_ARTIFACT_HASHES[f"raw-{language}"],
         "source_domain": "general",
         "context_tokens": 8192,
+        "chunking_receipt": chunking_receipt,
         "contamination_audit_sha256": _sha("contamination-audit-" + language),
         "chunks": chunks,
         "questions": [
@@ -263,6 +296,59 @@ def _causal_manifest(panel: dict) -> tuple[dict, str]:
     return manifest, scorer.sha256_json(manifest)
 
 
+def _source_manifest() -> tuple[dict, str]:
+    artifacts = {
+        name: {
+            "role": (
+                "raw_source"
+                if name.startswith("raw-")
+                else "extracted_text"
+                if name.startswith("extraction-")
+                else "chunk_boundary_receipt"
+            ),
+            "sha256": SOURCE_ARTIFACT_HASHES[name],
+        }
+        for name in SOURCE_ARTIFACT_PATHS
+    }
+    license_policies = {
+        "fixture-license": {
+            "source_family": "synthetic",
+            "license_id": "LicenseRef-Synthetic",
+            "license_url": "https://example.invalid/licenses/synthetic-v1",
+            "attribution": "R052 synthetic fixture authors",
+            "license_cleared": True,
+            "evaluation_use_cleared": True,
+            "redistribution_cleared": True,
+        }
+    }
+    snapshots = {
+        f"fixture-{language}": {
+            "raw_artifact": f"raw-{language}",
+            "extraction_artifact": f"extraction-{language}",
+            "source_family": "synthetic",
+            "upstream_url": f"https://example.invalid/r052/source-{language}",
+            "upstream_revision": _sha(f"revision-{language}"),
+            "upstream_date": "2026-10-01",
+            "untouched_split": "authored-eval-v1",
+            "license_policy": "fixture-license",
+            "attribution": f"R052 {language} fixture authors",
+            "third_party_images_excluded": True,
+            "natural_language_authored": True,
+            "benchmark_derived": False,
+        }
+        for language in ("en", "he")
+    }
+    manifest = {
+        "schema_version": scorer.SOURCE_MANIFEST_VERSION,
+        "license_policy": scorer.SOURCE_LICENSE_POLICY,
+        "benchmark_derived": False,
+        "license_policies": license_policies,
+        "artifacts": artifacts,
+        "snapshots": snapshots,
+    }
+    return manifest, scorer.sha256_json(manifest)
+
+
 def _contamination_manifest(panel: dict) -> tuple[dict, str]:
     auditor_code = TEST_ARTIFACT_SHA256
     entries = {}
@@ -308,10 +394,13 @@ def _contamination_manifest(panel: dict) -> tuple[dict, str]:
 
 
 def _validate(panel: dict) -> dict:
+    source, source_digest = _source_manifest()
     causal, causal_digest = _causal_manifest(panel)
     contamination, contamination_digest = _contamination_manifest(panel)
     return scorer.validate_panel(
         panel,
+        source,
+        source_digest,
         causal,
         causal_digest,
         contamination,
@@ -321,7 +410,33 @@ def _validate(panel: dict) -> dict:
         contamination_corpus_artifacts=[TEST_ARTIFACT],
         contamination_tokenizer_artifact=TEST_ARTIFACT,
         contamination_chunker_artifact=TEST_ARTIFACT,
+        source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
         provider_generator_artifacts={"fixture-dense": TEST_ARTIFACT},
+    )
+
+
+def _validate_selection(
+    panel: dict, selected: set[str], artifacts: dict[str, Path]
+) -> dict:
+    source, source_digest = _source_manifest()
+    causal, causal_digest = _causal_manifest(panel)
+    contamination, contamination_digest = _contamination_manifest(panel)
+    return scorer.validate_panel(
+        panel,
+        source,
+        source_digest,
+        causal,
+        causal_digest,
+        contamination,
+        contamination_digest,
+        annotation_builder_artifact=TEST_ARTIFACT,
+        contamination_auditor_artifact=TEST_ARTIFACT,
+        contamination_corpus_artifacts=[TEST_ARTIFACT],
+        contamination_tokenizer_artifact=TEST_ARTIFACT,
+        contamination_chunker_artifact=TEST_ARTIFACT,
+        source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
+        provider_generator_artifacts=artifacts,
+        selected_precomputed_providers=selected,
     )
 
 
@@ -452,6 +567,7 @@ def test_panel_rejects_benchmark_lineage_paths_and_markers(panel):
 
 
 def test_external_causal_manifest_is_required_but_only_validates_annotations(panel):
+    source, source_digest = _source_manifest()
     manifest, _ = _causal_manifest(panel)
     contamination, contamination_digest = _contamination_manifest(panel)
     changed_manifest = copy.deepcopy(manifest)
@@ -460,6 +576,8 @@ def test_external_causal_manifest_is_required_but_only_validates_annotations(pan
     with pytest.raises(ValueError, match="manifest entries"):
         scorer.validate_panel(
             panel,
+            source,
+            source_digest,
             changed_manifest,
             scorer.sha256_json(changed_manifest),
             contamination,
@@ -469,11 +587,14 @@ def test_external_causal_manifest_is_required_but_only_validates_annotations(pan
             contamination_corpus_artifacts=[TEST_ARTIFACT],
             contamination_tokenizer_artifact=TEST_ARTIFACT,
             contamination_chunker_artifact=TEST_ARTIFACT,
+            source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
             provider_generator_artifacts={"fixture-dense": TEST_ARTIFACT},
         )
     with pytest.raises(ValueError, match="external sha256 anchor"):
         scorer.validate_panel(
             panel,
+            source,
+            source_digest,
             manifest,
             "0" * 64,
             contamination,
@@ -483,6 +604,7 @@ def test_external_causal_manifest_is_required_but_only_validates_annotations(pan
             contamination_corpus_artifacts=[TEST_ARTIFACT],
             contamination_tokenizer_artifact=TEST_ARTIFACT,
             contamination_chunker_artifact=TEST_ARTIFACT,
+            source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
             provider_generator_artifacts={"fixture-dense": TEST_ARTIFACT},
         )
 
@@ -532,14 +654,249 @@ def test_precomputed_provider_requires_exact_hash_coverage_and_finite_vectors(pa
         _validate(changed)
 
 
+def test_provider_artifacts_are_optional_for_bm25_and_exact_for_selected(panel):
+    _validate_selection(panel, set(), {})
+    bm25_only = copy.deepcopy(panel)
+    bm25_only["providers"] = {}
+    _validate_selection(bm25_only, set(), {})
+    with pytest.raises(ValueError, match="cover selected providers exactly"):
+        _validate_selection(panel, {"fixture-dense"}, {})
+    with pytest.raises(ValueError, match="cover selected providers exactly"):
+        _validate_selection(panel, set(), {"fixture-dense": TEST_ARTIFACT})
+
+
+def test_source_snapshots_bind_raw_extraction_metadata_and_case_family(panel, tmp_path):
+    manifest, digest = _source_manifest()
+    _, by_hash = scorer.validate_source_snapshot_manifest(
+        panel, manifest, digest, SOURCE_ARTIFACT_PATHS
+    )
+    assert by_hash[panel["cases"][0]["source_snapshot_sha256"]]["role"] == "raw_source"
+
+    missing_path = dict(SOURCE_ARTIFACT_PATHS)
+    missing_path.pop("raw-en")
+    with pytest.raises(ValueError, match="cover manifest exactly"):
+        scorer.validate_source_snapshot_manifest(panel, manifest, digest, missing_path)
+
+    duplicate = copy.deepcopy(manifest)
+    duplicate["artifacts"]["extraction-he"]["sha256"] = duplicate["artifacts"][
+        "extraction-en"
+    ]["sha256"]
+    with pytest.raises(ValueError, match="duplicate artifact hashes"):
+        scorer.validate_source_snapshot_manifest(
+            panel,
+            duplicate,
+            scorer.sha256_json(duplicate),
+            SOURCE_ARTIFACT_PATHS,
+        )
+
+    duplicate_binding = copy.deepcopy(manifest)
+    duplicate_binding["snapshots"]["fixture-he"]["raw_artifact"] = "raw-en"
+    with pytest.raises(ValueError, match="duplicate raw/extraction bindings"):
+        scorer.validate_source_snapshot_manifest(
+            panel,
+            duplicate_binding,
+            scorer.sha256_json(duplicate_binding),
+            SOURCE_ARTIFACT_PATHS,
+        )
+
+    mismatched = copy.deepcopy(panel)
+    mismatched["cases"][0]["source_snapshot_sha256"] = SOURCE_ARTIFACT_HASHES[
+        "boundary-receipt"
+    ]
+    with pytest.raises(ValueError, match="cover source snapshots exactly"):
+        scorer.validate_source_snapshot_manifest(
+            mismatched, manifest, digest, SOURCE_ARTIFACT_PATHS
+        )
+
+    wrong_family = copy.deepcopy(panel)
+    wrong_family["cases"][0]["source_family"] = "permissive"
+    with pytest.raises(ValueError, match="family mismatches"):
+        scorer.validate_source_snapshot_manifest(
+            wrong_family, manifest, digest, SOURCE_ARTIFACT_PATHS
+        )
+
+    hostile = tmp_path / "extracted.txt"
+    hostile.write_text("copied from a JevBench example")
+    hostile_manifest = copy.deepcopy(manifest)
+    hostile_manifest["artifacts"]["extraction-en"]["sha256"] = scorer.artifact_sha256(
+        hostile
+    )
+    hostile_paths = dict(SOURCE_ARTIFACT_PATHS)
+    hostile_paths["extraction-en"] = hostile
+    with pytest.raises(ValueError, match="contains benchmark lineage"):
+        scorer.validate_source_snapshot_manifest(
+            panel,
+            hostile_manifest,
+            scorer.sha256_json(hostile_manifest),
+            hostile_paths,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value["snapshots"]["fixture-en"].update(
+                upstream_revision="latest"
+            ),
+            "immutable and exact",
+        ),
+        (
+            lambda value: value["snapshots"]["fixture-en"].update(
+                upstream_date="October 1"
+            ),
+            "ISO YYYY-MM-DD",
+        ),
+        (
+            lambda value: value["snapshots"]["fixture-en"].update(
+                untouched_split="unknown"
+            ),
+            "untouched_split must be exact",
+        ),
+        (
+            lambda value: value["snapshots"]["fixture-en"].update(
+                third_party_images_excluded=False
+            ),
+            "exclude third-party images",
+        ),
+        (
+            lambda value: value["license_policies"]["fixture-license"].update(
+                license_url="http://example.invalid/license"
+            ),
+            "HTTPS URL",
+        ),
+    ],
+)
+def test_source_snapshot_metadata_fails_closed(panel, mutate, message):
+    manifest, _ = _source_manifest()
+    mutate(manifest)
+    with pytest.raises(ValueError, match=message):
+        scorer.validate_source_snapshot_manifest(
+            panel,
+            manifest,
+            scorer.sha256_json(manifest),
+            SOURCE_ARTIFACT_PATHS,
+        )
+
+
+def _rehash_chunking_receipt(receipt: dict) -> None:
+    receipt["receipt_sha256"] = scorer.sha256_json(
+        {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    )
+
+
+def test_chunking_receipt_enforces_frozen_span_and_semantic_disclosure(panel):
+    source, _ = _source_manifest()
+    by_hash = {
+        declaration["sha256"]: declaration
+        for declaration in source["artifacts"].values()
+    }
+    case = panel["cases"][0]
+    scorer.validate_case_chunking_receipt(
+        case, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
+    )
+
+    too_long = copy.deepcopy(case)
+    too_long["chunks"][0]["token_end"] = 513
+    too_long["chunking_receipt"]["ordered_spans"][0]["token_end"] = 513
+    _rehash_chunking_receipt(too_long["chunking_receipt"])
+    with pytest.raises(ValueError, match="exceeding 512"):
+        scorer.validate_case_chunking_receipt(
+            too_long, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
+        )
+
+    unbound = copy.deepcopy(case)
+    unbound["chunking_receipt"]["ordered_spans"].reverse()
+    _rehash_chunking_receipt(unbound["chunking_receipt"])
+    with pytest.raises(ValueError, match="ordered spans"):
+        scorer.validate_case_chunking_receipt(
+            unbound, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
+        )
+
+    overclaim = copy.deepcopy(case)
+    overclaim["chunking_receipt"]["semantic_verification"] = "verified"
+    _rehash_chunking_receipt(overclaim["chunking_receipt"])
+    with pytest.raises(ValueError, match="not scorer-verified"):
+        scorer.validate_case_chunking_receipt(
+            overclaim, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
+        )
+
+    with pytest.raises(ValueError, match="tokenizer/chunker"):
+        scorer.validate_case_chunking_receipt(
+            case, by_hash, "0" * 64, TEST_ARTIFACT_SHA256
+        )
+
+
+def test_fixed_chunking_requires_exact_512_max_and_64_overlap(panel):
+    source, _ = _source_manifest()
+    by_hash = {
+        declaration["sha256"]: declaration
+        for declaration in source["artifacts"].values()
+    }
+    case = copy.deepcopy(panel["cases"][0])
+    starts = [index * 448 for index in range(len(case["chunks"]))]
+    for chunk, start in zip(case["chunks"], starts, strict=True):
+        chunk["token_start"] = start
+        chunk["token_end"] = start + 512
+    receipt = case["chunking_receipt"]
+    receipt["mode"] = "fixed_512_overlap_64"
+    receipt["boundary_receipt_artifact_sha256"] = None
+    receipt["ordered_spans"] = [
+        {
+            "chunk_key": chunk["chunk_key"],
+            "token_start": chunk["token_start"],
+            "token_end": chunk["token_end"],
+        }
+        for chunk in case["chunks"]
+    ]
+    _rehash_chunking_receipt(receipt)
+    scorer.validate_case_chunking_receipt(
+        case, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
+    )
+
+    receipt["ordered_spans"][1]["token_start"] += 1
+    case["chunks"][1]["token_start"] += 1
+    _rehash_chunking_receipt(receipt)
+    with pytest.raises(ValueError, match="exactly 64"):
+        scorer.validate_case_chunking_receipt(
+            case, by_hash, TEST_ARTIFACT_SHA256, TEST_ARTIFACT_SHA256
+        )
+
+
+def test_v1_panel_and_source_manifest_require_explicit_migration(panel):
+    old_panel = copy.deepcopy(panel)
+    old_panel["schema_version"] = "r052-evidence-panel-v1"
+    with pytest.raises(ValueError, match="r052-evidence-panel-v2"):
+        _validate(old_panel)
+
+    source, _ = _source_manifest()
+    source["schema_version"] = "r052-source-provenance-manifest-v1"
+    with pytest.raises(ValueError, match="policy/provenance"):
+        scorer.validate_source_snapshot_manifest(
+            panel,
+            source,
+            scorer.sha256_json(source),
+            SOURCE_ARTIFACT_PATHS,
+        )
+
+
+def test_json_parser_rejects_duplicate_bindings_and_non_finite_values():
+    with pytest.raises(ValueError, match="duplicate JSON key"):
+        scorer.parse_unique_finite_json(b'{"artifacts":{},"artifacts":{}}', "source")
+    with pytest.raises(ValueError, match="non-finite"):
+        scorer.parse_unique_finite_json(b'{"value":NaN}', "source")
+
+
 def test_receipt_is_content_bound_timestamp_free_and_atomic(panel, tmp_path):
     _validate(panel)
     method = scorer.score_method(panel, "bm25", (1, 2, 4))
     _, causal_digest = _causal_manifest(panel)
     _, contamination_digest = _contamination_manifest(panel)
+    _, source_digest = _source_manifest()
     receipt = scorer.build_receipt(
         panel,
         _sha("raw"),
+        source_digest,
         causal_digest,
         contamination_digest,
         (1, 2, 4),
@@ -565,6 +922,7 @@ def test_cli_scores_bm25_and_precomputed_without_model_download(
     panel, tmp_path, monkeypatch
 ):
     source = tmp_path / "panel.json"
+    source_snapshot_path = tmp_path / "source-snapshots.json"
     causal_source = tmp_path / "causal.json"
     contamination_source = tmp_path / "contamination.json"
     output = tmp_path / "receipt.json"
@@ -572,39 +930,48 @@ def test_cli_scores_bm25_and_precomputed_without_model_download(
     causal_source.write_bytes(scorer.canonical_json(causal_manifest))
     contamination_manifest, contamination_digest = _contamination_manifest(panel)
     contamination_source.write_bytes(scorer.canonical_json(contamination_manifest))
+    source_snapshot_manifest, source_snapshot_digest = _source_manifest()
+    source_snapshot_path.write_bytes(scorer.canonical_json(source_snapshot_manifest))
     source.write_bytes(scorer.canonical_json(panel))
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "score_r052_evidence_retrieval.py",
-            "--panel",
-            str(source),
-            "--causal-manifest",
-            str(causal_source),
-            "--causal-manifest-sha256",
-            causal_digest,
-            "--contamination-manifest",
-            str(contamination_source),
-            "--contamination-manifest-sha256",
-            contamination_digest,
-            "--causal-annotation-builder-artifact",
-            str(TEST_ARTIFACT),
-            "--contamination-auditor-artifact",
-            str(TEST_ARTIFACT),
-            "--contamination-corpus-artifact",
-            str(TEST_ARTIFACT),
-            "--contamination-tokenizer-artifact",
-            str(TEST_ARTIFACT),
-            "--contamination-chunker-artifact",
-            str(TEST_ARTIFACT),
-            "--provider-generator-artifact",
-            f"fixture-dense={TEST_ARTIFACT}",
-            "--output",
-            str(output),
-            "--provider",
-            "fixture-dense",
+    cli_args = [
+        "score_r052_evidence_retrieval.py",
+        "--panel",
+        str(source),
+        "--causal-manifest",
+        str(causal_source),
+        "--causal-manifest-sha256",
+        causal_digest,
+        "--contamination-manifest",
+        str(contamination_source),
+        "--contamination-manifest-sha256",
+        contamination_digest,
+        "--source-snapshot-manifest",
+        str(source_snapshot_path),
+        "--source-snapshot-manifest-sha256",
+        source_snapshot_digest,
+        *[
+            item
+            for name, path in SOURCE_ARTIFACT_PATHS.items()
+            for item in ("--source-snapshot-artifact", f"{name}={path}")
         ],
-    )
+        "--causal-annotation-builder-artifact",
+        str(TEST_ARTIFACT),
+        "--contamination-auditor-artifact",
+        str(TEST_ARTIFACT),
+        "--contamination-corpus-artifact",
+        str(TEST_ARTIFACT),
+        "--contamination-tokenizer-artifact",
+        str(TEST_ARTIFACT),
+        "--contamination-chunker-artifact",
+        str(TEST_ARTIFACT),
+        "--provider-generator-artifact",
+        f"fixture-dense={TEST_ARTIFACT}",
+        "--output",
+        str(output),
+        "--provider",
+        "fixture-dense",
+    ]
+    monkeypatch.setattr("sys.argv", cli_args)
     scorer.main()
     receipt = json.loads(output.read_text())
     assert [method["method"] for method in receipt["methods"]] == [
@@ -613,8 +980,20 @@ def test_cli_scores_bm25_and_precomputed_without_model_download(
     ]
     assert receipt["input_raw_sha256"] == scorer.file_sha256(source)
 
+    bm25_output = tmp_path / "bm25-receipt.json"
+    bm25_args = list(cli_args)
+    for flag in ("--provider-generator-artifact", "--provider"):
+        index = bm25_args.index(flag)
+        del bm25_args[index : index + 2]
+    bm25_args[bm25_args.index("--output") + 1] = str(bm25_output)
+    monkeypatch.setattr("sys.argv", bm25_args)
+    scorer.main()
+    bm25_receipt = json.loads(bm25_output.read_text())
+    assert [method["method"] for method in bm25_receipt["methods"]] == ["bm25"]
+
 
 def test_claimed_provenance_must_resolve_to_supplied_artifacts(panel, tmp_path):
+    source, source_digest = _source_manifest()
     causal, causal_digest = _causal_manifest(panel)
     contamination, contamination_digest = _contamination_manifest(panel)
     impostor = tmp_path / "impostor.py"
@@ -622,6 +1001,8 @@ def test_claimed_provenance_must_resolve_to_supplied_artifacts(panel, tmp_path):
     with pytest.raises(ValueError, match="annotation builder artifact hash mismatch"):
         scorer.validate_panel(
             panel,
+            source,
+            source_digest,
             causal,
             causal_digest,
             contamination,
@@ -631,6 +1012,7 @@ def test_claimed_provenance_must_resolve_to_supplied_artifacts(panel, tmp_path):
             contamination_corpus_artifacts=[TEST_ARTIFACT],
             contamination_tokenizer_artifact=TEST_ARTIFACT,
             contamination_chunker_artifact=TEST_ARTIFACT,
+            source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
             provider_generator_artifacts={"fixture-dense": TEST_ARTIFACT},
         )
 
@@ -639,23 +1021,30 @@ def test_io_paths_reject_all_primary_input_and_output_aliases(tmp_path):
     panel = tmp_path / "panel.json"
     causal = tmp_path / "causal.json"
     contamination = tmp_path / "contamination.json"
-    for path in (panel, causal, contamination):
+    source = tmp_path / "source.json"
+    for path in (panel, causal, contamination, source):
         path.write_text("{}")
     with pytest.raises(ValueError, match="supplied input artifact"):
         scorer.validate_io_paths(
-            panel, causal, contamination, panel, tmp_path / "runtime.json"
+            panel, causal, contamination, source, panel, tmp_path / "runtime.json"
         )
     with pytest.raises(ValueError, match="score and runtime"):
         scorer.validate_io_paths(
             panel,
             causal,
             contamination,
+            source,
             tmp_path / "receipt.json",
             tmp_path / "receipt.json",
         )
     with pytest.raises(ValueError, match="input paths must not alias"):
         scorer.validate_io_paths(
-            panel, panel, contamination, tmp_path / "out.json", tmp_path / "run.json"
+            panel,
+            panel,
+            contamination,
+            source,
+            tmp_path / "out.json",
+            tmp_path / "run.json",
         )
     artifact = tmp_path / "generator.py"
     artifact.write_text("pass\n")
@@ -664,6 +1053,7 @@ def test_io_paths_reject_all_primary_input_and_output_aliases(tmp_path):
             panel,
             causal,
             contamination,
+            source,
             tmp_path / "out.json",
             artifact,
             (artifact,),
@@ -676,6 +1066,7 @@ def test_io_paths_reject_all_primary_input_and_output_aliases(tmp_path):
             panel,
             causal,
             contamination,
+            source,
             frozen_directory / "out.json",
             tmp_path / "run.json",
             (frozen_directory,),

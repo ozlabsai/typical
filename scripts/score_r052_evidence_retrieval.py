@@ -20,13 +20,19 @@ import re
 import tempfile
 import time
 from collections import Counter, defaultdict
+from datetime import date
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 import numpy as np
 
-SCHEMA_VERSION = "r052-evidence-panel-v1"
-RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v1"
+SCHEMA_VERSION = "r052-evidence-panel-v2"
+RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v2"
+SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v2"
+SOURCE_LICENSE_POLICY = "approved-evaluation-and-redistribution-v1"
+CHUNKING_RECEIPT_VERSION = "r052-case-chunking-receipt-v1"
 MODEL_ID = "google/embeddinggemma-2"
 MODEL_REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b"
 TRANSFORMERS_VERSION = "5.19.0"
@@ -73,12 +79,69 @@ CASE_KEYS = {
     "language",
     "twin_group_key",
     "source_family",
+    "source_snapshot_sha256",
     "source_domain",
     "context_tokens",
+    "chunking_receipt",
     "contamination_audit_sha256",
     "chunks",
     "questions",
 }
+SOURCE_MANIFEST_KEYS = {
+    "schema_version",
+    "license_policy",
+    "benchmark_derived",
+    "license_policies",
+    "artifacts",
+    "snapshots",
+}
+SOURCE_LICENSE_KEYS = {
+    "source_family",
+    "license_id",
+    "license_url",
+    "attribution",
+    "license_cleared",
+    "evaluation_use_cleared",
+    "redistribution_cleared",
+}
+SOURCE_ARTIFACT_KEYS = {"role", "sha256"}
+SOURCE_SNAPSHOT_KEYS = {
+    "raw_artifact",
+    "extraction_artifact",
+    "source_family",
+    "upstream_url",
+    "upstream_revision",
+    "upstream_date",
+    "untouched_split",
+    "license_policy",
+    "attribution",
+    "third_party_images_excluded",
+    "natural_language_authored",
+    "benchmark_derived",
+}
+SOURCE_ARTIFACT_ROLES = frozenset(
+    {
+        "raw_source",
+        "extracted_text",
+        "image",
+        "translation_alignment_receipt",
+        "image_control_receipt",
+        "chunk_boundary_receipt",
+    }
+)
+CHUNKING_RECEIPT_KEYS = {
+    "schema_version",
+    "mode",
+    "max_chunk_tokens",
+    "fallback_overlap_tokens",
+    "tokenizer_artifact_sha256",
+    "chunker_artifact_sha256",
+    "boundary_receipt_artifact_sha256",
+    "semantic_verification",
+    "ordered_spans",
+    "receipt_sha256",
+}
+CHUNK_SPAN_KEYS = {"chunk_key", "token_start", "token_end"}
 CHUNK_KEYS = {
     "chunk_key",
     "kind",
@@ -141,7 +204,7 @@ CONTAMINATION_MANIFEST_KEYS = {
     "entries",
     "providers",
 }
-CONTAMINATION_MANIFEST_VERSION = "r052-contamination-audit-manifest-v1"
+CONTAMINATION_MANIFEST_VERSION = "r052-contamination-audit-manifest-v2"
 AUDIT_RECEIPT_KEYS = {
     "schema_version",
     "status",
@@ -162,6 +225,27 @@ def canonical_json(value: Any) -> bytes:
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         + "\n"
     ).encode()
+
+
+def parse_unique_finite_json(raw: bytes, label: str) -> Any:
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(
+            raw,
+            object_pairs_hook=unique_object,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ValueError(f"{label} contains non-finite JSON constant {token}")
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} must be valid UTF-8 JSON") from exc
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -209,6 +293,46 @@ def verify_artifact(path: Path, expected_sha256: str, label: str) -> str:
     return observed
 
 
+def _safe_source_artifact(path: Path, label: str) -> Path:
+    """Resolve a regular source snapshot without following hidden symlinks."""
+    if path.is_symlink():
+        raise ValueError(f"{label} must not be a symlink")
+    resolved = path.resolve(strict=True)
+    if resolved.is_dir():
+        for child in resolved.rglob("*"):
+            if child.is_symlink():
+                raise ValueError(f"{label} contains a symlink")
+            if not child.is_file() and not child.is_dir():
+                raise ValueError(f"{label} contains a non-regular entry")
+    elif not resolved.is_file():
+        raise ValueError(f"{label} must be a regular file or directory")
+    return resolved
+
+
+def _artifact_contains_forbidden_lineage(path: Path) -> bool:
+    files = (
+        [path]
+        if path.is_file()
+        else sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
+    )
+    markers = tuple(marker.encode() for marker in FORBIDDEN_LINEAGE_MARKERS)
+    overlap = max(map(len, markers)) - 1
+    for file_path in files:
+        relative = (
+            file_path.name if path.is_file() else file_path.relative_to(path).as_posix()
+        )
+        if any(marker in relative.casefold().encode() for marker in markers):
+            return True
+        tail = b""
+        with file_path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                folded = (tail + block).lower()
+                if any(marker in folded for marker in markers):
+                    return True
+                tail = folded[-overlap:]
+    return False
+
+
 def _exact_keys(value: dict[str, Any], expected: set[str], label: str) -> None:
     if set(value) != expected:
         raise ValueError(f"{label} keys must be exactly {sorted(expected)}")
@@ -224,6 +348,195 @@ def _require_text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} must be non-empty text")
     return value
+
+
+def _require_https_url(value: Any, label: str) -> str:
+    value = _require_text(value, label)
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username is not None:
+        raise ValueError(f"{label} must be an HTTPS URL")
+    return value
+
+
+def validate_source_snapshot_manifest(
+    panel: dict[str, Any],
+    manifest: Any,
+    expected_sha256: str,
+    artifact_paths: dict[str, Path],
+) -> tuple[str, dict[str, dict[str, Any]]]:
+    """Resolve every case to exact externally supplied source bytes/tree."""
+    _require_sha(expected_sha256, "trusted source snapshot manifest sha256")
+    if not isinstance(manifest, dict):
+        raise TypeError("trusted source snapshot manifest must be an object")
+    _exact_keys(manifest, SOURCE_MANIFEST_KEYS, "trusted source snapshot manifest")
+    if (
+        manifest["schema_version"] != SOURCE_MANIFEST_VERSION
+        or manifest["license_policy"] != SOURCE_LICENSE_POLICY
+        or manifest["benchmark_derived"] is not False
+    ):
+        raise ValueError("source snapshot manifest policy/provenance is invalid")
+    if sha256_json(manifest) != expected_sha256:
+        raise ValueError(
+            "trusted source snapshot manifest does not match its external sha256 anchor"
+        )
+    _reject_benchmark_lineage(manifest)
+    license_policies = manifest["license_policies"]
+    if not isinstance(license_policies, dict) or not license_policies:
+        raise ValueError("source license_policies must be a non-empty object")
+    for name, declaration in license_policies.items():
+        _require_text(name, "source license policy name")
+        if not isinstance(declaration, dict):
+            raise TypeError(f"source license policy {name} must be an object")
+        _exact_keys(declaration, SOURCE_LICENSE_KEYS, f"source license policy {name}")
+        if declaration["source_family"] not in SOURCE_FAMILIES:
+            raise ValueError(f"source license policy {name} family is invalid")
+        _require_text(declaration["license_id"], f"source license policy {name} id")
+        _require_https_url(
+            declaration["license_url"], f"source license policy {name} URL"
+        )
+        _require_text(
+            declaration["attribution"], f"source license policy {name} attribution"
+        )
+        if any(
+            declaration[field] is not True
+            for field in (
+                "license_cleared",
+                "evaluation_use_cleared",
+                "redistribution_cleared",
+            )
+        ):
+            raise ValueError(f"source license policy {name} is not cleared")
+
+    artifacts = manifest["artifacts"]
+    if not isinstance(artifacts, dict) or not artifacts:
+        raise ValueError("source snapshot manifest artifacts must be non-empty")
+    if set(artifact_paths) != set(artifacts):
+        raise ValueError("source snapshot artifact paths must cover manifest exactly")
+
+    by_hash: dict[str, dict[str, Any]] = {}
+    for name, declaration in artifacts.items():
+        _require_text(name, "source snapshot artifact name")
+        if not isinstance(declaration, dict):
+            raise TypeError(f"source snapshot artifact {name} must be an object")
+        _exact_keys(
+            declaration,
+            SOURCE_ARTIFACT_KEYS,
+            f"source snapshot artifact {name}",
+        )
+        role = declaration["role"]
+        if role not in SOURCE_ARTIFACT_ROLES:
+            raise ValueError(f"source snapshot artifact {name} role is invalid")
+        digest = _require_sha(declaration["sha256"], f"source artifact {name} sha256")
+        if digest in by_hash:
+            raise ValueError("source snapshot manifest has duplicate artifact hashes")
+        path = _safe_source_artifact(
+            artifact_paths[name], f"source snapshot artifact {name}"
+        )
+        if artifact_sha256(path) != digest:
+            raise ValueError(f"source snapshot artifact {name} hash mismatch")
+        if _artifact_contains_forbidden_lineage(path):
+            raise ValueError(
+                f"source snapshot artifact {name} contains benchmark lineage"
+            )
+        by_hash[digest] = declaration
+
+    snapshots = manifest["snapshots"]
+    if not isinstance(snapshots, dict) or not snapshots:
+        raise ValueError("source snapshots must be a non-empty object")
+    snapshot_by_raw_hash: dict[str, dict[str, Any]] = {}
+    used_raw: set[str] = set()
+    used_extractions: set[str] = set()
+    used_policies: set[str] = set()
+    for name, snapshot in snapshots.items():
+        _require_text(name, "source snapshot name")
+        if not isinstance(snapshot, dict):
+            raise TypeError(f"source snapshot {name} must be an object")
+        _exact_keys(snapshot, SOURCE_SNAPSHOT_KEYS, f"source snapshot {name}")
+        raw_name = _require_text(
+            snapshot["raw_artifact"], f"source snapshot {name} raw_artifact"
+        )
+        extraction_name = _require_text(
+            snapshot["extraction_artifact"],
+            f"source snapshot {name} extraction_artifact",
+        )
+        if raw_name in used_raw or extraction_name in used_extractions:
+            raise ValueError("source snapshots have duplicate raw/extraction bindings")
+        if (
+            raw_name not in artifacts
+            or artifacts[raw_name]["role"] != "raw_source"
+            or extraction_name not in artifacts
+            or artifacts[extraction_name]["role"] != "extracted_text"
+        ):
+            raise ValueError("source snapshot raw/extraction artifact roles mismatch")
+        used_raw.add(raw_name)
+        used_extractions.add(extraction_name)
+        family = snapshot["source_family"]
+        policy_name = snapshot["license_policy"]
+        if (
+            family not in SOURCE_FAMILIES
+            or policy_name not in license_policies
+            or license_policies[policy_name]["source_family"] != family
+        ):
+            raise ValueError("source snapshot license policy/family mismatch")
+        used_policies.add(policy_name)
+        _require_https_url(snapshot["upstream_url"], f"source snapshot {name} URL")
+        revision = _require_text(
+            snapshot["upstream_revision"],
+            f"source snapshot {name} upstream_revision",
+        )
+        if revision.casefold() in {"head", "latest", "main", "master", "unknown"}:
+            raise ValueError("source snapshot revision must be immutable and exact")
+        upstream_date = _require_text(
+            snapshot["upstream_date"], f"source snapshot {name} upstream_date"
+        )
+        try:
+            date.fromisoformat(upstream_date)
+        except ValueError as exc:
+            raise ValueError(
+                "source snapshot upstream_date must be ISO YYYY-MM-DD"
+            ) from exc
+        untouched_split = _require_text(
+            snapshot["untouched_split"], f"source snapshot {name} untouched_split"
+        )
+        if untouched_split.casefold() in {"unknown", "unspecified", "none"}:
+            raise ValueError("source snapshot untouched_split must be exact")
+        _require_text(snapshot["attribution"], f"source snapshot {name} attribution")
+        if (
+            snapshot["third_party_images_excluded"] is not True
+            or snapshot["natural_language_authored"] is not True
+            or snapshot["benchmark_derived"] is not False
+        ):
+            raise ValueError(
+                "source snapshot must be authored, independent, and exclude third-party images"
+            )
+        raw_hash = artifacts[raw_name]["sha256"]
+        snapshot_by_raw_hash[raw_hash] = snapshot
+
+    declared_raw = {
+        name for name, item in artifacts.items() if item["role"] == "raw_source"
+    }
+    declared_extractions = {
+        name for name, item in artifacts.items() if item["role"] == "extracted_text"
+    }
+    if used_raw != declared_raw or used_extractions != declared_extractions:
+        raise ValueError(
+            "source snapshots must bind every raw/extraction artifact exactly"
+        )
+    if used_policies != set(license_policies):
+        raise ValueError("source snapshots must use every declared license policy")
+
+    case_hashes = [case["source_snapshot_sha256"] for case in panel["cases"]]
+    for value in case_hashes:
+        _require_sha(value, "case source_snapshot_sha256")
+    if set(case_hashes) != set(snapshot_by_raw_hash):
+        raise ValueError(
+            "case source snapshot bindings must cover source snapshots exactly"
+        )
+    for case in panel["cases"]:
+        snapshot = snapshot_by_raw_hash[case["source_snapshot_sha256"]]
+        if snapshot["source_family"] != case["source_family"]:
+            raise ValueError("case source family mismatches its source snapshot")
+    return expected_sha256, by_hash
 
 
 def chunk_hash_payload(chunk: dict[str, Any]) -> dict[str, Any]:
@@ -319,12 +632,91 @@ def case_content_sha256(case: dict[str, Any]) -> str:
         {
             "language": case["language"],
             "source_family": case["source_family"],
+            "source_snapshot_sha256": case["source_snapshot_sha256"],
             "source_domain": case["source_domain"],
             "context_tokens": case["context_tokens"],
+            "chunking_receipt": case["chunking_receipt"],
             "chunks": [chunk["content_sha256"] for chunk in case["chunks"]],
             "questions": [question["content_sha256"] for question in case["questions"]],
         }
     )
+
+
+def validate_case_chunking_receipt(
+    case: dict[str, Any],
+    source_artifacts_by_hash: dict[str, dict[str, Any]],
+    tokenizer_artifact_sha256: str,
+    chunker_artifact_sha256: str,
+) -> None:
+    """Validate frozen spans and artifact bindings, never their semantic quality."""
+    receipt = case["chunking_receipt"]
+    if not isinstance(receipt, dict):
+        raise TypeError("case chunking_receipt must be an object")
+    _exact_keys(receipt, CHUNKING_RECEIPT_KEYS, "case chunking_receipt")
+    if receipt["schema_version"] != CHUNKING_RECEIPT_VERSION:
+        raise ValueError(f"chunking receipt schema must be {CHUNKING_RECEIPT_VERSION}")
+    if (
+        receipt["max_chunk_tokens"] != 512
+        or type(receipt["max_chunk_tokens"]) is not int
+        or receipt["fallback_overlap_tokens"] != 64
+        or type(receipt["fallback_overlap_tokens"]) is not int
+    ):
+        raise ValueError("chunking receipt must freeze 512-token/64-overlap contract")
+    if receipt["semantic_verification"] != "not_performed_by_scorer":
+        raise ValueError(
+            "chunking receipt must disclose that semantics are not scorer-verified"
+        )
+    if (
+        receipt["tokenizer_artifact_sha256"] != tokenizer_artifact_sha256
+        or receipt["chunker_artifact_sha256"] != chunker_artifact_sha256
+    ):
+        raise ValueError("chunking receipt tokenizer/chunker artifact hash mismatch")
+
+    spans = receipt["ordered_spans"]
+    expected_spans = [
+        {
+            "chunk_key": chunk["chunk_key"],
+            "token_start": chunk["token_start"],
+            "token_end": chunk["token_end"],
+        }
+        for chunk in case["chunks"]
+    ]
+    if not isinstance(spans, list) or len(spans) != len(expected_spans):
+        raise ValueError("chunking receipt must cover every chunk exactly once")
+    for span in spans:
+        if not isinstance(span, dict):
+            raise TypeError("chunking receipt spans must be objects")
+        _exact_keys(span, CHUNK_SPAN_KEYS, "chunking receipt span")
+    if spans != expected_spans:
+        raise ValueError("chunking receipt ordered spans do not match panel chunks")
+    if any(span["token_end"] - span["token_start"] > 512 for span in spans):
+        raise ValueError("chunking receipt contains a chunk exceeding 512 tokens")
+
+    mode = receipt["mode"]
+    boundary_digest = receipt["boundary_receipt_artifact_sha256"]
+    if mode == "fixed_512_overlap_64":
+        if boundary_digest is not None:
+            raise ValueError("fixed chunking cannot claim a semantic boundary receipt")
+        for previous, current in pairwise(spans):
+            if previous["token_end"] - current["token_start"] != 64:
+                raise ValueError("fallback chunks must overlap by exactly 64 tokens")
+    elif mode == "semantic_sections":
+        digest = _require_sha(
+            boundary_digest, "semantic boundary receipt artifact sha256"
+        )
+        declaration = source_artifacts_by_hash.get(digest)
+        if declaration is None or declaration["role"] != "chunk_boundary_receipt":
+            raise ValueError(
+                "semantic chunking requires a resolved chunk-boundary receipt artifact"
+            )
+    else:
+        raise ValueError(
+            "chunking mode must be semantic_sections or fixed_512_overlap_64"
+        )
+
+    body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    if receipt["receipt_sha256"] != sha256_json(body):
+        raise ValueError("chunking receipt hash mismatch")
 
 
 def validate_contamination_manifest(
@@ -507,6 +899,8 @@ def _reject_benchmark_lineage(value: Any) -> None:
 
 def validate_panel(
     panel: Any,
+    source_snapshot_manifest: Any,
+    source_snapshot_manifest_sha256: str,
     causal_manifest: Any,
     causal_manifest_sha256: str,
     contamination_manifest: Any,
@@ -517,7 +911,9 @@ def validate_panel(
     contamination_corpus_artifacts: list[Path],
     contamination_tokenizer_artifact: Path,
     contamination_chunker_artifact: Path,
+    source_snapshot_artifacts: dict[str, Path],
     provider_generator_artifacts: dict[str, Path],
+    selected_precomputed_providers: set[str] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(panel, dict):
         raise TypeError("panel must be an object")
@@ -538,6 +934,19 @@ def validate_panel(
         raise TypeError("providers must be an object")
 
     _reject_benchmark_lineage(panel)
+    for case_index, case in enumerate(panel["cases"]):
+        if not isinstance(case, dict):
+            raise TypeError(f"cases[{case_index}] must be an object")
+        _exact_keys(case, CASE_KEYS, f"cases[{case_index}]")
+    _, source_artifacts_by_hash = validate_source_snapshot_manifest(
+        panel,
+        source_snapshot_manifest,
+        source_snapshot_manifest_sha256,
+        source_snapshot_artifacts,
+    )
+    tokenizer_artifact_sha256 = artifact_sha256(contamination_tokenizer_artifact)
+    chunker_artifact_sha256 = artifact_sha256(contamination_chunker_artifact)
+
     case_keys: set[str] = set()
     twin_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     image_controls = 0
@@ -648,6 +1057,12 @@ def validate_panel(
             )
         if max(chunk["token_end"] for chunk in chunks) != case["context_tokens"]:
             raise ValueError("context_tokens must equal the final covered token offset")
+        validate_case_chunking_receipt(
+            case,
+            source_artifacts_by_hash,
+            tokenizer_artifact_sha256,
+            chunker_artifact_sha256,
+        )
 
         question_keys: set[str] = set()
         question_map: dict[str, dict[str, Any]] = {}
@@ -945,7 +1360,15 @@ def validate_panel(
             "panel requires at least one real/shuffled/missing image causal control"
         )
 
-    validate_providers(panel, provider_generator_artifacts)
+    validate_providers(
+        panel,
+        provider_generator_artifacts,
+        (
+            set(provider_generator_artifacts)
+            if selected_precomputed_providers is None
+            else selected_precomputed_providers
+        ),
+    )
     validate_causal_manifest(
         panel,
         causal_manifest,
@@ -965,7 +1388,9 @@ def validate_panel(
 
 
 def validate_providers(
-    panel: dict[str, Any], generator_artifacts: dict[str, Path]
+    panel: dict[str, Any],
+    generator_artifacts: dict[str, Path],
+    selected_precomputed_providers: set[str],
 ) -> None:
     query_hashes = {
         q["content_sha256"] for case in panel["cases"] for q in case["questions"]
@@ -973,9 +1398,12 @@ def validate_providers(
     document_hashes = {
         c["content_sha256"] for case in panel["cases"] for c in case["chunks"]
     }
-    if set(generator_artifacts) != set(panel["providers"]):
+    unknown = selected_precomputed_providers - set(panel["providers"])
+    if unknown:
+        raise ValueError(f"unknown selected precomputed providers: {sorted(unknown)}")
+    if set(generator_artifacts) != selected_precomputed_providers:
         raise ValueError(
-            "provider generator artifacts must cover every provider exactly"
+            "provider generator artifacts must cover selected providers exactly"
         )
     for name, provider in panel["providers"].items():
         _require_text(name, "provider name")
@@ -1000,11 +1428,12 @@ def validate_providers(
         _require_sha(
             provider["generator_code_sha256"], f"provider {name}.generator_code_sha256"
         )
-        verify_artifact(
-            generator_artifacts[name],
-            provider["generator_code_sha256"],
-            f"provider {name} generator",
-        )
+        if name in selected_precomputed_providers:
+            verify_artifact(
+                generator_artifacts[name],
+                provider["generator_code_sha256"],
+                f"provider {name} generator",
+            )
         _require_sha(provider["artifact_sha256"], f"provider {name}.artifact_sha256")
         dimension = provider["dimension"]
         if (
@@ -1658,6 +2087,7 @@ def score_method(
 def build_receipt(
     panel: dict[str, Any],
     raw_input_sha256: str,
+    source_snapshot_manifest_sha256: str,
     causal_manifest_sha256: str,
     contamination_manifest_sha256: str,
     ks: tuple[int, ...],
@@ -1667,6 +2097,7 @@ def build_receipt(
         "schema_version": RECEIPT_VERSION,
         "input_raw_sha256": raw_input_sha256,
         "input_canonical_sha256": sha256_json(panel),
+        "trusted_source_snapshot_manifest_sha256": source_snapshot_manifest_sha256,
         "trusted_causal_manifest_sha256": causal_manifest_sha256,
         "trusted_contamination_manifest_sha256": contamination_manifest_sha256,
         "code_sha256": file_sha256(Path(__file__)),
@@ -1743,6 +2174,7 @@ def validate_io_paths(
     panel: Path,
     causal_manifest: Path,
     contamination_manifest: Path,
+    source_snapshot_manifest: Path,
     output: Path,
     runtime_output: Path,
     artifact_inputs: tuple[Path, ...] = (),
@@ -1751,6 +2183,7 @@ def validate_io_paths(
         "panel": panel.resolve(strict=True),
         "causal manifest": causal_manifest.resolve(strict=True),
         "contamination manifest": contamination_manifest.resolve(strict=True),
+        "source snapshot manifest": source_snapshot_manifest.resolve(strict=True),
     }
     if len(set(inputs.values())) != len(inputs):
         raise ValueError("panel and manifest input paths must not alias")
@@ -1788,6 +2221,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--causal-manifest-sha256", required=True)
     parser.add_argument("--contamination-manifest", type=Path, required=True)
     parser.add_argument("--contamination-manifest-sha256", required=True)
+    parser.add_argument("--source-snapshot-manifest", type=Path, required=True)
+    parser.add_argument("--source-snapshot-manifest-sha256", required=True)
+    parser.add_argument(
+        "--source-snapshot-artifact",
+        type=parse_named_path,
+        action="append",
+        required=True,
+        metavar="NAME=PATH",
+    )
     parser.add_argument(
         "--causal-annotation-builder-artifact", type=Path, required=True
     )
@@ -1801,7 +2243,7 @@ def parse_args() -> argparse.Namespace:
         "--provider-generator-artifact",
         type=parse_named_path,
         action="append",
-        required=True,
+        default=[],
         metavar="NAME=PATH",
     )
     parser.add_argument("--output", type=Path, required=True)
@@ -1827,12 +2269,18 @@ def main() -> None:
     generator_artifacts = dict(args.provider_generator_artifact)
     if len(generator_artifacts) != len(args.provider_generator_artifact):
         raise ValueError("provider generator artifact names must be unique")
+    if len(set(args.provider)) != len(args.provider):
+        raise ValueError("selected provider names must be unique")
+    source_snapshot_artifacts = dict(args.source_snapshot_artifact)
+    if len(source_snapshot_artifacts) != len(args.source_snapshot_artifact):
+        raise ValueError("source snapshot artifact names must be unique")
     artifact_inputs = [
         args.causal_annotation_builder_artifact,
         args.contamination_auditor_artifact,
         *args.contamination_corpus_artifact,
         args.contamination_tokenizer_artifact,
         args.contamination_chunker_artifact,
+        *source_snapshot_artifacts.values(),
         *generator_artifacts.values(),
     ]
     artifact_inputs.extend(
@@ -1844,6 +2292,7 @@ def main() -> None:
         args.panel,
         args.causal_manifest,
         args.contamination_manifest,
+        args.source_snapshot_manifest,
         args.output,
         runtime_output,
         tuple(artifact_inputs),
@@ -1851,29 +2300,31 @@ def main() -> None:
     raw = args.panel.read_bytes()
     causal_raw = args.causal_manifest.read_bytes()
     contamination_raw = args.contamination_manifest.read_bytes()
-    try:
-        panel = validate_panel(
-            json.loads(raw),
-            json.loads(causal_raw),
-            args.causal_manifest_sha256,
-            json.loads(contamination_raw),
-            args.contamination_manifest_sha256,
-            annotation_builder_artifact=args.causal_annotation_builder_artifact,
-            contamination_auditor_artifact=args.contamination_auditor_artifact,
-            contamination_corpus_artifacts=args.contamination_corpus_artifact,
-            contamination_tokenizer_artifact=args.contamination_tokenizer_artifact,
-            contamination_chunker_artifact=args.contamination_chunker_artifact,
-            provider_generator_artifacts=generator_artifacts,
-        )
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ValueError("panel and causal manifest must be UTF-8 JSON") from exc
+    source_snapshot_raw = args.source_snapshot_manifest.read_bytes()
+    panel = validate_panel(
+        parse_unique_finite_json(raw, "panel"),
+        parse_unique_finite_json(source_snapshot_raw, "source snapshot manifest"),
+        args.source_snapshot_manifest_sha256,
+        parse_unique_finite_json(causal_raw, "causal manifest"),
+        args.causal_manifest_sha256,
+        parse_unique_finite_json(contamination_raw, "contamination manifest"),
+        args.contamination_manifest_sha256,
+        annotation_builder_artifact=args.causal_annotation_builder_artifact,
+        contamination_auditor_artifact=args.contamination_auditor_artifact,
+        contamination_corpus_artifacts=args.contamination_corpus_artifact,
+        contamination_tokenizer_artifact=args.contamination_tokenizer_artifact,
+        contamination_chunker_artifact=args.contamination_chunker_artifact,
+        source_snapshot_artifacts=source_snapshot_artifacts,
+        provider_generator_artifacts=generator_artifacts,
+        selected_precomputed_providers=set(args.provider),
+    )
     method_times = []
     started = time.perf_counter()
     methods = [score_method(panel, "bm25", args.ks)]
     method_times.append(
         {"method": "bm25", "wall_seconds": time.perf_counter() - started}
     )
-    selected = args.provider or sorted(panel["providers"])
+    selected = args.provider
     unknown = sorted(set(selected) - set(panel["providers"]))
     if unknown:
         raise ValueError(f"unknown providers: {unknown}")
@@ -1909,6 +2360,7 @@ def main() -> None:
     receipt = build_receipt(
         panel,
         sha256_bytes(raw),
+        args.source_snapshot_manifest_sha256,
         args.causal_manifest_sha256,
         args.contamination_manifest_sha256,
         args.ks,
