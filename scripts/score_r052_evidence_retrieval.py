@@ -29,8 +29,13 @@ from urllib.parse import urlparse
 
 import numpy as np
 
-SCHEMA_VERSION = "r052-evidence-panel-v4"
-RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v3"
+try:
+    from scripts import replay_r052_typed_policy as policy_replay
+except ModuleNotFoundError:  # Supports ``uv run python scripts/score_...py``.
+    import replay_r052_typed_policy as policy_replay
+
+SCHEMA_VERSION = "r052-evidence-panel-v5"
+RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v4"
 SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v4"
 SOURCE_LICENSE_POLICY = "approved-evaluation-and-redistribution-v1"
 CHUNKING_RECEIPT_VERSION = "r052-case-chunking-receipt-v2"
@@ -223,6 +228,7 @@ QUESTION_KEYS = {
     "question_key",
     "text",
     "options",
+    "option_ids",
     "decision_type",
     "policy_role",
     "twin_anchor",
@@ -990,9 +996,104 @@ def question_hash_payload(question: dict[str, Any]) -> dict[str, Any]:
     return {
         "text": question["text"],
         "options": question["options"],
+        "option_ids": question["option_ids"],
         "decision_type": question["decision_type"],
         "policy_role": question["policy_role"],
     }
+
+
+def retrieval_query_text(question: Mapping[str, Any]) -> str:
+    """Serialize retrieval content independently from decision presentation order."""
+    options = " | ".join(
+        f"{option_id}: {option}"
+        for option_id, option in sorted(
+            zip(question["option_ids"], question["options"], strict=True)
+        )
+    )
+    return (
+        "task: question answering | query: "
+        f"{question['text']}\noptions: {options}\npolicy role: {question['policy_role']}"
+        f"\ndecision type: {question['decision_type']}"
+    )
+
+
+def retrieval_query_sha256(question: Mapping[str, Any]) -> str:
+    return sha256_bytes(retrieval_query_text(question).encode("utf-8"))
+
+
+def policy_replay_draft(panel: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the stable pre-audit/provider projection bound by policy artifacts."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "provenance": {"kind": "independent_internal", "benchmark_derived": False},
+        "cases": [
+            {**case, "contamination_audit_sha256": "0" * 64} for case in panel["cases"]
+        ],
+        "providers": {},
+    }
+
+
+def validate_policy_replay(
+    panel: Mapping[str, Any],
+    fact_ledger: Any,
+    fact_ledger_sha256: str,
+    rubric: Any,
+    rubric_sha256: str,
+    supplied_receipt: Any,
+    supplied_receipt_sha256: str,
+    *,
+    replay_schema_artifact: Path,
+    replay_schema_sha256: str,
+    evaluator_artifact: Path,
+    evaluator_sha256: str,
+    adjudication_artifacts: Mapping[str, Path],
+) -> str:
+    """Re-run typed policy semantics and compare the exact supplied receipt."""
+    for value, label in (
+        (fact_ledger_sha256, "fact ledger"),
+        (rubric_sha256, "policy rubric"),
+        (supplied_receipt_sha256, "policy replay receipt"),
+        (replay_schema_sha256, "policy replay schema"),
+        (evaluator_sha256, "policy evaluator"),
+    ):
+        _require_sha(value, f"{label} sha256")
+    if sha256_json(fact_ledger) != fact_ledger_sha256:
+        raise ValueError("fact ledger does not match its external sha256")
+    if sha256_json(rubric) != rubric_sha256:
+        raise ValueError("policy rubric does not match its external sha256")
+    if sha256_json(supplied_receipt) != supplied_receipt_sha256:
+        raise ValueError("policy replay receipt does not match its external sha256")
+    verify_artifact(
+        replay_schema_artifact, replay_schema_sha256, "policy replay schema"
+    )
+    if replay_schema_sha256 != policy_replay.EXPECTED_SCHEMA_SHA256:
+        raise ValueError("policy replay schema hash is not the frozen evaluator schema")
+    verify_artifact(evaluator_artifact, evaluator_sha256, "policy replay evaluator")
+    adjudication_bytes: dict[str, bytes] = {}
+    for digest, path in adjudication_artifacts.items():
+        _require_sha(digest, "adjudication receipt sha256")
+        verify_artifact(path, digest, "adjudication receipt")
+        adjudication_bytes[digest] = path.read_bytes()
+    draft = policy_replay_draft(panel)
+    try:
+        replayed = policy_replay.replay(
+            draft,
+            fact_ledger,
+            rubric,
+            panel_sha256=sha256_json(draft),
+            ledger_sha256=fact_ledger_sha256,
+            rubric_sha256=rubric_sha256,
+            evaluator_sha256=evaluator_sha256,
+            schema_sha256=replay_schema_sha256,
+            adjudication_receipts=adjudication_bytes,
+        )
+    except policy_replay.PolicyError as exc:
+        raise ValueError(f"typed policy replay failed: {exc}") from exc
+    if supplied_receipt != replayed:
+        raise ValueError(
+            "supplied policy replay receipt does not match deterministic replay"
+        )
+    return supplied_receipt_sha256
 
 
 def causal_context_sha256(
@@ -1395,12 +1496,40 @@ def validate_panel(
     source_snapshot_artifacts: dict[str, Path],
     provider_generator_artifacts: dict[str, Path],
     selected_precomputed_providers: set[str] | None = None,
+    policy_fact_ledger: Any | None = None,
+    policy_fact_ledger_sha256: str | None = None,
+    policy_rubric: Any | None = None,
+    policy_rubric_sha256: str | None = None,
+    policy_replay_receipt: Any | None = None,
+    policy_replay_receipt_sha256: str | None = None,
+    policy_replay_schema_artifact: Path | None = None,
+    policy_replay_schema_sha256: str | None = None,
+    policy_evaluator_artifact: Path | None = None,
+    policy_evaluator_sha256: str | None = None,
+    policy_adjudication_artifacts: Mapping[str, Path] | None = None,
 ) -> dict[str, Any]:
+    replay_inputs = (
+        policy_fact_ledger,
+        policy_fact_ledger_sha256,
+        policy_rubric,
+        policy_rubric_sha256,
+        policy_replay_receipt,
+        policy_replay_receipt_sha256,
+        policy_replay_schema_artifact,
+        policy_replay_schema_sha256,
+        policy_evaluator_artifact,
+        policy_evaluator_sha256,
+        policy_adjudication_artifacts,
+    )
+    if any(value is None for value in replay_inputs):
+        raise ValueError("all typed policy replay artifacts and hashes are required")
     if not isinstance(panel, dict):
         raise TypeError("panel must be an object")
     _exact_keys(panel, TOP_LEVEL_KEYS, "panel")
     if panel["schema_version"] != SCHEMA_VERSION:
-        raise ValueError(f"schema_version must be {SCHEMA_VERSION}")
+        raise ValueError(
+            f"prior panel schemas require migration; schema_version must be {SCHEMA_VERSION}"
+        )
     provenance = panel["provenance"]
     if not isinstance(provenance, dict):
         raise TypeError("provenance must be an object")
@@ -1588,6 +1717,20 @@ def validate_panel(
                 raise ValueError(f"{question_label}.options must be non-empty strings")
             if len(set(question["options"])) != len(question["options"]):
                 raise ValueError(f"{question_label}.options must be unique")
+            option_ids = question["option_ids"]
+            if (
+                not isinstance(option_ids, list)
+                or len(option_ids) != len(question["options"])
+                or len(set(option_ids)) != len(option_ids)
+                or any(
+                    not isinstance(option_id, str)
+                    or policy_replay.IDENTIFIER_RE.fullmatch(option_id) is None
+                    for option_id in option_ids
+                )
+            ):
+                raise ValueError(
+                    f"{question_label}.option_ids must be parallel unique identifiers"
+                )
             if question["twin_anchor"] is not None:
                 _require_text(question["twin_anchor"], f"{question_label}.twin_anchor")
             decisive = question["decisive_chunk_keys"]
@@ -1660,15 +1803,20 @@ def validate_panel(
                 raise ValueError("decisive evidence removal must change the outcome")
             full_outcome = proof["full_outcome"]
             removed_outcome = proof["removed_outcome"]
-            if (
-                not isinstance(full_outcome, dict)
-                or not full_outcome
-                or not isinstance(removed_outcome, dict)
-                or set(full_outcome) != set(removed_outcome)
+            if full_outcome != {
+                "status": "resolved",
+                "option_index": full_outcome.get("option_index")
+                if isinstance(full_outcome, dict)
+                else None,
+            } or (
+                type(full_outcome["option_index"]) is not int
+                or not 0 <= full_outcome["option_index"] < len(question["options"])
             ):
                 raise ValueError(
-                    "causal outcomes must be non-empty objects with identical fields"
+                    "causal full_outcome must be resolved with a valid option_index"
                 )
+            if removed_outcome != {"status": "unresolved"}:
+                raise ValueError("causal removed_outcome must be unresolved")
             try:
                 full_outcome_sha256 = sha256_bytes(
                     (
@@ -1710,14 +1858,9 @@ def validate_panel(
                 or any(not isinstance(field, str) or not field for field in changed)
             ):
                 raise ValueError("causal_proof.changed_fields must be non-empty")
-            actual_changed = sorted(
-                field
-                for field in full_outcome
-                if full_outcome[field] != removed_outcome[field]
-            )
-            if changed != actual_changed:
+            if changed != ["status", "option_index"]:
                 raise ValueError(
-                    "causal_proof.changed_fields does not match outcome diff"
+                    "causal_proof.changed_fields must describe resolution loss"
                 )
             if question["content_sha256"] != sha256_json(
                 question_hash_payload(question)
@@ -1826,6 +1969,7 @@ def validate_panel(
 
             if (
                 len(left_question["options"]) != len(right_question["options"])
+                or left_question["option_ids"] != right_question["option_ids"]
                 or left_question["decision_type"] != right_question["decision_type"]
                 or left_question["policy_role"] != right_question["policy_role"]
                 or left_question["causal_proof"]["full_outcome"]
@@ -1879,6 +2023,20 @@ def validate_panel(
         contamination_tokenizer_artifact,
         contamination_chunker_artifact,
     )
+    validate_policy_replay(
+        panel,
+        policy_fact_ledger,
+        policy_fact_ledger_sha256,
+        policy_rubric,
+        policy_rubric_sha256,
+        policy_replay_receipt,
+        policy_replay_receipt_sha256,
+        replay_schema_artifact=policy_replay_schema_artifact,
+        replay_schema_sha256=policy_replay_schema_sha256,
+        evaluator_artifact=policy_evaluator_artifact,
+        evaluator_sha256=policy_evaluator_sha256,
+        adjudication_artifacts=policy_adjudication_artifacts,
+    )
     return panel
 
 
@@ -1888,7 +2046,7 @@ def validate_providers(
     selected_precomputed_providers: set[str],
 ) -> None:
     query_hashes = {
-        q["content_sha256"] for case in panel["cases"] for q in case["questions"]
+        retrieval_query_sha256(q) for case in panel["cases"] for q in case["questions"]
     }
     document_hashes = {
         c["content_sha256"] for case in panel["cases"] for c in case["chunks"]
@@ -2007,7 +2165,7 @@ class PrecomputedProvider:
 
     def query(self, question: dict[str, Any]) -> np.ndarray:
         return normalize_mrl(
-            self.spec["queries"][question["content_sha256"]], self.truncate_dim
+            self.spec["queries"][retrieval_query_sha256(question)], self.truncate_dim
         )
 
     def document(self, chunk: dict[str, Any]) -> np.ndarray:
@@ -2165,12 +2323,11 @@ class LocalEmbeddingGemma2Provider:
 
     @staticmethod
     def _query_text(question: dict[str, Any]) -> str:
-        options = " | ".join(question["options"])
-        return (
-            "task: question answering | query: "
-            f"{question['text']}\noptions: {options}\npolicy role: {question['policy_role']}"
-            f"\ndecision type: {question['decision_type']}"
-        )
+        return retrieval_query_text(question)
+
+    @classmethod
+    def _query_cache_key(cls, question: dict[str, Any]) -> str:
+        return "q:" + retrieval_query_sha256(question)
 
     @staticmethod
     def _document_text(chunk: dict[str, Any]) -> str:
@@ -2207,7 +2364,7 @@ class LocalEmbeddingGemma2Provider:
 
     def query(self, question: dict[str, Any]) -> np.ndarray:
         return self._embed(
-            self._query_text(question), None, "q:" + question["content_sha256"]
+            self._query_text(question), None, self._query_cache_key(question)
         )
 
     def document(self, chunk: dict[str, Any]) -> np.ndarray:
@@ -2268,7 +2425,13 @@ def bm25_rank(
                 question["text"],
                 question["decision_type"],
                 question["policy_role"],
-                *question["options"],
+                *[
+                    value
+                    for pair in sorted(
+                        zip(question["option_ids"], question["options"], strict=True)
+                    )
+                    for value in pair
+                ],
             ]
         )
     )
@@ -2595,6 +2758,7 @@ def build_receipt(
     source_snapshot_manifest_sha256: str,
     causal_manifest_sha256: str,
     contamination_manifest_sha256: str,
+    policy_replay_receipt_sha256: str,
     ks: tuple[int, ...],
     methods: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -2605,6 +2769,7 @@ def build_receipt(
         "trusted_source_snapshot_manifest_sha256": source_snapshot_manifest_sha256,
         "trusted_causal_manifest_sha256": causal_manifest_sha256,
         "trusted_contamination_manifest_sha256": contamination_manifest_sha256,
+        "trusted_policy_replay_receipt_sha256": policy_replay_receipt_sha256,
         "code_sha256": file_sha256(Path(__file__)),
         "configuration": {"ks": list(ks)},
         "panel": {
@@ -2764,6 +2929,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime-lock", type=Path)
     parser.add_argument("--runtime-lock-sha256")
     parser.add_argument("--transformers-wheel", type=Path)
+    parser.add_argument("--policy-fact-ledger", type=Path, required=True)
+    parser.add_argument("--policy-fact-ledger-sha256", required=True)
+    parser.add_argument("--policy-rubric", type=Path, required=True)
+    parser.add_argument("--policy-rubric-sha256", required=True)
+    parser.add_argument("--policy-replay-receipt", type=Path, required=True)
+    parser.add_argument("--policy-replay-receipt-sha256", required=True)
+    parser.add_argument("--policy-replay-schema-artifact", type=Path, required=True)
+    parser.add_argument("--policy-replay-schema-sha256", required=True)
+    parser.add_argument("--policy-evaluator-artifact", type=Path, required=True)
+    parser.add_argument("--policy-evaluator-sha256", required=True)
+    parser.add_argument(
+        "--policy-adjudication-artifact",
+        type=parse_named_path,
+        action="append",
+        required=True,
+        metavar="SHA256=PATH",
+    )
     return parser.parse_args()
 
 
@@ -2776,6 +2958,9 @@ def main() -> None:
         raise ValueError("provider generator artifact names must be unique")
     if len(set(args.provider)) != len(args.provider):
         raise ValueError("selected provider names must be unique")
+    policy_adjudications = dict(args.policy_adjudication_artifact)
+    if len(policy_adjudications) != len(args.policy_adjudication_artifact):
+        raise ValueError("policy adjudication hashes must be unique")
     source_snapshot_artifacts = dict(args.source_snapshot_artifact)
     if len(source_snapshot_artifacts) != len(args.source_snapshot_artifact):
         raise ValueError("source snapshot artifact names must be unique")
@@ -2787,6 +2972,12 @@ def main() -> None:
         args.contamination_chunker_artifact,
         *source_snapshot_artifacts.values(),
         *generator_artifacts.values(),
+        args.policy_fact_ledger,
+        args.policy_rubric,
+        args.policy_replay_receipt,
+        args.policy_replay_schema_artifact,
+        args.policy_evaluator_artifact,
+        *policy_adjudications.values(),
     ]
     artifact_inputs.extend(
         path
@@ -2806,6 +2997,33 @@ def main() -> None:
     causal_raw = args.causal_manifest.read_bytes()
     contamination_raw = args.contamination_manifest.read_bytes()
     source_snapshot_raw = args.source_snapshot_manifest.read_bytes()
+    fact_ledger_raw = args.policy_fact_ledger.read_bytes()
+    rubric_raw = args.policy_rubric.read_bytes()
+    replay_receipt_raw = args.policy_replay_receipt.read_bytes()
+    for raw_value, expected, label in (
+        (fact_ledger_raw, args.policy_fact_ledger_sha256, "policy fact ledger"),
+        (rubric_raw, args.policy_rubric_sha256, "policy rubric"),
+        (
+            replay_receipt_raw,
+            args.policy_replay_receipt_sha256,
+            "policy replay receipt",
+        ),
+    ):
+        _require_sha(expected, f"{label} sha256")
+        if sha256_bytes(raw_value) != expected:
+            raise ValueError(f"{label} does not match its external sha256")
+    fact_ledger = parse_unique_finite_json(fact_ledger_raw, "policy fact ledger")
+    rubric = parse_unique_finite_json(rubric_raw, "policy rubric")
+    replay_receipt = parse_unique_finite_json(
+        replay_receipt_raw, "policy replay receipt"
+    )
+    for value, raw_value, label in (
+        (fact_ledger, fact_ledger_raw, "policy fact ledger"),
+        (rubric, rubric_raw, "policy rubric"),
+        (replay_receipt, replay_receipt_raw, "policy replay receipt"),
+    ):
+        if canonical_json(value) != raw_value:
+            raise ValueError(f"{label} must use canonical JSON bytes")
     panel = validate_panel(
         parse_unique_finite_json(raw, "panel"),
         parse_unique_finite_json(source_snapshot_raw, "source snapshot manifest"),
@@ -2822,6 +3040,17 @@ def main() -> None:
         source_snapshot_artifacts=source_snapshot_artifacts,
         provider_generator_artifacts=generator_artifacts,
         selected_precomputed_providers=set(args.provider),
+        policy_fact_ledger=fact_ledger,
+        policy_fact_ledger_sha256=args.policy_fact_ledger_sha256,
+        policy_rubric=rubric,
+        policy_rubric_sha256=args.policy_rubric_sha256,
+        policy_replay_receipt=replay_receipt,
+        policy_replay_receipt_sha256=args.policy_replay_receipt_sha256,
+        policy_replay_schema_artifact=args.policy_replay_schema_artifact,
+        policy_replay_schema_sha256=args.policy_replay_schema_sha256,
+        policy_evaluator_artifact=args.policy_evaluator_artifact,
+        policy_evaluator_sha256=args.policy_evaluator_sha256,
+        policy_adjudication_artifacts=policy_adjudications,
     )
     method_times = []
     started = time.perf_counter()
@@ -2868,6 +3097,7 @@ def main() -> None:
         args.source_snapshot_manifest_sha256,
         args.causal_manifest_sha256,
         args.contamination_manifest_sha256,
+        args.policy_replay_receipt_sha256,
         args.ks,
         methods,
     )

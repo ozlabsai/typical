@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from scripts import replay_r052_typed_policy as replay
 from scripts import score_r052_evidence_retrieval as scorer
 
 TEST_ARTIFACT = Path(__file__).resolve()
@@ -155,12 +156,13 @@ def _question(
     decisive: list[str],
     distractors: list[str],
 ) -> dict:
-    full_outcome = {"authorization": "allow"}
-    removed_outcome = {"authorization": "deny"}
+    full_outcome = {"status": "resolved", "option_index": 0}
+    removed_outcome = {"status": "unresolved"}
     question = {
         "question_key": key,
         "text": text,
         "options": ["allow", "deny"],
+        "option_ids": ["allow", "deny"],
         "decision_type": "choice",
         "policy_role": "authorization",
         "twin_anchor": anchor,
@@ -175,7 +177,7 @@ def _question(
             "removed_outcome_sha256": scorer.sha256_json(removed_outcome),
             "full_outcome": full_outcome,
             "removed_outcome": removed_outcome,
-            "changed_fields": ["authorization"],
+            "changed_fields": ["status", "option_index"],
         },
         "content_sha256": "",
     }
@@ -197,7 +199,12 @@ def _case(
         "en": {
             "policy": "Always apply the authorization policy.",
             "evidence": "The signed approval code is cobalt.",
-            "distractor": "The unsigned memo discusses lunch.",
+            "distractors": [
+                "The unsigned memo discusses lunch.",
+                "The archive is closed.",
+                "The courier arrives tomorrow.",
+                "The meeting room is empty.",
+            ],
             "image": "Inspect the pictured approval seal.",
             "q_image": "Does the image contain the valid approval seal?",
             "q_text": "Is the signed approval present?",
@@ -205,17 +212,25 @@ def _case(
         "he": {
             "policy": "יש להחיל תמיד את מדיניות ההרשאה.",
             "evidence": "קוד האישור החתום הוא קובלט.",
-            "distractor": "המזכר הלא חתום דן בארוחת צהריים.",
+            "distractors": [
+                "המזכר הלא חתום דן בארוחת צהריים.",
+                "הארכיון סגור.",
+                "השליח מגיע מחר.",
+                "חדר הישיבות ריק.",
+            ],
             "image": "בדקו את חותמת האישור שבתמונה.",
             "q_image": "האם בתמונה מופיעה חותמת האישור התקפה?",
             "q_text": "האם קיים אישור חתום?",
         },
     }[language]
     reviewed_en = SOURCE_ARTIFACT_PATHS["reviewed-en"].read_text(encoding="utf-8")
-    split = len(reviewed_en) // 2
+    split_points = [len(reviewed_en) * index // 5 for index in range(6)]
     if language == "en":
-        translations["evidence"] = reviewed_en[:split]
-        translations["distractor"] = reviewed_en[split:]
+        translations["evidence"] = reviewed_en[split_points[0] : split_points[1]]
+        translations["distractors"] = [
+            reviewed_en[split_points[index] : split_points[index + 1]]
+            for index in range(1, 5)
+        ]
 
     def text_derivation(anchor: str, start: int, end: int) -> dict:
         if language == "en":
@@ -262,15 +277,24 @@ def _case(
             "evidence",
             translations["evidence"],
             "text-evidence",
-            derivation=text_derivation("text-evidence", 0, split),
+            derivation=text_derivation(
+                "text-evidence", split_points[0], split_points[1]
+            ),
         ),
-        _chunk(
-            f"distractor-{suffix}",
-            "distractor",
-            translations["distractor"],
-            "text-distractor",
-            derivation=text_derivation("text-distractor", split, len(reviewed_en)),
-        ),
+        *[
+            _chunk(
+                f"distractor-{index}-{suffix}",
+                "distractor",
+                translations["distractors"][index - 1],
+                f"text-distractor-{index}",
+                derivation=text_derivation(
+                    f"text-distractor-{index}",
+                    split_points[index],
+                    split_points[index + 1],
+                ),
+            )
+            for index in range(1, 5)
+        ],
         _chunk(
             f"real-{suffix}",
             "evidence",
@@ -298,7 +322,7 @@ def _case(
             derivation=image_derivation(None),
         ),
     ]
-    boundaries = [0, 1365, 2730, 4096, 5461, 7680]
+    boundaries = [0, 960, 1920, 2880, 3840, 4800, 5760, 6720, 7680]
     for index, chunk in enumerate(chunks):
         chunk["token_start"] = boundaries[index]
         chunk["token_end"] = (
@@ -347,7 +371,7 @@ def _case(
                 [f"real-{suffix}"],
                 [
                     f"evidence-{suffix}",
-                    f"distractor-{suffix}",
+                    *[f"distractor-{index}-{suffix}" for index in range(1, 5)],
                     f"shuffled-{suffix}",
                     f"missing-{suffix}",
                 ],
@@ -358,7 +382,7 @@ def _case(
                 "q-text",
                 [f"evidence-{suffix}"],
                 [
-                    f"distractor-{suffix}",
+                    *[f"distractor-{index}-{suffix}" for index in range(1, 5)],
                     f"real-{suffix}",
                     f"shuffled-{suffix}",
                     f"missing-{suffix}",
@@ -387,7 +411,7 @@ def make_panel() -> dict:
     document_vectors = {}
     for case in cases:
         for question in case["questions"]:
-            query_vectors[question["content_sha256"]] = (
+            query_vectors[scorer.retrieval_query_sha256(question)] = (
                 [1.0, 0.0, 0.0, 0.0]
                 if question["twin_anchor"] == "q-image"
                 else [0.0, 1.0, 0.0, 0.0]
@@ -396,7 +420,10 @@ def make_panel() -> dict:
             vector = {
                 "policy": [0.1, 0.1, 0.9, 0.0],
                 "text-evidence": [0.0, 1.0, 0.0, 0.0],
-                "text-distractor": [0.0, -1.0, 0.0, 0.0],
+                "text-distractor-1": [0.0, -1.0, 0.0, 0.0],
+                "text-distractor-2": [0.0, -1.0, 0.0, 0.0],
+                "text-distractor-3": [0.0, -1.0, 0.0, 0.0],
+                "text-distractor-4": [0.0, -1.0, 0.0, 0.0],
                 "image-real": [1.0, 0.0, 0.0, 0.0],
                 "image-shuffled": [-1.0, 0.0, 0.0, 0.0],
                 "image-missing": [-0.5, 0.1, 0.0, 0.0],
@@ -542,10 +569,166 @@ def _contamination_manifest(panel: dict) -> tuple[dict, str]:
     return manifest, scorer.sha256_json(manifest)
 
 
+def _policy_artifacts(panel: dict) -> dict:
+    draft = scorer.policy_replay_draft(panel)
+    panel_digest = scorer.sha256_json(draft)
+    facts = {
+        "f0001": {"type": "boolean", "unit": None},
+        "f0002": {"type": "boolean", "unit": None},
+    }
+    bindings = []
+    for case in panel["cases"]:
+        by_anchor = {chunk["twin_anchor"]: chunk for chunk in case["chunks"]}
+        for fact, anchor in (("f0001", "image-real"), ("f0002", "text-evidence")):
+            chunk = by_anchor[anchor]
+            locator = (
+                {
+                    "kind": "image_region",
+                    "region_sha256": chunk["media"]["sha256"],
+                }
+                if chunk["modality"] == "image"
+                else {
+                    "kind": "text_span",
+                    "char_start": 0,
+                    "char_end": len(chunk["text"]),
+                    "span_sha256": scorer.sha256_bytes(chunk["text"].encode()),
+                }
+            )
+            bindings.append(
+                {
+                    "case_key": case["case_key"],
+                    "chunk_key": chunk["chunk_key"],
+                    "chunk_content_sha256": chunk["content_sha256"],
+                    "observations": [{"fact": fact, "value": True, "locator": locator}],
+                    "adjudication_receipt_sha256": TEST_ARTIFACT_SHA256,
+                }
+            )
+    ledger = {
+        "schema_version": replay.LEDGER_VERSION,
+        "panel_sha256": panel_digest,
+        "facts": facts,
+        "bindings": bindings,
+    }
+    ledger_digest = scorer.sha256_json(ledger)
+    groups = []
+    for anchor, fact in (("q-image", "f0001"), ("q-text", "f0002")):
+        decision_id = f"d.{anchor}"
+        presentations = []
+        for case in panel["cases"]:
+            question = next(q for q in case["questions"] if q["twin_anchor"] == anchor)
+            full = [chunk["chunk_key"] for chunk in case["chunks"]]
+            immutable = {
+                chunk["chunk_key"] for chunk in case["chunks"] if chunk["immutable"]
+            }
+            decisive = question["decisive_chunk_keys"]
+            distractors = question["known_distractor_chunk_keys"]
+            presentations.append(
+                {
+                    "presentation_id": f"p.{anchor}.{case['language']}",
+                    "case_key": case["case_key"],
+                    "question_bindings": {
+                        decision_id: {
+                            "question_key": question["question_key"],
+                            "question_content_sha256": question["content_sha256"],
+                        }
+                    },
+                    "views": {
+                        "full": full,
+                        "removed": [key for key in full if key not in decisive],
+                        "decisive_only": [
+                            key for key in full if key in immutable | set(decisive)
+                        ],
+                        "distractor_only": [
+                            key for key in full if key in immutable | set(distractors)
+                        ],
+                    },
+                    "ablations": [
+                        {
+                            "decision_id": decision_id,
+                            "remove_chunk_keys": decisive,
+                            "required_transition": "resolution_loss",
+                            "assert_full": {"status": "resolved", "output": "allow"},
+                            "assert_removed": {"status": "unresolved"},
+                        }
+                    ],
+                }
+            )
+        groups.append(
+            {
+                "group_id": f"g.{anchor}",
+                "facts": {fact: facts[fact]},
+                "decisions": [
+                    {
+                        "decision_id": decision_id,
+                        "type": "choice",
+                        "outputs": [
+                            {"id": "allow", "label": "allow"},
+                            {"id": "deny", "label": "deny"},
+                        ],
+                        "order": ["allow", "deny"],
+                        "rules": [
+                            {
+                                "output": "allow",
+                                "when": {"op": "fact", "id": fact},
+                            },
+                            {
+                                "output": "deny",
+                                "when": {
+                                    "op": "not",
+                                    "arg": {"op": "fact", "id": fact},
+                                },
+                            },
+                        ],
+                    }
+                ],
+                "presentations": presentations,
+            }
+        )
+    rubric = {
+        "schema_version": replay.RUBRIC_VERSION,
+        "panel_sha256": panel_digest,
+        "fact_ledger_sha256": ledger_digest,
+        "semantic_groups": groups,
+    }
+    rubric_digest = scorer.sha256_json(rubric)
+    evaluator_digest = scorer.artifact_sha256(TEST_ARTIFACT)
+    schema_path = Path("sources/r052/policy_replay.schema.json").resolve()
+    schema_digest = scorer.artifact_sha256(schema_path)
+    receipt = replay.replay(
+        draft,
+        ledger,
+        rubric,
+        panel_sha256=panel_digest,
+        ledger_sha256=ledger_digest,
+        rubric_sha256=rubric_digest,
+        evaluator_sha256=evaluator_digest,
+        schema_sha256=schema_digest,
+        adjudication_receipts={TEST_ARTIFACT_SHA256: TEST_ARTIFACT.read_bytes()},
+    )
+    return {
+        "policy_fact_ledger": ledger,
+        "policy_fact_ledger_sha256": ledger_digest,
+        "policy_rubric": rubric,
+        "policy_rubric_sha256": rubric_digest,
+        "policy_replay_receipt": receipt,
+        "policy_replay_receipt_sha256": scorer.sha256_json(receipt),
+        "policy_replay_schema_artifact": schema_path,
+        "policy_replay_schema_sha256": schema_digest,
+        "policy_evaluator_artifact": TEST_ARTIFACT,
+        "policy_evaluator_sha256": evaluator_digest,
+        "policy_adjudication_artifacts": {TEST_ARTIFACT_SHA256: TEST_ARTIFACT},
+    }
+
+
 def _validate(panel: dict) -> dict:
     source, source_digest = _source_manifest()
     causal, causal_digest = _causal_manifest(panel)
     contamination, contamination_digest = _contamination_manifest(panel)
+    try:
+        policy = _policy_artifacts(panel)
+    except replay.PolicyError:
+        # Structural mutation tests must reach the scorer's earlier schema checks.
+        policy = _policy_artifacts(make_panel())
     return scorer.validate_panel(
         panel,
         source,
@@ -561,6 +744,7 @@ def _validate(panel: dict) -> dict:
         contamination_chunker_artifact=TEST_ARTIFACT,
         source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
         provider_generator_artifacts={"fixture-dense": TEST_ARTIFACT},
+        **policy,
     )
 
 
@@ -586,12 +770,160 @@ def _validate_selection(
         source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
         provider_generator_artifacts=artifacts,
         selected_precomputed_providers=selected,
+        **_policy_artifacts(panel),
+    )
+
+
+def _validate_replay_only(panel: dict, **overrides) -> str:
+    values = overrides.pop("_base_policy", None) or _policy_artifacts(panel)
+    values.update(overrides)
+    return scorer.validate_policy_replay(
+        panel,
+        values["policy_fact_ledger"],
+        values["policy_fact_ledger_sha256"],
+        values["policy_rubric"],
+        values["policy_rubric_sha256"],
+        values["policy_replay_receipt"],
+        values["policy_replay_receipt_sha256"],
+        replay_schema_artifact=values["policy_replay_schema_artifact"],
+        replay_schema_sha256=values["policy_replay_schema_sha256"],
+        evaluator_artifact=values["policy_evaluator_artifact"],
+        evaluator_sha256=values["policy_evaluator_sha256"],
+        adjudication_artifacts=values["policy_adjudication_artifacts"],
     )
 
 
 @pytest.fixture
 def panel() -> dict:
     return make_panel()
+
+
+def test_scorer_requires_all_typed_replay_artifacts(panel):
+    source, source_digest = _source_manifest()
+    causal, causal_digest = _causal_manifest(panel)
+    contamination, contamination_digest = _contamination_manifest(panel)
+    with pytest.raises(ValueError, match="all typed policy replay artifacts"):
+        scorer.validate_panel(
+            panel,
+            source,
+            source_digest,
+            causal,
+            causal_digest,
+            contamination,
+            contamination_digest,
+            annotation_builder_artifact=TEST_ARTIFACT,
+            contamination_auditor_artifact=TEST_ARTIFACT,
+            contamination_corpus_artifacts=[TEST_ARTIFACT],
+            contamination_tokenizer_artifact=TEST_ARTIFACT,
+            contamination_chunker_artifact=TEST_ARTIFACT,
+            source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
+            provider_generator_artifacts={"fixture-dense": TEST_ARTIFACT},
+        )
+
+
+def test_replay_rejects_option_id_order_tamper_and_authored_proof_drift(panel):
+    policy = _policy_artifacts(panel)
+    rubric = copy.deepcopy(policy["policy_rubric"])
+    decision = rubric["semantic_groups"][0]["decisions"][0]
+    decision["outputs"].reverse()
+    decision["order"].reverse()
+    rubric_digest = scorer.sha256_json(rubric)
+    with pytest.raises(ValueError, match="output ids/order"):
+        _validate_replay_only(
+            panel,
+            policy_rubric=rubric,
+            policy_rubric_sha256=rubric_digest,
+        )
+
+    changed = copy.deepcopy(panel)
+    proof = changed["cases"][0]["questions"][0]["causal_proof"]
+    proof["full_outcome"] = {"status": "resolved", "option_index": 1}
+    proof["full_outcome_sha256"] = scorer.sha256_json(proof["full_outcome"])
+    resealed = copy.deepcopy(policy)
+    changed_panel_digest = scorer.sha256_json(scorer.policy_replay_draft(changed))
+    resealed["policy_fact_ledger"]["panel_sha256"] = changed_panel_digest
+    resealed["policy_fact_ledger_sha256"] = scorer.sha256_json(
+        resealed["policy_fact_ledger"]
+    )
+    resealed["policy_rubric"]["panel_sha256"] = changed_panel_digest
+    resealed["policy_rubric"]["fact_ledger_sha256"] = resealed[
+        "policy_fact_ledger_sha256"
+    ]
+    resealed["policy_rubric_sha256"] = scorer.sha256_json(resealed["policy_rubric"])
+    with pytest.raises(ValueError, match="contradicts authoritative replay"):
+        _validate_replay_only(changed, _base_policy=resealed)
+
+
+def test_replay_rejects_omitted_and_duplicate_question_coverage(panel):
+    policy = _policy_artifacts(panel)
+    omitted = copy.deepcopy(policy["policy_rubric"])
+    omitted["semantic_groups"][0]["presentations"] = omitted["semantic_groups"][0][
+        "presentations"
+    ][:1]
+    with pytest.raises(ValueError, match="every panel question|Hebrew presentation"):
+        _validate_replay_only(
+            panel,
+            policy_rubric=omitted,
+            policy_rubric_sha256=scorer.sha256_json(omitted),
+        )
+
+    duplicate = copy.deepcopy(policy["policy_rubric"])
+    copied = copy.deepcopy(duplicate["semantic_groups"][0]["presentations"][0])
+    copied["presentation_id"] = "p.duplicate"
+    duplicate["semantic_groups"][0]["presentations"].append(copied)
+    with pytest.raises(ValueError, match="reused by multiple decisions"):
+        _validate_replay_only(
+            panel,
+            policy_rubric=duplicate,
+            policy_rubric_sha256=scorer.sha256_json(duplicate),
+        )
+
+
+def test_replay_rejects_bound_artifact_and_receipt_tampering(panel, tmp_path):
+    policy = _policy_artifacts(panel)
+    with pytest.raises(ValueError, match="fact ledger does not match"):
+        _validate_replay_only(panel, policy_fact_ledger_sha256="0" * 64)
+    with pytest.raises(ValueError, match="policy rubric does not match"):
+        _validate_replay_only(panel, policy_rubric_sha256="0" * 64)
+    with pytest.raises(ValueError, match="schema artifact hash mismatch"):
+        _validate_replay_only(panel, policy_replay_schema_sha256="0" * 64)
+    with pytest.raises(ValueError, match="evaluator artifact hash mismatch"):
+        _validate_replay_only(panel, policy_evaluator_sha256="0" * 64)
+    wrong_adjudication = tmp_path / "wrong-adjudication.txt"
+    wrong_adjudication.write_text("tampered")
+    with pytest.raises(ValueError, match="adjudication receipt artifact hash mismatch"):
+        _validate_replay_only(
+            panel,
+            policy_adjudication_artifacts={
+                next(iter(policy["policy_adjudication_artifacts"])): wrong_adjudication
+            },
+        )
+    receipt = copy.deepcopy(policy["policy_replay_receipt"])
+    receipt["schema_version"] = "tampered"
+    with pytest.raises(ValueError, match="does not match deterministic replay"):
+        _validate_replay_only(
+            panel,
+            policy_replay_receipt=receipt,
+            policy_replay_receipt_sha256=scorer.sha256_json(receipt),
+        )
+
+
+def test_hebrew_option_ids_must_equal_english_twin(panel):
+    changed = copy.deepcopy(panel)
+    question = changed["cases"][1]["questions"][0]
+    question["option_ids"].reverse()
+    question["content_sha256"] = scorer.sha256_json(
+        scorer.question_hash_payload(question)
+    )
+    proof = question["causal_proof"]
+    proof["full_context_sha256"] = scorer.causal_context_sha256(
+        changed["cases"][1], question, set()
+    )
+    proof["removed_context_sha256"] = scorer.causal_context_sha256(
+        changed["cases"][1], question, set(question["decisive_chunk_keys"])
+    )
+    with pytest.raises(ValueError, match="paired questions"):
+        _validate(changed)
 
 
 def test_dense_scoring_is_exact_deterministic_and_unions_every_question(panel):
@@ -645,6 +977,36 @@ def test_bm25_is_unicode_deterministic_and_reports_controls(panel):
     assert scorer.tokenize("אישור חתום") == ["אישור", "חתום"]
 
 
+def test_retrieval_query_is_invariant_to_parallel_option_permutation(panel):
+    question = panel["cases"][0]["questions"][0]
+    permuted = copy.deepcopy(question)
+    permuted["options"].reverse()
+    permuted["option_ids"].reverse()
+    permuted["content_sha256"] = scorer.sha256_json(
+        scorer.question_hash_payload(permuted)
+    )
+    assert question["content_sha256"] != permuted["content_sha256"]
+    assert scorer.LocalEmbeddingGemma2Provider._query_text(
+        question
+    ) == scorer.LocalEmbeddingGemma2Provider._query_text(permuted)
+    assert scorer.LocalEmbeddingGemma2Provider._query_cache_key(
+        question
+    ) == scorer.LocalEmbeddingGemma2Provider._query_cache_key(permuted)
+    assert scorer.retrieval_query_sha256(question) == scorer.retrieval_query_sha256(
+        permuted
+    )
+    provider = scorer.PrecomputedProvider(
+        "fixture-dense", panel["providers"]["fixture-dense"], None
+    )
+    assert np.array_equal(provider.query(question), provider.query(permuted))
+    candidates = [
+        chunk for chunk in panel["cases"][0]["chunks"] if not chunk["immutable"]
+    ]
+    assert scorer.bm25_rank(question, candidates) == scorer.bm25_rank(
+        permuted, candidates
+    )
+
+
 def test_mrl_truncation_always_renormalizes_and_rejects_bad_values():
     vector = np.arange(1, 769, dtype=float)
     result = scorer.normalize_mrl(vector, 256)
@@ -693,7 +1055,7 @@ def test_mrl_truncation_always_renormalizes_and_rejects_bad_values():
         ),
         (lambda value: value["cases"][1].update(twin_group_key=None), "Hebrew"),
         (
-            lambda value: value["cases"][0]["chunks"][3]["image_control"].update(
+            lambda value: value["cases"][0]["chunks"][6]["image_control"].update(
                 variant="missing"
             ),
             "variants",
@@ -739,6 +1101,7 @@ def test_external_causal_manifest_is_required_but_only_validates_annotations(pan
             contamination_chunker_artifact=TEST_ARTIFACT,
             source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
             provider_generator_artifacts={"fixture-dense": TEST_ARTIFACT},
+            **_policy_artifacts(panel),
         )
     with pytest.raises(ValueError, match="external sha256 anchor"):
         scorer.validate_panel(
@@ -756,6 +1119,7 @@ def test_external_causal_manifest_is_required_but_only_validates_annotations(pan
             contamination_chunker_artifact=TEST_ARTIFACT,
             source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
             provider_generator_artifacts={"fixture-dense": TEST_ARTIFACT},
+            **_policy_artifacts(panel),
         )
 
 
@@ -1152,9 +1516,9 @@ def test_cross_case_derivation_keys_are_globally_unambiguous(panel):
 def test_image_derivation_binds_image_and_control_receipts(panel):
     changed = copy.deepcopy(panel)
     case = changed["cases"][0]
-    derivation = copy.deepcopy(case["chunks"][3]["derivation"])
+    derivation = copy.deepcopy(case["chunks"][6]["derivation"])
     derivation["image_artifact_sha256"] = SOURCE_ARTIFACT_HASHES["shuffled-image"]
-    _replace_chunk_derivation(case, 3, derivation)
+    _replace_chunk_derivation(case, 6, derivation)
     with pytest.raises(ValueError, match="supplied image artifact"):
         _validate(changed)
 
@@ -1242,11 +1606,11 @@ def test_fixed_chunking_fails_closed_without_tokenizer_recomputation(panel):
 def test_prior_panel_and_source_manifest_require_explicit_migration(panel):
     old_panel = copy.deepcopy(panel)
     old_panel["schema_version"] = "r052-evidence-panel-v1"
-    with pytest.raises(ValueError, match="r052-evidence-panel-v4"):
+    with pytest.raises(ValueError, match=scorer.SCHEMA_VERSION):
         _validate(old_panel)
 
     old_panel["schema_version"] = "r052-evidence-panel-v2"
-    with pytest.raises(ValueError, match="r052-evidence-panel-v4"):
+    with pytest.raises(ValueError, match=scorer.SCHEMA_VERSION):
         _validate(old_panel)
 
     source, _ = _source_manifest()
@@ -1301,6 +1665,7 @@ def test_receipt_is_content_bound_timestamp_free_and_atomic(panel, tmp_path):
         source_digest,
         causal_digest,
         contamination_digest,
+        _policy_artifacts(panel)["policy_replay_receipt_sha256"],
         (1, 2, 4),
         [method],
     )
@@ -1335,6 +1700,15 @@ def test_cli_scores_bm25_and_precomputed_without_model_download(
     source_snapshot_manifest, source_snapshot_digest = _source_manifest()
     source_snapshot_path.write_bytes(scorer.canonical_json(source_snapshot_manifest))
     source.write_bytes(scorer.canonical_json(panel))
+    policy = _policy_artifacts(panel)
+    ledger_path = tmp_path / "fact-ledger.json"
+    rubric_path = tmp_path / "rubric.json"
+    replay_receipt_path = tmp_path / "policy-replay-receipt.json"
+    ledger_path.write_bytes(scorer.canonical_json(policy["policy_fact_ledger"]))
+    rubric_path.write_bytes(scorer.canonical_json(policy["policy_rubric"]))
+    replay_receipt_path.write_bytes(
+        scorer.canonical_json(policy["policy_replay_receipt"])
+    )
     cli_args = [
         "score_r052_evidence_retrieval.py",
         "--panel",
@@ -1368,6 +1742,28 @@ def test_cli_scores_bm25_and_precomputed_without_model_download(
         str(TEST_ARTIFACT),
         "--provider-generator-artifact",
         f"fixture-dense={TEST_ARTIFACT}",
+        "--policy-fact-ledger",
+        str(ledger_path),
+        "--policy-fact-ledger-sha256",
+        policy["policy_fact_ledger_sha256"],
+        "--policy-rubric",
+        str(rubric_path),
+        "--policy-rubric-sha256",
+        policy["policy_rubric_sha256"],
+        "--policy-replay-receipt",
+        str(replay_receipt_path),
+        "--policy-replay-receipt-sha256",
+        policy["policy_replay_receipt_sha256"],
+        "--policy-replay-schema-artifact",
+        str(policy["policy_replay_schema_artifact"]),
+        "--policy-replay-schema-sha256",
+        policy["policy_replay_schema_sha256"],
+        "--policy-evaluator-artifact",
+        str(policy["policy_evaluator_artifact"]),
+        "--policy-evaluator-sha256",
+        policy["policy_evaluator_sha256"],
+        "--policy-adjudication-artifact",
+        f"{TEST_ARTIFACT_SHA256}={TEST_ARTIFACT}",
         "--output",
         str(output),
         "--provider",
@@ -1416,6 +1812,7 @@ def test_claimed_provenance_must_resolve_to_supplied_artifacts(panel, tmp_path):
             contamination_chunker_artifact=TEST_ARTIFACT,
             source_snapshot_artifacts=SOURCE_ARTIFACT_PATHS,
             provider_generator_artifacts={"fixture-dense": TEST_ARTIFACT},
+            **_policy_artifacts(panel),
         )
 
 

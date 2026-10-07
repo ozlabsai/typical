@@ -33,17 +33,19 @@ from typing import Any
 from urllib.parse import urlparse
 
 try:
+    from scripts import replay_r052_typed_policy as policy_replay
     from scripts import score_r052_evidence_retrieval as scoring
 except ModuleNotFoundError:  # Supports ``uv run python scripts/build_...py``.
+    import replay_r052_typed_policy as policy_replay
     import score_r052_evidence_retrieval as scoring
 
-SPEC_VERSION = "r052-authored-dossier-spec-v3"
+SPEC_VERSION = "r052-authored-dossier-spec-v4"
 SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v4"
-ANNOTATION_VERSION = "r052-authored-causal-annotations-v1"
-AUDIT_INPUT_VERSION = "r052-contamination-audit-input-v1"
+ANNOTATION_VERSION = "r052-authored-causal-annotations-v2"
+AUDIT_INPUT_VERSION = "r052-contamination-audit-input-v2"
 AUDIT_RESULTS_VERSION = "r052-external-contamination-results-v1"
-PROVIDER_BUNDLE_VERSION = "r052-precomputed-provider-bundle-v1"
-BUILD_RECEIPT_VERSION = "r052-evidence-panel-build-receipt-v1"
+PROVIDER_BUNDLE_VERSION = "r052-precomputed-provider-bundle-v2"
+BUILD_RECEIPT_VERSION = "r052-evidence-panel-build-receipt-v2"
 LICENSE_POLICY = "approved-evaluation-and-redistribution-v1"
 AUDIT_ALGORITHM = "exact-sha256+minhash-jaccard-v1"
 LONG_CONTEXT_TOKENS = 8_192
@@ -93,6 +95,7 @@ QUESTION_SPEC_KEYS = {
     "question_ref",
     "text",
     "options",
+    "option_ids",
     "decision_type",
     "policy_role",
     "twin_anchor",
@@ -459,8 +462,12 @@ def _validate_spec(
     if not isinstance(spec, dict):
         raise TypeError("dossier spec must be an object")
     _exact_keys(spec, SPEC_KEYS, "dossier spec")
-    if spec["schema_version"] != SPEC_VERSION or spec["benchmark_derived"] is not False:
-        raise ValueError("dossier spec schema/provenance is invalid")
+    if spec["schema_version"] != SPEC_VERSION:
+        raise ValueError(
+            f"prior dossier specs require migration; schema_version must be {SPEC_VERSION}"
+        )
+    if spec["benchmark_derived"] is not False:
+        raise ValueError("dossier spec provenance is invalid")
     profile = spec["panel_profile"]
     if profile not in {"production", "test_fixture"}:
         raise ValueError("panel_profile must be production or test_fixture")
@@ -743,6 +750,20 @@ def _validate_spec(
                 or len(set(options)) != len(options)
             ):
                 raise ValueError(f"{question_label}.options is invalid")
+            option_ids = question["option_ids"]
+            if (
+                not isinstance(option_ids, list)
+                or len(option_ids) != len(options)
+                or len(set(option_ids)) != len(option_ids)
+                or any(
+                    not isinstance(value, str)
+                    or policy_replay.IDENTIFIER_RE.fullmatch(value) is None
+                    for value in option_ids
+                )
+            ):
+                raise ValueError(
+                    f"{question_label}.option_ids must be parallel unique identifiers"
+                )
             decisive = question["decisive_chunk_refs"]
             distractors = question["known_distractor_chunk_refs"]
             if (
@@ -935,22 +956,21 @@ def _validate_annotations(value: Any) -> dict[tuple[str, str], dict[str, Any]]:
             or not entry["removed_chunk_refs"]
         ):
             raise ValueError("causal removed_chunk_refs must be non-empty")
+        full = entry["full_outcome"]
+        removed = entry["removed_outcome"]
         if (
-            not isinstance(entry["full_outcome"], dict)
-            or not entry["full_outcome"]
-            or not isinstance(entry["removed_outcome"], dict)
-            or set(entry["full_outcome"]) != set(entry["removed_outcome"])
+            not isinstance(full, dict)
+            or set(full) != {"status", "option_index"}
+            or full["status"] != "resolved"
+            or type(full["option_index"]) is not int
+            or full["option_index"] < 0
+            or removed != {"status": "unresolved"}
         ):
-            raise ValueError("causal outcomes need identical non-empty field sets")
-        changed = sorted(
-            field
-            for field in entry["full_outcome"]
-            if entry["full_outcome"][field] != entry["removed_outcome"][field]
-        )
-        if entry["changed_fields"] != changed or not changed:
             raise ValueError(
-                "causal changed_fields must exactly match the authored outcome diff"
+                "causal outcomes must be resolved option_index versus unresolved"
             )
+        if entry["changed_fields"] != ["status", "option_index"]:
+            raise ValueError("causal changed_fields must be status then option_index")
         # Reject non-finite/non-JSON values now rather than when emitting hashes.
         _canonical(entry["full_outcome"])
         _canonical(entry["removed_outcome"])
@@ -1118,9 +1138,12 @@ def _build_cases(
                 raise ValueError(
                     "causal removed chunks must exactly match decisive chunks in source order"
                 )
+            if annotation["full_outcome"]["option_index"] >= len(item["option_ids"]):
+                raise ValueError("causal resolved option_index is out of range")
             question_base = {
                 "text": item["text"],
                 "options": item["options"],
+                "option_ids": item["option_ids"],
                 "decision_type": item["decision_type"],
                 "policy_role": item["policy_role"],
             }
@@ -1279,6 +1302,7 @@ def build_audit_input(
                         "content_sha256": question["content_sha256"],
                         "text": question["text"],
                         "options": question["options"],
+                        "option_ids": question["option_ids"],
                         "policy_role": question["policy_role"],
                     }
                     for question in case["questions"]
@@ -1294,8 +1318,12 @@ def build_audit_input(
         "causal_annotations_sha256": annotations_sha256,
         "tokenizer_artifact_sha256": tokenizer_artifact_sha256,
         "chunker_artifact_sha256": chunker_artifact_sha256,
+        # This exact projection is frozen before audit/provider receipts exist. Policy
+        # authors bind it in their ledger/rubric, avoiding a receipt/panel hash cycle.
+        "policy_replay_draft": scoring.policy_replay_draft({"cases": cases}),
         "cases": audit_cases,
     }
+    value["policy_replay_draft_sha256"] = _sha_json(value["policy_replay_draft"])
     return value, cases, case_ref_to_key
 
 
@@ -1374,7 +1402,9 @@ def _build_providers(
             "provider bundles and generator artifacts must cover one another"
         )
     query_hashes = {
-        question["content_sha256"] for case in cases for question in case["questions"]
+        scoring.retrieval_query_sha256(question)
+        for case in cases
+        for question in case["questions"]
     }
     document_hashes = {
         chunk["content_sha256"] for case in cases for chunk in case["chunks"]
@@ -1461,6 +1491,15 @@ def finalize_bundle(
     tokenizer_artifact: Path,
     chunker_artifact: Path,
     bindings: Mapping[str, str],
+    policy_fact_ledger: Mapping[str, Any],
+    policy_fact_ledger_sha256: str,
+    policy_rubric: Mapping[str, Any],
+    policy_rubric_sha256: str,
+    policy_replay_schema_artifact: Path,
+    policy_replay_schema_sha256: str,
+    policy_evaluator_artifact: Path,
+    policy_evaluator_sha256: str,
+    policy_adjudication_artifacts: Mapping[str, Path],
 ) -> dict[str, Any]:
     tokenizer_hash = scoring.artifact_sha256(
         _check_no_symlinks(tokenizer_artifact, "tokenizer artifact")
@@ -1481,6 +1520,47 @@ def finalize_bundle(
     )
     if audit_input != regenerated or _sha_json(audit_input) != audit_input_sha256:
         raise ValueError("audit input is not the exact deterministic builder output")
+    if _sha_json(policy_fact_ledger) != policy_fact_ledger_sha256:
+        raise ValueError("fact ledger does not match its external SHA-256 binding")
+    if _sha_json(policy_rubric) != policy_rubric_sha256:
+        raise ValueError("policy rubric does not match its external SHA-256 binding")
+    scoring.verify_artifact(
+        policy_replay_schema_artifact,
+        policy_replay_schema_sha256,
+        "policy replay schema",
+    )
+    if policy_replay_schema_sha256 != policy_replay.EXPECTED_SCHEMA_SHA256:
+        raise ValueError("policy replay schema is not the frozen evaluator schema")
+    scoring.verify_artifact(
+        policy_evaluator_artifact,
+        policy_evaluator_sha256,
+        "policy replay evaluator",
+    )
+    adjudication_bytes: dict[str, bytes] = {}
+    for digest, path in policy_adjudication_artifacts.items():
+        _sha(digest, "adjudication receipt hash")
+        scoring.verify_artifact(path, digest, "adjudication receipt")
+        adjudication_bytes[digest] = path.read_bytes()
+    replay_draft = audit_input["policy_replay_draft"]
+    if replay_draft != scoring.policy_replay_draft({"cases": cases}) or audit_input[
+        "policy_replay_draft_sha256"
+    ] != _sha_json(replay_draft):
+        raise ValueError("audit input policy replay draft/hash is not deterministic")
+    try:
+        policy_replay_receipt = policy_replay.replay(
+            replay_draft,
+            policy_fact_ledger,
+            policy_rubric,
+            panel_sha256=audit_input["policy_replay_draft_sha256"],
+            ledger_sha256=policy_fact_ledger_sha256,
+            rubric_sha256=policy_rubric_sha256,
+            evaluator_sha256=policy_evaluator_sha256,
+            schema_sha256=policy_replay_schema_sha256,
+            adjudication_receipts=adjudication_bytes,
+        )
+    except policy_replay.PolicyError as exc:
+        raise ValueError(f"typed policy replay failed: {exc}") from exc
+    policy_replay_receipt_sha256 = _sha_json(policy_replay_receipt)
     if _sha_json(audit_results) != bindings["audit_results_sha256"]:
         raise ValueError("audit results do not match their external SHA-256 binding")
     if set(provider_bundles) != set(provider_bundle_sha256):
@@ -1585,6 +1665,17 @@ def finalize_bundle(
         contamination_chunker_artifact=chunker_artifact,
         source_snapshot_artifacts=dict(source_artifact_paths),
         provider_generator_artifacts=dict(provider_generator_artifacts),
+        policy_fact_ledger=policy_fact_ledger,
+        policy_fact_ledger_sha256=policy_fact_ledger_sha256,
+        policy_rubric=policy_rubric,
+        policy_rubric_sha256=policy_rubric_sha256,
+        policy_replay_receipt=policy_replay_receipt,
+        policy_replay_receipt_sha256=policy_replay_receipt_sha256,
+        policy_replay_schema_artifact=policy_replay_schema_artifact,
+        policy_replay_schema_sha256=policy_replay_schema_sha256,
+        policy_evaluator_artifact=policy_evaluator_artifact,
+        policy_evaluator_sha256=policy_evaluator_sha256,
+        policy_adjudication_artifacts=policy_adjudication_artifacts,
     )
     files = {
         "panel.json": panel,
@@ -1592,6 +1683,7 @@ def finalize_bundle(
         "causal_manifest.json": causal_manifest,
         "contamination_manifest.json": contamination_manifest,
         "audit_input.json": audit_input,
+        "policy_replay_receipt.json": policy_replay_receipt,
     }
     file_hashes = {name: _sha_bytes(_canonical(value)) for name, value in files.items()}
     receipt = {
@@ -1599,9 +1691,10 @@ def finalize_bundle(
         "panel_profile": spec["panel_profile"],
         "benchmark_derived": False,
         "semantic_ground_truth": {
-            "origin": "externally_authored_causal_annotations",
-            "builder_executed_domain_semantics": False,
-            "builder_claims_semantic_validation": False,
+            "origin": "deterministic_typed_policy_replay",
+            "annotations_role": "preregistered_draft_inputs_only",
+            "builder_executed_domain_semantics": True,
+            "builder_claims_semantic_validation": True,
         },
         "bindings": {
             **bindings,
@@ -1620,11 +1713,19 @@ def finalize_bundle(
             "contamination_corpora": corpus_hashes,
             "contamination_tokenizer": tokenizer_hash,
             "contamination_chunker": chunker_hash,
+            "policy_replay_draft_sha256": audit_input["policy_replay_draft_sha256"],
+            "policy_fact_ledger_sha256": policy_fact_ledger_sha256,
+            "policy_rubric_sha256": policy_rubric_sha256,
+            "policy_replay_schema_sha256": policy_replay_schema_sha256,
+            "policy_evaluator_sha256": policy_evaluator_sha256,
+            "policy_adjudication_receipts": sorted(policy_adjudication_artifacts),
         },
         "outputs": {
             **file_hashes,
             "causal_manifest_external_sha256": causal_sha,
             "contamination_manifest_external_sha256": contamination_sha,
+            "policy_replay_receipt_external_sha256": policy_replay_receipt_sha256,
+            "policy_replay_receipt_sha256": policy_replay_receipt["receipt_sha256"],
         },
         "counts": {
             "cases": len(cases),
@@ -1750,6 +1851,21 @@ def _parser() -> argparse.ArgumentParser:
     final.add_argument(
         "--provider-generator-artifact", type=_named_path, action="append", default=[]
     )
+    final.add_argument("--policy-fact-ledger", type=Path, required=True)
+    final.add_argument("--expected-policy-fact-ledger-sha256", required=True)
+    final.add_argument("--policy-rubric", type=Path, required=True)
+    final.add_argument("--expected-policy-rubric-sha256", required=True)
+    final.add_argument("--policy-replay-schema-artifact", type=Path, required=True)
+    final.add_argument("--expected-policy-replay-schema-sha256", required=True)
+    final.add_argument("--policy-evaluator-artifact", type=Path, required=True)
+    final.add_argument("--expected-policy-evaluator-sha256", required=True)
+    final.add_argument(
+        "--policy-adjudication-artifact",
+        type=_named_path,
+        action="append",
+        required=True,
+        metavar="SHA256=PATH",
+    )
     final.add_argument("--output-dir", type=Path, required=True)
     return parser
 
@@ -1796,6 +1912,19 @@ def main() -> None:
         )
         provider_bundles[name] = provider
     generators = _unique_named(args.provider_generator_artifact, "provider generator")
+    fact_ledger, fact_ledger_sha = _load_json(
+        args.policy_fact_ledger,
+        args.expected_policy_fact_ledger_sha256,
+        "policy fact ledger",
+    )
+    rubric, rubric_sha = _load_json(
+        args.policy_rubric,
+        args.expected_policy_rubric_sha256,
+        "policy rubric",
+    )
+    adjudications = _unique_named(
+        args.policy_adjudication_artifact, "policy adjudication artifact"
+    )
     bindings = {**bindings, "audit_results_sha256": results_sha}
     receipt = finalize_bundle(
         output_dir=args.output_dir,
@@ -1814,6 +1943,15 @@ def main() -> None:
         tokenizer_artifact=args.contamination_tokenizer_artifact,
         chunker_artifact=args.contamination_chunker_artifact,
         bindings=bindings,
+        policy_fact_ledger=fact_ledger,
+        policy_fact_ledger_sha256=fact_ledger_sha,
+        policy_rubric=rubric,
+        policy_rubric_sha256=rubric_sha,
+        policy_replay_schema_artifact=args.policy_replay_schema_artifact,
+        policy_replay_schema_sha256=args.expected_policy_replay_schema_sha256,
+        policy_evaluator_artifact=args.policy_evaluator_artifact,
+        policy_evaluator_sha256=args.expected_policy_evaluator_sha256,
+        policy_adjudication_artifacts=adjudications,
     )
     print(json.dumps(receipt, ensure_ascii=False, sort_keys=True, indent=2))
 

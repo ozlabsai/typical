@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from scripts import build_r052_evidence_panel as builder
+from scripts import replay_r052_typed_policy as replay
 from scripts import score_r052_evidence_retrieval as scorer
 
 
@@ -60,6 +61,7 @@ def _case(
     reviewed_text: str,
 ) -> dict:
     hebrew = language == "he"
+    split_points = [len(reviewed_text) * index // 6 for index in range(7)]
     chunks = [
         {
             "chunk_ref": "policy",
@@ -77,7 +79,11 @@ def _case(
             "chunk_ref": "decisive-text",
             "kind": "evidence",
             "modality": "text",
-            "text": "האישור בתוקף." if hebrew else reviewed_text,
+            "text": (
+                "האישור בתוקף."
+                if hebrew
+                else reviewed_text[split_points[0] : split_points[1]]
+            ),
             "token_start": 5,
             "token_end": 10,
             "twin_anchor": "decisive-text",
@@ -95,13 +101,46 @@ def _case(
                     "kind": "source_text_slice",
                     "source_artifact": "source-en",
                     "char_start": 0,
-                    "char_end": len(reviewed_text),
+                    "char_end": split_points[1],
                 }
             ),
         },
     ]
+    for index in range(1, 6):
+        chunks.append(
+            {
+                "chunk_ref": f"text-distractor-{index}",
+                "kind": "distractor",
+                "modality": "text",
+                "text": (
+                    f"מידע לא מכריע {index}."
+                    if hebrew
+                    else reviewed_text[split_points[index] : split_points[index + 1]]
+                ),
+                "token_start": 9 + index,
+                "token_end": 10 + index,
+                "twin_anchor": f"text-distractor-{index}",
+                "media_artifact": None,
+                "image_control": None,
+                "derivation": (
+                    {
+                        "kind": "translated_twin",
+                        "source_twin_case_ref": "case-en",
+                        "source_twin_chunk_ref": f"text-distractor-{index}",
+                        "alignment_receipt_artifact": "alignment-receipt",
+                    }
+                    if hebrew
+                    else {
+                        "kind": "source_text_slice",
+                        "source_artifact": "source-en",
+                        "char_start": split_points[index],
+                        "char_end": split_points[index + 1],
+                    }
+                ),
+            }
+        )
     for index, (variant, media) in enumerate(
-        (("real", image_a), ("shuffled", image_b), ("missing", None)), start=10
+        (("real", image_a), ("shuffled", image_b), ("missing", None)), start=15
     ):
         chunks.append(
             {
@@ -132,7 +171,7 @@ def _case(
         "source_snapshot": source,
         "alignment_receipt_artifact": "alignment-receipt",
         "source_domain": "operations",
-        "context_tokens": 13,
+        "context_tokens": 18,
         "chunking": {
             "mode": "semantic_sections",
             "boundary_receipt_artifact": "boundary-receipt",
@@ -143,13 +182,154 @@ def _case(
                 "question_ref": "approve",
                 "text": "האם לאשר?" if hebrew else "Should this be approved?",
                 "options": ["כן", "לא"] if hebrew else ["yes", "no"],
+                "option_ids": ["yes", "no"],
                 "decision_type": "choice",
                 "policy_role": "choice",
                 "twin_anchor": "approve",
                 "decisive_chunk_refs": ["decisive-text", "image-real"],
-                "known_distractor_chunk_refs": ["image-shuffled", "image-missing"],
+                "known_distractor_chunk_refs": [
+                    *[f"text-distractor-{index}" for index in range(1, 6)],
+                    "image-shuffled",
+                    "image-missing",
+                ],
             }
         ],
+    }
+
+
+def _policy_artifacts(tmp_path: Path, audit_input: dict) -> dict:
+    draft = audit_input["policy_replay_draft"]
+    panel_digest = audit_input["policy_replay_draft_sha256"]
+    facts = {
+        "f0001": {"type": "boolean", "unit": None},
+        "f0002": {"type": "boolean", "unit": None},
+    }
+    adjudication = tmp_path / "policy-adjudication.txt"
+    adjudication.write_text("Independent pre-question fact adjudication.\n")
+    adjudication_digest = scorer.artifact_sha256(adjudication)
+    bindings = []
+    presentations = []
+    decision_id = "d.approve"
+    for case in draft["cases"]:
+        chunks = {chunk["twin_anchor"]: chunk for chunk in case["chunks"]}
+        for fact, anchor in (("f0001", "decisive-text"), ("f0002", "image-real")):
+            chunk = chunks[anchor]
+            locator = (
+                {
+                    "kind": "image_region",
+                    "region_sha256": chunk["media"]["sha256"],
+                }
+                if chunk["media"] is not None
+                else {
+                    "kind": "text_span",
+                    "char_start": 0,
+                    "char_end": len(chunk["text"]),
+                    "span_sha256": scorer.sha256_bytes(chunk["text"].encode()),
+                }
+            )
+            bindings.append(
+                {
+                    "case_key": case["case_key"],
+                    "chunk_key": chunk["chunk_key"],
+                    "chunk_content_sha256": chunk["content_sha256"],
+                    "observations": [{"fact": fact, "value": True, "locator": locator}],
+                    "adjudication_receipt_sha256": adjudication_digest,
+                }
+            )
+        question = case["questions"][0]
+        full = [chunk["chunk_key"] for chunk in case["chunks"]]
+        immutable = {
+            chunk["chunk_key"] for chunk in case["chunks"] if chunk["immutable"]
+        }
+        decisive = question["decisive_chunk_keys"]
+        distractors = question["known_distractor_chunk_keys"]
+        presentations.append(
+            {
+                "presentation_id": f"p.approve.{case['language']}",
+                "case_key": case["case_key"],
+                "question_bindings": {
+                    decision_id: {
+                        "question_key": question["question_key"],
+                        "question_content_sha256": question["content_sha256"],
+                    }
+                },
+                "views": {
+                    "full": full,
+                    "removed": [key for key in full if key not in decisive],
+                    "decisive_only": [
+                        key for key in full if key in immutable | set(decisive)
+                    ],
+                    "distractor_only": [
+                        key for key in full if key in immutable | set(distractors)
+                    ],
+                },
+                "ablations": [
+                    {
+                        "decision_id": decision_id,
+                        "remove_chunk_keys": decisive,
+                        "required_transition": "resolution_loss",
+                        "assert_full": {"status": "resolved", "output": "yes"},
+                        "assert_removed": {"status": "unresolved"},
+                    }
+                ],
+            }
+        )
+    ledger = {
+        "schema_version": replay.LEDGER_VERSION,
+        "panel_sha256": panel_digest,
+        "facts": facts,
+        "bindings": bindings,
+    }
+    ledger_digest = scorer.sha256_json(ledger)
+    any_fact = {
+        "op": "any",
+        "args": [
+            {"op": "fact", "id": "f0001"},
+            {"op": "fact", "id": "f0002"},
+        ],
+    }
+    rubric = {
+        "schema_version": replay.RUBRIC_VERSION,
+        "panel_sha256": panel_digest,
+        "fact_ledger_sha256": ledger_digest,
+        "semantic_groups": [
+            {
+                "group_id": "g.approve",
+                "facts": facts,
+                "decisions": [
+                    {
+                        "decision_id": decision_id,
+                        "type": "choice",
+                        "outputs": [
+                            {"id": "yes", "label": "yes"},
+                            {"id": "no", "label": "no"},
+                        ],
+                        "order": ["yes", "no"],
+                        "rules": [
+                            {"output": "yes", "when": any_fact},
+                            {"output": "no", "when": {"op": "not", "arg": any_fact}},
+                        ],
+                    }
+                ],
+                "presentations": presentations,
+            }
+        ],
+    }
+    rubric_digest = scorer.sha256_json(rubric)
+    schema_artifact = Path("sources/r052/policy_replay.schema.json").resolve()
+    schema_digest = scorer.artifact_sha256(schema_artifact)
+    evaluator_artifact = Path(replay.__file__).resolve()
+    evaluator_digest = scorer.artifact_sha256(evaluator_artifact)
+    return {
+        "policy_fact_ledger": ledger,
+        "policy_fact_ledger_sha256": ledger_digest,
+        "policy_rubric": rubric,
+        "policy_rubric_sha256": rubric_digest,
+        "policy_replay_schema_artifact": schema_artifact,
+        "policy_replay_schema_sha256": schema_digest,
+        "policy_evaluator_artifact": evaluator_artifact,
+        "policy_evaluator_sha256": evaluator_digest,
+        "policy_adjudication_artifacts": {adjudication_digest: adjudication},
     }
 
 
@@ -285,9 +465,9 @@ def _fixture(tmp_path: Path) -> dict:
                 "case_ref": case["case_ref"],
                 "question_ref": "approve",
                 "removed_chunk_refs": ["decisive-text", "image-real"],
-                "full_outcome": {"decision": "approve", "score": 1},
-                "removed_outcome": {"decision": "review", "score": 0},
-                "changed_fields": ["decision", "score"],
+                "full_outcome": {"status": "resolved", "option_index": 0},
+                "removed_outcome": {"status": "unresolved"},
+                "changed_fields": ["status", "option_index"],
             }
             for case in spec["cases"]
         ],
@@ -353,7 +533,7 @@ def _fixture(tmp_path: Path) -> dict:
     generator = tmp_path / "generator.py"
     generator.write_text("# local deterministic embedding generator\n")
     queries = {
-        question["content_sha256"]: [1.0, 0.0]
+        scorer.retrieval_query_sha256(question): [1.0, 0.0]
         for case in cases
         for question in case["questions"]
     }
@@ -376,6 +556,7 @@ def _fixture(tmp_path: Path) -> dict:
     }
     provider_path = tmp_path / "provider.json"
     provider_sha = _write_json(provider_path, provider)
+    policy = _policy_artifacts(tmp_path, audit_input)
     return locals()
 
 
@@ -397,6 +578,7 @@ def _finalize(fixture: dict, output_name: str = "bundle", **overrides):
         "tokenizer_artifact": fixture["tokenizer"],
         "chunker_artifact": fixture["chunker"],
         "bindings": fixture["hashes"],
+        **fixture["policy"],
     }
     arguments.update(overrides)
     return builder.finalize_bundle(**arguments)
@@ -420,17 +602,23 @@ def test_builds_deterministic_scorer_valid_bundle_and_preserves_order(tmp_path):
     assert [chunk["twin_anchor"] for chunk in panel["cases"][0]["chunks"]] == [
         "policy",
         "decisive-text",
+        "text-distractor-1",
+        "text-distractor-2",
+        "text-distractor-3",
+        "text-distractor-4",
+        "text-distractor-5",
         "image-real",
         "image-shuffled",
         "image-missing",
     ]
-    assert panel["cases"][0]["chunks"][2]["media"]["sha256"] == scorer.file_sha256(
+    assert panel["cases"][0]["chunks"][7]["media"]["sha256"] == scorer.file_sha256(
         fixture["artifact_paths"]["real-image"]
     )
     assert receipt["semantic_ground_truth"] == {
-        "origin": "externally_authored_causal_annotations",
-        "builder_executed_domain_semantics": False,
-        "builder_claims_semantic_validation": False,
+        "origin": "deterministic_typed_policy_replay",
+        "annotations_role": "preregistered_draft_inputs_only",
+        "builder_executed_domain_semantics": True,
+        "builder_claims_semantic_validation": True,
     }
     scorer.validate_panel(
         panel,
@@ -447,6 +635,13 @@ def test_builds_deterministic_scorer_valid_bundle_and_preserves_order(tmp_path):
         contamination_chunker_artifact=fixture["chunker"],
         source_snapshot_artifacts=fixture["resolved"],
         provider_generator_artifacts={"fixture": fixture["generator"]},
+        policy_replay_receipt=json.loads(
+            (output / "policy_replay_receipt.json").read_bytes()
+        ),
+        policy_replay_receipt_sha256=receipt["outputs"][
+            "policy_replay_receipt_external_sha256"
+        ],
+        **fixture["policy"],
     )
 
     second = _finalize(fixture, "bundle-second")
@@ -457,6 +652,7 @@ def test_builds_deterministic_scorer_valid_bundle_and_preserves_order(tmp_path):
         "causal_manifest.json",
         "contamination_manifest.json",
         "audit_input.json",
+        "policy_replay_receipt.json",
         "build_receipt.json",
     ):
         assert (output / name).read_bytes() == (
@@ -475,6 +671,50 @@ def test_can_finalize_provider_free_panel_for_bm25_preflight(tmp_path):
     panel = json.loads((tmp_path / "bundle" / "panel.json").read_bytes())
     assert panel["providers"] == {}
     assert receipt["counts"]["providers"] == 0
+
+
+def test_prepare_audit_exposes_exact_acyclic_policy_draft(tmp_path):
+    fixture = _fixture(tmp_path)
+    draft = fixture["audit_input"]["policy_replay_draft"]
+    assert fixture["audit_input"]["policy_replay_draft_sha256"] == scorer.sha256_json(
+        draft
+    )
+    assert fixture["policy"]["policy_fact_ledger"][
+        "panel_sha256"
+    ] == scorer.sha256_json(draft)
+    assert draft["providers"] == {}
+    assert {case["contamination_audit_sha256"] for case in draft["cases"]} == {"0" * 64}
+
+
+def test_prior_dossier_spec_requires_explicit_v4_migration(tmp_path):
+    fixture = _fixture(tmp_path)
+    old = deepcopy(fixture["spec"])
+    old["schema_version"] = "r052-authored-dossier-spec-v3"
+    with pytest.raises(ValueError, match="prior dossier specs require migration"):
+        builder._validate_spec(old, fixture["source_manifest"], allow_test_profile=True)
+
+
+def test_finalize_rejects_policy_artifact_hash_and_coverage_tampering(tmp_path):
+    fixture = _fixture(tmp_path)
+    with pytest.raises(ValueError, match="fact ledger does not match"):
+        _finalize(fixture, policy_fact_ledger_sha256="0" * 64)
+
+    rubric = deepcopy(fixture["policy"]["policy_rubric"])
+    rubric["semantic_groups"][0]["presentations"] = rubric["semantic_groups"][0][
+        "presentations"
+    ][:1]
+    with pytest.raises(ValueError, match="every panel question|Hebrew presentation"):
+        _finalize(
+            fixture,
+            policy_rubric=rubric,
+            policy_rubric_sha256=scorer.sha256_json(rubric),
+        )
+
+    wrong = tmp_path / "wrong-adjudication.txt"
+    wrong.write_text("tampered")
+    digest = next(iter(fixture["policy"]["policy_adjudication_artifacts"]))
+    with pytest.raises(ValueError, match="adjudication receipt artifact hash mismatch"):
+        _finalize(fixture, policy_adjudication_artifacts={digest: wrong})
 
 
 def test_rejects_binary_pdf_as_reviewed_source_text(tmp_path):
@@ -537,7 +777,9 @@ def test_builder_rejects_invented_text_and_reviewed_source_slice_gaps(tmp_path):
 
     gap = deepcopy(fixture["spec"])
     gap["cases"][0]["chunks"][1]["derivation"]["char_start"] = 1
-    gap["cases"][0]["chunks"][1]["text"] = fixture["reviewed_en"][1:]
+    gap["cases"][0]["chunks"][1]["text"] = fixture["reviewed_en"][
+        1 : len(fixture["reviewed_en"]) // 6
+    ]
     with pytest.raises(ValueError, match="without gaps"):
         builder.build_audit_input(
             gap,
@@ -605,7 +847,7 @@ def test_rejects_causal_claim_not_equal_to_authored_outcome_diff(tmp_path):
     fixture = _fixture(tmp_path)
     annotations = deepcopy(fixture["annotations"])
     annotations["entries"][0]["changed_fields"] = ["decision"]
-    with pytest.raises(ValueError, match="exactly match"):
+    with pytest.raises(ValueError, match="status then option_index"):
         builder._validate_annotations(annotations)
 
 
