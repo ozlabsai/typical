@@ -2,9 +2,10 @@
 
 Date: 2026-10-07
 
-This runbook is executable only after R050 emits one eligible winner. The same frozen base,
-adapter, option-logit readout, and runtime settings are used for every external evaluation.
-External results must never feed back into checkpoint, temperature, prompt, or loss selection.
+Scored work in this runbook is executable only after R050 emits one eligible winner. The detached
+wrapper may be staged earlier with its bounded wait mode. The same frozen base, adapter,
+option-logit readout, and runtime settings are used for every external evaluation. External
+results must never feed back into checkpoint, temperature, prompt, or loss selection.
 
 ## 0. Frozen targets and authority
 
@@ -41,6 +42,46 @@ revisions below, with these published Jev gates:
 - equal-workflow mean: at least `0.678`;
 - no missing case, failed request, failed decision, retry, or model substitution.
 
+## Autonomous execution (normative)
+
+The wrapper is the single normative execution path. It holds one strict-mode process for the
+whole attempt, keeps scored stdout/stderr sealed, and makes the per-adapter exactly-once claim
+immediately before the first scored request. The expanded commands in sections 1–6 document its
+audited gates; do not execute those blocks separately.
+
+Set `EXPECTED_TYPICAL_COMMIT` to the 40-character commit from the reviewed deployment handoff,
+not a value discovered from the checkout during launch. Then start the wrapper in one detached
+session. The launch log contains milestones and failures, while scored command logs remain under
+the mode-0700 evaluation root.
+
+```bash
+set -euo pipefail
+umask 077
+
+export TYPICAL_REPO=/workspace/g1/typical-eval-frozen
+export R050_ROOT=/workspace/g1/r050-ab512c3/repo/.context/r050-gpu-run-a77fea5-resume2
+export EVAL_ROOT=/workspace/g1/r050-official-eval-20261007
+export WORKFLOWEVALS=/workspace/g1/WorkflowEvals-0ac3b8ad
+export JEVBENCH=/workspace/g1/jevbench-bb05a335
+export EXPECTED_TYPICAL_COMMIT='<reviewed-deployment-commit>'
+export LAUNCH_LOG=/workspace/g1/r050-official-eval-20261007.launch.log
+
+[[ "$EXPECTED_TYPICAL_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+test "$(git -C "$TYPICAL_REPO" rev-parse HEAD)" = "$EXPECTED_TYPICAL_COMMIT"
+test ! -e "$EVAL_ROOT"
+test ! -e "$LAUNCH_LOG"
+! tmux has-session -t r050-official 2>/dev/null
+
+tmux new-session -d -s r050-official \
+  "exec env R050_WAIT_FOR_COMPLETE=1 EXPECTED_TYPICAL_COMMIT=$EXPECTED_TYPICAL_COMMIT TYPICAL_REPO=$TYPICAL_REPO R050_ROOT=$R050_ROOT EVAL_ROOT=$EVAL_ROOT WORKFLOWEVALS=$WORKFLOWEVALS JEVBENCH=$JEVBENCH bash $TYPICAL_REPO/scripts/run_r050_official_eval.sh >$LAUNCH_LOG 2>&1"
+tmux has-session -t r050-official
+```
+
+Do not start a second session or choose another evaluation root after the adapter claim exists.
+A failure after that boundary invalidates the official attempt; it is not permission to rerun
+already scored cases. Monitor only process liveness, GPU utilization, and log/file byte growth
+until `official-eval-complete.json` exists.
+
 ## 1. Winner and artifact gate
 
 Use a new evaluation directory and derive every artifact from the sealed pipeline state. Never
@@ -50,7 +91,7 @@ type a base-model or winner path by hand.
 set -euo pipefail
 umask 077
 
-export TYPICAL_REPO=/workspace/g1/typical-eval-985a08e
+export TYPICAL_REPO=/workspace/g1/typical-eval-frozen
 export R050_ROOT=/workspace/g1/r050-ab512c3/repo/.context/r050-gpu-run-a77fea5-resume2
 export EVAL_ROOT=/workspace/g1/r050-official-eval-20261007
 export WORKFLOWEVALS=/workspace/g1/WorkflowEvals-0ac3b8ad
@@ -58,8 +99,8 @@ export JEVBENCH=/workspace/g1/jevbench-bb05a335
 
 STATE="$R050_ROOT/state.json"
 COMPLETE="$R050_ROOT/complete.json"
-test "$(git -C "$TYPICAL_REPO" rev-parse HEAD)" = \
-  985a08ef89afd7dbcf0a5716b5c84cc6d97d9cc2
+: "${EXPECTED_TYPICAL_COMMIT:?inherited from the normative launcher}"
+test "$(git -C "$TYPICAL_REPO" rev-parse HEAD)" = "$EXPECTED_TYPICAL_COMMIT"
 test -z "$(git -C "$TYPICAL_REPO" status --porcelain)"
 test "$(jq -r .status "$COMPLETE")" = complete
 test "$(jq -c .official_evaluations_run "$COMPLETE")" = '[]'
@@ -79,7 +120,19 @@ BASE_REVISION=$(jq -er .revision "$MODEL_INVENTORY")
 MODEL_ID="typical-r050-sha256-${ADAPTER_SHA:0:16}"
 
 test ! -e "$EVAL_ROOT"
-mkdir -p "$EVAL_ROOT"
+mkdir "$EVAL_ROOT"
+
+# Preserve the exact winner-selection state before any external score exists.
+cp "$STATE" "$EVAL_ROOT/r050-state.json"
+cp "$COMPLETE" "$EVAL_ROOT/r050-complete.json"
+cp "$ARM_COMPLETION" "$EVAL_ROOT/r050-winner-completion.json"
+git -C "$TYPICAL_REPO" rev-parse HEAD >"$EVAL_ROOT/typical-commit.txt"
+sha256sum \
+  "$EVAL_ROOT/r050-state.json" \
+  "$EVAL_ROOT/r050-complete.json" \
+  "$EVAL_ROOT/r050-winner-completion.json" \
+  "$TYPICAL_REPO/uv.lock" \
+  >"$EVAL_ROOT/frozen-input-sha256.txt"
 
 curl --fail --location --silent --show-error \
   https://benchmarkheaven.com/api/jevbench/v1.5.4 \
@@ -144,6 +197,13 @@ export TYPICAL_API_KEY="$(openssl rand -hex 32)"
 export TYPICAL_BASE_URL=http://127.0.0.1:8090
 
 cd "$TYPICAL_REPO"
+uv run --frozen python - <<'PY'
+import socket
+
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 8090))
+PY
+
 uv run --frozen python scripts/serve_typesafe_gemma_lora.py \
   --model "$BASE_MODEL" \
   --model-revision "$BASE_REVISION" \
@@ -166,10 +226,23 @@ while test ! -s "$EVAL_ROOT/server-startup-receipt.json"; do
   sleep 5
 done
 
-curl --fail --silent --show-error \
-  --header "Authorization: Bearer $TYPICAL_API_KEY" \
-  "$TYPICAL_BASE_URL/v1/models" \
-  | jq -e --arg model "$MODEL_ID" '.models | length == 1 and .[0].name == $model'
+READY=0
+for _ in $(seq 1 120); do
+  if curl --fail --silent --show-error \
+    --header "Authorization: Bearer $TYPICAL_API_KEY" \
+    "$TYPICAL_BASE_URL/v1/models" \
+    --output "$EVAL_ROOT/server-models.tmp.json"; then
+    READY=1
+    break
+  fi
+  kill -0 "$SERVER_PID"
+  sleep 5
+done
+test "$READY" = 1
+jq -e --arg model "$MODEL_ID" \
+  '.models | length == 1 and .[0].name == $model' \
+  "$EVAL_ROOT/server-models.tmp.json"
+mv "$EVAL_ROOT/server-models.tmp.json" "$EVAL_ROOT/server-models.json"
 ```
 
 The server refuses an unauthenticated non-loopback bind. Its immutable receipt must bind the exact
@@ -177,9 +250,10 @@ base and adapter canonical hashes, model ID, runtime settings, and server/runtim
 
 ## 3. Prepare the disclosed WorkflowEvals harness
 
-Apply the tracked patch only to a clean checkout at the exact upstream commit. The patch gives
-Typical a distinct provider and credential, uses the native TypeSafe protocol, checks the echoed
-model ID, and sets `RetryPolicy(max_retries=0)` so failures cannot be hidden.
+Use the isolated checkout already staged with the tracked patch at the exact upstream commit. The
+patch gives Typical a distinct provider and credential, uses the native TypeSafe protocol, checks
+the echoed model ID, and sets `RetryPolicy(max_retries=0)` so failures cannot be hidden. Recompute
+the patched tree from the disclosed bytes before running anything; do not apply the patch again.
 
 ```bash
 PATCH="$TYPICAL_REPO/patches/workflowevals-typical-provider-0ac3b8ad.patch"
@@ -187,9 +261,17 @@ test "$(sha256sum "$PATCH" | cut -d' ' -f1)" = \
   07106bf888aa53a2770b83503c58635708db32042ecb4b034a41963b1ba43908
 test "$(git -C "$WORKFLOWEVALS" rev-parse HEAD)" = \
   0ac3b8ad845429f0d8e064ecfb2430a47c5a25cb
-test -z "$(git -C "$WORKFLOWEVALS" status --porcelain)"
-git -C "$WORKFLOWEVALS" apply --check "$PATCH"
-git -C "$WORKFLOWEVALS" apply "$PATCH"
+
+cd "$TYPICAL_REPO"
+uv run --frozen python - "$WORKFLOWEVALS" "$PATCH" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from scripts.verify_r050_official_eval import _workflow_patch_identity
+
+print(json.dumps(_workflow_patch_identity(Path(sys.argv[1]), Path(sys.argv[2])), sort_keys=True))
+PY
 
 cd "$WORKFLOWEVALS"
 uv lock --check
@@ -229,6 +311,7 @@ keeps a case's multi-question request contiguous; invoice requests can contain 1
 ```bash
 cd "$WORKFLOWEVALS"
 RUN_TAG="typical-r050-${ADAPTER_SHA:0:16}-$(date -u +%Y%m%dT%H%M%SZ)"
+printf '%s\n' "$RUN_TAG" >"$EVAL_ROOT/run-tag.txt"
 for workflow in security_incidents agent_trace_observability invoice_processing customer_service; do
   test ! -e "$WORKFLOWEVALS/runs/$workflow/$RUN_TAG"
 done
@@ -237,29 +320,33 @@ uv run --frozen python run.py security_incidents \
   --model "typical:$MODEL_ID" --name "$RUN_TAG" \
   --base-url "$TYPICAL_BASE_URL" --workers 1 --question-workers 1 \
   --questions all --timeout 1800 \
-  --dataset-revision fbe1ea5c69cf494157fd23f2002a0d9d9a418443
+  --dataset-revision fbe1ea5c69cf494157fd23f2002a0d9d9a418443 \
+  >"$EVAL_ROOT/workflow-security_incidents.log" 2>&1
 
 uv run --frozen python run.py agent_trace_observability \
   --model "typical:$MODEL_ID" --name "$RUN_TAG" \
   --base-url "$TYPICAL_BASE_URL" --workers 1 --question-workers 1 \
   --questions all --timeout 1800 \
-  --dataset-revision 8635540973910a92465fe2bc53e195375aa6e1a8
+  --dataset-revision 8635540973910a92465fe2bc53e195375aa6e1a8 \
+  >"$EVAL_ROOT/workflow-agent_trace_observability.log" 2>&1
 
 uv run --frozen python run.py invoice_processing \
   --model "typical:$MODEL_ID" --name "$RUN_TAG" \
   --base-url "$TYPICAL_BASE_URL" --workers 1 --question-workers 1 \
   --questions all --timeout 1800 \
-  --dataset-revision 6beeb2d2acd65c086c835022f5f4d7434114cafc
+  --dataset-revision 6beeb2d2acd65c086c835022f5f4d7434114cafc \
+  >"$EVAL_ROOT/workflow-invoice_processing.log" 2>&1
 
 uv run --frozen python run.py customer_service \
   --model "typical:$MODEL_ID" --name "$RUN_TAG" \
   --base-url "$TYPICAL_BASE_URL" --workers 1 --question-workers 1 \
   --questions all --timeout 1800 \
-  --dataset-revision b1342f5a704587dbc465867c38c2694348ff86e4
+  --dataset-revision b1342f5a704587dbc465867c38c2694348ff86e4 \
+  >"$EVAL_ROOT/workflow-customer_service.log" 2>&1
 ```
 
-Do not use `--limit` or `--retry-errors`. A documented infrastructure failure may be followed by
-a new, separately named run; never resume or overwrite a scored candidate after observing output.
+Do not use `--limit` or `--retry-errors`. A failure after the wrapper creates the adapter claim
+invalidates the official attempt; never resume, rename, or rerun a scored candidate.
 
 ## 5. Run the 231-row public JevBench diagnostic
 
@@ -272,6 +359,7 @@ the exact canonical R050 hashes before model load:
 kill "$SERVER_PID"
 wait "$SERVER_PID" || true
 trap - EXIT
+unset TYPICAL_API_KEY
 
 cd "$TYPICAL_REPO"
 test ! -e "$EVAL_ROOT/jevbench-public-231"
@@ -294,7 +382,8 @@ uv run --frozen python scripts/jevbench_gemma_lora.py \
   --dtype bfloat16 \
   --device cuda \
   --attn-implementation sdpa \
-  --seed 42
+  --seed 42 \
+  >"$EVAL_ROOT/jevbench-public-231.log" 2>&1
 ```
 
 The 231-row output is diagnostic evidence only. It cannot establish v1.5.4 parity and must not
@@ -346,8 +435,10 @@ JevBench v1.5.4 parity remains `unmeasured` until the external 1,624-row evaluat
 The receipt is an internal, content-addressed consistency proof, not hardware-backed remote
 attestation: a cryptographic claim about physical model execution requires the external evaluator
 to sign or append-only commit its run. Do not describe the local receipt as that stronger claim.
-Repeat the `preserved` check after archival and immediately before reporting results. It binds the
-whole run trees, so later byte edits or added files invalidate the preservation receipt.
+The wrapper writes `preservation-before-archive-receipt.json`, copies the complete run trees into
+the attempt archive, and writes the distinct `preservation-after-archive-receipt.json` against
+those copies. These checks bind the whole run trees, so later byte edits or added files invalidate
+the preservation receipt.
 
 Archive the JSON verification and preservation receipts alongside:
 
