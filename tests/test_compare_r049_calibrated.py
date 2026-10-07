@@ -115,14 +115,18 @@ def test_perfect_gain_passes_internal_stage1_gate():
 
     report = _compare(rows, control, candidate)
 
-    assert report["schema"] == "r049_calibrated_comparison_v3"
+    assert report["schema"] == "r049_calibrated_comparison_v4"
     delta = report["overall"]["paired_delta"]["equal_semantic_cluster"]
     assert delta["complete_outcome_accuracy"] == 1.0
     assert delta["categorical_brier_absolute_improvement"] == 2.0
     assert delta["categorical_brier_relative_improvement"] == 1.0
     assert delta["complete_outcome_nll_degradation"] < 0
     assert delta["field_accuracy"] == 1.0
-    assert report["internal_stage1_gate"]["passed"] is True
+    assert report["contract"]["canonical_panel_validated"] is False
+    assert report["internal_stage1_gate"]["requirements"][
+        "canonical_panel_validation"
+    ]["passed"] is False
+    assert report["internal_stage1_gate"]["passed"] is False
     assert report["promotion"]["status"] == "not_evaluated"
     assert report["external_gates"]["retention"]["status"] == "not_evaluated"
     assert report["external_gates"]["workflowevals"]["status"] == "not_evaluated"
@@ -244,12 +248,14 @@ def test_file_comparison_binds_manifest_hashes_and_is_deterministic(tmp_path):
     _write_jsonl(candidate_path, [_oracle_prediction(row) for row in rows])
     panel_sha = hashlib.sha256(panel.read_bytes()).hexdigest()
     manifest = artifact / "manifest.json"
+    manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
 
     first = compare_files(
         panel,
         control_path,
         candidate_path,
         manifest_path=manifest,
+        manifest_sha256=manifest_sha,
         expected_hashes={"panel": panel_sha},
         bootstrap_seed=17,
         bootstrap_replicates=200,
@@ -259,6 +265,7 @@ def test_file_comparison_binds_manifest_hashes_and_is_deterministic(tmp_path):
         control_path,
         candidate_path,
         manifest_path=manifest,
+        manifest_sha256=manifest_sha,
         expected_hashes={"panel": panel_sha},
         bootstrap_seed=17,
         bootstrap_replicates=200,
@@ -266,7 +273,34 @@ def test_file_comparison_binds_manifest_hashes_and_is_deterministic(tmp_path):
 
     assert first == second
     assert first["provenance"]["manifest"]["verified"] is True
+    assert first["provenance"]["manifest"]["expected_sha256_verified"] is True
+    assert first["provenance"]["inputs"]["panel"][
+        "expected_sha256_verified"
+    ] is True
+    assert first["contract"]["canonical_panel_validated"] is True
     assert "timestamp" not in json.dumps(first)
+
+
+def test_file_comparison_requires_externally_frozen_panel_hash(tmp_path):
+    panel = tmp_path / "eval.jsonl"
+    control = tmp_path / "control.jsonl"
+    candidate = tmp_path / "candidate.jsonl"
+    manifest = tmp_path / "manifest.json"
+    row = _row("r0", "c0")
+    _write_jsonl(panel, [row])
+    _write_jsonl(control, [_prediction(row, False)])
+    _write_jsonl(candidate, [_prediction(row, True)])
+    manifest.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="externally frozen panel sha256"):
+        compare_files(
+            panel,
+            control,
+            candidate,
+            manifest_path=manifest,
+            manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            bootstrap_replicates=100,
+        )
 
 
 def test_file_comparison_rejects_panel_version_stripping(tmp_path):
@@ -288,6 +322,7 @@ def test_file_comparison_rejects_panel_version_stripping(tmp_path):
     manifest = json.loads(manifest_path.read_text())
     manifest["outputs"]["eval"] = {"rows": len(rows), "sha256": panel_sha}
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     control_path = tmp_path / "control.jsonl"
     candidate_path = tmp_path / "candidate.jsonl"
     predictions = [_oracle_prediction(row) for row in rows]
@@ -300,6 +335,42 @@ def test_file_comparison_rejects_panel_version_stripping(tmp_path):
             control_path,
             candidate_path,
             manifest_path=manifest_path,
+            manifest_sha256=manifest_sha,
+            expected_hashes={"panel": panel_sha},
+            bootstrap_replicates=100,
+        )
+
+
+def test_file_comparison_rejects_rewritten_subset_manifest(tmp_path):
+    artifact = tmp_path / "panel"
+    write_corpus(
+        artifact,
+        seed=17,
+        row_counts={"train": 224, "cal": 224, "eval": 224},
+    )
+    manifest_path = artifact / "manifest.json"
+    frozen_manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    panel = artifact / "eval.jsonl"
+    rows = [json.loads(line) for line in panel.read_text().splitlines()][:16]
+    _write_jsonl(panel, rows)
+    panel_sha = hashlib.sha256(panel.read_bytes()).hexdigest()
+    manifest = json.loads(manifest_path.read_text())
+    manifest["outputs"]["eval"] = {"rows": len(rows), "sha256": panel_sha}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    control_path = tmp_path / "control.jsonl"
+    candidate_path = tmp_path / "candidate.jsonl"
+    predictions = [_oracle_prediction(row) for row in rows]
+    _write_jsonl(control_path, predictions)
+    _write_jsonl(candidate_path, predictions)
+
+    with pytest.raises(ValueError, match="manifest sha256 mismatch"):
+        compare_files(
+            panel,
+            control_path,
+            candidate_path,
+            manifest_path=manifest_path,
+            manifest_sha256=frozen_manifest_sha,
+            expected_hashes={"panel": panel_sha},
             bootstrap_replicates=100,
         )
 

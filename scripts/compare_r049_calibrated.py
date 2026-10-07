@@ -27,7 +27,7 @@ import scripts.build_r048_action_panel as r048_builder
 from scripts.score_exact_policy_panel import NLL_PROBABILITY_FLOOR, classify
 
 
-SCHEMA = "r049_calibrated_comparison_v3"
+SCHEMA = "r049_calibrated_comparison_v4"
 DEFAULT_BOOTSTRAP_SEED = 490_049
 DEFAULT_BOOTSTRAP_REPLICATES = 20_000
 MIN_BOOTSTRAP_REPLICATES = 100
@@ -106,7 +106,7 @@ def _slice_value(row: dict[str, Any], key: str) -> str | None:
     return str(value)
 
 
-def _validate_panel(rows: list[dict[str, Any]]) -> list[str]:
+def _validate_panel(rows: list[dict[str, Any]]) -> tuple[list[str], bool]:
     if not isinstance(rows, list) or not rows:
         raise ValueError("panel must be a nonempty list")
     versions = {
@@ -114,7 +114,8 @@ def _validate_panel(rows: list[dict[str, Any]]) -> list[str]:
         for row in rows if isinstance(row, dict) and isinstance(row.get("meta"), dict)
     }
     versions.discard(None)
-    if versions:
+    canonical_validated = bool(versions)
+    if canonical_validated:
         if versions != {r048_builder.PANEL_VERSION}:
             raise ValueError("panel versions must match the canonical R048 version")
         splits = {row.get("meta", {}).get("split") for row in rows}
@@ -224,7 +225,7 @@ def _validate_panel(rows: list[dict[str, Any]]) -> list[str]:
                 raise ValueError(
                     f"{group_id}: side {side} has inconsistent semantic targets"
                 )
-    return identifiers
+    return identifiers, canonical_validated
 
 
 def _index_predictions(
@@ -757,7 +758,7 @@ def compare_rows(
     provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compare two prediction sets with fail-closed, cluster-aware metrics."""
-    panel_ids = _validate_panel(panel_rows)
+    panel_ids, canonical_validated = _validate_panel(panel_rows)
     panel_id_set = set(panel_ids)
     control_predictions = _index_predictions(
         control_prediction_rows, "control", panel_id_set
@@ -791,6 +792,16 @@ def compare_rows(
     families = _family_nonregression(slices)
     option_order = _option_order_robustness(candidate)
     gate = _internal_gate(overall, coverage, families, slices, option_order)
+    gate["requirements"]["canonical_panel_validation"] = {
+        "passed": canonical_validated,
+        "observed": canonical_validated,
+        "operator": "==",
+        "threshold": True,
+    }
+    gate["failures"] = [
+        name for name, item in gate["requirements"].items() if not item["passed"]
+    ]
+    gate["passed"] = not gate["failures"]
     return {
         "schema": SCHEMA,
         "provenance": provenance or {},
@@ -801,6 +812,7 @@ def compare_rows(
             ),
             "point_estimate_unit": f"equal-weight {INFERENCE_KEY}",
             "rendered_metrics_role": "descriptive_only",
+            "canonical_panel_validated": canonical_validated,
             "brier_improvement_direction": "control_minus_candidate",
             "nll_degradation_direction": "candidate_minus_control",
             "bootstrap": {
@@ -857,12 +869,19 @@ def _verify_manifest(
     panel_path: Path,
     panel_payload: bytes,
     panel_rows: list[dict[str, Any]],
+    expected_manifest_sha256: str,
 ) -> dict[str, Any]:
     try:
         payload = manifest_path.read_bytes()
         manifest = json.loads(payload)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("cannot read a valid panel manifest") from error
+    expected_manifest_sha256 = _checked_hash(
+        expected_manifest_sha256, "manifest expected sha256"
+    )
+    observed_manifest_sha256 = _sha256(payload)
+    if observed_manifest_sha256 != expected_manifest_sha256:
+        raise ValueError("manifest sha256 mismatch")
     if (not isinstance(manifest, dict)
             or manifest.get("panel") != "exact_policy_v1"
             or manifest.get("panel_version") != r048_builder.PANEL_VERSION):
@@ -886,7 +905,8 @@ def _verify_manifest(
     if expectation.get("rows") != len(panel_rows):
         raise ValueError("panel row count differs from panel manifest")
     return {
-        "sha256": _sha256(payload),
+        "sha256": observed_manifest_sha256,
+        "expected_sha256_verified": True,
         "verified": True,
         "panel_sha256": expected_sha,
         "panel_rows": len(panel_rows),
@@ -899,6 +919,7 @@ def compare_files(
     candidate_path: str | Path,
     *,
     manifest_path: str | Path | None = None,
+    manifest_sha256: str | None = None,
     expected_hashes: dict[str, str] | None = None,
     bootstrap_seed: int = DEFAULT_BOOTSTRAP_SEED,
     bootstrap_replicates: int = DEFAULT_BOOTSTRAP_REPLICATES,
@@ -919,8 +940,12 @@ def compare_files(
         expected = _checked_hash(expected, f"{name} expected sha256")
         if hashes[name] != expected:
             raise ValueError(f"{name} sha256 mismatch")
+    if "panel" not in expected_hashes:
+        raise ValueError("an externally frozen panel sha256 is required")
     if manifest_path is None:
         raise ValueError("a canonical R048 panel manifest is required")
+    if manifest_sha256 is None:
+        raise ValueError("an externally frozen panel manifest sha256 is required")
     provenance: dict[str, Any] = {
         "inputs": {
             name: {
@@ -934,7 +959,8 @@ def compare_files(
         "manifest": None,
     }
     provenance["manifest"] = _verify_manifest(
-        Path(manifest_path), paths["panel"], loaded["panel"][1], loaded["panel"][0]
+        Path(manifest_path), paths["panel"], loaded["panel"][1], loaded["panel"][0],
+        manifest_sha256,
     )
     panel_rows = loaded["panel"][0]
     if any(
@@ -998,7 +1024,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--control-predictions", type=Path, required=True)
     parser.add_argument("--candidate-predictions", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--panel-sha256")
+    parser.add_argument("--manifest-sha256", required=True)
+    parser.add_argument("--panel-sha256", required=True)
     parser.add_argument("--control-sha256")
     parser.add_argument("--candidate-sha256")
     parser.add_argument("--out", type=Path, required=True)
@@ -1019,6 +1046,7 @@ def main(argv: list[str] | None = None) -> int:
         args.control_predictions,
         args.candidate_predictions,
         manifest_path=args.manifest,
+        manifest_sha256=args.manifest_sha256,
         expected_hashes=expected_hashes,
         bootstrap_seed=args.bootstrap_seed,
         bootstrap_replicates=args.bootstrap_replicates,
