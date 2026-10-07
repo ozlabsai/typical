@@ -129,8 +129,11 @@ Panel: a minimum 40-case/60-question independent panel: ten long English dossier
 questions each, ten HE↔EN twin groups, and ten real-image cases with real/shuffled/missing controls
 and at least five textual distractors. The ten acquired long sources span five domains and seed the
 English dossiers; they do not replace reviewed Hebrew translations, first-party causal charts, or
-externally authored annotations. Each dossier must expose at least eight retrievable chunks, identify
-the minimal decisive exhibit, and prove that removing it flips a field or complete policy outcome.
+externally authored annotations. Each long dossier must cover its full declared token range with
+contiguous semantic chunks or the frozen 512/64 fallback, preserve explicit global-policy context,
+expose at least 15 retrievable chunks, and contain one Choice, Noul, and Score question. It must
+identify the minimal decisive exhibit and prove that removing it flips a field or complete policy
+outcome.
 
 Chunking is frozen before scoring: semantic section boundaries when present; otherwise 512-token
 chunks with 64-token overlap. Every question is embedded separately with its options and policy role.

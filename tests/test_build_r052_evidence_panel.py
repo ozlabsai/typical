@@ -115,6 +115,7 @@ def _case(language: str, suffix: str, source: str, image_a: str, image_b: str) -
                 "question_ref": "approve",
                 "text": "האם לאשר?" if hebrew else "Should this be approved?",
                 "options": ["כן", "לא"] if hebrew else ["yes", "no"],
+                "decision_type": "choice",
                 "policy_role": "choice",
                 "twin_anchor": "approve",
                 "decisive_chunk_refs": ["decisive-text", "image-real"],

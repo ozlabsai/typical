@@ -36,7 +36,7 @@ try:
 except ModuleNotFoundError:  # Supports ``uv run python scripts/build_...py``.
     import score_r052_evidence_retrieval as scoring
 
-SPEC_VERSION = "r052-authored-dossier-spec-v1"
+SPEC_VERSION = "r052-authored-dossier-spec-v2"
 SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v2"
 ANNOTATION_VERSION = "r052-authored-causal-annotations-v1"
 AUDIT_INPUT_VERSION = "r052-contamination-audit-input-v1"
@@ -91,6 +91,7 @@ QUESTION_SPEC_KEYS = {
     "question_ref",
     "text",
     "options",
+    "decision_type",
     "policy_role",
     "twin_anchor",
     "decisive_chunk_refs",
@@ -637,6 +638,8 @@ def _validate_spec(
             question_refs.add(ref)
             for field in ("text", "policy_role"):
                 _text(question[field], f"{question_label}.{field}")
+            if question["decision_type"] not in {"choice", "noul", "score"}:
+                raise ValueError(f"{question_label}.decision_type is invalid")
             if question["twin_anchor"] is not None:
                 _text(question["twin_anchor"], f"{question_label}.twin_anchor")
             options = question["options"]
@@ -705,9 +708,7 @@ def _validate_production_contract(cases: Sequence[Mapping[str, Any]]) -> None:
             and chunk["image_control"]["variant"] == "real"
         }
         for question in case["questions"]:
-            role = question["policy_role"].casefold()
-            if role in typed_role_counts:
-                typed_role_counts[role] += 1
+            typed_role_counts[question["decision_type"]] += 1
             if real_refs.intersection(question["decisive_chunk_refs"]):
                 image_questions += 1
             if case["context_tokens"] >= LONG_CONTEXT_TOKENS:
