@@ -37,6 +37,13 @@ from scripts.soft_action_executor import (
     semantic_truth_logits,
     soft_action_log_distribution,
 )
+from scripts.typed_policy_executor import (
+    PANEL as TYPED_POLICY_PANEL,
+    hard_typed_assignment,
+    typed_policy_truth_logits,
+    validate_typed_policy_row,
+    validate_typed_policy_siblings,
+)
 
 
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -48,7 +55,7 @@ SYSTEM = (
 TARGET_MODULES = (
     r".*language_model.*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$"
 )
-GROUPED_ACTION_PANELS = frozenset(("action_v1", "exact_policy_v1"))
+GROUPED_ACTION_PANELS = frozenset(("action_v1", "exact_policy_v1", TYPED_POLICY_PANEL))
 
 
 def _unique_json_object(pairs):
@@ -323,8 +330,48 @@ def _exact_policy_group(row, source_dir=None):
     }
 
 
+def _typed_policy_group(row, source_dir=None):
+    """Validate and cache one categorical field group for exact execution."""
+    del source_dir  # Typed policy groups are intentionally text-only.
+    contract = validate_typed_policy_row(row)
+    views = []
+    for qid in contract["qids"]:
+        question = row["questions"][qid]
+        labels = list(question["criteria"])
+        distribution = contract["soft_targets"].get(qid)
+        target = row["targets"][qid]["label"]
+        probabilities = ([distribution[label] for label in labels]
+                         if distribution is not None
+                         else [float(label == target) for label in labels])
+        views.append({
+            "id": f"{contract['id']}/{qid}",
+            "state": row["state"],
+            "instructions": question["instructions"],
+            "items": list(question["criteria"].items()),
+            "probabilities": probabilities,
+            # Canonical/reversed siblings are deliberate presentations, not
+            # candidates for the trainer's per-step option shuffle.
+            "fixed_order": True,
+            "gold_label": target,
+            "image": None,
+        })
+    return {
+        "id": contract["id"],
+        "action_kind": TYPED_POLICY_PANEL,
+        "action_views": views,
+        "action_qids": list(contract["qids"]),
+        "action_qid_to_field": dict(contract["qid_to_field"]),
+        "action_trace": dict(contract["action_trace"]),
+        "compiled_policy": contract["compiled_policy"],
+        "gold_outcome": contract["gold_outcome"],
+        "decision_threshold": contract["decision_threshold"],
+        "action_positive_labels": dict(contract["positive_labels"]),
+    }
+
+
 def load_examples(paths):
     examples = []
+    typed_rows = []
     for path in paths:
         path = Path(path)
         with path.open() as source:
@@ -337,6 +384,10 @@ def load_examples(paths):
                         continue
                     if isinstance(meta, dict) and meta.get("panel") == "exact_policy_v1":
                         examples.append(_exact_policy_group(row, path.parent))
+                        continue
+                    if isinstance(meta, dict) and meta.get("panel") == TYPED_POLICY_PANEL:
+                        typed_rows.append(row)
+                        examples.append(_typed_policy_group(row, path.parent))
                         continue
                     wrapped_views = [
                         view for key in ("paired_views", "auxiliary_views")
@@ -439,6 +490,8 @@ def load_examples(paths):
                         examples.append(example)
                     else:
                         examples.extend(flatten_row(row, path.parent))
+    if typed_rows:
+        validate_typed_policy_siblings(typed_rows)
     return examples
 
 
@@ -590,10 +643,19 @@ def grouped_exact_policy_slot_loss(
             "brier", decision_threshold, action_temperature)
     if not field_losses:
         raise ValueError("exact-policy group needs at least one field loss")
-    field_loss = torch.stack(field_losses).mean()
     truth_logits = semantic_truth_logits(
         field_scores, field_labels, decision_threshold=decision_threshold,
         temperature=action_temperature)
+    return _grouped_policy_slot_loss(
+        field_losses, truth_logits, policy, gold_outcome, action_loss_weight,
+        exact_policy_outcome_loss, return_components)
+
+
+def _grouped_policy_slot_loss(field_losses, truth_logits, policy, gold_outcome,
+                              action_loss_weight, exact_policy_outcome_loss,
+                              return_components):
+    """Score a Boolean policy distribution shared by binary and typed fields."""
+    field_loss = torch.stack(field_losses).mean()
     log_distribution = exact_outcome_log_distribution(policy, truth_logits)
     # Compute both experimental arms from the identical exact distribution so
     # NLL and Brier runs have matched executor work and differ only in score.
@@ -617,6 +679,27 @@ def grouped_exact_policy_slot_loss(
     return result
 
 
+def grouped_typed_policy_slot_loss(
+        field_losses, field_scores, field_labels, positive_labels, policy, gold_outcome,
+        decision_threshold, action_loss_weight, action_temperature,
+        exact_policy_outcome_loss="nll", return_components=False):
+    """Mean categorical CE plus a proper score over exact policy outcomes."""
+    validate_action_objective(action_loss_weight, action_temperature)
+    validate_exact_policy_outcome_objective(
+        exact_policy_outcome_loss, decision_threshold, action_temperature)
+    if return_components:
+        validate_exact_policy_outcome_objective(
+            "brier", decision_threshold, action_temperature)
+    if not field_losses:
+        raise ValueError("typed-policy group needs at least one field loss")
+    truth_logits = typed_policy_truth_logits(
+        field_scores, field_labels, positive_labels,
+        decision_threshold=decision_threshold, temperature=action_temperature)
+    return _grouped_policy_slot_loss(
+        field_losses, truth_logits, policy, gold_outcome, action_loss_weight,
+        exact_policy_outcome_loss, return_components)
+
+
 def hard_action_from_scores(field_scores, field_labels, decision_threshold):
     """Replay serving's semantic threshold and Boolean executor for telemetry."""
     truths = {}
@@ -635,6 +718,14 @@ def hard_exact_outcome_from_scores(field_scores, field_labels, policy,
         labels = field_labels[field]
         yes_probability = F.softmax(scores.detach().float(), dim=0)[labels.index("yes")]
         truths[field] = bool(yes_probability.item() >= decision_threshold)
+    return execute_policy(policy, truths)
+
+
+def hard_typed_outcome_from_scores(field_scores, field_labels, positive_labels, policy,
+                                   decision_threshold):
+    """Threshold categorical event mass and run the deterministic policy."""
+    truths = hard_typed_assignment(
+        field_scores, field_labels, positive_labels, decision_threshold)
     return execute_policy(policy, truths)
 
 
@@ -884,9 +975,10 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     if return_exact_policy_components:
         if action_loss_weight != 0:
             raise ValueError("exact-policy component probing requires zero action loss weight")
-        if (not examples or any(example.get("action_kind") != "exact_policy_v1"
+        if (not examples or any(example.get("action_kind") not in
+                                {"exact_policy_v1", TYPED_POLICY_PANEL}
                                 for example in examples)):
-            raise ValueError("exact-policy components require only exact-policy groups")
+            raise ValueError("exact-policy components require only executable policy groups")
     logical_views = [logical_slot_views(example) for example in examples]
     flat_examples = [view for views in logical_views for view in views]
     image_examples = [example for example in flat_examples if example.get("image")]
@@ -967,19 +1059,36 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                 scores, labels = view_scores[cursor + local_index]
                 field_scores[field] = scores
                 field_labels[field] = labels
-            if logical_example.get("action_kind") == "exact_policy_v1":
-                exact_result = grouped_exact_policy_slot_loss(
-                    slot_view_losses, field_scores, field_labels,
-                    logical_example["compiled_policy"], logical_example["gold_outcome"],
-                    logical_example["decision_threshold"], action_loss_weight,
-                    action_temperature, exact_policy_outcome_loss,
-                    return_components=return_exact_policy_components)
+            action_kind = logical_example.get("action_kind")
+            if action_kind in {"exact_policy_v1", TYPED_POLICY_PANEL}:
+                if action_kind == TYPED_POLICY_PANEL:
+                    exact_result = grouped_typed_policy_slot_loss(
+                        slot_view_losses, field_scores, field_labels,
+                        logical_example["action_positive_labels"],
+                        logical_example["compiled_policy"], logical_example["gold_outcome"],
+                        logical_example["decision_threshold"], action_loss_weight,
+                        action_temperature, exact_policy_outcome_loss,
+                        return_components=return_exact_policy_components)
+                else:
+                    exact_result = grouped_exact_policy_slot_loss(
+                        slot_view_losses, field_scores, field_labels,
+                        logical_example["compiled_policy"], logical_example["gold_outcome"],
+                        logical_example["decision_threshold"], action_loss_weight,
+                        action_temperature, exact_policy_outcome_loss,
+                        return_components=return_exact_policy_components)
                 action_slot, _, action_loss = exact_result[:3]
                 if return_exact_policy_components:
                     exact_component_slots.append(exact_result[3])
-                predicted_action = hard_exact_outcome_from_scores(
-                    field_scores, field_labels, logical_example["compiled_policy"],
-                    logical_example["decision_threshold"])
+                if action_kind == TYPED_POLICY_PANEL:
+                    predicted_action = hard_typed_outcome_from_scores(
+                        field_scores, field_labels,
+                        logical_example["action_positive_labels"],
+                        logical_example["compiled_policy"],
+                        logical_example["decision_threshold"])
+                else:
+                    predicted_action = hard_exact_outcome_from_scores(
+                        field_scores, field_labels, logical_example["compiled_policy"],
+                        logical_example["decision_threshold"])
                 action_correct += int(predicted_action == logical_example["gold_outcome"])
                 action_loss_kinds.append(exact_policy_outcome_loss)
             else:
@@ -1067,7 +1176,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
             stats["action_ce"] = mean_action_loss
         elif loss_kinds == {"brier"}:
             stats["action_brier"] = mean_action_loss
-        if any(example.get("action_kind") == "exact_policy_v1"
+        if any(example.get("action_kind") in {"exact_policy_v1", TYPED_POLICY_PANEL}
                for example in action_examples):
             stats["exact_policy_outcome_loss"] = exact_policy_outcome_loss
     canonical_ce_sum = torch.stack(canonical_ce_losses).detach().sum().item()
