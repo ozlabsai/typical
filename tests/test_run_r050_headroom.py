@@ -55,47 +55,62 @@ def _predictions(rows, failed=()):
 
 
 @pytest.fixture(scope="module")
-def canonical_payloads():
+def canonical_payloads(tmp_path_factory):
     builder = runner.r048
-    prefix = builder.DEFAULT_ROWS["eval"]
-    count = runner.headroom.HEADROOM_ROWS
-    rows = builder.build("eval", prefix + count, seed=48)[prefix:]
+    core = tmp_path_factory.mktemp("runner-frozen-core")
+    builder.write_corpus(core, seed=48)
+    rows, manifest = runner.headroom.build_headroom(core, runner.headroom.FROZEN_CORE_MANIFEST_SHA256)
     payload = builder._jsonl_bytes(rows)
-    builder_hash = runner.file_hash(builder.__file__)
-    manifest = {"schema": runner.headroom.SCHEMA, "role": "headroom", "panel": "exact_policy_v1",
-                "panel_version": builder.PANEL_VERSION, "generator_sha256": builder_hash,
-                "headroom_builder_sha256": runner.file_hash(runner.headroom.__file__), "seed": 48,
-                "cluster_size": 8, "row_counts": {"headroom": count},
-                "outputs": {"headroom": {"rows": count, "sha256": runner._sha(payload)}},
-                "bindings": {"r048_builder_sha256": builder_hash,
-                             "core_manifest": {"sha256": "a" * 64},
-                             "core_files": {split: {"rows": n, "sha256": "b" * 64}
-                                            for split, n in builder.DEFAULT_ROWS.items()}},
-                "construction": {"canonical_row_split": "eval", "frozen_prefix_rows": prefix,
-                                 "expanded_eval_rows": prefix + count, "tail_clusters": count // 8,
-                                 "prefix_objects_and_bytes_identical": True}}
+    assert runner._sha(payload) == runner.FROZEN_DATA_SHA256
+    assert runner._sha(_manifest_bytes(manifest)) == runner.FROZEN_MANIFEST_SHA256
     return rows, payload, manifest
 
 
+def _manifest_bytes(manifest):
+    return (json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
+
+
 def _validate(payload, manifest):
-    encoded = runner._json(manifest)
+    encoded = _manifest_bytes(manifest)
     return runner.validate_headroom(payload, encoded, runner._sha(payload), runner._sha(encoded))
 
 
-def _assets(tmp_path):
+def _assets(tmp_path, monkeypatch):
     model = tmp_path / "models--google--gemma-4-12B-it" / "snapshots" / runner.FROZEN_BASE_REVISION
     model.mkdir(parents=True)
     (model / "config.json").write_text('{"model_type":"gemma4"}')
     (model / "model.safetensors").write_bytes(b"synthetic model fixture, never loaded")
     inventory = tmp_path / "inventory.json"
-    inventory.write_bytes(runner._json(build_inventory(model)))
+    frozen_inventory = {"files": runner.FROZEN_BASE_TREE_FILES, "model_id": runner.MODEL_ID,
+                        "revision": runner.FROZEN_BASE_REVISION, "schema_version": "r047-model-inventory-v1",
+                        "tree_sha256": runner.FROZEN_BASE_TREE_SHA256}
+    inventory.write_bytes((json.dumps(frozen_inventory, indent=2, sort_keys=True) + "\n").encode())
+    assert runner.file_hash(inventory) == runner.FROZEN_INVENTORY_SHA256
     adapter = tmp_path / "adapter"
     adapter.mkdir()
     (adapter / "adapter_config.json").write_bytes(runner._json({"peft_type": "LORA", "base_model_name_or_path": runner.MODEL_ID}))
     (adapter / "adapter_model.safetensors").write_bytes(b"synthetic adapter fixture, never loaded")
-    digest, count = runner.tree_hash(adapter)
-    return model, inventory, adapter, {"expected_inventory_sha256": runner.file_hash(inventory),
-                                      "expected_adapter_tree_sha256": digest, "expected_adapter_tree_files": count}
+    (adapter / "README.md").write_text("synthetic parent fixture")
+    (adapter / "training.json").write_text("{}")
+    actual_tree_hash = runner.tree_hash
+    model_fixture_tree, adapter_fixture_tree = actual_tree_hash(model), actual_tree_hash(adapter)
+    def verify_fixture_inventory(path, root, revision):
+        # Simulate the existing verifier's successful full real-weight verification,
+        # while still detecting mutations of our explicit CPU-only fixture bytes.
+        assert revision == runner.FROZEN_BASE_REVISION
+        if actual_tree_hash(root) != model_fixture_tree:
+            raise ValueError("staged model tree differs from model inventory")
+        return frozen_inventory, runner.file_hash(path)
+    def verify_fixture_adapter(root):
+        observed = actual_tree_hash(root)
+        if Path(root) == adapter and observed == adapter_fixture_tree:
+            return runner.FROZEN_PARENT_TREE_SHA256, runner.FROZEN_PARENT_TREE_FILES
+        return observed
+    monkeypatch.setattr(runner, "verify_inventory", verify_fixture_inventory)
+    monkeypatch.setattr(runner, "tree_hash", verify_fixture_adapter)
+    return model, inventory, adapter, {"expected_inventory_sha256": runner.FROZEN_INVENTORY_SHA256,
+                                      "expected_adapter_tree_sha256": runner.FROZEN_PARENT_TREE_SHA256,
+                                      "expected_adapter_tree_files": runner.FROZEN_PARENT_TREE_FILES}
 
 
 def _runtime():
@@ -113,7 +128,13 @@ def test_canonical_full_tail_external_hashes_and_current_builder_validation(cano
     rows, payload, manifest = canonical_payloads
     assert _validate(payload, manifest)[0] == rows
     assert len(rows) == 672
-    encoded = runner._json(manifest)
+    selection = manifest["construction"]["selection"]
+    assert selection["selected_cluster_indices"] != list(range(336, 420))
+    assert selection["selected_cluster_indices_sha256"] == runner.FROZEN_SELECTION_SHA256
+    assert manifest["construction"]["expanded_eval_rows"] == 5376
+    assert manifest["construction"]["candidate_pool"]["clusters"] == 336
+    assert {item["clusters"] for item in manifest["factor_counts"]["regime_surface"]} == {21}
+    encoded = _manifest_bytes(manifest)
     for data_hash, manifest_hash in ((None, runner._sha(encoded)), (runner._sha(payload), None),
                                      ("0" * 64, runner._sha(encoded)), (runner._sha(payload), "0" * 64)):
         with pytest.raises(ValueError, match="externally expected"):
@@ -138,7 +159,7 @@ def test_tampered_bindings_and_core_relabeling_fail(canonical_payloads, change):
     if change == "output_hash": changed["outputs"]["headroom"]["sha256"] = "0" * 64
     if change == "core_binding": changed["bindings"]["r048_builder_sha256"] = "0" * 64
     if change == "prefix": changed["construction"]["frozen_prefix_rows"] = 0
-    if change == "tail_size": changed["construction"]["tail_clusters"] -= 1
+    if change == "tail_size": changed["construction"]["candidate_pool"]["clusters"] -= 1
     if change == "no_tail_claim": changed["construction"]["prefix_objects_and_bytes_identical"] = False
     with pytest.raises(ValueError): _validate(payload, changed)
 
@@ -158,6 +179,48 @@ def test_forged_rows_still_fail_when_hashes_and_manifest_rebound(canonical_paylo
     rebound = copy.deepcopy(manifest)
     rebound["outputs"]["headroom"]["sha256"] = runner._sha(payload)
     with pytest.raises(ValueError): _validate(payload, rebound)
+
+
+@pytest.mark.parametrize("change", ["candidate_hash", "selection_digest", "selected_indices", "balanced_claim",
+                                     "boolean_balanced_claim", "overlap_claim", "missing_overlap_key", "expanded_proof"])
+def test_independent_selection_and_expanded_proof_rejects_forged_manifest_even_bypassing_anchor_for_test(
+        canonical_payloads, monkeypatch, change):
+    _, payload, original = canonical_payloads
+    manifest = copy.deepcopy(original)
+    if change == "candidate_hash": manifest["construction"]["candidate_pool"]["sha256"] = "0" * 64
+    if change == "selection_digest": manifest["construction"]["selection"]["selected_cluster_indices_sha256"] = "0" * 64
+    if change == "selected_indices": manifest["construction"]["selection"]["selected_cluster_indices"].reverse()
+    if change == "balanced_claim": manifest["factor_counts"]["regime_surface"][0]["clusters"] = 22
+    if change == "boolean_balanced_claim":
+        for cell in manifest["factor_counts"]["base_cells"]: cell["clusters"] = True
+    if change == "overlap_claim": manifest["audit"]["cross_core_overlaps"]["eval"]["encoder_semantic_signature"] = 1
+    if change == "missing_overlap_key": manifest["audit"]["cross_core_overlaps"]["cal"].pop("model_input_exact")
+    if change == "expanded_proof": manifest["audit"]["expanded_corpus"]["splits"]["eval"]["rows"] = 2688
+    # Production cannot bypass the literal. This deliberately exercises the
+    # second, independently recomputed validation boundary as well.
+    monkeypatch.setattr(runner, "FROZEN_MANIFEST_SHA256", runner._sha(_manifest_bytes(manifest)))
+    with pytest.raises(ValueError): _validate(payload, manifest)
+
+
+def test_contiguous_first_eighty_four_and_subset_cannot_reuse_balanced_v2_receipt(canonical_payloads, monkeypatch):
+    _, _, original = canonical_payloads
+    prefix = runner.r048.DEFAULT_ROWS["eval"]
+    biased = runner.r048.build("eval", prefix + 672, 48)[prefix:]
+    manifest = copy.deepcopy(original)
+    payload = runner.r048._jsonl_bytes(biased)
+    manifest["outputs"]["headroom"]["sha256"] = runner._sha(payload)
+    manifest["construction"]["selection"] = runner.headroom._selection_receipt(list(range(336, 420)))
+    manifest["factor_counts"] = runner.headroom._factor_counts(biased)
+    monkeypatch.setattr(runner, "FROZEN_DATA_SHA256", runner._sha(payload))
+    monkeypatch.setattr(runner, "FROZEN_MANIFEST_SHA256", runner._sha(_manifest_bytes(manifest)))
+    with pytest.raises(ValueError, match="rotation"):
+        _validate(payload, manifest)
+    subset = runner.r048._jsonl_bytes(biased[:-8])
+    manifest["outputs"]["headroom"]["sha256"] = runner._sha(subset)
+    monkeypatch.setattr(runner, "FROZEN_DATA_SHA256", runner._sha(subset))
+    monkeypatch.setattr(runner, "FROZEN_MANIFEST_SHA256", runner._sha(_manifest_bytes(manifest)))
+    with pytest.raises(ValueError, match="complete expected"):
+        _validate(subset, manifest)
 
 
 def test_error_gate_recomputes_outcomes_and_reports_rows_and_independent_clusters():
@@ -225,11 +288,11 @@ def test_bad_cluster_metadata_cannot_inflate_independent_failures(change):
     with pytest.raises(ValueError): runner.evaluate_headroom(rows, _predictions(rows))
 
 
-def test_actual_inventory_and_adapter_trees_require_external_anchors(tmp_path):
-    model, inventory, adapter, expected = _assets(tmp_path)
+def test_inventory_and_adapter_verifiers_require_external_literal_anchors(tmp_path, monkeypatch):
+    model, inventory, adapter, expected = _assets(tmp_path, monkeypatch)
     receipt = runner.verify_assets(model, inventory, adapter, **expected)
     assert receipt["model_revision"] == runner.FROZEN_BASE_REVISION
-    assert receipt["adapter_tree_files"] == 2
+    assert receipt["adapter_tree_files"] == 4
     for key, value in (("expected_inventory_sha256", "0" * 64), ("expected_adapter_tree_sha256", "0" * 64),
                        ("expected_adapter_tree_files", 3), ("expected_adapter_tree_files", True)):
         changed = {**expected, key: value}
@@ -239,8 +302,8 @@ def test_actual_inventory_and_adapter_trees_require_external_anchors(tmp_path):
         runner.verify_assets(model, inventory, adapter, **expected)
 
 
-def test_adapter_payload_symlink_and_base_revision_tampering_fail(tmp_path):
-    model, inventory, adapter, expected = _assets(tmp_path)
+def test_adapter_payload_symlink_and_base_revision_tampering_fail(tmp_path, monkeypatch):
+    model, inventory, adapter, expected = _assets(tmp_path, monkeypatch)
     weights = adapter / "adapter_model.safetensors"
     weights.write_bytes(b"different parent")
     with pytest.raises(ValueError, match="parent adapter tree"):
@@ -253,9 +316,35 @@ def test_adapter_payload_symlink_and_base_revision_tampering_fail(tmp_path):
     weights.write_bytes(b"fixture")
     config = adapter / "adapter_config.json"
     config.write_bytes(runner._json({"peft_type": "LORA", "base_model_name_or_path": runner.MODEL_ID, "revision": "wrong"}))
-    digest, count = runner.tree_hash(adapter)
-    expected.update(expected_adapter_tree_sha256=digest, expected_adapter_tree_files=count)
+    monkeypatch.setattr(runner, "tree_hash", lambda path: (runner.FROZEN_PARENT_TREE_SHA256, runner.FROZEN_PARENT_TREE_FILES))
     with pytest.raises(ValueError, match="different base revision"):
+        runner.verify_assets(model, inventory, adapter, **expected)
+
+
+@pytest.mark.parametrize("tree,files", [("0" * 64, 9), (runner.FROZEN_BASE_TREE_SHA256, 8),
+                                      (runner.FROZEN_BASE_TREE_SHA256, 9.0)])
+def test_returned_base_inventory_tree_must_match_literal_not_just_caller_inventory(tmp_path, monkeypatch, tree, files):
+    model, inventory, adapter, expected = _assets(tmp_path, monkeypatch)
+    wrong = json.loads(inventory.read_bytes())
+    wrong.update(tree_sha256=tree, files=files)
+    monkeypatch.setattr(runner, "verify_inventory", lambda *args: (wrong, runner.FROZEN_INVENTORY_SHA256))
+    with pytest.raises(ValueError, match="verified base tree"):
+        runner.verify_assets(model, inventory, adapter, **expected)
+
+
+def test_locally_regenerated_inventory_and_adapter_receipts_cannot_reanchor_trust(tmp_path, monkeypatch):
+    model, inventory, adapter, expected = _assets(tmp_path, monkeypatch)
+    inventory.write_bytes(runner._json(build_inventory(model)))
+    expected["expected_inventory_sha256"] = runner.file_hash(inventory)
+    with pytest.raises(ValueError, match="audited literal"):
+        runner.verify_assets(model, inventory, adapter, **expected)
+    # A coherent local adapter hash still is not the frozen R044 parent.
+    expected["expected_inventory_sha256"] = runner.FROZEN_INVENTORY_SHA256
+    frozen = {"files": 9, "model_id": runner.MODEL_ID, "revision": runner.FROZEN_BASE_REVISION,
+              "schema_version": "r047-model-inventory-v1", "tree_sha256": runner.FROZEN_BASE_TREE_SHA256}
+    inventory.write_bytes((json.dumps(frozen, indent=2, sort_keys=True) + "\n").encode())
+    expected["expected_adapter_tree_sha256"] = "a" * 64
+    with pytest.raises(ValueError, match="audited R044"):
         runner.verify_assets(model, inventory, adapter, **expected)
 
 
@@ -295,8 +384,8 @@ def test_cpu_mocked_run_binds_assets_code_runtime_and_complete_predictions(tmp_p
     rows, payload, manifest = canonical_payloads
     data, manifest_path = tmp_path / "headroom.jsonl", tmp_path / "manifest.json"
     data.write_bytes(payload)
-    manifest_path.write_bytes(runner._json(manifest))
-    model, inventory, adapter, asset_expectations = _assets(tmp_path)
+    manifest_path.write_bytes(_manifest_bytes(manifest))
+    model, inventory, adapter, asset_expectations = _assets(tmp_path, monkeypatch)
     def fake_infer(rows, model, adapter):
         return _predictions(rows, range(len(rows))), _runtime(), {"1": sum(len(row["questions"]) for row in rows)}
     monkeypatch.setattr(runner, "infer_rows", fake_infer)
@@ -310,13 +399,14 @@ def test_cpu_mocked_run_binds_assets_code_runtime_and_complete_predictions(tmp_p
     assert (tmp_path / "out" / "complete.json").is_file()
 
 
-@pytest.mark.parametrize("failure", ["inventory", "adapter", "missing_prediction", "runtime", "batch_shape", "changed_data"])
+@pytest.mark.parametrize("failure", ["inventory", "adapter", "missing_prediction", "runtime", "batch_shape", "changed_data",
+                                     "changed_inventory", "changed_adapter", "changed_model"])
 def test_run_invalid_assets_execution_or_predictions_never_publish(tmp_path, canonical_payloads, monkeypatch, failure):
     _, payload, manifest = canonical_payloads
     data, manifest_path = tmp_path / "headroom.jsonl", tmp_path / "manifest.json"
     data.write_bytes(payload)
-    manifest_path.write_bytes(runner._json(manifest))
-    model, inventory, adapter, expectations = _assets(tmp_path)
+    manifest_path.write_bytes(_manifest_bytes(manifest))
+    model, inventory, adapter, expectations = _assets(tmp_path, monkeypatch)
     if failure == "inventory": expectations["expected_inventory_sha256"] = "0" * 64
     if failure == "adapter": expectations["expected_adapter_tree_sha256"] = "0" * 64
     def fake_infer(rows, model, adapter):
@@ -325,6 +415,9 @@ def test_run_invalid_assets_execution_or_predictions_never_publish(tmp_path, can
         if failure == "runtime": runtime["sdpa_profiler_observed"] = False
         if failure == "batch_shape": histogram = {"2": 1}
         if failure == "changed_data": data.write_bytes(payload + b"\n")
+        if failure == "changed_inventory": inventory.write_bytes(inventory.read_bytes() + b"\n")
+        if failure == "changed_adapter": (adapter / "adapter_model.safetensors").write_bytes(b"changed parent")
+        if failure == "changed_model": (model / "model.safetensors").write_bytes(b"changed base")
         return predictions, runtime, histogram
     monkeypatch.setattr(runner, "infer_rows", fake_infer)
     with pytest.raises(ValueError):
