@@ -1,0 +1,346 @@
+{
+  "schema_version": "r052-source-acquisition-manifest-v1",
+  "purpose": "Immutable natural-source acquisition inputs only; downstream builders must separately bind chunk, translation, image, annotation, and audit receipts into r052-source-provenance-manifest-v2.",
+  "benchmark_derived": false,
+  "sealed_benchmark_data_included": false,
+  "extraction": {
+    "program": "pdftotext",
+    "version": "26.04.0",
+    "flags": [
+      "-layout",
+      "-enc",
+      "UTF-8",
+      "-eol",
+      "unix"
+    ],
+    "encoding": "UTF-8"
+  },
+  "license_policies": {
+    "ntsb_staff_text": {
+      "source_family": "public_domain",
+      "license_id": "LicenseRef-USGov-NTSB-Staff-Text",
+      "policy_url": "https://www.ntsb.gov/about/policies/pages/policies.aspx",
+      "scope": "Only text prepared by NTSB employees as part of their official duties is treated as public domain. Copyrighted third-party text, photographs, illustrations, pictorial material, the NTSB logo, and the NTSB seal are outside this clearance and must be excluded unless separately cleared.",
+      "attribution": "Courtesy: National Transportation Safety Board",
+      "evaluation_use_cleared": true,
+      "staff_text_redistribution_permitted": true,
+      "raw_pdf_redistribution_permitted": false,
+      "third_party_material_excluded": true,
+      "downstream_review_required": true
+    },
+    "gao_government_work": {
+      "source_family": "public_domain",
+      "license_id": "LicenseRef-USGov-GAO-Work",
+      "policy_url": "https://www.gao.gov/copyright",
+      "scope": "GAO products and information are United States government works, but embedded copyrighted images or other third-party material are outside this clearance and must be excluded unless separately cleared. Raw PDFs are retained only as local verification inputs.",
+      "attribution": "U.S. Government Accountability Office (GAO)",
+      "evaluation_use_cleared": true,
+      "staff_text_redistribution_permitted": true,
+      "raw_pdf_redistribution_permitted": false,
+      "third_party_material_excluded": true,
+      "downstream_review_required": true
+    }
+  },
+  "snapshots": [
+    {
+      "id": "AAR0002",
+      "agency": "National Transportation Safety Board",
+      "title": "Crash During Landing, Federal Express, Inc., McDonnell Douglas MD-11, N611FE, Newark International Airport, Newark, New Jersey, July 31, 1997",
+      "report_id": "NTSB/AAR-00/02",
+      "package_id": "PB2000-910402",
+      "upstream_revision": "NTSB/AAR-00/02+PB2000-910402",
+      "upstream_url": "https://www.ntsb.gov/investigations/AccidentReports/Reports/AAR0002.pdf",
+      "adoption_or_issue_date": "2000-07-25",
+      "public_release_date": null,
+      "intended_domain": "safety",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "ntsb_staff_text",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "AAR0002.pdf",
+        "sha256": "9c4b12ceb8adb5938f65836c2f09cae6eac0485ef8bbdfdd875c1271c651b1d4",
+        "bytes": 6922000,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "AAR0002.txt",
+        "sha256": "fdcbeac4a8c563119d1345131a96a85d9ee1f1815423b71a21a223b52c86f670",
+        "bytes": 244740,
+        "words": 37579,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    },
+    {
+      "id": "HAR0302",
+      "agency": "National Transportation Safety Board",
+      "title": "Ford Explorer Sport Collision With Ford Windstar Minivan and Jeep Grand Cherokee on Interstate 95/495 Near Largo, Maryland, February 1, 2002",
+      "report_id": "NTSB/HAR-03/02",
+      "package_id": "PB2003-916202",
+      "upstream_revision": "NTSB/HAR-03/02+PB2003-916202",
+      "upstream_url": "https://www.ntsb.gov/investigations/AccidentReports/Reports/HAR0302.pdf",
+      "adoption_or_issue_date": "2003-06-03",
+      "public_release_date": null,
+      "intended_domain": "safety",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "ntsb_staff_text",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "HAR0302.pdf",
+        "sha256": "f08db7111434f1600165c66250ebb8a8485c80ba47d317d6e879048ae05f294b",
+        "bytes": 2008787,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "HAR0302.txt",
+        "sha256": "3a5fef0cd433e1d2f69e92597a83dc6e77fa14fb1100e91cf8844048818453b5",
+        "bytes": 185529,
+        "words": 27438,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    },
+    {
+      "id": "MAR0905",
+      "agency": "National Transportation Safety Board",
+      "title": "Sinking of U.S. Fish Processing Vessel Alaska Ranger, Bering Sea, March 23, 2008",
+      "report_id": "NTSB/MAR-09/05",
+      "package_id": "PB2009-916405",
+      "upstream_revision": "NTSB/MAR-09/05+PB2009-916405",
+      "upstream_url": "https://www.ntsb.gov/investigations/AccidentReports/Reports/MAR0905.pdf",
+      "adoption_or_issue_date": "2009-09-30",
+      "public_release_date": null,
+      "intended_domain": "safety",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "ntsb_staff_text",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "MAR0905.pdf",
+        "sha256": "8e03a006b11be4738fe0291334a5433b605270d05e824d42d8aac5fa595f98d0",
+        "bytes": 2683084,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "MAR0905.txt",
+        "sha256": "18e150f1acf3b14741be0b3f916464bf32daf37f71b1786645879db54fb7ded2",
+        "bytes": 271319,
+        "words": 36876,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    },
+    {
+      "id": "PAR0901",
+      "agency": "National Transportation Safety Board",
+      "title": "Rupture of Hazardous Liquid Pipeline With Release and Ignition of Propane, Carmichael, Mississippi, November 1, 2007",
+      "report_id": "NTSB/PAR-09/01",
+      "package_id": "PB2009-916501",
+      "upstream_revision": "NTSB/PAR-09/01+PB2009-916501",
+      "upstream_url": "https://www.ntsb.gov/investigations/AccidentReports/Reports/PAR0901.pdf",
+      "adoption_or_issue_date": "2009-10-14",
+      "public_release_date": null,
+      "intended_domain": "safety",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "ntsb_staff_text",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "PAR0901.pdf",
+        "sha256": "627a286fe2649bc48352607d03112a2a909d43ea9ef6ff49275db88a7c6d895a",
+        "bytes": 1293664,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "PAR0901.txt",
+        "sha256": "11ea5c332b2e65d3007ae4a1331b320e1f67eac50785b1dddf3d757a68170175",
+        "bytes": 168665,
+        "words": 22521,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    },
+    {
+      "id": "RAR1202",
+      "agency": "National Transportation Safety Board",
+      "title": "Collision of BNSF Coal Train With the Rear End of Standing BNSF Maintenance-of-Way Equipment Train, Red Oak, Iowa, April 17, 2011",
+      "report_id": "NTSB/RAR-12/02",
+      "package_id": "PB2012-916302",
+      "upstream_revision": "NTSB/RAR-12/02+PB2012-916302",
+      "upstream_url": "https://www.ntsb.gov/investigations/AccidentReports/Reports/RAR1202.pdf",
+      "adoption_or_issue_date": "2012-04-24",
+      "public_release_date": null,
+      "intended_domain": "safety",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "ntsb_staff_text",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "RAR1202.pdf",
+        "sha256": "f9b7710fd918191be669858b4849976b1d4a1c9379ab574baf2581fc742734c0",
+        "bytes": 2960038,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "RAR1202.txt",
+        "sha256": "185fc2fed48e48c4c51ddec38b18a3559e79aac8c190b30ba8cd8537d35a13f1",
+        "bytes": 222016,
+        "words": 29833,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    },
+    {
+      "id": "GAO-01-203",
+      "agency": "U.S. Government Accountability Office",
+      "title": "Fish and Wildlife Service: Challenges to Managing the Carlsbad, California, Field Office's Endangered Species Workload",
+      "report_id": "GAO-01-203",
+      "package_id": "GAOREPORTS-GAO-01-203",
+      "upstream_revision": "GAOREPORTS-GAO-01-203",
+      "upstream_url": "https://www.govinfo.gov/content/pkg/GAOREPORTS-GAO-01-203/pdf/GAOREPORTS-GAO-01-203.pdf",
+      "adoption_or_issue_date": "2001-01-31",
+      "public_release_date": "2001-02-27",
+      "intended_domain": "operations",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "gao_government_work",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "GAO-01-203.pdf",
+        "sha256": "21063da960313763113a278d8c3b771f59f1a31649c0c173c5e62f0334861e70",
+        "bytes": 3936636,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "GAO-01-203.txt",
+        "sha256": "a9eac5842b7e6902fae1d5a0fbd889800b27a39ee1eb66f0845f31e0d7c54642",
+        "bytes": 151045,
+        "words": 17558,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    },
+    {
+      "id": "GAO-01-463",
+      "agency": "U.S. Government Accountability Office",
+      "title": "Combating Terrorism: Accountability Over Medical Supplies Needs Further Improvement",
+      "report_id": "GAO-01-463",
+      "package_id": "GAOREPORTS-GAO-01-463",
+      "upstream_revision": "GAOREPORTS-GAO-01-463",
+      "upstream_url": "https://www.govinfo.gov/content/pkg/GAOREPORTS-GAO-01-463/pdf/GAOREPORTS-GAO-01-463.pdf",
+      "adoption_or_issue_date": "2001-03-30",
+      "public_release_date": "2001-05-01",
+      "intended_domain": "support",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "gao_government_work",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "GAO-01-463.pdf",
+        "sha256": "92b5dba4638e3593f6646697f4b3ce9fb8488c9b59423b3242d473593ac77eed",
+        "bytes": 742779,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "GAO-01-463.txt",
+        "sha256": "4b1e9b731ca8d44f805bc3c4c3a8b275b109402b1e5713e463694b11f0adc7eb",
+        "bytes": 87510,
+        "words": 10523,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    },
+    {
+      "id": "GAO-06-184",
+      "agency": "U.S. Government Accountability Office",
+      "title": "Financial Management Systems: Additional Efforts Needed to Address Key Causes of Modernization Failures",
+      "report_id": "GAO-06-184",
+      "package_id": "GAOREPORTS-GAO-06-184",
+      "upstream_revision": "GAOREPORTS-GAO-06-184",
+      "upstream_url": "https://www.govinfo.gov/content/pkg/GAOREPORTS-GAO-06-184/pdf/GAOREPORTS-GAO-06-184.pdf",
+      "adoption_or_issue_date": "2006-03-15",
+      "public_release_date": "2006-03-15",
+      "intended_domain": "technical",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "gao_government_work",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "GAO-06-184.pdf",
+        "sha256": "616f0c93ee7d9748fed39041c404fd808c6ca57b322e66d07188ad790e2e605a",
+        "bytes": 2523643,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "GAO-06-184.txt",
+        "sha256": "dd83578f4d96fb2db4bfbcd2235aa6ff19b41fd5a6bfb0f535f1b24f1c90a2ee",
+        "bytes": 290986,
+        "words": 29312,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    },
+    {
+      "id": "GAO-06-970",
+      "agency": "U.S. Government Accountability Office",
+      "title": "Financial Management: Improvements Under Way but Serious Financial Systems Problems Persist",
+      "report_id": "GAO-06-970",
+      "package_id": "GAOREPORTS-GAO-06-970",
+      "upstream_revision": "GAOREPORTS-GAO-06-970",
+      "upstream_url": "https://www.govinfo.gov/content/pkg/GAOREPORTS-GAO-06-970/pdf/GAOREPORTS-GAO-06-970.pdf",
+      "adoption_or_issue_date": "2006-09-26",
+      "public_release_date": "2006-09-26",
+      "intended_domain": "finance",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "gao_government_work",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "GAO-06-970.pdf",
+        "sha256": "57fbe1be575d3b209e7ce26bee9b8bc8f22324632c469d74786d22a704ba2f7e",
+        "bytes": 1494069,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "GAO-06-970.txt",
+        "sha256": "e4ca2dd7608ac93f12e75785085ae49f81dfe59493ac9d3ab433b5f881905b36",
+        "bytes": 203484,
+        "words": 22254,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    },
+    {
+      "id": "GAO-08-1075R",
+      "agency": "U.S. Government Accountability Office",
+      "title": "Information Technology: Federal Laws, Regulations, and Mandatory Standards to Securing Private Sector Information Technology Systems and Data in Critical Infrastructure Sectors",
+      "report_id": "GAO-08-1075R",
+      "package_id": "GAOREPORTS-GAO-08-1075R",
+      "upstream_revision": "GAOREPORTS-GAO-08-1075R",
+      "upstream_url": "https://www.govinfo.gov/content/pkg/GAOREPORTS-GAO-08-1075R/pdf/GAOREPORTS-GAO-08-1075R.pdf",
+      "adoption_or_issue_date": "2008-09-16",
+      "public_release_date": "2008-09-16",
+      "intended_domain": "legal",
+      "untouched_split": "r052-natural-eval-untouched-v1",
+      "license_policy": "gao_government_work",
+      "natural_language_authored": true,
+      "benchmark_derived": false,
+      "raw_pdf": {
+        "filename": "GAO-08-1075R.pdf",
+        "sha256": "f4c6999dd16db7afce5708a288f9e8dcfb6ebfd8e252702eb8c0845b6c5b2eed",
+        "bytes": 855364,
+        "redistribute": false
+      },
+      "extracted_text": {
+        "filename": "GAO-08-1075R.txt",
+        "sha256": "28cb605de6d9166057325c64800e1f59ab2fcdfcb877a9362e3fbb6cd6f5b160",
+        "bytes": 135173,
+        "words": 11839,
+        "encoding": "UTF-8",
+        "redistribute_after_review_only": true
+      }
+    }
+  ]
+}
