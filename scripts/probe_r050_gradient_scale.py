@@ -14,6 +14,7 @@ import math
 import os
 import sys
 from collections import Counter, defaultdict
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ STRATUM_KEYS = (
     "operator_composition",
     "field_count",
 )
+PROBE_VARIANTS = tuple(product((0, 1), ("en", "he"), ("no_yes", "yes_no")))
 
 
 def _sha256(payload: bytes) -> str:
@@ -126,23 +128,17 @@ def _row_probe_metadata(row: dict[str, Any]) -> tuple[str, tuple[Any, ...]]:
         raise ValueError("probe row has an invalid language")
     if meta.get("option_order") not in {"no_yes", "yes_no"}:
         raise ValueError("probe row has an invalid option order")
+    if type(meta.get("counterfactual_side")) is not int or meta["counterfactual_side"] not in {0, 1}:
+        raise ValueError("probe row has an invalid counterfactual side")
     identifier = row.get("id")
     if not isinstance(identifier, str) or not identifier:
         raise ValueError("probe row id must be a nonempty string")
     return signature, values
 
 
-def _representative(rows: list[dict[str, Any]], seed: int) -> dict[str, Any]:
-    def key(row):
-        meta = row["meta"]
-        preference = (
-            meta["language"] != "en",
-            meta["option_order"] != "no_yes",
-        )
-        tie_break = _sha256(f"{seed}:{row['id']}".encode())
-        return (*preference, tie_break, row["id"])
-
-    return min(rows, key=key)
+def _variant(row: dict[str, Any]) -> tuple[int, str, str]:
+    meta = row["meta"]
+    return meta["counterfactual_side"], meta["language"], meta["option_order"]
 
 
 def select_probe_rows(rows: list[dict[str, Any]], requested_signatures: int,
@@ -170,8 +166,12 @@ def select_probe_rows(rows: list[dict[str, Any]], requested_signatures: int,
 
     buckets = defaultdict(list)
     for signature, orbit in by_signature.items():
-        buckets[signature_strata[signature]].append(
-            (signature, _representative(orbit, seed)))
+        by_variant = {_variant(row): row for row in orbit}
+        if len(by_variant) != len(orbit) or set(by_variant) != set(PROBE_VARIANTS):
+            raise ValueError(
+                "each probe semantic signature needs one complete eight-view orbit"
+            )
+        buckets[signature_strata[signature]].append((signature, by_variant))
     for stratum in buckets:
         buckets[stratum].sort(key=lambda item: (_sha256(
             f"{seed}:{item[0]}".encode()), item[0]))
@@ -192,25 +192,42 @@ def select_probe_rows(rows: list[dict[str, Any]], requested_signatures: int,
         if not progressed:
             raise RuntimeError("stratified selection exhausted unexpectedly")
 
-    selected_rows = [row for _, row, _ in selected]
+    selected_rows = []
+    selected_with_views = []
+    rotation = seed % len(PROBE_VARIANTS)
+    for index, (signature, by_variant, stratum) in enumerate(selected):
+        variant = PROBE_VARIANTS[(index + rotation) % len(PROBE_VARIANTS)]
+        row = by_variant[variant]
+        selected_rows.append(row)
+        selected_with_views.append((signature, row, stratum, variant))
     records = [
         {
             "semantic_signature": signature,
             "row_id": row["id"],
             "stratum": dict(zip(STRATUM_KEYS, stratum)),
+            "counterfactual_side": variant[0],
+            "language": variant[1],
+            "option_order": variant[2],
         }
-        for signature, row, stratum in selected
+        for signature, row, stratum, variant in selected_with_views
     ]
     stratum_counts = Counter(
-        "|".join(map(str, stratum)) for _, _, stratum in selected)
+        "|".join(map(str, stratum)) for _, _, stratum, _ in selected_with_views)
+    variant_counts = Counter(
+        f"side{side}|{language}|{order}"
+        for _, _, _, (side, language, order) in selected_with_views
+    )
     selection = {
         "seed": seed,
         "requested_signatures": requested_signatures,
         "available_signatures": len(by_signature),
         "selected_signatures": len(selected),
-        "representative_rule": "prefer en/no_yes, then seeded sha256(row_id)",
+        "representative_rule": (
+            "seed-rotated counterfactual/language/option-order cycle over complete orbits"
+        ),
         "stratum_keys": list(STRATUM_KEYS),
         "stratum_counts": dict(sorted(stratum_counts.items())),
+        "variant_counts": dict(sorted(variant_counts.items())),
         "records": records,
         "semantic_signature_digest": _canonical_sha(
             sorted(record["semantic_signature"] for record in records)),

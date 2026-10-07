@@ -14,10 +14,10 @@ def _signature(index):
 
 def _row(index, *, mode="priority", regime="raw_operands",
          operator="all_checks", language="en", option_order="no_yes",
-         split="train"):
+         side=0, split="train"):
     fields = ["field_a", "field_b"]
     return {
-        "id": f"row-{index}-{mode}-{language}-{option_order}",
+        "id": f"row-{index}-{mode}-{side}-{language}-{option_order}",
         "questions": {f"q{position:02d}": {} for position in range(len(fields))},
         "meta": {
             "panel": "exact_policy_v1",
@@ -29,18 +29,25 @@ def _row(index, *, mode="priority", regime="raw_operands",
             "operator_composition": operator,
             "language": language,
             "option_order": option_order,
+            "counterfactual_side": side,
         },
     }
 
 
-def test_stratified_selection_is_deterministic_and_uses_canonical_views():
+def _orbit(index, **kwargs):
+    return [
+        _row(index, side=side, language=language, option_order=order, **kwargs)
+        for side in (0, 1)
+        for language in ("en", "he")
+        for order in ("no_yes", "yes_no")
+    ]
+
+
+def test_stratified_selection_is_deterministic_and_balances_view_variants():
     rows = []
     for index in range(1, 7):
         mode = "priority" if index <= 3 else "collect"
-        rows.extend([
-            _row(index, mode=mode, language="he", option_order="yes_no"),
-            _row(index, mode=mode, language="en", option_order="no_yes"),
-        ])
+        rows.extend(_orbit(index, mode=mode))
 
     selected_a, receipt_a = probe.select_probe_rows(rows, 4, seed=50050)
     selected_b, receipt_b = probe.select_probe_rows(
@@ -48,8 +55,10 @@ def test_stratified_selection_is_deterministic_and_uses_canonical_views():
 
     assert [row["id"] for row in selected_a] == [row["id"] for row in selected_b]
     assert receipt_a == receipt_b
-    assert all(row["meta"]["language"] == "en" for row in selected_a)
-    assert all(row["meta"]["option_order"] == "no_yes" for row in selected_a)
+    assert len({(row["meta"]["counterfactual_side"], row["meta"]["language"],
+                 row["meta"]["option_order"]) for row in selected_a}) == 4
+    assert {row["meta"]["language"] for row in selected_a} == {"en", "he"}
+    assert {row["meta"]["option_order"] for row in selected_a} == {"no_yes", "yes_no"}
     assert sorted(receipt_a["stratum_counts"].values()) == [2, 2]
     assert len({row["meta"]["semantic_signature"] for row in selected_a}) == 4
 
@@ -57,9 +66,9 @@ def test_stratified_selection_is_deterministic_and_uses_canonical_views():
 @pytest.mark.parametrize(
     ("rows", "requested", "message"),
     [
-        ([_row(1, split="eval")], 1, "training split"),
-        ([_row(1)], 2, "only 1 are available"),
-        ([_row(1), _row(1, mode="collect")], 1, "multiple factor cells"),
+        (_orbit(1, split="eval"), 1, "training split"),
+        (_orbit(1), 2, "only 1 are available"),
+        (_orbit(1) + _orbit(1, mode="collect"), 1, "multiple factor cells"),
     ],
 )
 def test_stratified_selection_fails_closed(rows, requested, message):
@@ -89,6 +98,18 @@ def test_panel_manifest_binds_panel_and_builder(tmp_path):
     builder.write_text("# changed\n")
     with pytest.raises(ValueError, match="builder differs"):
         probe.verify_panel_manifest(manifest, payload, rows, builder)
+
+
+def test_sixty_four_signature_probe_balances_all_eight_view_variants():
+    rows = []
+    for index in range(1, 65):
+        rows.extend(_orbit(index, mode="priority" if index % 2 else "collect"))
+
+    selected, receipt = probe.select_probe_rows(rows, 64, seed=50_050)
+
+    assert len(selected) == 64
+    assert set(receipt["variant_counts"].values()) == {8}
+    assert len(receipt["variant_counts"]) == 8
 
 
 def test_gradient_statistics_computes_target_norm_coefficients_and_geometry():
