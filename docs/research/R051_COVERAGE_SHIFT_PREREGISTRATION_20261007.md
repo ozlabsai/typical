@@ -46,6 +46,39 @@ Both arms use the same parent checkpoint, LoRA architecture, optimizer, schedule
 labeled-outcome count, and total non-padding token budget. The parent and objective are selected
 only by the predeclared R050 internal gates.
 
+### Implementation feasibility audit
+
+The current R050 mixer cannot satisfy this design by changing its sample count alone. It requires
+eight rendered rows per executable group, so 1,600 executable slots still contain only 200 unique
+groups. Its `exact_policy_v1` schema is also Boolean-only and cannot represent a single complete
+policy over balanced Choice, Noul, and Score questions.
+
+The underlying exact grouped loss remains reusable. R051 introduces a narrow `typed_policy_v1`
+layer that maps each categorical field to a declared policy event:
+
+```text
+event_logit = logsumexp(logits[positive labels])
+            - logsumexp(logits[complement labels])
+```
+
+Those event logits feed the existing verified Boolean policy compiler and exact outcome
+NLL/Brier. This supports categorical Choice and ordinal Score fields without replacing the
+executor or serving readout. Every declared event must be a nonempty proper subset of its field's
+labels, and every field must remain outcome-causal under the compiled policy.
+
+The target executable construction is exactly 800 semantic roots with two answer-order siblings:
+792 five-question roots plus eight four-question roots, totaling 3,992 typed decisions per
+canonical presentation and 7,984 after both orders. Type totals are fixed at 2,662 Choice, 2,662
+Noul, and 2,660 Score decisions. Noul truth values and ordinal ranks are balanced. Siblings share
+state, targets, policy, lineage, and split; only option insertion order differs.
+
+Current generated long rows do not meet the declared natural 8k–12k-token requirement, and R050's
+8,192-token cap cannot admit the top of that bucket. R051 therefore requires newly pinned,
+license-cleared natural source snapshots with upstream IDs/revisions and a 16,384-token training
+limit. Five percent of semantic roots (40/800) form the first long-context bucket, with decisive
+evidence placed across early, middle, and late token quantiles. Removing the decisive exhibit must
+flip the intended field or complete policy outcome.
+
 ### Arm A — regenerated current-distribution control
 
 - Regenerate the R050-v2 sampling schedule from its frozen source pools.
@@ -71,6 +104,11 @@ A target construction is 3,200 logical slots: 1,600 executable slots from roughl
 groups with two answer-order views per group, 800 broad slots, 400 Hebrew slots, and 400
 multimodal slots. If long sequences prevent matching raw row counts, match non-padding tokens and
 labeled outcomes instead. No benchmark item, output, or score enters either arm.
+
+Arm B copies the 800 broad, 400 Hebrew, and 400 multimodal raw JSONL lines from the frozen R050 mix
+at the same slot positions; only executable blocks may differ. The builder must bind and recheck
+the source and ordered-payload hashes rather than regenerating these protected rows. Image bytes
+are copied into a new tree and rehashed; mutable hard links are forbidden.
 
 ## Frozen internal gate
 
@@ -120,4 +158,3 @@ Only one frozen candidate may proceed to external evaluation:
 
 The 231-row public JevBench set remains diagnostic-only and cannot select this curriculum,
 checkpoint, loss, temperature, or subsequent method.
-
