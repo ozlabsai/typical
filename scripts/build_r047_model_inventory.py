@@ -10,7 +10,15 @@ from scripts.preflight_r043_assets import file_hash, tree_hash
 SCHEMA_VERSION = "r047-model-inventory-v1"
 MODEL_ID = "google/gemma-4-12B-it"
 FROZEN_BASE_REVISION = "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7"
+FROZEN_R044_BASE_REFERENCE = "/workspace/g1/hf-gemma"
 INVENTORY_FIELDS = {"schema_version", "model_id", "revision", "tree_sha256", "files"}
+
+
+def is_frozen_base_reference(value):
+    """Accept only the model ID, pinned snapshot, or R044's authenticated cache reference."""
+    return (isinstance(value, str)
+            and (value in {MODEL_ID, FROZEN_R044_BASE_REFERENCE}
+                 or Path(value).name == FROZEN_BASE_REVISION))
 
 
 def validate_model_path(model_path, revision=FROZEN_BASE_REVISION):

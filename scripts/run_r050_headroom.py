@@ -19,7 +19,12 @@ if __package__ in {None, ""}:
 from scripts import build_r048_action_panel as r048
 from scripts import build_r050_headroom as headroom
 from scripts import score_exact_policy_panel as scorer
-from scripts.build_r047_model_inventory import FROZEN_BASE_REVISION, MODEL_ID, verify_inventory
+from scripts.build_r047_model_inventory import (
+    FROZEN_BASE_REVISION,
+    MODEL_ID,
+    is_frozen_base_reference,
+    verify_inventory,
+)
 from scripts.build_r050_replay_pools import _atomic_publish
 from scripts.preflight_r043_assets import file_hash, tree_hash
 from scripts.singleton_option_scorer import validate_runtime_fingerprint
@@ -318,7 +323,7 @@ def verify_assets(model_path, inventory_path, adapter_path, *, expected_inventor
     if config.get("revision") not in {None, FROZEN_BASE_REVISION}:
         raise ValueError("parent adapter declares a different base revision")
     base = config.get("base_model_name_or_path")
-    if base != MODEL_ID and (not isinstance(base, str) or Path(base).name != FROZEN_BASE_REVISION):
+    if not is_frozen_base_reference(base):
         raise ValueError("parent adapter declares a different base model")
     return {"model_id": MODEL_ID, "model_revision": FROZEN_BASE_REVISION,
             "model_inventory_sha256": inventory_hash, "base_model_tree_sha256": inventory["tree_sha256"],

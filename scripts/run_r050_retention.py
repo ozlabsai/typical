@@ -16,6 +16,7 @@ from typing import Any
 from scripts.build_r047_model_inventory import (
     FROZEN_BASE_REVISION,
     MODEL_ID,
+    is_frozen_base_reference,
     verify_inventory,
 )
 from scripts.build_r050_replay_pools import _atomic_publish
@@ -301,7 +302,7 @@ def verify_adapter(path, expected_tree_sha256, expected_tree_files, label):
     if config.get("peft_type") != "LORA" or config.get("revision") not in {None, FROZEN_BASE_REVISION}:
         raise ValueError(f"{label} configuration is unsupported")
     base = config.get("base_model_name_or_path")
-    if base != MODEL_ID and (not isinstance(base, str) or Path(base).name != FROZEN_BASE_REVISION):
+    if not is_frozen_base_reference(base):
         raise ValueError(f"{label} declares a different base model")
     return {"path": str(path.resolve()), "adapter_tree_sha256": observed,
             "adapter_tree_files": files,

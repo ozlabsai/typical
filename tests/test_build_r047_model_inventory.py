@@ -5,7 +5,9 @@ import pytest
 
 from scripts.build_r047_model_inventory import (
     FROZEN_BASE_REVISION,
+    FROZEN_R044_BASE_REFERENCE,
     build_inventory,
+    is_frozen_base_reference,
     main,
     verify_inventory,
 )
@@ -49,3 +51,11 @@ def test_inventory_rejects_wrong_revision_or_extra_schema_field(tmp_path):
     output.write_text(json.dumps(inventory) + "\n")
     with pytest.raises(ValueError, match="schema is invalid"):
         verify_inventory(output, model)
+
+
+def test_frozen_adapter_base_references_are_explicit_and_fail_closed():
+    assert is_frozen_base_reference("google/gemma-4-12B-it")
+    assert is_frozen_base_reference(FROZEN_R044_BASE_REFERENCE)
+    assert is_frozen_base_reference(f"/cache/snapshots/{FROZEN_BASE_REVISION}")
+    assert not is_frozen_base_reference("/workspace/g1/another-model")
+    assert not is_frozen_base_reference(None)

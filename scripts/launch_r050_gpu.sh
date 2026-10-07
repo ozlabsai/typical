@@ -9,7 +9,7 @@ cd "$ROOT"
 REVISION=707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7
 MODEL=${R050_MODEL:-/workspace/g1/hf-gemma/hub/models--google--gemma-4-12B-it/snapshots/$REVISION}
 OUT=${R050_OUT:-$ROOT/.context/r050-gpu-run-0f5ceb5}
-EXPECTED_PIPELINE_SHA256=dafbf8baec0c3773a4bdbd43f8de5b1090edfd0fa096d59b5ec47befde76348d
+EXPECTED_PIPELINE_SHA256=2c3ba068a71a415095d8f518d1ea4dd97f093b21252dba03615448eb1b2e50a2
 
 observed_pipeline_sha=$(sha256sum scripts/run_r050_pipeline.py | awk '{print $1}')
 if [[ "$observed_pipeline_sha" != "$EXPECTED_PIPELINE_SHA256" ]]; then
