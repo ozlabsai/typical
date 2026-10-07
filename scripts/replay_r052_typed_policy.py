@@ -53,21 +53,22 @@ MAX_JSON_DEPTH = 64
 MAX_JSON_NODES = 250_000
 MAX_JSON_OBJECTS = 50_000
 MAX_INTEGER_DIGITS = 128
-MAX_CASES = 512
+MAX_CASES = 64
 MAX_CASE_ITEMS = 4_096
 MAX_OPTIONS = 32
 MAX_FACTS = 8_192
 MAX_GROUP_FACTS = 256
 MAX_BINDINGS = 16_384
 MAX_GROUPS = 64
-MAX_PRESENTATIONS = 2_048
+MAX_PRESENTATIONS = 64
 MAX_RULES = 32
 MAX_CHUNKS_PER_PRESENTATION = 128
 MAX_DECISIONS_PER_PRESENTATION = 3
 MAX_REPLAY_WORK_UNITS = 5_000_000
 MAX_CACHED_ENVIRONMENT_ENTRIES = 4 * MAX_GROUP_FACTS
+RECEIPT_SERIALIZATION_PASSES = 4
 EXPECTED_SCHEMA_SHA256 = (
-    "57ac51e1df0c2dd543ea007a6237f81580cc533efe43a8c0322600a0bc5d985f"
+    "710b4bbaca4fbdd74342790aaefdd9d81f19dba7161a564cf900883832710df9"
 )
 
 
@@ -700,15 +701,32 @@ def _validate_replay_work_budget(
     groups: list[Any],
     cases: dict[str, dict[str, Any]],
     observation_index: dict[str, dict[str, tuple[tuple[str, TypedValue], ...]]],
+    adjudication_receipt_count: int,
 ) -> None:
     """Reject multiplicative replay shapes before evaluating any policy rule."""
     work_units = 0
+    receipt_objects = 0
+    receipt_nodes = 0
 
     def add(units: int) -> None:
         nonlocal work_units
         work_units += units
         if work_units > MAX_REPLAY_WORK_UNITS:
             raise PolicyError("policy replay exceeds the total derived-work budget")
+
+    def add_receipt(objects: int, nodes: int) -> None:
+        nonlocal receipt_objects, receipt_nodes
+        receipt_objects += objects
+        receipt_nodes += nodes
+        if receipt_objects > MAX_JSON_OBJECTS or receipt_nodes > MAX_JSON_NODES:
+            raise PolicyError(
+                "policy replay receipt exceeds canonical JSON object/node bounds"
+            )
+        add(RECEIPT_SERIALIZATION_PASSES * nodes)
+
+    # Root + inputs objects. Nodes include root fields, the semantic-groups list,
+    # inputs, its adjudication list, and every supplied adjudication digest.
+    add_receipt(2, 11 + adjudication_receipt_count)
 
     presentation_count = 0
     for group in groups:
@@ -731,6 +749,7 @@ def _validate_replay_work_budget(
             raise PolicyError("semantic group exceeds the presentation work cap")
         fact_count = len(facts)
         decision_costs: dict[str, int] = {}
+        decision_rule_counts: dict[str, int] = {}
         for decision in decisions:
             if not isinstance(decision, dict) or not isinstance(
                 decision.get("rules"), list
@@ -741,6 +760,7 @@ def _validate_replay_work_budget(
             decision_id = _identifier(decision.get("decision_id"), "decision work id")
             if decision_id in decision_costs:
                 raise PolicyError("decision work ids must be unique")
+            decision_rule_counts[decision_id] = len(decision["rules"])
             decision_costs[decision_id] = len(decision["rules"]) + sum(
                 _ast_work_units(rule.get("when"))
                 for rule in decision["rules"]
@@ -751,6 +771,8 @@ def _validate_replay_work_budget(
             ):
                 raise PolicyError("decision rules must be objects")
 
+        # A receipt group object, its id, and its presentation list.
+        add_receipt(1, 3)
         for presentation in presentations:
             presentation_count += 1
             if presentation_count > MAX_PRESENTATIONS:
@@ -779,6 +801,24 @@ def _validate_replay_work_budget(
             ):
                 raise PolicyError("presentation exceeds the decision work cap")
             by_chunk = observation_index.get(case_key, {})
+
+            # Trace object + five fact-state maps and their state objects, followed
+            # by each decision, four view results, and four copies of its rule trace.
+            presentation_objects = (
+                7
+                + 5 * fact_count
+                + sum(
+                    6 + 4 * rule_count for rule_count in decision_rule_counts.values()
+                )
+            )
+            presentation_nodes = (
+                10
+                + 25 * fact_count
+                + sum(
+                    38 + 12 * rule_count for rule_count in decision_rule_counts.values()
+                )
+            )
+            add_receipt(presentation_objects, presentation_nodes)
 
             def environment_cost(
                 chunk_keys: Any,
@@ -1418,7 +1458,9 @@ def replay(
     if not isinstance(groups, list) or not groups or len(groups) > MAX_GROUPS:
         raise PolicyError("policy rubric semantic_groups must be non-empty")
     observation_index = _index_observations(facts, bindings)
-    _validate_replay_work_budget(groups, cases, observation_index)
+    _validate_replay_work_budget(
+        groups, cases, observation_index, len(adjudication_receipts)
+    )
     panel_questions = {
         (case_key, question["question_key"])
         for case_key, case in cases.items()

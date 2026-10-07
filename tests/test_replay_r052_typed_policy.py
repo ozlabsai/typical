@@ -221,6 +221,90 @@ def _fixture():
     return panel, ledger, rubric
 
 
+def _production_shape_fixture():
+    panel, ledger, rubric = _fixture()
+    base_case = panel["cases"][0]
+    base_binding = ledger["bindings"][0]
+    base_group = rubric["semantic_groups"][0]
+    base_decision = base_group["decisions"][0]
+    base_presentation = base_group["presentations"][0]
+    cases = []
+    bindings = []
+    groups = []
+    for group_index, decision_count in enumerate((1, 2)):
+        decisions = []
+        for decision_index in range(decision_count):
+            decision = deepcopy(base_decision)
+            decision["decision_id"] = f"d.{group_index}.{decision_index}"
+            decisions.append(decision)
+        presentations = []
+        for case_index in range(20):
+            suffix = f"{group_index}.{case_index}"
+            case = deepcopy(base_case)
+            case["case_key"] = f"case.{suffix}"
+            key_map = {
+                chunk["chunk_key"]: f"{chunk['chunk_key']}.{suffix}"
+                for chunk in case["chunks"]
+            }
+            for chunk in case["chunks"]:
+                chunk["chunk_key"] = key_map[chunk["chunk_key"]]
+
+            questions = []
+            question_bindings = {}
+            ablations = []
+            for decision_index, decision in enumerate(decisions):
+                question = deepcopy(base_case["questions"][0])
+                question["question_key"] = f"q.{suffix}.{decision_index}"
+                question["twin_anchor"] = f"permit.{decision_index}"
+                question["decisive_chunk_keys"] = [key_map["c.decisive"]]
+                question["known_distractor_chunk_keys"] = [key_map["c.distractor"]]
+                _set_causal_proof(case, question)
+                questions.append(question)
+                decision_id = decision["decision_id"]
+                question_bindings[decision_id] = {
+                    "question_key": question["question_key"],
+                    "question_content_sha256": question["content_sha256"],
+                }
+                ablations.append(
+                    {
+                        "decision_id": decision_id,
+                        "remove_chunk_keys": [key_map["c.decisive"]],
+                        "required_transition": "resolution_loss",
+                        "assert_full": {"status": "resolved", "output": "yes"},
+                        "assert_removed": {"status": "unresolved"},
+                    }
+                )
+            case["questions"] = questions
+            cases.append(case)
+
+            binding = deepcopy(base_binding)
+            binding["case_key"] = case["case_key"]
+            binding["chunk_key"] = key_map["c.decisive"]
+            bindings.append(binding)
+
+            presentation = deepcopy(base_presentation)
+            presentation["presentation_id"] = f"p.{suffix}"
+            presentation["case_key"] = case["case_key"]
+            presentation["question_bindings"] = question_bindings
+            presentation["views"] = {
+                name: [key_map[key] for key in keys]
+                for name, keys in base_presentation["views"].items()
+            }
+            presentation["ablations"] = ablations
+            presentations.append(presentation)
+
+        group = deepcopy(base_group)
+        group["group_id"] = f"g.{group_index}"
+        group["decisions"] = decisions
+        group["presentations"] = presentations
+        groups.append(group)
+
+    panel["cases"] = cases
+    ledger["bindings"] = bindings
+    rubric["semantic_groups"] = groups
+    return panel, ledger, rubric
+
+
 def _seal(panel, ledger, rubric):
     panel_hash = replay.sha256_json(panel)
     ledger["panel_sha256"] = panel_hash
@@ -1005,7 +1089,7 @@ def test_json_and_collection_bounds_and_recursion_are_fail_closed(monkeypatch):
     monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 0)
     with pytest.raises(replay.PolicyError, match="presentation"):
         _run(_fixture())
-    monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 2_048)
+    monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 64)
     monkeypatch.setattr(replay, "MAX_INPUT_BYTES", 2)
     with pytest.raises(replay.PolicyError, match="input byte bound"):
         replay.parse_canonical_json(b"{}\n", "oversized")
@@ -1059,6 +1143,14 @@ def test_runtime_and_schema_group_bounds_match_and_maximum_is_valid():
         == 128
     )
     assert schema["x-replay-work-units-max"] == replay.MAX_REPLAY_WORK_UNITS
+    assert schema["x-max-cases"] == replay.MAX_CASES == 64
+    assert (
+        schema["x-max-presentations"]
+        == schema["$defs"]["semanticGroup"]["properties"]["presentations"]["maxItems"]
+        == schema["$defs"]["receiptGroup"]["properties"]["presentations"]["maxItems"]
+        == replay.MAX_PRESENTATIONS
+        == 64
+    )
 
     base_panel, base_ledger, base_rubric = _fixture()
     cases = []
@@ -1110,12 +1202,14 @@ def test_runtime_and_schema_group_bounds_match_and_maximum_is_valid():
     base_rubric["semantic_groups"] = groups
     receipt = _run((base_panel, base_ledger, base_rubric))
     assert len(receipt["semantic_groups"]) == replay.MAX_GROUPS
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    assert receipt["receipt_sha256"] == replay.sha256_json(unsigned)
 
 
 def test_replay_work_budget_rejects_audit_shape_but_minimum_passes(monkeypatch):
     panel, ledger, rubric = _fixture()
     cases, _ = replay._panel_index(panel)
-    replay._validate_replay_work_budget(rubric["semantic_groups"], cases, {})
+    replay._validate_replay_work_budget(rubric["semantic_groups"], cases, {}, 1)
     assert _run((panel, ledger, rubric))["semantic_groups"]
 
     chunk_keys = [f"c{index}" for index in range(4_096)]
@@ -1162,90 +1256,87 @@ def test_replay_work_budget_rejects_audit_shape_but_minimum_passes(monkeypatch):
     assert len(audit_group["decisions"]) == 32
     assert len(distractors) == 4_094
     with pytest.raises(replay.PolicyError, match="decision work cap"):
-        replay._validate_replay_work_budget([audit_group], {"audit": audit_case}, {})
+        replay._validate_replay_work_budget([audit_group], {"audit": audit_case}, {}, 1)
     monkeypatch.setattr(replay, "MAX_DECISIONS_PER_PRESENTATION", 32)
     monkeypatch.setattr(replay, "MAX_CHUNKS_PER_PRESENTATION", 4_096)
     with pytest.raises(replay.PolicyError, match="derived-work budget"):
-        replay._validate_replay_work_budget([audit_group], {"audit": audit_case}, {})
+        replay._validate_replay_work_budget([audit_group], {"audit": audit_case}, {}, 1)
 
 
-def test_replay_work_budget_accepts_realistic_40_case_60_question_shape():
+def test_receipt_preflight_rejects_300_by_3_by_32_shape(monkeypatch):
+    monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 300)
+    rules = [
+        {
+            "when": {
+                "op": "const",
+                "type": "boolean",
+                "unit": None,
+                "value": False,
+            }
+        }
+        for _ in range(32)
+    ]
+    decisions = [{"decision_id": f"d{index}", "rules": rules} for index in range(3)]
     cases = {}
-    groups = []
-    total_questions = 0
-    for group_index, decision_count in enumerate((1, 2)):
-        decisions = [
+    presentations = []
+    for index in range(300):
+        case_key = f"case{index}"
+        full = [f"{case_key}.policy", f"{case_key}.decisive"]
+        questions = [
             {
-                "decision_id": f"d{group_index}.{decision_index}",
-                "rules": [
-                    {
-                        "when": {
-                            "op": "const",
-                            "type": "boolean",
-                            "unit": None,
-                            "value": value,
-                        }
-                    }
-                    for value in (True, False)
-                ],
+                "question_key": f"{case_key}.q{decision_index}",
+                "known_distractor_chunk_keys": [],
             }
-            for decision_index in range(decision_count)
+            for decision_index in range(3)
         ]
-        presentations = []
-        for case_index in range(20):
-            case_key = f"case.{group_index}.{case_index}"
-            chunk_keys = [f"{case_key}.c{index}" for index in range(16)]
-            questions = []
-            question_bindings = {}
-            ablations = []
-            for decision in decisions:
-                decision_id = decision["decision_id"]
-                question_key = f"{case_key}.{decision_id}"
-                questions.append(
-                    {
-                        "question_key": question_key,
-                        "known_distractor_chunk_keys": chunk_keys[4:],
-                    }
-                )
-                question_bindings[decision_id] = {"question_key": question_key}
-                ablations.append(
-                    {"decision_id": decision_id, "remove_chunk_keys": chunk_keys[1:3]}
-                )
-                total_questions += 1
-            cases[case_key] = {
-                "chunks": [{"chunk_key": key} for key in chunk_keys],
-                "questions": questions,
-            }
-            presentations.append(
-                {
-                    "case_key": case_key,
-                    "question_bindings": question_bindings,
-                    "ablations": ablations,
-                    "views": {
-                        "full": chunk_keys,
-                        "removed": chunk_keys[:1] + chunk_keys[3:],
-                        "decisive_only": chunk_keys[:4],
-                        "distractor_only": chunk_keys[:1] + chunk_keys[4:],
-                    },
-                }
-            )
-        groups.append(
+        cases[case_key] = {
+            "chunks": [{"chunk_key": key} for key in full],
+            "questions": questions,
+        }
+        presentations.append(
             {
-                "facts": {
-                    f"f{group_index}{index:03d}": {
-                        "type": "boolean",
-                        "unit": None,
+                "case_key": case_key,
+                "question_bindings": {
+                    f"d{decision_index}": {
+                        "question_key": questions[decision_index]["question_key"]
                     }
-                    for index in range(16)
+                    for decision_index in range(3)
                 },
-                "decisions": decisions,
-                "presentations": presentations,
+                "ablations": [
+                    {
+                        "decision_id": f"d{decision_index}",
+                        "remove_chunk_keys": [full[1]],
+                    }
+                    for decision_index in range(3)
+                ],
+                "views": {
+                    "full": full,
+                    "removed": full[:1],
+                    "decisive_only": full,
+                    "distractor_only": full[:1],
+                },
             }
         )
 
-    assert len(cases) == 40
-    assert total_questions == 60
-    replay._validate_replay_work_budget(groups, cases, {})
+    group = {
+        "facts": {"f0001": {"type": "boolean", "unit": None}},
+        "decisions": decisions,
+        "presentations": presentations,
+    }
+    assert len(cases) == 300
+    assert len(decisions) == 3
+    assert all(len(decision["rules"]) == 32 for decision in decisions)
+    with pytest.raises(replay.PolicyError, match="receipt exceeds canonical JSON"):
+        replay._validate_replay_work_budget([group], cases, {}, 1)
+
+
+def test_replay_work_budget_accepts_realistic_40_case_60_question_shape():
+    panel, ledger, rubric = _production_shape_fixture()
+    assert len(panel["cases"]) == 40
+    assert sum(len(case["questions"]) for case in panel["cases"]) == 60
+    receipt = _run((panel, ledger, rubric))
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    assert receipt["receipt_sha256"] == replay.sha256_json(unsigned)
 
 
 def test_fact_environments_are_scoped_to_semantic_group_declarations():
