@@ -14,32 +14,24 @@ import json
 import random
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts.gemma_decision_runtime import (
+    LETTERS,
+    GemmaDecisionRuntime,
+    Overlength,
+    render_decision_prompt,
+)
 from scripts.singleton_option_scorer import (
     probabilities_from_option_scores,
-    singleton_option_probabilities,
     validate_native_probs,
 )
 
 
-LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-SYSTEM = (
-    "You are a calibration engine. You never answer in prose. You are given a state, a question and "
-    "a numbered set of options, and you choose exactly one option. You reply with that option's "
-    "LETTER and nothing else — a single character, no words, no punctuation, no explanation."
-)
-
-
 class InvalidTask(ValueError):
-    pass
-
-
-class Overlength(ValueError):
     pass
 
 
@@ -74,105 +66,26 @@ def task_items(task) -> list[tuple[str, object]]:
 
 def render_prompt(task) -> tuple[str, list[str]]:
     items = task_items(task)
-    state = task.state if isinstance(task.state, str) else json.dumps(
-        task.state, ensure_ascii=False, indent=1
+    return (
+        render_decision_prompt(task.state, task.question.get("instructions"), items),
+        [label for label, _ in items],
     )
-    instructions = task.question.get("instructions") or ""
-    if not isinstance(instructions, str):
-        instructions = json.dumps(instructions, ensure_ascii=False)
-    lines = [state.rstrip(), "", instructions.rstrip(), "", "Options:"]
-    lines.extend(f"{LETTERS[i]}. {description}" for i, (_, description) in enumerate(items))
-    lines += ["", "Answer with the letter of exactly one option, and nothing else:"]
-    return "\n".join(lines), [label for label, _ in items]
 
 
-class GemmaLoraAdapter:
+class GemmaLoraAdapter(GemmaDecisionRuntime):
     name = "typical_gemma_lora"
     cost_basis = "local_gpu_no_provider_tariff"
     price_input_per_m = None
     price_output_per_m = None
 
-    def __init__(self, model: str, model_revision: str, adapter: str | None,
-                 adapter_revision: str | None, max_context: int, dtype: str,
-                 device: str = "cuda", attn_implementation: str = "sdpa"):
-        if max_context < 1:
-            raise ValueError("max_context must be positive")
-        self.model = model
-        self.model_revision = model_revision
-        self.adapter = adapter
-        self.adapter_revision = adapter_revision
-        self.max_context = max_context
-        self.dtype = dtype
-        self.device = device
-        self.attn_implementation = attn_implementation
-        self._model = self._tokenizer = self._groups = None
-
-    @property
-    def model_name(self) -> str:
-        return self.model + (f"+{self.adapter}" if self.adapter else "")
-
-    def load(self):
-        if self._model is not None:
-            return self
-        import torch
-        from peft import PeftModel
-        from transformers import AutoModelForImageTextToText, AutoTokenizer
-        from scripts.train_gemma_decision_lora import letter_token_groups
-
-        dtypes = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
-        if self.dtype not in dtypes:
-            raise ValueError(f"unsupported dtype {self.dtype!r}")
-        started = time.perf_counter()
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            self.model, revision=self.model_revision, local_files_only=Path(self.model).exists()
-        )
-        model = AutoModelForImageTextToText.from_pretrained(
-            self.model, revision=self.model_revision, dtype=dtypes[self.dtype],
-            local_files_only=Path(self.model).exists(), attn_implementation=self.attn_implementation,
-        )
-        advertised = getattr(getattr(model.config, "text_config", model.config),
-                             "max_position_embeddings", None)
-        if not isinstance(advertised, int) or self.max_context > advertised:
-            raise ValueError(
-                f"configured max_context={self.max_context} exceeds or cannot verify model limit {advertised!r}"
-            )
-        if self.adapter:
-            model = PeftModel.from_pretrained(
-                model, self.adapter, revision=self.adapter_revision,
-                local_files_only=Path(self.adapter).exists(),
-            )
-        model.config.use_cache = False
-        self._model = model.to(self.device).eval()
-        self._groups = letter_token_groups(self._tokenizer)
-        self.load_s = time.perf_counter() - started
-        self.model_context = advertised
-        return self
-
     def build_request(self, task) -> dict:
         return {"state": task.state, "questions": {"decision": task.question},
                 "labels": list(task.labels)}
 
-    def _input_ids(self, prompt: str):
-        messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
-        text = self._tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
-        )
-        ids = self._tokenizer(text, add_special_tokens=False, return_tensors="pt",
-                              truncation=False)["input_ids"]
-        tokens = int(ids.shape[-1])
-        if tokens > self.max_context:
-            raise Overlength(f"prompt has {tokens} tokens; configured maximum is {self.max_context}")
-        return ids, tokens
-
     def _predict(self, task) -> tuple[dict[str, float], int]:
-        import torch
-
         prompt, labels = render_prompt(task)
-        ids, tokens = self._input_ids(prompt)
-        with torch.inference_mode():
-            probabilities = singleton_option_probabilities(
-                self._model, ids.to(self.device), self._groups, labels)
-        return probabilities, tokens
+        result = self.score_prompt(prompt, labels)
+        return result.probabilities, result.input_tokens
 
     def run(self, task):
         from jevbench.adapters.base import DecisionResult

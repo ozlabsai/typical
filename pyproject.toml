@@ -29,3 +29,8 @@ pythonpath = ["pcdm", "."]
 [tool.uv]
 # the repo is a workspace of scripts, not an installable distribution; do not try to build pcdm/
 package = false
+
+[dependency-groups]
+dev = [
+    "typesafe-sdk==0.7.2",
+]
