@@ -302,6 +302,29 @@ def test_inventory_and_adapter_verifiers_require_external_literal_anchors(tmp_pa
         runner.verify_assets(model, inventory, adapter, **expected)
 
 
+def test_candidate_mode_authenticates_non_parent_adapter_without_reanchoring_headroom(
+        tmp_path, monkeypatch):
+    model, inventory, adapter, expected = _assets(tmp_path, monkeypatch)
+    (adapter / "trainer.pt").write_bytes(b"candidate optimizer state")
+    candidate_tree, candidate_files = runner.tree_hash(adapter)
+    candidate = {
+        **expected,
+        "expected_adapter_tree_sha256": candidate_tree,
+        "expected_adapter_tree_files": candidate_files,
+        "require_frozen_parent": False,
+    }
+
+    receipt = runner.verify_assets(model, inventory, adapter, **candidate)
+    assert (receipt["adapter_tree_sha256"], receipt["adapter_tree_files"]) == (
+        candidate_tree, candidate_files)
+    with pytest.raises(ValueError, match="audited R044 parent"):
+        runner.verify_assets(
+            model, inventory, adapter,
+            **{key: value for key, value in candidate.items()
+               if key != "require_frozen_parent"},
+        )
+
+
 def test_adapter_payload_symlink_and_base_revision_tampering_fail(tmp_path, monkeypatch):
     model, inventory, adapter, expected = _assets(tmp_path, monkeypatch)
     weights = adapter / "adapter_model.safetensors"

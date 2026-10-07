@@ -291,7 +291,8 @@ def evaluate_headroom(rows, predictions):
 
 
 def verify_assets(model_path, inventory_path, adapter_path, *, expected_inventory_sha256,
-                  expected_adapter_tree_sha256, expected_adapter_tree_files):
+                  expected_adapter_tree_sha256, expected_adapter_tree_files,
+                  require_frozen_parent=True):
     inventory_expectation = _hash(expected_inventory_sha256, "model inventory")
     if inventory_expectation != FROZEN_INVENTORY_SHA256:
         raise ValueError("externally expected model inventory must equal the audited literal")
@@ -305,8 +306,13 @@ def verify_assets(model_path, inventory_path, adapter_path, *, expected_inventor
             or (inventory.get("tree_sha256"), inventory.get("files")) != (FROZEN_BASE_TREE_SHA256, FROZEN_BASE_TREE_FILES)):
         raise ValueError("verified base tree/hash file count differs from the audited literal")
     digest = _hash(expected_adapter_tree_sha256, "parent adapter tree")
-    if (digest != FROZEN_PARENT_TREE_SHA256 or type(expected_adapter_tree_files) is not int
-            or expected_adapter_tree_files != FROZEN_PARENT_TREE_FILES):
+    if (type(require_frozen_parent) is not bool
+            or type(expected_adapter_tree_files) is not int
+            or expected_adapter_tree_files <= 0):
+        raise ValueError("adapter verification mode and file count are invalid")
+    if (require_frozen_parent
+            and (digest != FROZEN_PARENT_TREE_SHA256
+                 or expected_adapter_tree_files != FROZEN_PARENT_TREE_FILES)):
         raise ValueError("externally expected adapter tree/hash file count must equal the audited R044 parent literals")
     adapter = Path(adapter_path).absolute()
     if not adapter.is_dir() or adapter.is_symlink() or any(item.is_symlink() for item in adapter.rglob("*")):

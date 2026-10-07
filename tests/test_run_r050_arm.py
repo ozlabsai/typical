@@ -120,3 +120,59 @@ def test_recipe_rejects_rehashed_wrong_objective_and_boolean_integer(tmp_path):
     digest = hashlib.sha256(recipe_path.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match="matched training configuration"):
         runner.validate_recipe(recipe_path, digest)
+
+
+def test_verify_bindings_compares_compact_mix_after_manifest_validation(
+        tmp_path, monkeypatch):
+    mix_binding = {
+        "path": str((tmp_path / "mix.jsonl").resolve()),
+        "manifest_path": str((tmp_path / "manifest.json").resolve()),
+        "sha256": "a" * 64,
+        "manifest_sha256": "b" * 64,
+        "executable_factor_cells_sha256": "c" * 64,
+    }
+    validated = {**mix_binding, "manifest": {"schema": "validated"}}
+    monkeypatch.setattr(runner, "validate_mix", lambda *args: dict(validated))
+
+    # Stop after the mix comparison; reaching the panel lookup proves the
+    # validated-but-unsealed manifest field was removed before equality.
+    monkeypatch.setattr(
+        runner, "require_hash",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("past mix binding")),
+    )
+    bindings = {
+        name: {} for name in {
+            "mix", "model", "gradient_probe", "training_panel", "panel_manifest",
+            "panel_builder", "parent_adapter", "trainer", "gradient_probe_code",
+        }
+    }
+    bindings["mix"] = mix_binding
+
+    with pytest.raises(RuntimeError, match="past mix binding"):
+        runner.verify_bindings({"bindings": bindings})
+
+
+def test_metrics_accepts_zero_action_update_without_losing_epoch_accounting(tmp_path):
+    _, recipe, _ = _recipe(tmp_path)
+    kind = recipe["objective"]["exact_policy_outcome_loss"]
+    rows = [{"step": 0, "validation": {}}]
+    for step in range(1, 401):
+        groups = 0 if step == 379 else (8 if step == 1 else 4)
+        rows.append({
+            "step": step,
+            "train_loss": 0.1,
+            "action_groups_seen": groups,
+            "action_groups_correct": 0,
+            "action_loss": 0.0,
+            "action_loss_weight": recipe["objective"]["action_loss_weight"],
+            "exact_policy_outcome_loss": kind,
+            "action_loss_kind": "mixed" if groups == 0 else kind,
+        })
+    metrics = tmp_path / "metrics.jsonl"
+    metrics.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    assert runner.validate_metrics(metrics, recipe)[1] == 401
+    rows[379]["action_loss_kind"] = kind
+    metrics.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(ValueError, match="wrong or incomplete action objective"):
+        runner.validate_metrics(metrics, recipe)

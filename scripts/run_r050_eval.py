@@ -310,6 +310,7 @@ def run(data, manifest, model, inventory, adapter, out, *, expected_data_sha256,
         "expected_inventory_sha256": expected_inventory_sha256,
         "expected_adapter_tree_sha256": expected_adapter_tree_sha256,
         "expected_adapter_tree_files": expected_adapter_tree_files,
+        "require_frozen_parent": False,
     }
     assets = trusted_runtime.verify_assets(model, inventory, adapter, **asset_kwargs)
     if (assets.get("base_model_tree_sha256") != FROZEN_BASE_TREE_SHA256

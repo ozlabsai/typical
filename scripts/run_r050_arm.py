@@ -115,7 +115,11 @@ def verify_bindings(recipe: dict[str, Any]) -> None:
     mix = validate_mix(
         mix_binding.get("path"), mix_binding.get("manifest_path"),
         mix_binding.get("sha256"), mix_binding.get("manifest_sha256"))
-    if mix != mix_binding:
+    # ``validate_mix`` returns the parsed manifest so arm preparation can
+    # authenticate its upstream lineage before sealing the compact binding.
+    # The manifest itself is intentionally not embedded in every recipe.
+    manifest = mix.pop("manifest", None)
+    if not isinstance(manifest, dict) or mix != mix_binding:
         raise ValueError("training mix binding drift")
     panel_binding = bindings["training_panel"]
     panel, panel_sha = require_hash(
@@ -252,16 +256,22 @@ def validate_metrics(path: Path, recipe: dict[str, Any]) -> tuple[str, int]:
     objective = recipe["objective"]
     executable_seen = 0
     for row in rows[1:]:
+        groups_seen = row.get("action_groups_seen")
+        expected_kind = ("mixed" if groups_seen == 0
+                         else objective["exact_policy_outcome_loss"])
         if (isinstance(row.get("train_loss"), bool)
                 or not isinstance(row.get("train_loss"), (int, float))
                 or not _same_number(row.get("action_loss_weight"),
                                     objective["action_loss_weight"])
                 or row.get("exact_policy_outcome_loss") != objective["exact_policy_outcome_loss"]
-                or row.get("action_loss_kind") != objective["exact_policy_outcome_loss"]
-                or type(row.get("action_groups_seen")) is not int
-                or row["action_groups_seen"] < 0):
+                or row.get("action_loss_kind") != expected_kind
+                or type(groups_seen) is not int
+                or groups_seen < 0
+                or (groups_seen == 0
+                    and (row.get("action_groups_correct") != 0
+                         or not _same_number(row.get("action_loss"), 0.0)))):
             raise ValueError("metrics report the wrong or incomplete action objective")
-        executable_seen += row["action_groups_seen"]
+        executable_seen += groups_seen
     if executable_seen != EXPECTED_STRATA["executable"]:
         raise ValueError("metrics do not account for all 1,600 executable slots exactly once")
     return file_hash(path), len(rows)

@@ -10,7 +10,7 @@ export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 REVISION=707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7
 MODEL=${R050_MODEL:-/workspace/g1/hf-gemma/hub/models--google--gemma-4-12B-it/snapshots/$REVISION}
 OUT=${R050_OUT:-$ROOT/.context/r050-gpu-run-0f5ceb5}
-EXPECTED_PIPELINE_SHA256=03b43f647dfad7d417fd295164f8b5b313aad6e6844ace5782bd691054fbe5db
+EXPECTED_PIPELINE_SHA256=654804085af58bd200528cbb91b668bff90fe19cd490ab165b98eeb4ce2bd0f4
 
 observed_pipeline_sha=$(sha256sum scripts/run_r050_pipeline.py | awk '{print $1}')
 if [[ "$observed_pipeline_sha" != "$EXPECTED_PIPELINE_SHA256" ]]; then
