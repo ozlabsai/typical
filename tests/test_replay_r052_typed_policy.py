@@ -1,3 +1,4 @@
+import json
 from copy import deepcopy
 from fractions import Fraction
 from pathlib import Path
@@ -95,6 +96,7 @@ def _fixture():
         "question_key": "q.permit",
         "text": "Is the permit active?",
         "options": ["Yes", "No"],
+        "option_ids": ["yes", "no"],
         "policy_role": "permit",
         "content_sha256": ZERO,
         "decision_type": "noul",
@@ -105,7 +107,13 @@ def _fixture():
     question["content_sha256"] = replay.sha256_json(
         {
             key: question[key]
-            for key in ("text", "options", "decision_type", "policy_role")
+            for key in (
+                "text",
+                "options",
+                "option_ids",
+                "decision_type",
+                "policy_role",
+            )
         }
     )
     panel = {
@@ -114,7 +122,7 @@ def _fixture():
             {
                 "case_key": "case.en",
                 "language": "en",
-                "twin_group_key": "twin.permit",
+                "twin_group_key": None,
                 "chunks": chunks,
                 "questions": [question],
             }
@@ -187,7 +195,6 @@ def _fixture():
                             "d.permit": {
                                 "question_key": "q.permit",
                                 "question_content_sha256": question["content_sha256"],
-                                "output_option_indices": {"yes": 0, "no": 1},
                             }
                         },
                         "views": {
@@ -248,13 +255,16 @@ def test_happy_path_receipt_is_deterministic_and_missing_noul_is_never_false():
     assert first == second
     trace = first["semantic_groups"][0]["presentations"][0]["decisions"][0]
     assert trace["transition"] == "resolution_loss"
-    assert trace["views"]["full"]["selected_option"] == {
+    assert trace["views"]["full"] | {"rules": []} == {
+        "status": "resolved",
+        "output_id": "yes",
+        "option_index": 0,
+        "text": "Yes",
         "question_key": "q.permit",
         "question_content_sha256": values[0]["cases"][0]["questions"][0][
             "content_sha256"
         ],
-        "index": 0,
-        "text": "Yes",
+        "rules": [],
     }
     assert trace["views"]["removed"]["status"] == "unresolved"
     assert [item["truth"] for item in trace["views"]["removed"]["rules"]] == [
@@ -272,18 +282,22 @@ def test_unknown_competing_choice_and_multiple_true_fail_closed():
     question = panel["cases"][0]["questions"][0]
     question["decision_type"] = "choice"
     question["options"].append("Maybe")
+    question["option_ids"].append("maybe")
     question["content_sha256"] = replay.sha256_json(
         {
             key: question[key]
-            for key in ("text", "options", "decision_type", "policy_role")
+            for key in (
+                "text",
+                "options",
+                "option_ids",
+                "decision_type",
+                "policy_role",
+            )
         }
     )
     rubric["semantic_groups"][0]["presentations"][0]["question_bindings"]["d.permit"][
         "question_content_sha256"
     ] = question["content_sha256"]
-    rubric["semantic_groups"][0]["presentations"][0]["question_bindings"]["d.permit"][
-        "output_option_indices"
-    ] = {"yes": 0, "no": 1, "maybe": 2}
     _set_causal_proof(panel["cases"][0], question)
     decision["outputs"].append({"id": "maybe", "label": "Maybe"})
     decision["order"].append("maybe")
@@ -465,6 +479,7 @@ def test_question_hash_tamper_hebrew_drift_image_leakage_and_policy_removal():
                     "decision_type": "noul",
                     "policy_role": "p",
                     "options": ["כן", "לא"],
+                    "option_ids": ["yes", "no"],
                 }
             ],
         },
@@ -488,6 +503,7 @@ def test_question_hash_tamper_hebrew_drift_image_leakage_and_policy_removal():
                     "decision_type": "noul",
                     "policy_role": "p",
                     "options": ["yes", "no"],
+                    "option_ids": ["yes", "no"],
                 }
             ],
         },
@@ -511,7 +527,6 @@ def test_question_hash_tamper_hebrew_drift_image_leakage_and_policy_removal():
                     "question_bindings": {
                         "d": {
                             "question_key": "q",
-                            "output_option_indices": {"yes": 0, "no": 1},
                         }
                     },
                 },
@@ -530,7 +545,6 @@ def test_question_hash_tamper_hebrew_drift_image_leakage_and_policy_removal():
                     "question_bindings": {
                         "d": {
                             "question_key": "q",
-                            "output_option_indices": {"yes": 0, "no": 1},
                         }
                     },
                 },
@@ -624,14 +638,67 @@ def test_question_coverage_is_an_exact_bijection():
         _run((panel, ledger, rubric))
 
 
-def test_option_mapping_causal_proof_and_resolution_loss_are_authoritative():
+def test_option_ids_causal_proof_and_resolution_loss_are_authoritative():
     panel, ledger, rubric = _fixture()
     binding = rubric["semantic_groups"][0]["presentations"][0]["question_bindings"][
         "d.permit"
     ]
     binding["output_option_indices"] = {"yes": 1, "no": 0}
-    with pytest.raises(replay.PolicyError, match="option order"):
+    with pytest.raises(replay.PolicyError, match="keys must be exactly"):
         _run((panel, ledger, rubric))
+
+    panel, ledger, rubric = _fixture()
+    question = panel["cases"][0]["questions"][0]
+    question["option_ids"] = ["no", "yes"]
+    question["content_sha256"] = replay.sha256_json(
+        {
+            key: question[key]
+            for key in (
+                "text",
+                "options",
+                "option_ids",
+                "decision_type",
+                "policy_role",
+            )
+        }
+    )
+    rubric["semantic_groups"][0]["presentations"][0]["question_bindings"]["d.permit"][
+        "question_content_sha256"
+    ] = question["content_sha256"]
+    _set_causal_proof(panel["cases"][0], question)
+    with pytest.raises(replay.PolicyError, match="exactly bind panel option_ids"):
+        _run((panel, ledger, rubric))
+
+    decision = rubric["semantic_groups"][0]["decisions"][0]
+    question["options"] = ["No", "Yes"]
+    decision["outputs"].reverse()
+    decision["order"].reverse()
+    decision["rules"].reverse()
+    question["content_sha256"] = replay.sha256_json(
+        {
+            key: question[key]
+            for key in (
+                "text",
+                "options",
+                "option_ids",
+                "decision_type",
+                "policy_role",
+            )
+        }
+    )
+    rubric["semantic_groups"][0]["presentations"][0]["question_bindings"]["d.permit"][
+        "question_content_sha256"
+    ] = question["content_sha256"]
+    _set_causal_proof(panel["cases"][0], question, option_index=1)
+    swapped = _run((panel, ledger, rubric))
+    selected = swapped["semantic_groups"][0]["presentations"][0]["decisions"][0][
+        "views"
+    ]["full"]
+    assert (selected["output_id"], selected["option_index"], selected["text"]) == (
+        "yes",
+        1,
+        "Yes",
+    )
 
     panel, ledger, rubric = _fixture()
     question = panel["cases"][0]["questions"][0]
@@ -650,6 +717,24 @@ def test_option_mapping_causal_proof_and_resolution_loss_are_authoritative():
         "required_transition"
     ] = "label_flip"
     with pytest.raises(replay.PolicyError, match="required causal transition"):
+        _run((panel, ledger, rubric))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("options", None, "options must be"),
+        ("options", {"yes": "Yes"}, "options must be"),
+        ("options", ["Yes", "Yes"], "options must be"),
+        ("option_ids", None, "option_ids must be"),
+        ("option_ids", {"yes": 0, "no": 1}, "option_ids must be"),
+        ("option_ids", ["yes", "yes"], "option_ids must be"),
+    ],
+)
+def test_malformed_panel_options_fail_as_policy_errors(field, value, message):
+    panel, ledger, rubric = _fixture()
+    panel["cases"][0]["questions"][0][field] = value
+    with pytest.raises(replay.PolicyError, match=message):
         _run((panel, ledger, rubric))
 
 
@@ -782,6 +867,7 @@ def test_hebrew_twins_compare_option_evidence_environment_and_replay_traces():
                     "decision_type": "noul",
                     "policy_role": "role",
                     "options": ["yes", "no"],
+                    "option_ids": ["yes", "no"],
                     "decisive_chunk_keys": [f"c.{suffix}"],
                     "known_distractor_chunk_keys": [],
                 }
@@ -789,6 +875,7 @@ def test_hebrew_twins_compare_option_evidence_environment_and_replay_traces():
         }
 
     cases = {"he": twin_case("he", "he"), "en": twin_case("en", "en")}
+    cases["he"]["questions"][0]["options"] = ["כן", "לא"]
     views = {
         name: ["c.he"]
         for name in ("full", "removed", "decisive_only", "distractor_only")
@@ -801,7 +888,6 @@ def test_hebrew_twins_compare_option_evidence_environment_and_replay_traces():
             "question_bindings": {
                 "d": {
                     "question_key": "q.he",
-                    "output_option_indices": {"yes": 0, "no": 1},
                 }
             },
         },
@@ -812,7 +898,6 @@ def test_hebrew_twins_compare_option_evidence_environment_and_replay_traces():
             "question_bindings": {
                 "d": {
                     "question_key": "q.en",
-                    "output_option_indices": {"yes": 0, "no": 1},
                 }
             },
         },
@@ -820,30 +905,46 @@ def test_hebrew_twins_compare_option_evidence_environment_and_replay_traces():
     groups = [{"group_id": "g", "presentations": presentations}]
     result = {
         "status": "resolved",
-        "output": "yes",
-        "selected_option": {"index": 0},
+        "output_id": "yes",
+        "option_index": 0,
         "rules": [],
     }
     decision = {
         "decision_id": "d",
         "transition": "resolution_loss",
-        "views": {"full": result},
+        "views": {
+            name: deepcopy(result)
+            for name in ("full", "removed", "decisive_only", "distractor_only")
+        },
+    }
+    fact_states = {
+        name: {} for name in ("full", "removed", "decisive_only", "distractor_only")
     }
     traces = {
-        ("g", "p.he"): {"fact_states": {"full": {}}, "decisions": [decision]},
+        ("g", "p.he"): {"fact_states": fact_states, "decisions": [decision]},
         ("g", "p.en"): {
-            "fact_states": {"full": {}},
+            "fact_states": deepcopy(fact_states),
             "decisions": [deepcopy(decision)],
         },
     }
     replay._validate_hebrew(groups, cases, traces)
 
-    option_drift = deepcopy(groups)
-    option_drift[0]["presentations"][1]["question_bindings"]["d"][
-        "output_option_indices"
-    ] = {"yes": 1, "no": 0}
-    with pytest.raises(replay.PolicyError, match="option index mappings drift"):
-        replay._validate_hebrew(option_drift, cases, traces)
+    three_way_cases = deepcopy(cases)
+    three_way_cases["he2"] = twin_case("he", "he2")
+    three_way_groups = deepcopy(groups)
+    extra_presentation = deepcopy(three_way_groups[0]["presentations"][0])
+    extra_presentation["presentation_id"] = "p.he2"
+    extra_presentation["case_key"] = "he2"
+    extra_presentation["views"] = {name: ["c.he2"] for name in views}
+    extra_presentation["question_bindings"]["d"]["question_key"] = "q.he2"
+    three_way_groups[0]["presentations"].append(extra_presentation)
+    with pytest.raises(replay.PolicyError, match="exactly one English and one Hebrew"):
+        replay._validate_hebrew(three_way_groups, three_way_cases, traces)
+
+    option_drift = deepcopy(cases)
+    option_drift["en"]["questions"][0]["option_ids"] = ["no", "yes"]
+    with pytest.raises(replay.PolicyError, match="semantic anchors drift"):
+        replay._validate_hebrew(groups, option_drift, traces)
 
     evidence_drift = deepcopy(cases)
     evidence_drift["en"]["questions"][0]["decisive_chunk_keys"] = []
@@ -856,7 +957,9 @@ def test_hebrew_twins_compare_option_evidence_environment_and_replay_traces():
         replay._validate_hebrew(groups, cases, environment_drift)
 
     trace_drift = deepcopy(traces)
-    trace_drift[("g", "p.en")]["decisions"][0]["views"]["full"]["output"] = "no"
+    trace_drift[("g", "p.en")]["decisions"][0]["views"]["decisive_only"][
+        "output_id"
+    ] = "no"
     with pytest.raises(replay.PolicyError, match="replay traces drift"):
         replay._validate_hebrew(groups, cases, trace_drift)
 
@@ -885,28 +988,28 @@ def test_json_and_collection_bounds_and_recursion_are_fail_closed(monkeypatch):
     monkeypatch.setattr(replay, "MAX_JSON_NODES", 2)
     with pytest.raises(replay.PolicyError, match="node bound"):
         replay.parse_canonical_json(b'{"a":1,"b":2}\n', "wide")
-    monkeypatch.setattr(replay, "MAX_JSON_NODES", 1_000_000)
+    monkeypatch.setattr(replay, "MAX_JSON_NODES", 250_000)
     monkeypatch.setattr(replay, "MAX_JSON_OBJECTS", 1)
     with pytest.raises(replay.PolicyError, match="object bound"):
         replay.parse_canonical_json(b'{"a":{}}\n', "objects")
-    monkeypatch.setattr(replay, "MAX_JSON_OBJECTS", 200_000)
+    monkeypatch.setattr(replay, "MAX_JSON_OBJECTS", 50_000)
     panel, ledger, rubric = _fixture()
     monkeypatch.setattr(replay, "MAX_RULES", 1)
     with pytest.raises(replay.PolicyError, match="outputs|rules"):
         _run((panel, ledger, rubric))
-    monkeypatch.setattr(replay, "MAX_RULES", 64)
-    monkeypatch.setattr(replay, "MAX_BINDINGS", 2)
-    with pytest.raises(replay.PolicyError, match="collection bounds"):
+    monkeypatch.setattr(replay, "MAX_RULES", 32)
+    monkeypatch.setattr(replay, "MAX_BINDINGS", 0)
+    with pytest.raises(replay.PolicyError, match="bindings"):
         _run(_fixture())
-    monkeypatch.setattr(replay, "MAX_BINDINGS", 100_000)
+    monkeypatch.setattr(replay, "MAX_BINDINGS", 16_384)
     monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 0)
-    with pytest.raises(replay.PolicyError, match="case count"):
+    with pytest.raises(replay.PolicyError, match="presentations"):
         _run(_fixture())
-    monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 20_000)
+    monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 2_048)
     monkeypatch.setattr(replay, "MAX_INPUT_BYTES", 2)
     with pytest.raises(replay.PolicyError, match="input byte bound"):
         replay.parse_canonical_json(b"{}\n", "oversized")
-    monkeypatch.setattr(replay, "MAX_INPUT_BYTES", 128 * 1024 * 1024)
+    monkeypatch.setattr(replay, "MAX_INPUT_BYTES", 64 * 1024 * 1024)
     monkeypatch.setattr(
         replay.json,
         "loads",
@@ -928,6 +1031,65 @@ def test_schema_hash_is_hard_bound():
             **hashes,
             adjudication_receipts={ADJUDICATION_SHA256: ADJUDICATION_BYTES},
         )
+
+
+def test_runtime_and_schema_group_bounds_match_and_maximum_is_valid():
+    schema = json.loads(Path("sources/r052/policy_replay.schema.json").read_text())
+    schema_max = schema["$defs"]["policyRubric"]["properties"]["semantic_groups"][
+        "maxItems"
+    ]
+    assert schema_max == replay.MAX_GROUPS == 64
+
+    base_panel, base_ledger, base_rubric = _fixture()
+    cases = []
+    bindings = []
+    groups = []
+    for index in range(replay.MAX_GROUPS):
+        suffix = f"{index:02d}"
+        case = deepcopy(base_panel["cases"][0])
+        case["case_key"] = f"case.{suffix}"
+        key_map = {
+            chunk["chunk_key"]: f"{chunk['chunk_key']}.{suffix}"
+            for chunk in case["chunks"]
+        }
+        for chunk in case["chunks"]:
+            chunk["chunk_key"] = key_map[chunk["chunk_key"]]
+        question = case["questions"][0]
+        question["question_key"] = f"q.{suffix}"
+        question["decisive_chunk_keys"] = [
+            key_map[key] for key in question["decisive_chunk_keys"]
+        ]
+        question["known_distractor_chunk_keys"] = [
+            key_map[key] for key in question["known_distractor_chunk_keys"]
+        ]
+        _set_causal_proof(case, question)
+        cases.append(case)
+
+        binding = deepcopy(base_ledger["bindings"][0])
+        binding["case_key"] = case["case_key"]
+        binding["chunk_key"] = key_map["c.decisive"]
+        bindings.append(binding)
+
+        group = deepcopy(base_rubric["semantic_groups"][0])
+        group["group_id"] = f"g.{suffix}"
+        presentation = group["presentations"][0]
+        presentation["presentation_id"] = f"p.{suffix}"
+        presentation["case_key"] = case["case_key"]
+        presentation["question_bindings"]["d.permit"]["question_key"] = question[
+            "question_key"
+        ]
+        presentation["views"] = {
+            name: [key_map[key] for key in keys]
+            for name, keys in presentation["views"].items()
+        }
+        presentation["ablations"][0]["remove_chunk_keys"] = [key_map["c.decisive"]]
+        groups.append(group)
+
+    base_panel["cases"] = cases
+    base_ledger["bindings"] = bindings
+    base_rubric["semantic_groups"] = groups
+    receipt = _run((base_panel, base_ledger, base_rubric))
+    assert len(receipt["semantic_groups"]) == replay.MAX_GROUPS
 
 
 def test_cli_requires_external_hashes_and_never_overwrites(tmp_path):
@@ -977,3 +1139,24 @@ def test_cli_requires_external_hashes_and_never_overwrites(tmp_path):
     argv[-1] = str(symlink_output)
     assert replay.main(argv) == 2
     assert target.read_text() == "unchanged"
+
+
+def test_atomic_publication_exposes_only_complete_receipt_bytes(tmp_path, monkeypatch):
+    destination = tmp_path / "receipt.json"
+    payload = b'{"complete":true}\n'
+    real_link = replay.os.link
+    publications = []
+
+    def inspect_then_link(source, target, *, follow_symlinks):
+        assert Path(source).parent == destination.parent
+        assert Path(source).read_bytes() == payload
+        assert not Path(target).exists()
+        publications.append((source, target))
+        return real_link(source, target, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(replay.os, "link", inspect_then_link)
+    replay._write_exclusive_atomic(destination, payload)
+
+    assert publications
+    assert destination.read_bytes() == payload
+    assert not list(tmp_path.glob(f".{destination.name}.*.tmp"))

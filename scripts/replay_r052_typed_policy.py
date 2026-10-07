@@ -12,6 +12,11 @@ The ledger proves exact adjudication-receipt bytes, not when the human review
 happened.  Pre-question authoring plus pixel-region interpretation, image
 dimensions, and presentation order remain external human assurances where the
 panel does not expose those values.
+
+Eligibility is a monotone ``resolved -> unresolved`` removal algebra: hiding
+chunks can only remove typed observations, and missing/conflict never defaults
+to false.  Therefore a decisive set is inclusion-minimal exactly when restoring
+each single removed chunk prevents the declared resolution loss.
 """
 
 from __future__ import annotations
@@ -23,10 +28,10 @@ import math
 import os
 import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -40,21 +45,24 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 FACT_ID_RE = re.compile(r"^f[0-9]{4,}$")
 MAX_AST_DEPTH = 16
 MAX_AST_NODES = 256
-MAX_AST_ARGS = 64
+MAX_AST_ARGS = 32
 MAX_REMOVAL_CHUNKS = 12
-MAX_INPUT_BYTES = 128 * 1024 * 1024
-MAX_RECEIPT_ARTIFACT_BYTES = 16 * 1024 * 1024
+MAX_INPUT_BYTES = 64 * 1024 * 1024
+MAX_RECEIPT_ARTIFACT_BYTES = 4 * 1024 * 1024
 MAX_JSON_DEPTH = 64
-MAX_JSON_NODES = 1_000_000
-MAX_JSON_OBJECTS = 200_000
+MAX_JSON_NODES = 250_000
+MAX_JSON_OBJECTS = 50_000
 MAX_INTEGER_DIGITS = 128
-MAX_FACTS = 100_000
-MAX_BINDINGS = 100_000
-MAX_GROUPS = 10_000
-MAX_PRESENTATIONS = 20_000
-MAX_RULES = 64
+MAX_CASES = 512
+MAX_CASE_ITEMS = 4_096
+MAX_OPTIONS = 32
+MAX_FACTS = 8_192
+MAX_BINDINGS = 16_384
+MAX_GROUPS = 64
+MAX_PRESENTATIONS = 2_048
+MAX_RULES = 32
 EXPECTED_SCHEMA_SHA256 = (
-    "d278f39d20c1bf734d9c3fbbb88ea5ad3667d8123caab09041fae5e37472d3af"
+    "cc9207f950a52d20b296dba3d0d06770eebe3f52f5ce2d6cfa50d542568c03a8"
 )
 
 
@@ -278,7 +286,7 @@ def _panel_index(
 ) -> tuple[dict[str, dict[str, Any]], dict[str, tuple[dict[str, Any], dict[str, Any]]]]:
     if not isinstance(panel, dict) or not isinstance(panel.get("cases"), list):
         raise PolicyError("panel must contain a cases array")
-    if not panel["cases"] or len(panel["cases"]) > MAX_PRESENTATIONS:
+    if not panel["cases"] or len(panel["cases"]) > MAX_CASES:
         raise PolicyError("panel case count is outside the safe bound")
     cases: dict[str, dict[str, Any]] = {}
     chunks: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
@@ -288,11 +296,22 @@ def _panel_index(
         case_key = _identifier(case.get("case_key"), "panel case_key")
         if case_key in cases:
             raise PolicyError("panel case keys must be unique")
+        language = case.get("language")
+        if language not in {"en", "he"}:
+            raise PolicyError("panel case language must be en or he")
+        twin_group_key = case.get("twin_group_key")
+        if twin_group_key is not None:
+            _identifier(twin_group_key, "panel twin_group_key")
+        elif language == "he":
+            raise PolicyError("Hebrew panel cases require a semantic twin group")
         if not isinstance(case.get("chunks"), list) or not isinstance(
             case.get("questions"), list
         ):
             raise PolicyError(f"panel case {case_key} lacks chunks/questions")
-        if len(case["chunks"]) > MAX_BINDINGS or len(case["questions"]) > MAX_BINDINGS:
+        if (
+            len(case["chunks"]) > MAX_CASE_ITEMS
+            or len(case["questions"]) > MAX_CASE_ITEMS
+        ):
             raise PolicyError(f"panel case {case_key} exceeds collection bounds")
         cases[case_key] = case
         local_chunks: set[str] = set()
@@ -366,14 +385,47 @@ def _panel_index(
             required_question_fields = {
                 "text",
                 "options",
+                "option_ids",
                 "decision_type",
                 "policy_role",
             }
             if not required_question_fields <= set(question):
                 raise PolicyError("panel question lacks content-hash fields")
+            _text(question["text"], "panel question text")
+            _text(question["policy_role"], "panel question policy_role")
+            if question["decision_type"] not in {"choice", "noul", "score"}:
+                raise PolicyError("panel question decision_type is invalid")
+            options = question["options"]
+            option_ids = question["option_ids"]
+            if (
+                not isinstance(options, list)
+                or not 2 <= len(options) <= MAX_OPTIONS
+                or any(
+                    not isinstance(option, str) or not option.strip()
+                    for option in options
+                )
+                or len(options) != len(set(options))
+            ):
+                raise PolicyError(
+                    "panel question options must be non-empty unique text"
+                )
+            if (
+                not isinstance(option_ids, list)
+                or len(option_ids) != len(options)
+                or any(
+                    not isinstance(option_id, str)
+                    or IDENTIFIER_RE.fullmatch(option_id) is None
+                    for option_id in option_ids
+                )
+                or len(option_ids) != len(set(option_ids))
+            ):
+                raise PolicyError(
+                    "panel question option_ids must be parallel unique semantic ids"
+                )
             question_payload = {
                 "text": question["text"],
                 "options": question["options"],
+                "option_ids": question["option_ids"],
                 "decision_type": question["decision_type"],
                 "policy_role": question["policy_role"],
             }
@@ -579,22 +631,15 @@ def _validate_ast(
 
 def _fact_environment(
     facts: dict[str, tuple[str, str | None]],
-    bindings: list[dict[str, Any]],
+    observation_index: dict[str, dict[str, tuple[tuple[str, TypedValue], ...]]],
     case_key: str,
     visible_chunks: set[str],
 ) -> dict[str, TypedValue | Signal]:
     values: dict[str, list[TypedValue]] = {fact_id: [] for fact_id in facts}
-    for binding in bindings:
-        if (
-            binding["case_key"] != case_key
-            or binding["chunk_key"] not in visible_chunks
-        ):
-            continue
-        for observation in binding["observations"]:
-            fact_id = observation["fact"]
-            values[fact_id].append(
-                _typed_value(observation["value"], facts[fact_id], f"fact {fact_id}")
-            )
+    by_chunk = observation_index.get(case_key, {})
+    for chunk_key in visible_chunks:
+        for fact_id, value in by_chunk.get(chunk_key, ()):
+            values[fact_id].append(value)
     environment: dict[str, TypedValue | Signal] = {}
     for fact_id, candidates in values.items():
         if not candidates:
@@ -604,6 +649,29 @@ def _fact_environment(
         else:
             environment[fact_id] = candidates[0]
     return environment
+
+
+def _index_observations(
+    facts: dict[str, tuple[str, str | None]], bindings: list[dict[str, Any]]
+) -> dict[str, dict[str, tuple[tuple[str, TypedValue], ...]]]:
+    mutable: dict[str, dict[str, list[tuple[str, TypedValue]]]] = {}
+    for binding in bindings:
+        case_index = mutable.setdefault(binding["case_key"], {})
+        chunk_values = case_index.setdefault(binding["chunk_key"], [])
+        for observation in binding["observations"]:
+            fact_id = observation["fact"]
+            chunk_values.append(
+                (
+                    fact_id,
+                    _typed_value(
+                        observation["value"], facts[fact_id], f"fact {fact_id}"
+                    ),
+                )
+            )
+    return {
+        case_key: {chunk_key: tuple(values) for chunk_key, values in chunks.items()}
+        for case_key, chunks in mutable.items()
+    }
 
 
 def _as_bool(value: Any) -> bool | Signal:
@@ -721,21 +789,19 @@ def classify_transition(full: DecisionResult, removed: DecisionResult) -> str:
 def _result_json(
     result: DecisionResult,
     question: dict[str, Any],
-    question_binding: dict[str, Any],
 ) -> dict[str, Any]:
-    selected_option = None
+    option_index = None
+    option_text = None
     if result.status == "resolved":
-        index = question_binding["output_option_indices"][result.output]
-        selected_option = {
-            "question_key": question["question_key"],
-            "question_content_sha256": question["content_sha256"],
-            "index": index,
-            "text": question["options"][index],
-        }
+        option_index = question["option_ids"].index(result.output)
+        option_text = question["options"][option_index]
     return {
         "status": result.status,
-        "output": result.output,
-        "selected_option": selected_option,
+        "output_id": result.output,
+        "option_index": option_index,
+        "text": option_text,
+        "question_key": question["question_key"],
+        "question_content_sha256": question["content_sha256"],
         "rules": [
             {
                 "output": output,
@@ -943,8 +1009,33 @@ def _validate_hebrew(
     cases: dict[str, dict[str, Any]],
     traces: dict[tuple[str, str], dict[str, Any]],
 ) -> None:
+    case_twins: dict[str, list[dict[str, Any]]] = {}
+    for case in cases.values():
+        twin = case.get("twin_group_key")
+        if twin is not None:
+            case_twins.setdefault(twin, []).append(case)
+    for members in case_twins.values():
+        if len(members) != 2 or {case.get("language") for case in members} != {
+            "en",
+            "he",
+        }:
+            raise PolicyError(
+                "each panel twin group must contain exactly one English and one Hebrew case"
+            )
     for group in groups:
         presentations = group["presentations"]
+        presentation_twins: dict[str, list[dict[str, Any]]] = {}
+        for presentation in presentations:
+            twin = cases[presentation["case_key"]].get("twin_group_key")
+            if twin is not None:
+                presentation_twins.setdefault(twin, []).append(presentation)
+        for twin, members in presentation_twins.items():
+            if len(members) != 2 or {
+                cases[item["case_key"]].get("language") for item in members
+            } != {"en", "he"}:
+                raise PolicyError(
+                    "semantic twin groups require reciprocal one-to-one EN/HE presentations"
+                )
         for presentation in presentations:
             case = cases[presentation["case_key"]]
             if case.get("language") != "he":
@@ -1025,13 +1116,9 @@ def _validate_hebrew(
                     or he_question.get("policy_role") != en_question.get("policy_role")
                     or len(he_question.get("options", []))
                     != len(en_question.get("options", []))
+                    or he_question.get("option_ids") != en_question.get("option_ids")
                 ):
                     raise PolicyError("Hebrew/English question semantic anchors drift")
-                if (
-                    binding["output_option_indices"]
-                    != en_binding["output_option_indices"]
-                ):
-                    raise PolicyError("Hebrew/English option index mappings drift")
                 he_decisive = [
                     next(
                         chunk["twin_anchor"]
@@ -1075,12 +1162,8 @@ def _validate_hebrew(
                         "views": {
                             name: {
                                 "status": result["status"],
-                                "output": result["output"],
-                                "option_index": (
-                                    None
-                                    if result["selected_option"] is None
-                                    else result["selected_option"]["index"]
-                                ),
+                                "output_id": result["output_id"],
+                                "option_index": result["option_index"],
                                 "rules": result["rules"],
                             }
                             for name, result in decision["views"].items()
@@ -1125,6 +1208,7 @@ def replay(
     facts, bindings = validate_ledger(
         ledger, panel, panel_sha256, adjudication_receipts
     )
+    observation_index = _index_observations(facts, bindings)
     cases, _ = _panel_index(panel)
     _validate_images(cases, bindings)
     rubric = _exact(
@@ -1283,11 +1367,7 @@ def replay(
             for decision_id, binding in question_bindings.items():
                 binding = _exact(
                     binding,
-                    {
-                        "question_key",
-                        "question_content_sha256",
-                        "output_option_indices",
-                    },
+                    {"question_key", "question_content_sha256"},
                     "question binding",
                 )
                 question = _question(
@@ -1301,18 +1381,10 @@ def replay(
                 if question_identity in bound_questions:
                     raise PolicyError("panel question is reused by multiple decisions")
                 bound_questions.add(question_identity)
-                option_indices = binding["output_option_indices"]
                 output_order = decisions[decision_id]["order"]
-                if (
-                    not isinstance(option_indices, dict)
-                    or set(option_indices) != set(output_order)
-                    or any(type(index) is not int for index in option_indices.values())
-                    or [option_indices[output] for output in output_order]
-                    != list(range(len(output_order)))
-                    or len(question.get("options", [])) != len(output_order)
-                ):
+                if question["option_ids"] != output_order:
                     raise PolicyError(
-                        "output_option_indices must bijectively follow question option order"
+                        "decision output ids/order must exactly bind panel option_ids"
                     )
                 questions[decision_id] = question
 
@@ -1348,8 +1420,25 @@ def replay(
                         f"{name} view omits policy or references foreign chunks"
                     )
 
+            environment_cache: dict[frozenset[str], dict[str, TypedValue | Signal]] = {}
+
+            def environment_for(
+                chunk_keys: set[str],
+                *,
+                _cache: dict[
+                    frozenset[str], dict[str, TypedValue | Signal]
+                ] = environment_cache,
+                _case_key: str = case_key,
+            ) -> dict[str, TypedValue | Signal]:
+                cache_key = frozenset(chunk_keys)
+                if cache_key not in _cache:
+                    _cache[cache_key] = _fact_environment(
+                        facts, observation_index, _case_key, chunk_keys
+                    )
+                return _cache[cache_key]
+
             view_envs = {
-                name: _fact_environment(facts, bindings, case_key, set(chunk_keys))
+                name: environment_for(set(chunk_keys))
                 for name, chunk_keys in parsed_views.items()
             }
             decision_traces: list[dict[str, Any]] = []
@@ -1466,9 +1555,7 @@ def replay(
                     raise PolicyError(
                         "distractor-only evidence reproduces the full result"
                     )
-                selected_index = question_bindings[decision_id][
-                    "output_option_indices"
-                ][resolved["full"].output]
+                selected_index = question["option_ids"].index(resolved["full"].output)
                 _validate_causal_proof(
                     case,
                     question,
@@ -1477,23 +1564,21 @@ def replay(
                     resolved["removed"],
                     selected_index,
                 )
-                for subset_size in range(len(remove)):
-                    for subset in combinations(remove, subset_size):
-                        subset_env = _fact_environment(
-                            facts, bindings, case_key, set(full) - set(subset)
-                        )
-                        subset_result = _resolve(decision, subset_env)
-                        if (
-                            classify_transition(resolved["full"], subset_result)
-                            == ablation["required_transition"]
-                        ):
-                            raise PolicyError(
-                                "decisive removal is not inclusion-minimal"
-                            )
-                for distractor in distractors:
-                    without = _fact_environment(
-                        facts, bindings, case_key, set(full) - {distractor}
+                # Resolution loss is monotone under observation removal.  Thus D is
+                # inclusion-minimal iff every immediate subset D - {chunk} restores
+                # the full resolved output; enumerating all 2^|D| subsets is needless.
+                for restored in remove:
+                    immediate_removal = remove_set - {restored}
+                    subset_result = _resolve(
+                        decision, environment_for(set(full) - immediate_removal)
                     )
+                    if (
+                        subset_result.status != "resolved"
+                        or subset_result.output != resolved["full"].output
+                    ):
+                        raise PolicyError("decisive removal is not inclusion-minimal")
+                for distractor in distractors:
+                    without = environment_for(set(full) - {distractor})
                     without_result = _resolve(decision, without)
                     if (
                         without_result.status != resolved["full"].status
@@ -1506,9 +1591,7 @@ def replay(
                     {
                         "decision_id": decision_id,
                         "views": {
-                            name: _result_json(
-                                result, question, question_bindings[decision_id]
-                            )
+                            name: _result_json(result, question)
                             for name, result in sorted(resolved.items())
                         },
                         "transition": transition,
@@ -1589,17 +1672,27 @@ def _write_exclusive_atomic(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.parent.is_symlink() or not path.parent.is_dir():
         raise PolicyError("output parent must be a real directory")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = -1
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    temporary = Path(temporary_name)
     try:
-        descriptor = os.open(path, flags, 0o600)
-        with os.fdopen(descriptor, "wb") as handle:
-            descriptor = -1
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short write while publishing receipt")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.link(temporary, path, follow_symlinks=False)
+        source_stat = os.fstat(descriptor)
+        published_stat = path.stat(follow_symlinks=False)
+        if (source_stat.st_dev, source_stat.st_ino) != (
+            published_stat.st_dev,
+            published_stat.st_ino,
+        ):
+            path.unlink(missing_ok=True)
+            raise PolicyError("atomic receipt publication inode mismatch")
         directory_descriptor = os.open(path.parent, os.O_RDONLY)
         try:
             os.fsync(directory_descriptor)
@@ -1607,12 +1700,9 @@ def _write_exclusive_atomic(path: Path, payload: bytes) -> None:
             os.close(directory_descriptor)
     except FileExistsError as exc:
         raise PolicyError("output already exists; refusing to overwrite") from exc
-    except Exception:
-        path.unlink(missing_ok=True)
-        raise
     finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+        os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def _parser() -> argparse.ArgumentParser:
