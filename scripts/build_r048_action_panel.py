@@ -1,4 +1,4 @@
-"""Build the deterministic, counterfactual R048 exact-policy v1.2 panel."""
+"""Build the deterministic, counterfactual R048 exact-policy v1.4 panel."""
 
 from __future__ import annotations
 
@@ -7,6 +7,9 @@ import hashlib
 import json
 import re
 from collections import Counter, defaultdict
+from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +21,7 @@ SPLITS = tuple(DEFAULT_ROWS)
 OPTION_ORDERS = ("no_yes", "yes_no")
 LANGUAGES = ("en", "he")
 CLUSTER_SIZE = 8
-PANEL_VERSION = "1.3"
+PANEL_VERSION = "1.4"
 FUZZY_THRESHOLD = 0.92
 FUZZY_MAX_PAIR_RATE = 0.0001
 FUZZY_MAX_SIMILARITY = 0.98
@@ -129,9 +132,25 @@ def _action(name: str, field: str | None = None) -> dict[str, Any]:
 
 
 def _policy(mode: str, fields: list[str], topology: str) -> dict[str, Any]:
-    direct_name = f"{mode}_fieldwise"
-    grouped_name = f"{mode}_grouped_partition"
-    if topology == direct_name:
+    coarse_name = f"{mode}_coarse_gate"
+    fieldwise_name = f"{mode}_fieldwise"
+    if topology == coarse_name:
+        any_failure = {"any": [{"not": {"field": field}} for field in fields]}
+        if mode == "priority":
+            rules = [{"when": any_failure,
+                      "action": _action("review_any_failure")}]
+        else:
+            rules = [{"when": any_failure, "action": _action("review_any_failure"),
+                      "primary_rank": None}]
+            # Preserve genuinely multi-action collect outcomes without making
+            # the two-field development mapping injective.
+            if len(fields) >= 3:
+                rules.append({
+                    "when": {"all": [{"not": {"field": field}} for field in fields]},
+                    "action": _action("escalate_total_failure"),
+                    "primary_rank": 0,
+                })
+    elif topology == fieldwise_name:
         rules = []
         for rank, field in enumerate(fields):
             rule = {
@@ -141,108 +160,151 @@ def _policy(mode: str, fields: list[str], topology: str) -> dict[str, Any]:
             if mode == "collect":
                 rule["primary_rank"] = None if rank % 3 == 0 else rank
             rules.append(rule)
-    elif topology == grouped_name:
-        any_failure = {"any": [{"not": {"field": field}} for field in fields]}
-        if mode == "priority":
-            rules = [{"when": any_failure,
-                      "action": _action("review_combined_failure")}]
-        else:
-            all_failure = {"all": [{"not": {"field": field}} for field in fields]}
-            rules = [
-                {"when": any_failure, "action": _action("review_any_failure"),
-                 "primary_rank": None},
-                {"when": all_failure, "action": _action("escalate_total_failure"),
-                 "primary_rank": 0},
-            ]
     else:
         raise ValueError(f"unknown {mode} policy topology: {topology}")
     fallback = _action("approve") if mode == "priority" else None
     return {"fields": fields, "mode": mode, "rules": rules, "fallback": fallback}
 
 
+def _iso_day(offset: int) -> str:
+    return (date(2024, 1, 1) + timedelta(days=offset)).isoformat()
+
+
 def _make_fact(field: str, truth: bool, scenario: int, value_regime: str,
                operator: str) -> dict[str, Any]:
+    """Create a field-native operand, not a renamed numeric threshold."""
     if field not in PRIMITIVES:
         raise ValueError(f"unknown field: {field}")
     delta = 1 + scenario % 9
-    base = 20 + scenario % 71
     common = {"primitive": PRIMITIVES[field], "value_regime": value_regime,
               "operator_composition": operator}
-    if operator == "direct_le":
-        values = {"observed": base - delta if truth else base + delta,
-                  "boundary": base}
-    elif operator == "closed_interval":
-        values = {"lower": base - 10,
-                  "observed": base if truth else base + 10 + delta,
-                  "upper": base + 10}
-    elif operator == "nonnegative_margin":
-        values = {"headroom": delta if truth else -delta}
-    elif operator == "zero_violations":
-        values = {"violations": 0 if truth else delta}
-    elif operator == "all_checks":
-        values = {"checks": [True, truth, True]}
-    elif operator == "sum_gate":
-        limit = base + delta
-        values = {"components": [base // 2, base - base // 2 if truth else base],
-                  "limit": limit}
-    else:
-        raise ValueError(f"unknown operator composition: {operator}")
+    token = f"{scenario:07d}"
+    if field == "identity_verified":
+        birth_date = _iso_day(365 + scenario % 9000)
+        values = {
+            "registry_record": {"legal_name": f"Person {token}", "birth_date": birth_date},
+            "submitted_record": {
+                "legal_name": f"Person {token}",
+                "birth_date": birth_date if truth else _iso_day(366 + scenario % 9000),
+            },
+        }
+    elif field == "policy_eligible":
+        values = {
+            "policy_tier": "enhanced" if truth else f"excluded-{scenario % 17}",
+            "eligible_tiers": ["standard", "enhanced"],
+        }
+    elif field == "amount_within_limit":
+        limit = Decimal(1000 + scenario % 7000) / Decimal("10")
+        amount = limit - Decimal(delta) / 10 if truth else limit + Decimal(delta) / 10
+        values = {"requested_amount": f"{amount:.2f}", "limit_amount": f"{limit:.2f}",
+                  "currency": "ILS"}
+    elif field == "submission_timely":
+        deadline_offset = 10_000 + scenario % 5000
+        values = {
+            "submitted_on": _iso_day(deadline_offset - delta if truth
+                                     else deadline_offset + delta),
+            "deadline_on": _iso_day(deadline_offset),
+        }
+    elif field == "evidence_complete":
+        required = ["identity", "receipt", f"case-{scenario % 997:03d}"]
+        values = {"required_items": required,
+                  "present_items": required if truth else required[:-1]}
+    elif field == "region_covered":
+        values = {"recorded_region": "north" if truth else f"offshore-{scenario % 19}",
+                  "covered_regions": ["north", "central", "south"]}
+    elif field == "consent_valid":
+        review_offset = 15_000 + scenario % 4000
+        values = {
+            "review_on": _iso_day(review_offset),
+            "expires_on": _iso_day(review_offset + delta if truth
+                                   else review_offset - delta),
+        }
+    else:  # account_active
+        account = f"acct-{token}"
+        values = {"account_ref": account,
+                  "status_by_account": {account: "active" if truth else "closed"}}
     return {**common, **values}
 
 
 def _fact_truth(field: str, fact: dict[str, Any]) -> bool:
     if fact.get("primitive") != PRIMITIVES.get(field):
         raise ValueError(f"{field}: primitive mismatch")
-    operator = fact.get("operator_composition")
-    if operator == "direct_le":
-        return fact["observed"] <= fact["boundary"]
-    if operator == "closed_interval":
-        return fact["lower"] <= fact["observed"] <= fact["upper"]
-    if operator == "nonnegative_margin":
-        return fact["headroom"] >= 0
-    if operator == "zero_violations":
-        return fact["violations"] == 0
-    if operator == "all_checks":
-        return all(fact["checks"])
-    if operator == "sum_gate":
-        return sum(fact["components"]) <= fact["limit"]
-    raise ValueError(f"{field}: unknown operator composition")
+    if field == "identity_verified":
+        return fact["registry_record"] == fact["submitted_record"]
+    if field == "policy_eligible":
+        return fact["policy_tier"] in fact["eligible_tiers"]
+    if field == "amount_within_limit":
+        try:
+            return Decimal(fact["requested_amount"]) <= Decimal(fact["limit_amount"])
+        except (InvalidOperation, TypeError) as error:
+            raise ValueError("invalid decimal operand") from error
+    if field == "submission_timely":
+        return date.fromisoformat(fact["submitted_on"]) <= date.fromisoformat(
+            fact["deadline_on"])
+    if field == "evidence_complete":
+        return set(fact["required_items"]) <= set(fact["present_items"])
+    if field == "region_covered":
+        return fact["recorded_region"] in fact["covered_regions"]
+    if field == "consent_valid":
+        return date.fromisoformat(fact["expires_on"]) >= date.fromisoformat(
+            fact["review_on"])
+    if field == "account_active":
+        return fact["status_by_account"].get(fact["account_ref"]) == "active"
+    raise ValueError(f"unknown field: {field}")
 
 
 def _render_fact(field: str, fact: dict[str, Any], language: str) -> str:
     subject = QUESTION_TEXT[language][field].rstrip("?")
-    operator = fact["operator_composition"]
     if language == "en":
-        if operator == "direct_le":
-            detail = f"observed {fact['observed']}; boundary {fact['boundary']}; observed <= boundary"
-        elif operator == "closed_interval":
-            detail = (f"lower {fact['lower']}; observation {fact['observed']}; upper "
-                      f"{fact['upper']}; lower <= observation <= upper")
-        elif operator == "nonnegative_margin":
-            detail = f"signed headroom {fact['headroom']}; acceptable when headroom >= 0"
-        elif operator == "zero_violations":
-            detail = f"violation count {fact['violations']}; acceptable only at zero"
-        elif operator == "all_checks":
-            detail = f"three independent checks {fact['checks']}; acceptable only when all pass"
-        else:
-            detail = (f"weighted components {fact['components']}; gate {fact['limit']}; "
-                      "acceptable when their sum <= gate")
+        renderers = {
+            "identity_verified": lambda: (
+                f"registry {fact['registry_record']}; submitted {fact['submitted_record']}; "
+                "valid only on exact record agreement"),
+            "policy_eligible": lambda: (
+                f"tier {fact['policy_tier']}; eligible tiers {fact['eligible_tiers']}"),
+            "amount_within_limit": lambda: (
+                f"requested {fact['requested_amount']} {fact['currency']}; limit "
+                f"{fact['limit_amount']} {fact['currency']}; requested <= limit"),
+            "submission_timely": lambda: (
+                f"submitted {fact['submitted_on']}; deadline {fact['deadline_on']}; "
+                "submitted date <= deadline"),
+            "evidence_complete": lambda: (
+                f"required {fact['required_items']}; present {fact['present_items']}; "
+                "every required item must be present"),
+            "region_covered": lambda: (
+                f"recorded {fact['recorded_region']}; covered {fact['covered_regions']}"),
+            "consent_valid": lambda: (
+                f"review {fact['review_on']}; expiry {fact['expires_on']}; expiry >= review"),
+            "account_active": lambda: (
+                f"account {fact['account_ref']}; registry status "
+                f"{fact['status_by_account'][fact['account_ref']]}; must equal active"),
+        }
+        detail = renderers[field]()
         return f"{subject} — {detail}."
-    if operator == "direct_le":
-        detail = f"ערך נצפה {fact['observed']}; גבול {fact['boundary']}; הערך הנצפה <= הגבול"
-    elif operator == "closed_interval":
-        detail = (f"סף תחתון {fact['lower']}; תצפית {fact['observed']}; סף עליון "
-                  f"{fact['upper']}; הסף התחתון <= התצפית <= הסף העליון")
-    elif operator == "nonnegative_margin":
-        detail = f"מרווח חתום {fact['headroom']}; תקין כאשר המרווח >= 0"
-    elif operator == "zero_violations":
-        detail = f"מספר חריגות {fact['violations']}; תקין רק כאשר המספר אפס"
-    elif operator == "all_checks":
-        checks = ["עבר" if value else "נכשל" for value in fact["checks"]]
-        detail = f"שלוש בדיקות עצמאיות {checks}; תקין רק כאשר כולן עברו"
-    else:
-        detail = (f"רכיבים משוקללים {fact['components']}; שער {fact['limit']}; "
-                  "תקין כאשר סכומם <= השער")
+    renderers = {
+        "identity_verified": lambda: (
+            f"רשומת מרשם {fact['registry_record']}; רשומה שהוגשה {fact['submitted_record']}; "
+            "נדרש תיאום מלא"),
+        "policy_eligible": lambda: (
+            f"מסלול {fact['policy_tier']}; מסלולים זכאים {fact['eligible_tiers']}"),
+        "amount_within_limit": lambda: (
+            f"סכום מבוקש {fact['requested_amount']} {fact['currency']}; תקרה "
+            f"{fact['limit_amount']} {fact['currency']}; הסכום <= התקרה"),
+        "submission_timely": lambda: (
+            f"הוגש בתאריך {fact['submitted_on']}; מועד אחרון {fact['deadline_on']}; "
+            "תאריך ההגשה <= המועד האחרון"),
+        "evidence_complete": lambda: (
+            f"פריטים נדרשים {fact['required_items']}; פריטים קיימים {fact['present_items']}; "
+            "כל פריט נדרש חייב להימצא"),
+        "region_covered": lambda: (
+            f"אזור רשום {fact['recorded_region']}; אזורים מכוסים {fact['covered_regions']}"),
+        "consent_valid": lambda: (
+            f"מועד בדיקה {fact['review_on']}; תפוגה {fact['expires_on']}; תפוגה >= בדיקה"),
+        "account_active": lambda: (
+            f"חשבון {fact['account_ref']}; מצב במרשם "
+            f"{fact['status_by_account'][fact['account_ref']]}; נדרש מצב active"),
+    }
+    detail = renderers[field]()
     return f"{subject} — {detail}."
 
 
@@ -268,6 +330,44 @@ def _question(field: str, language: str, option_order: str,
     return {"type": "noul", "instructions": instructions, "criteria": dict(labels)}
 
 
+def _policy_families(mode: str, topology: str) -> tuple[str, str]:
+    expected = {
+        ("priority", "priority_coarse_gate"): ("coarse_disjunction", "single_review_gate"),
+        ("collect", "collect_coarse_gate"): ("coarse_disjunction", "aggregate_review_set"),
+        ("priority", "priority_fieldwise"): ("ordered_field_conditions", "first_remediation"),
+        ("collect", "collect_fieldwise"): ("independent_field_conditions", "remediation_set"),
+    }
+    try:
+        return expected[(mode, topology)]
+    except KeyError as error:
+        raise ValueError(f"unknown policy family: {mode}/{topology}") from error
+
+
+def _separation_witness(mode: str, fields: list[str],
+                        heldout_policy: dict[str, Any]) -> dict[str, Any]:
+    """Return a one-field witness that held-out mapping refines development."""
+    development = _policy(mode, fields, f"{mode}_coarse_gate")
+    assignments = [dict(zip(fields, values))
+                   for values in product((False, True), repeat=len(fields))]
+    for left_index, left in enumerate(assignments):
+        for right in assignments[left_index + 1:]:
+            if sum(left[field] != right[field] for field in fields) != 1:
+                continue
+            development_left = execute_policy(development, left).as_dict()
+            development_right = execute_policy(development, right).as_dict()
+            heldout_left = execute_policy(heldout_policy, left).as_dict()
+            heldout_right = execute_policy(heldout_policy, right).as_dict()
+            if development_left == development_right and heldout_left != heldout_right:
+                return {
+                    "trace_a": left,
+                    "trace_b": right,
+                    "development_outcome": development_left,
+                    "heldout_outcome_a": heldout_left,
+                    "heldout_outcome_b": heldout_right,
+                }
+    raise ValueError(f"{mode}: held-out topology has no causal separation witness")
+
+
 def _cluster_spec(split: str, cluster: int, seed: int) -> dict[str, Any]:
     scenario = seed * 1_000_000 + SPLIT_OFFSETS[split] + cluster
     field_count = 2 + cluster % 7
@@ -280,10 +380,10 @@ def _cluster_spec(split: str, cluster: int, seed: int) -> dict[str, Any]:
     mode = ("priority", "collect")[(cluster // 7 + seed) % 2]
     if split == "eval" and (cluster // 2) % 2:
         topology_slice = "heldout"
-        topology = f"{mode}_grouped_partition"
+        topology = f"{mode}_fieldwise"
     else:
         topology_slice = "same" if split == "eval" else "development"
-        topology = f"{mode}_fieldwise"
+        topology = f"{mode}_coarse_gate"
     family_index = (cluster // 7 + cluster + seed) % 2
     families = SPLIT_FAMILIES[split]
     renderer = families["renderer"][family_index]
@@ -292,6 +392,9 @@ def _cluster_spec(split: str, cluster: int, seed: int) -> dict[str, Any]:
     operator = families["operator"][family_index]
 
     policy = _policy(mode, fields, topology)
+    program_family, action_family = _policy_families(mode, topology)
+    witness = (_separation_witness(mode, fields, policy)
+               if topology_slice == "heldout" else None)
     other_fields = [field for field in fields if field != flipped_field]
     candidates = []
     for bits in range(1 << len(other_fields)):
@@ -319,12 +422,18 @@ def _cluster_spec(split: str, cluster: int, seed: int) -> dict[str, Any]:
         fields, mode, flipped_field, truths_by_side, renderer, source,
         value_regime, operator, policy,
     )
+    exact_cluster_signature = _exact_cluster_signature(
+        semantic_signature, facts_by_side,
+    )
     return {
         "scenario": scenario, "fields": fields, "mode": mode,
         "flipped_field": flipped_field, "facts_by_side": facts_by_side,
         "topology": topology, "topology_slice": topology_slice,
         "renderer": renderer, "source": source, "value_regime": value_regime,
         "operator": operator, "semantic_signature": semantic_signature,
+        "exact_cluster_signature": exact_cluster_signature,
+        "program_family": program_family, "action_family": action_family,
+        "topology_separation_witness": witness,
     }
 
 
@@ -372,6 +481,9 @@ def _row(split: str, index: int, seed: int,
             "policy_mode": spec["mode"],
             "policy_topology": spec["topology"],
             "topology_slice": spec["topology_slice"],
+            "program_family": spec["program_family"],
+            "action_family": spec["action_family"],
+            "topology_separation_witness": spec["topology_separation_witness"],
             "renderer_family": spec["renderer"],
             "source_family": spec["source"],
             "value_regime": spec["value_regime"],
@@ -380,6 +492,7 @@ def _row(split: str, index: int, seed: int,
             "external_policy_topology": spec["topology"],
             "external_policy_topology_slice": spec["topology_slice"],
             "semantic_signature": spec["semantic_signature"],
+            "exact_cluster_signature": spec["exact_cluster_signature"],
             "latent_signature": spec["semantic_signature"],
             "factor_cell": f"{spec['mode']}|n{len(fields)}|p{fields.index(spec['flipped_field'])}|{spec['topology_slice']}",
         },
@@ -421,6 +534,26 @@ def _sha(value: Any) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _complete_cluster_serialization_signature(group: list[dict[str, Any]]) -> str:
+    """Hash all user-visible and executable cluster content, excluding IDs."""
+    excluded_meta = {
+        "split", "counterfactual_cluster_id", "semantic_group_id", "scenario_id",
+        "semantic_signature", "exact_cluster_signature", "latent_signature",
+    }
+    projected = []
+    for row in sorted(group, key=lambda item: (
+            item["meta"]["counterfactual_side"], item["meta"]["language"],
+            item["meta"]["option_order"])):
+        projected.append({
+            "state": row["state"],
+            "questions": row["questions"],
+            "targets": row["targets"],
+            "meta": {key: value for key, value in row["meta"].items()
+                     if key not in excluded_meta},
+        })
+    return _sha(projected)
+
+
 def _partition_signature(policy: dict[str, Any]) -> tuple[int, ...]:
     """Truth-partition signature, invariant to action names and payloads."""
     compiled = compile_policy(policy)
@@ -438,7 +571,7 @@ def _semantic_signature(fields: list[str], mode: str, flipped_field: str,
                         renderer_family: str, source_family: str,
                         value_regime: str, operator_composition: str,
                         policy: dict[str, Any]) -> str:
-    """Hash semantics only: deliberately excludes split, IDs, and raw values."""
+    """Hash latent semantics, excluding split, IDs, and concrete operands."""
     return _sha({
         "fields": fields,
         "mode": mode,
@@ -449,6 +582,17 @@ def _semantic_signature(fields: list[str], mode: str, flipped_field: str,
         "value_regime": value_regime,
         "operator_composition": operator_composition,
         "policy_partition": _partition_signature(policy),
+    })
+
+
+def _exact_cluster_signature(
+    semantic_signature: str,
+    facts_by_side: dict[int, dict[str, dict[str, Any]]],
+) -> str:
+    """Hash the full pair operands in addition to their latent semantics."""
+    return _sha({
+        "semantic_signature": semantic_signature,
+        "endpoint_facts": facts_by_side,
     })
 
 
@@ -501,6 +645,42 @@ def _fuzzy_report(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> di
     }
 
 
+def _validate_separation_witness(meta: dict[str, Any]) -> None:
+    witness = meta["topology_separation_witness"]
+    if meta["topology_slice"] != "heldout":
+        if witness is not None:
+            raise ValueError("non-held-out topology must not carry a separation witness")
+        return
+    fields = meta["field_order"]
+    if not isinstance(witness, dict) or set(witness) != {
+        "trace_a", "trace_b", "development_outcome", "heldout_outcome_a",
+        "heldout_outcome_b",
+    }:
+        raise ValueError("held-out topology needs a complete separation witness")
+    left, right = witness["trace_a"], witness["trace_b"]
+    if (not isinstance(left, dict) or not isinstance(right, dict)
+            or set(left) != set(fields) or set(right) != set(fields)
+            or any(type(value) is not bool for value in (*left.values(), *right.values()))
+            or sum(left[field] != right[field] for field in fields) != 1):
+        raise ValueError("held-out separation witness is not a causal pair")
+    development = _policy(meta["policy_mode"], fields,
+                          f"{meta['policy_mode']}_coarse_gate")
+    development_left = execute_policy(development, left).as_dict()
+    development_right = execute_policy(development, right).as_dict()
+    heldout_left = execute_policy(meta["policy"], left).as_dict()
+    heldout_right = execute_policy(meta["policy"], right).as_dict()
+    if (development_left != development_right
+            or heldout_left == heldout_right
+            or witness != {
+                "trace_a": left,
+                "trace_b": right,
+                "development_outcome": development_left,
+                "heldout_outcome_a": heldout_left,
+                "heldout_outcome_b": heldout_right,
+            }):
+        raise ValueError("held-out topology does not separate the witness")
+
+
 def validate_split(rows: list[dict[str, Any]], split: str,
                    expected_rows: int | None = None) -> dict[str, Any]:
     if expected_rows is not None and len(rows) != expected_rows:
@@ -540,7 +720,9 @@ def validate_split(rows: list[dict[str, Any]], split: str,
             "policy_topology", "topology_slice", "renderer_family", "source_family",
             "value_regime", "operator_composition", "topology_transfer_scope",
             "external_policy_topology", "external_policy_topology_slice",
-            "semantic_signature", "latent_signature", "factor_cell",
+            "semantic_signature", "exact_cluster_signature", "latent_signature",
+            "factor_cell", "program_family", "action_family",
+            "topology_separation_witness",
         }
         if (not required <= set(meta) or meta.get("split") != split
                 or meta.get("panel_version") != PANEL_VERSION):
@@ -570,6 +752,14 @@ def validate_split(rows: list[dict[str, Any]], split: str,
             raise ValueError(f"{identifier}: scorer policy metadata mismatch")
         if meta["policy"] != _policy(policy.mode, list(policy.fields), topology):
             raise ValueError(f"{identifier}: external policy topology mismatch")
+        expected_program, expected_action = _policy_families(policy.mode, topology)
+        if (meta["program_family"] != expected_program
+                or meta["action_family"] != expected_action):
+            raise ValueError(f"{identifier}: invalid program/action family")
+        try:
+            _validate_separation_witness(meta)
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"{identifier}: invalid topology separation witness") from error
         qids = [f"q{index:02d}" for index in range(len(policy.fields))]
         expected_mapping = dict(zip(qids, policy.fields))
         if meta["qid_to_field"] != expected_mapping:
@@ -588,8 +778,11 @@ def validate_split(rows: list[dict[str, Any]], split: str,
             raise ValueError(f"{identifier}: invalid split family cell")
         for qid, field in expected_mapping.items():
             question = row["questions"][qid]
+            expected_criteria = (["no", "yes"] if meta["option_order"] == "no_yes"
+                                 else ["yes", "no"])
             if (question != _question(field, meta["language"], meta["option_order"],
                                       meta["renderer_family"])
+                    or list(question.get("criteria", {})) != expected_criteria
                     or set(row["targets"][qid]) != {"label"}
                     or row["targets"][qid]["label"] not in {"no", "yes"}):
                 raise ValueError(f"{identifier}/{qid}: invalid semantic question")
@@ -665,7 +858,8 @@ def validate_split(rows: list[dict[str, Any]], split: str,
         invariant_keys = (
             "scenario_id", "field_order", "policy", "flipped_field",
             "policy_topology", "topology_slice", "renderer_family", "source_family",
-            "value_regime", "operator_composition",
+            "value_regime", "operator_composition", "program_family", "action_family",
+            "topology_separation_witness", "exact_cluster_signature",
         )
         if any(len({_sha(row["meta"][key]) for row in group}) != 1
                for key in invariant_keys):
@@ -685,7 +879,14 @@ def validate_split(rows: list[dict[str, Any]], split: str,
             representative["value_regime"], representative["operator_composition"],
             representative["policy"],
         )
+        expected_exact_signature = _exact_cluster_signature(
+            expected_signature,
+            {side: next(row["meta"]["facts"] for row in group
+                        if row["meta"]["counterfactual_side"] == side)
+             for side in (0, 1)},
+        )
         if (representative["semantic_signature"] != expected_signature
+                or representative["exact_cluster_signature"] != expected_exact_signature
                 or representative["latent_signature"] != expected_signature):
             raise ValueError(f"{cluster_id}: invalid split-neutral semantic signature")
         by_view: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -703,6 +904,21 @@ def validate_split(rows: list[dict[str, Any]], split: str,
                     or changed_facts != changed_truths
                     or left_meta["gold_outcome"] == right_meta["gold_outcome"]):
                 raise ValueError(f"{cluster_id}: non-causal counterfactual pair")
+    exact_clusters: dict[str, str] = {}
+    complete_serializations: dict[str, str] = {}
+    for cluster_id, group in clusters.items():
+        signature = group[0]["meta"]["exact_cluster_signature"]
+        previous = exact_clusters.setdefault(signature, cluster_id)
+        if previous != cluster_id:
+            raise ValueError(
+                f"{split}: duplicate exact semantic case clusters {previous} and {cluster_id}"
+            )
+        serialization = _complete_cluster_serialization_signature(group)
+        previous = complete_serializations.setdefault(serialization, cluster_id)
+        if previous != cluster_id:
+            raise ValueError(
+                f"{split}: duplicate complete cluster serializations {previous} and {cluster_id}"
+            )
     if len(rows) >= 16 * CLUSTER_SIZE:
         if set(flipped_fields) != set(FIELDS):
             raise ValueError(f"{split}: every field needs causal flips")
@@ -724,19 +940,19 @@ def validate_split(rows: list[dict[str, Any]], split: str,
         }:
             raise ValueError("eval: policy mode/topology factors are not crossed")
         if any((row["meta"]["topology_slice"] == "same")
-               != row["meta"]["policy_topology"].endswith("_fieldwise")
+               != row["meta"]["policy_topology"].endswith("_coarse_gate")
                for row in rows):
             raise ValueError("eval: topology slice label does not match policy topology")
         for row in rows:
             meta = row["meta"]
             if meta["topology_slice"] == "heldout":
-                direct = _policy(meta["policy_mode"], meta["field_order"],
-                                 f"{meta['policy_mode']}_fieldwise")
-                if _partition_signature(meta["policy"]) == _partition_signature(direct):
+                development = _policy(meta["policy_mode"], meta["field_order"],
+                                      f"{meta['policy_mode']}_coarse_gate")
+                if _partition_signature(meta["policy"]) == _partition_signature(development):
                     raise ValueError("eval: held-out policy has an identity-equivalent partition")
     elif set(topology_slices) != {"development"}:
         raise ValueError(f"{split}: only development topology is allowed")
-    elif any(not row["meta"]["policy_topology"].endswith("_fieldwise")
+    elif any(not row["meta"]["policy_topology"].endswith("_coarse_gate")
              for row in rows):
         raise ValueError(f"{split}: held-out policy topology leaked into development")
     if len(rows) >= 400:
@@ -763,6 +979,8 @@ def validate_split(rows: list[dict[str, Any]], split: str,
         "generated_counterfactual_clusters": len(clusters),
         "unique_split_neutral_semantic_signatures": len({
             row["meta"]["semantic_signature"] for row in rows}),
+        "unique_exact_semantic_case_clusters": len(exact_clusters),
+        "unique_complete_cluster_serializations": len(complete_serializations),
         "counterfactual_endpoint_pairs": len(clusters) * 4,
         "semantic_endpoints": len(clusters) * 2,
         "mode_counts": dict(sorted(modes.items())),
@@ -817,6 +1035,19 @@ def validate_corpus(corpus: dict[str, list[dict[str, Any]]],
     }
 
 
+def _jsonl_bytes(rows: list[dict[str, Any]]) -> bytes:
+    # Key insertion order is part of the benchmark contract: sorting keys
+    # would silently turn the yes/no intervention back into a positional cue.
+    return "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode()
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    try:
+        return [json.loads(line) for line in path.read_text().splitlines() if line]
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid persisted JSONL: {path}") from error
+
+
 def write_corpus(out: Path, seed: int = 48,
                  row_counts: dict[str, int] | None = None) -> dict[str, Any]:
     counts = dict(row_counts or DEFAULT_ROWS)
@@ -825,14 +1056,20 @@ def write_corpus(out: Path, seed: int = 48,
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise ValueError(f"refusing to overwrite nonempty directory: {out}")
     corpus = {split: build(split, count, seed) for split, count in counts.items()}
-    audit = validate_corpus(corpus, counts)
     out.mkdir(parents=True, exist_ok=True)
     outputs = {}
     for split, rows in corpus.items():
-        payload = "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
-                          for row in rows).encode()
+        payload = _jsonl_bytes(rows)
         (out / f"{split}.jsonl").write_bytes(payload)
         outputs[split] = {"rows": len(rows), "sha256": hashlib.sha256(payload).hexdigest()}
+    persisted = {split: _read_jsonl(out / f"{split}.jsonl") for split in SPLITS}
+    for split in SPLITS:
+        persisted_bytes = (out / f"{split}.jsonl").read_bytes()
+        if persisted[split] != corpus[split] or _jsonl_bytes(persisted[split]) != persisted_bytes:
+            raise ValueError(f"{split}: persisted JSONL failed exact round-trip validation")
+    # The manifest is bound to an audit of bytes read back from disk, not to
+    # the pre-serialization Python objects.
+    audit = validate_corpus(persisted, counts)
     manifest = {
         "panel": "exact_policy_v1",
         "panel_version": PANEL_VERSION,

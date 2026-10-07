@@ -9,8 +9,10 @@ import scripts.build_r048_action_panel as panel_builder
 from scripts.build_r048_action_panel import (
     DEFAULT_ROWS,
     FIELDS,
+    PANEL_VERSION,
     PRIMITIVES,
     SPLIT_FAMILIES,
+    _fact_truth,
     _model_input,
     _normalize_text,
     _partition_signature,
@@ -38,6 +40,11 @@ def test_default_corpus_is_deterministic_and_valid():
         assert set(report["mode_counts"]) == {"priority", "collect"}
         assert set(report["field_size_counts"]) == {str(size) for size in range(2, 9)}
         assert report["generated_counterfactual_clusters"] == DEFAULT_ROWS[split] // 8
+        assert report["unique_exact_semantic_case_clusters"] == DEFAULT_ROWS[split] // 8
+        assert report["unique_complete_cluster_serializations"] == DEFAULT_ROWS[split] // 8
+        if DEFAULT_ROWS[split] >= 1600:
+            assert (report["unique_split_neutral_semantic_signatures"]
+                    < report["generated_counterfactual_clusters"])
         assert report["semantic_endpoints"] == DEFAULT_ROWS[split] // 4
     for overlap in audit["cross_split_overlaps"].values():
         assert overlap["model_input_exact"] == 0
@@ -81,6 +88,42 @@ def test_languages_and_option_orders_are_semantic_not_positional():
                    for question in row["questions"].values())
 
 
+def test_field_primitives_have_native_operands_and_evaluators():
+    rows = build("train", 224, seed=13)
+    expected_operand_keys = {
+        "identity_verified": {"registry_record", "submitted_record"},
+        "policy_eligible": {"policy_tier", "eligible_tiers"},
+        "amount_within_limit": {"requested_amount", "limit_amount", "currency"},
+        "submission_timely": {"submitted_on", "deadline_on"},
+        "evidence_complete": {"required_items", "present_items"},
+        "region_covered": {"recorded_region", "covered_regions"},
+        "consent_valid": {"review_on", "expires_on"},
+        "account_active": {"account_ref", "status_by_account"},
+    }
+    common = {"primitive", "value_regime", "operator_composition"}
+    seen = {}
+    for row in rows:
+        for field, fact in row["meta"]["facts"].items():
+            assert set(fact) == common | expected_operand_keys[field]
+            assert _fact_truth(field, fact) == row["meta"]["action_trace"][field]
+            seen[field] = frozenset(set(fact) - common)
+    assert set(seen) == set(FIELDS)
+    assert len(set(seen.values())) == len(FIELDS)
+
+
+def test_program_and_action_families_are_executable_not_nominal():
+    rows = build("eval", 224, seed=18)
+    families = {(row["meta"]["policy_topology"], row["meta"]["program_family"],
+                 row["meta"]["action_family"]) for row in rows}
+    assert families == {
+        ("priority_coarse_gate", "coarse_disjunction", "single_review_gate"),
+        ("collect_coarse_gate", "coarse_disjunction", "aggregate_review_set"),
+        ("priority_fieldwise", "ordered_field_conditions", "first_remediation"),
+        ("collect_fieldwise", "independent_field_conditions", "remediation_set"),
+    }
+    assert all(row["meta"]["panel_version"] == PANEL_VERSION == "1.4" for row in rows)
+
+
 def test_clusters_are_one_fact_causal_twins_with_all_eight_views():
     groups = defaultdict(list)
     for row in build("train", 224, seed=9):
@@ -114,15 +157,23 @@ def test_primitives_roles_and_external_policy_topologies_are_real_holdouts():
     }
     assert {row["meta"]["policy_topology"] for row in evaluation
             if row["meta"]["topology_slice"] == "heldout"} == {
-                "priority_grouped_partition", "collect_grouped_partition",
+                "priority_fieldwise", "collect_fieldwise",
             }
     for row in evaluation:
         meta = row["meta"]
         if meta["topology_slice"] == "heldout":
-            direct = _policy(meta["policy_mode"], meta["field_order"],
-                             f"{meta['policy_mode']}_fieldwise")
-            assert _partition_signature(meta["policy"]) != _partition_signature(direct)
+            development_policy = _policy(meta["policy_mode"], meta["field_order"],
+                                         f"{meta['policy_mode']}_coarse_gate")
+            assert (_partition_signature(meta["policy"])
+                    != _partition_signature(development_policy))
             assert meta["topology_transfer_scope"] == "external_policy_outcome_mapping_only"
+            witness = meta["topology_separation_witness"]
+            assert execute_policy(development_policy, witness["trace_a"]) == execute_policy(
+                development_policy, witness["trace_b"])
+            assert execute_policy(meta["policy"], witness["trace_a"]) != execute_policy(
+                meta["policy"], witness["trace_b"])
+            assert sum(witness["trace_a"][field] != witness["trace_b"][field]
+                       for field in meta["field_order"]) == 1
     assert {row["meta"]["flipped_field"] for row in development} == set(FIELDS)
     assert {primitive for row in development
             for primitive in row["meta"]["primitive_by_field"].values()} == set(PRIMITIVES.values())
@@ -132,7 +183,7 @@ def test_primitives_roles_and_external_policy_topologies_are_real_holdouts():
     # This reconstruction catches the exact v1.2 defect: syntactic wrapping
     # with OR false changes the AST but not the truth partition.
     direct = _policy("priority", ["identity_verified", "policy_eligible"],
-                     "priority_fieldwise")
+                     "priority_coarse_gate")
     identity_wrapper = copy.deepcopy(direct)
     for rule in identity_wrapper["rules"]:
         rule["when"] = {"any": [rule["when"], {"const": False}]}
@@ -203,6 +254,22 @@ def test_corpus_validation_enforces_normalized_and_fuzzy_caps(monkeypatch):
         validate_corpus(corpus, {split: 224 for split in DEFAULT_ROWS})
 
 
+def test_validation_rejects_exact_complete_cluster_duplicates(monkeypatch):
+    monkeypatch.setattr(panel_builder, "_exact_cluster_signature",
+                        lambda *args, **kwargs: "same")
+    rows = build("train", 112, seed=31)
+    with pytest.raises(ValueError, match="duplicate exact semantic case clusters"):
+        validate_split(rows, "train", 112)
+
+
+def test_validation_rejects_duplicate_complete_cluster_serializations(monkeypatch):
+    rows = build("train", 112, seed=32)
+    monkeypatch.setattr(panel_builder, "_complete_cluster_serialization_signature",
+                        lambda _group: "same")
+    with pytest.raises(ValueError, match="duplicate complete cluster serializations"):
+        validate_split(rows, "train", 112)
+
+
 def test_scorer_integration_populates_endpoints_clusters_and_topology_slices():
     rows = build("eval", 32, seed=4)
     predictions = []
@@ -218,7 +285,7 @@ def test_scorer_integration_populates_endpoints_clusters_and_topology_slices():
     assert report["independent_clusters"]["n"] == 4
     assert set(report["slices"]["topology_slice"]) == {"same", "heldout"}
     assert set(report["slices"]["policy_topology"]) == {
-        "priority_fieldwise", "priority_grouped_partition",
+        "priority_coarse_gate", "priority_fieldwise",
     }
     assert report["rendered"]["exact_outcome_accuracy"] == 1.0
 
@@ -243,6 +310,11 @@ def test_generated_rows_load_as_grouped_trainer_examples(tmp_path):
          "gold outcome mismatch"),
         (lambda row: row["meta"]["qid_to_field"].__setitem__("q00", "unknown"),
          "qid_to_field"),
+        (lambda row: row["meta"].__setitem__("program_family", "nominal_only"),
+         "program/action family"),
+        (lambda row: row["questions"]["q00"].__setitem__(
+            "criteria", dict(reversed(row["questions"]["q00"]["criteria"].items()))),
+         "semantic question"),
     ],
 )
 def test_validation_fails_closed_on_tampering(mutation, message):
@@ -262,6 +334,17 @@ def test_write_corpus_emits_bound_hashes_and_refuses_overwrite(tmp_path):
             "rows": count,
             "sha256": hashlib.sha256(payload).hexdigest(),
         }
+        persisted = [json.loads(line) for line in payload.decode().splitlines()]
+        assert persisted == build(split, count, seed=17)
+        for row in persisted:
+            expected = (["no", "yes"] if row["meta"]["option_order"] == "no_yes"
+                        else ["yes", "no"])
+            assert all(list(question["criteria"]) == expected
+                       for question in row["questions"].values())
+        assert (manifest["audit"]["splits"][split]
+                ["unique_exact_semantic_case_clusters"] == count // 8)
+        assert (manifest["audit"]["splits"][split]
+                ["unique_complete_cluster_serializations"] == count // 8)
     with pytest.raises(ValueError, match="refusing to overwrite"):
         write_corpus(tmp_path, seed=17, row_counts=counts)
 
