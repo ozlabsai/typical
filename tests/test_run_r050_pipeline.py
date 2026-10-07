@@ -1,4 +1,5 @@
 import hashlib
+import fcntl
 import json
 import sys
 from pathlib import Path
@@ -55,8 +56,8 @@ def _config(tmp_path):
         retention_suites=suites,
         retention_suite_hashes={name: hashlib.sha256(name.encode()).hexdigest()
                                 for name in suites},
-        code_hashes={name: hashlib.sha256(name.encode()).hexdigest()
-                     for name in pipeline.CODE_FILES},
+        code_hashes={"run_r050_pipeline.py": file_hash(pipeline.__file__),
+                     **pipeline.FROZEN_CODE_SHA256},
         python=Path(sys.executable))
 
 
@@ -78,6 +79,9 @@ class FakeGPU:
     def _arg(command, name):
         return Path(command[command.index(name) + 1])
 
+    def _code(self, *names):
+        return {name: self.config.code_hashes[name] for name in names}
+
     def __call__(self, command, **kwargs):
         self.calls.append((list(command), kwargs))
         script = Path(command[1]).name
@@ -86,19 +90,33 @@ class FakeGPU:
         if script == "run_r050_headroom.py":
             _publish(output, "r050_headroom_completion_v1",
                      {"headroom_sufficient": self.headroom},
-                     {"headroom_sufficient": self.headroom},
+                     {"headroom_sufficient": self.headroom, "code_sha256": self._code(
+                         "run_r050_headroom.py", "build_r050_headroom.py",
+                         "build_r048_action_panel.py", "score_exact_policy_panel.py",
+                         "singleton_option_scorer.py", "exact_policy_executor.py",
+                         "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+                         "preflight_r043_assets.py", "build_r050_replay_pools.py")},
                      {"headroom_sufficient": self.headroom})
             returncode = 0 if self.headroom else 2
         elif script == "probe_r050_gradient_scale.py":
             _write_json(output, {"schema_version": "r050-gradient-scale-probe-v1",
-                                 "status": "complete"})
+                                 "status": "complete", "bindings": {
+                                     "trainer_sha256": self.config.code_hashes["train_gemma_decision_lora.py"],
+                                     "probe_sha256": self.config.code_hashes["probe_r050_gradient_scale.py"],
+                                     "panel_builder_sha256": self.config.code_hashes["build_r048_action_panel.py"],
+                                 }})
         elif script == "prepare_r050_arms.py":
             output.mkdir(parents=True)
             arms = []
             for order, arm_id in enumerate(("arm_nll", "arm_brier", "arm_control"), 1):
                 recipe = {"schema": "r050-matched-arm-recipe-v1", "arm_id": arm_id,
                           "run_order": order,
-                          "objective": {"objective": self.objectives[arm_id]}}
+                          "objective": {"objective": self.objectives[arm_id]},
+                          "bindings": {
+                              "panel_builder": {"sha256": self.config.code_hashes["build_r048_action_panel.py"]},
+                              "trainer": {"sha256": self.config.code_hashes["train_gemma_decision_lora.py"]},
+                              "gradient_probe_code": {"sha256": self.config.code_hashes["probe_r050_gradient_scale.py"]},
+                          }}
                 path = _write_json(output / f"{arm_id}.json", recipe)
                 arms.append({"arm_id": arm_id, "run_order": order,
                              "recipe": path.name, "sha256": file_hash(path)})
@@ -131,7 +149,13 @@ class FakeGPU:
                 "report.json": {"sha256": file_hash(report_path), "bytes": report_path.stat().st_size},
             }
             receipt = _write_json(output / "receipt.json", {
-                "arm_completion": {"sha256": file_hash(completion)}, "outputs": outputs})
+                "arm_completion": {"sha256": file_hash(completion)}, "outputs": outputs,
+                "code_sha256": self._code(
+                    "run_r050_eval.py", "run_r050_headroom.py", "build_r048_action_panel.py",
+                    "score_exact_policy_panel.py", "compare_r049_calibrated.py",
+                    "singleton_option_scorer.py", "exact_policy_executor.py",
+                    "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+                    "preflight_r043_assets.py", "run_r050_arm.py")})
             _write_json(output / "complete.json", {
                 "schema": "r050_full_eval_completion_v1", "status": "complete",
                 "receipt_sha256": file_hash(receipt), "outputs": outputs,
@@ -158,7 +182,11 @@ class FakeGPU:
             candidate = self._arg(command, "--candidate-adapter").parent.name
             passed = self.retention[candidate]
             _publish(output, pipeline._runtime_contracts()["retention_completion_schema"],
-                     {"promotion_pass": passed}, {}, {"promotion_pass": passed})
+                     {"promotion_pass": passed}, {"code_sha256": self._code(
+                         "run_r050_retention.py", "singleton_option_scorer.py",
+                         "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+                         "preflight_r043_assets.py", "run_r050_eval.py", "run_r050_arm.py",
+                         "build_r050_replay_pools.py")}, {"promotion_pass": passed})
             returncode = 0 if passed else 2
         else:
             raise AssertionError(script)
@@ -170,6 +198,14 @@ def _run(monkeypatch, config, fake):
     monkeypatch.setattr(pipeline, "preflight", lambda *_args, **_kwargs: {
         "binding": binding, "binding_sha256": pipeline._sha(pipeline._canonical(binding))})
     return pipeline.Pipeline(config, subprocess_run=fake).run()
+
+
+def _state(config, stages):
+    binding = config.binding()
+    config.out.mkdir(parents=True, exist_ok=True)
+    _write_json(config.out / "state.json", {
+        "schema": pipeline.SCHEMA, "binding": binding,
+        "binding_sha256": pipeline._sha(pipeline._canonical(binding)), "stages": stages})
 
 
 def test_insufficient_headroom_seals_and_stops_before_probe(monkeypatch, tmp_path):
@@ -195,6 +231,70 @@ def test_partial_output_is_never_adopted(monkeypatch, tmp_path):
     with pytest.raises(FileExistsError, match="partial"):
         pipeline.Pipeline(config, subprocess_run=fake).run()
     assert not fake.calls
+
+
+def test_running_stage_adopts_only_fully_valid_atomic_output(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    _state(config, {"01-headroom": {"status": "running"}})
+    fake = FakeGPU(config, headroom=False)
+    fake([str(config.python), str(config.scripts / "run_r050_headroom.py"),
+          "--out", str(config.out / "headroom")], check=False)
+    fake.calls.clear()
+    result = _run(monkeypatch, config, fake)
+    assert result["status"] == "headroom_insufficient"
+    assert not fake.calls
+    state = json.loads((config.out / "state.json").read_text())
+    assert state["stages"]["01-headroom"]["status"] == "complete"
+
+
+@pytest.mark.parametrize("make_partial", [False, True])
+def test_running_stage_rejects_missing_or_partial_output(
+        monkeypatch, tmp_path, make_partial):
+    config = _config(tmp_path)
+    _state(config, {"01-headroom": {"status": "running"}})
+    if make_partial:
+        (config.out / "headroom").mkdir()
+        _write_json(config.out / "headroom" / "receipt.json", {"partial": True})
+    fake = FakeGPU(config)
+    match = "partial or invalid" if make_partial else "before publishing"
+    with pytest.raises(RuntimeError, match=match):
+        _run(monkeypatch, config, fake)
+    assert not fake.calls
+
+
+def test_observed_failed_stage_is_forensic_and_never_adopted(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    _state(config, {"01-headroom": {"status": "failed"}})
+    fake = FakeGPU(config, headroom=False)
+    fake([str(config.python), str(config.scripts / "run_r050_headroom.py"),
+          "--out", str(config.out / "headroom")], check=False)
+    fake.calls.clear()
+    with pytest.raises(RuntimeError, match="new output root"):
+        _run(monkeypatch, config, fake)
+    assert not fake.calls
+
+
+def test_stale_lock_inode_and_preledger_kill_window_are_recoverable(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    config.out.mkdir()
+    (config.out / ".pipeline.lock").write_text("stale pid data is not authority\n")
+    fake = FakeGPU(config, headroom=False)
+    result = _run(monkeypatch, config, fake)
+    assert result["status"] == "headroom_insufficient"
+    assert (config.out / ".pipeline.lock").is_file()
+
+
+def test_live_flock_rejects_concurrent_invocation(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    config.out.mkdir()
+    lock = (config.out / ".pipeline.lock").open("a+b")
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        with pytest.raises(RuntimeError, match="active"):
+            _run(monkeypatch, config, FakeGPU(config, headroom=False))
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
 
 
 def test_resume_revalidates_hashes_and_rejects_drift(monkeypatch, tmp_path):
@@ -263,3 +363,61 @@ def test_atomic_new_has_one_winner_and_never_overwrites(tmp_path):
     with pytest.raises(FileExistsError, match="overwrite"):
         pipeline._atomic_new(target, {"winner": "second"})
     assert json.loads(target.read_text()) == {"winner": "first"}
+
+
+@pytest.mark.parametrize(("metric", "value"), [
+    ("complete_outcome_accuracy", "NaN"),
+    ("complete_outcome_accuracy", "1e999"),
+    ("categorical_brier_absolute_improvement", "-1e999"),
+])
+def test_comparison_rejects_nonfinite_tie_break_metrics(
+        monkeypatch, tmp_path, metric, value):
+    config = _config(tmp_path)
+    runner = pipeline.Pipeline(config)
+    arm = {"arm_id": "control"}
+    candidate = {"arm_id": "candidate"}
+    monkeypatch.setattr(runner, "_arms", lambda: [arm, candidate])
+    monkeypatch.setattr(runner, "_eval_evidence", lambda _arm: {"prediction_sha256": "f" * 64})
+    output = config.out / "comparisons" / "candidate-vs-control.json"
+    output.parent.mkdir(parents=True)
+    output.write_text(
+        '{"schema":"r049_calibrated_comparison_v5","provenance":{"inputs":{'
+        f'"panel":{{"sha256":"{config.eval_panel_sha256}"}},'
+        '"control":{"sha256":"' + "f" * 64 + '"},'
+        '"candidate":{"sha256":"' + "f" * 64 + '"}}},'
+        '"internal_stage1_gate":{"passed":true},'
+        '"overall":{"paired_delta":{"equal_semantic_cluster":{'
+        f'"complete_outcome_accuracy":{value if metric == "complete_outcome_accuracy" else "0.1"},'
+        f'"categorical_brier_absolute_improvement":{value if metric != "complete_outcome_accuracy" else "0.1"}'
+        '}}}}\n')
+    with pytest.raises(ValueError, match="nonfinite|tie-break"):
+        runner._comparison_evidence("candidate", "control")
+
+
+def test_frozen_code_trust_covers_current_transitive_child_closure():
+    expected = {
+        "build_r043_causal_pairs.py", "build_r044_mm_replay.py",
+        "build_r047_model_inventory.py", "build_r048_action_panel.py",
+        "build_r050_headroom.py", "build_r050_mix.py", "build_r050_replay_pools.py",
+        "compare_r049_calibrated.py", "exact_policy_executor.py",
+        "preflight_r043_assets.py", "prepare_r050_arms.py",
+        "probe_r050_gradient_scale.py", "run_r050_arm.py", "run_r050_eval.py",
+        "run_r050_headroom.py", "run_r050_retention.py", "score_exact_policy_panel.py",
+        "singleton_option_scorer.py", "soft_action_executor.py",
+        "train_gemma_decision_lora.py",
+    }
+    assert set(pipeline.FROZEN_CODE_SHA256) == expected
+    scripts = Path(pipeline.__file__).parent
+    assert all(file_hash(scripts / name) == digest
+               for name, digest in pipeline.FROZEN_CODE_SHA256.items())
+
+
+def test_child_receipt_cannot_reanchor_modified_code(tmp_path):
+    config = _config(tmp_path)
+    runner = pipeline.Pipeline(config)
+    names = ("run_r050_headroom.py", "score_exact_policy_panel.py")
+    valid = {name: config.code_hashes[name] for name in names}
+    runner._validate_code_receipt({"code_sha256": valid}, names)
+    forged = {**valid, "score_exact_policy_panel.py": "0" * 64}
+    with pytest.raises(ValueError, match="pipeline binding"):
+        runner._validate_code_receipt({"code_sha256": forged}, names)

@@ -8,8 +8,10 @@ an environment/package manager.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -32,18 +34,31 @@ OBJECTIVES = {
     "field_ce_plus_exact_outcome_nll",
     "field_ce_plus_exact_outcome_brier",
 }
-CODE_FILES = (
-    "run_r050_pipeline.py",
-    "run_r050_headroom.py",
-    "probe_r050_gradient_scale.py",
-    "prepare_r050_arms.py",
-    "run_r050_arm.py",
-    "run_r050_eval.py",
-    "compare_r049_calibrated.py",
-    "run_r050_retention.py",
-    "train_gemma_decision_lora.py",
-    "build_r048_action_panel.py",
-)
+FROZEN_CODE_SHA256 = {
+    "build_r043_causal_pairs.py": "fb620544bf52468dee50e6dbd91dceb3c4561c40d10fa76fc8d24c3a61e4bf3b",
+    "build_r044_mm_replay.py": "d7125df1efb7608fe9ca0fd57d3880c2e0664aa88404da8c1819c233af4a097b",
+    "build_r047_model_inventory.py": "3a47a7adfc212fff863fe7209557778c077d3c58e88f128bbf3aa091de2bd071",
+    "build_r048_action_panel.py": "a9945518f134d5b5a62195c8ab727373743a7194e54a96f688a817120f671f5e",
+    "build_r050_headroom.py": "5f9ee1cf4d1fbfae46863bad06cbc2d3bb062b1b115ee89c8941914362fa8e12",
+    "build_r050_mix.py": "a943444063d6884ee1a76ca395e7c7c2e965f70ef8736e0dfc93c0514628cbcb",
+    "build_r050_replay_pools.py": "371d7cfcd1c32d15d3bb811645888c784553e24847f865f7bcc8447d3213530a",
+    "compare_r049_calibrated.py": "ea810ea3a7ef5d55385896701ac8e6b0626908b900431852d2dc11384a448e67",
+    "exact_policy_executor.py": "34a6f967f311f5243a5eb4949a8d576c2bafcb49923d4d1d804de652bd84cc06",
+    "preflight_r043_assets.py": "d37172c19ac0477d49b32e9804e5800d7060cb95edda2853f036bac7f9a0e03b",
+    "prepare_r050_arms.py": "5f3c38074f9d571e81d1df6a08c3fc556da6dfa002b2f54b7f3d86c27d67dd6c",
+    "probe_r050_gradient_scale.py": "39a337801b57ab547e69303e57216d4815200b934f052b979b43dbea749829df",
+    "run_r050_arm.py": "30c8455bb8bcf12ea061fc1872d0cac902c7b182fd9cbfbf0d1d2f6d0fc36747",
+    "run_r050_eval.py": "184b03bf54e6b0c5964ea8b2e81f06e9d5f1bf1010d05bf6d2d5d5d83a0a118a",
+    "run_r050_headroom.py": "d2329954146a730db2bed6138982206159b5189acdfd39a568c35a357eee5fe8",
+    "run_r050_retention.py": "b4a146be22bd9e478e08b90e674a5a2944ca0b34422129e87a4c8869a0f3a998",
+    "score_exact_policy_panel.py": "64be9dd52f9e5d32cc883b4167dff6278a3b4993bd207bbd3aa81897145aeaba",
+    "singleton_option_scorer.py": "2bd954ec37121d50beea3cc238c71d4c57429f5d8466898521c3e3631a4aad2c",
+    "soft_action_executor.py": "3b8ea41646f2d4c45e1c5cac47298867c8ee5cd00b6f97b6b8b0b59b58d191be",
+    "train_gemma_decision_lora.py": "74077c28e7f195fe61f2454d38fba6c7baa3338bb5d90c588346fefce30a570c",
+}
+# The orchestrator cannot contain its own digest.  Its hash remains a mandatory
+# external binding; every child and transitive local dependency is literal here.
+CODE_FILES = ("run_r050_pipeline.py", *FROZEN_CODE_SHA256)
 OFFICIAL_EVALUATORS = ("jevbench", "workfloweval")
 FROZEN_MIX_SHA256 = "499dd9c9a8341e55d1d965bbd1ffc45c893880fcdab4d35d295d06324c1c2003"
 FROZEN_MIX_MANIFEST_SHA256 = "2b52da6fac16a803d5dd2fa14bcc54c68693f01754b3039561386602f287b53d"
@@ -264,6 +279,9 @@ def preflight(config: PipelineConfig, *, check_model_assets: bool) -> dict[str, 
     if set(config.code_hashes) != expected_code:
         raise ValueError(f"code hash names must be exactly: {', '.join(CODE_FILES)}")
     for name in CODE_FILES:
+        supplied = _checked_hash(config.code_hashes[name], f"expected current code {name} sha256")
+        if name in FROZEN_CODE_SHA256 and supplied != FROZEN_CODE_SHA256[name]:
+            raise ValueError(f"current code {name} differs from the audited literal")
         _regular_hash(config.scripts / name, config.code_hashes[name], f"current code {name}")
 
     files = (
@@ -333,12 +351,29 @@ class Pipeline:
                validator: Callable[[], dict[str, Any]], *, accepted=(0,)) -> dict[str, Any]:
         existing = self.state["stages"].get(name)
         if existing:
-            if existing.get("status") != "complete":
-                raise RuntimeError(f"stage {name} is incomplete; refusing an unsafe retry")
-            evidence = validator()
-            if evidence != existing.get("evidence"):
-                raise ValueError(f"stage {name} completion evidence drifted")
-            return evidence
+            status = existing.get("status")
+            if status == "complete":
+                evidence = validator()
+                if evidence != existing.get("evidence"):
+                    raise ValueError(f"stage {name} completion evidence drifted")
+                return evidence
+            if status == "running":
+                if not os.path.lexists(output):
+                    raise RuntimeError(
+                        f"stage {name} was interrupted before publishing output; "
+                        "refusing an unsafe retry")
+                try:
+                    evidence = validator()
+                except Exception as error:
+                    raise RuntimeError(
+                        f"stage {name} has partial or invalid interrupted output; "
+                        "refusing an unsafe retry") from error
+                self._set_stage(name, "complete", evidence)
+                return evidence
+            # A failed child was observed, rather than an ambiguous crash.  Its
+            # logs/output remain forensic evidence and require a fresh root.
+            raise RuntimeError(
+                f"stage {name} previously failed; use a new output root after investigation")
         if os.path.lexists(output):
             raise FileExistsError(f"untracked or partial stage output exists: {output}")
         self._set_stage(name, "running")
@@ -369,6 +404,12 @@ class Pipeline:
             stderr.flush(); os.fsync(stderr.fileno())
         return int(result.returncode)
 
+    def _validate_code_receipt(self, receipt: dict[str, Any], names: tuple[str, ...]) -> None:
+        observed = receipt.get("code_sha256")
+        expected = {name: self.config.code_hashes[name] for name in names}
+        if observed != expected:
+            raise ValueError("child receipt code hashes differ from the pipeline binding")
+
     def _dir_completion(self, directory: Path, schema: str) -> tuple[dict[str, Any], dict[str, Any]]:
         if directory.is_symlink() or not directory.is_dir():
             raise ValueError(f"completed stage directory is missing: {directory}")
@@ -393,6 +434,12 @@ class Pipeline:
         directory = self.root / "headroom"
         marker, receipt = self._dir_completion(directory, "r050_headroom_completion_v1")
         report = _read_json(directory / "report.json", "headroom report")
+        self._validate_code_receipt(receipt, (
+            "run_r050_headroom.py", "build_r050_headroom.py", "build_r048_action_panel.py",
+            "score_exact_policy_panel.py", "singleton_option_scorer.py",
+            "exact_policy_executor.py", "train_gemma_decision_lora.py",
+            "build_r047_model_inventory.py", "preflight_r043_assets.py",
+            "build_r050_replay_pools.py"))
         sufficient = report.get("headroom_sufficient")
         if (type(sufficient) is not bool or marker.get("headroom_sufficient") is not sufficient
                 or receipt.get("headroom_sufficient") is not sufficient):
@@ -407,6 +454,14 @@ class Pipeline:
         value = _read_json(path, "gradient probe receipt")
         if value.get("schema_version") != "r050-gradient-scale-probe-v1" or value.get("status") != "complete":
             raise ValueError("gradient probe receipt is not complete")
+        bindings = value.get("bindings", {})
+        expected = {
+            "trainer_sha256": self.config.code_hashes["train_gemma_decision_lora.py"],
+            "probe_sha256": self.config.code_hashes["probe_r050_gradient_scale.py"],
+            "panel_builder_sha256": self.config.code_hashes["build_r048_action_panel.py"],
+        }
+        if any(bindings.get(name) != digest for name, digest in expected.items()):
+            raise ValueError("gradient probe code hashes differ from the pipeline binding")
         return {"sha256": file_hash(path)}
 
     def _suite_evidence(self) -> dict[str, Any]:
@@ -428,6 +483,15 @@ class Pipeline:
             # Do not inspect objective identity until every evaluation exists.
             if (recipe.get("arm_id"), recipe.get("run_order")) != (arm["arm_id"], arm["run_order"]):
                 raise ValueError("arm recipe identity differs from suite manifest")
+            bindings = recipe.get("bindings", {})
+            expected_code = {
+                "panel_builder": self.config.code_hashes["build_r048_action_panel.py"],
+                "trainer": self.config.code_hashes["train_gemma_decision_lora.py"],
+                "gradient_probe_code": self.config.code_hashes["probe_r050_gradient_scale.py"],
+            }
+            if any(bindings.get(name, {}).get("sha256") != digest
+                   for name, digest in expected_code.items()):
+                raise ValueError("arm recipe code hashes differ from the pipeline binding")
             recipes[arm["arm_id"]] = digest
         return {"manifest_sha256": file_hash(manifest_path), "recipes": recipes}
 
@@ -463,6 +527,12 @@ class Pipeline:
     def _eval_evidence(self, arm: dict[str, Any]) -> dict[str, Any]:
         directory = self.root / "eval" / arm["arm_id"]
         marker, receipt = self._dir_completion(directory, "r050_full_eval_completion_v1")
+        self._validate_code_receipt(receipt, (
+            "run_r050_eval.py", "run_r050_headroom.py", "build_r048_action_panel.py",
+            "score_exact_policy_panel.py", "compare_r049_calibrated.py",
+            "singleton_option_scorer.py", "exact_policy_executor.py",
+            "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+            "preflight_r043_assets.py", "run_r050_arm.py"))
         completion_sha = self._training_evidence(arm)["completion_sha256"]
         if receipt.get("arm_completion", {}).get("sha256") != completion_sha:
             raise ValueError("evaluation receipt does not bind the arm completion")
@@ -491,16 +561,23 @@ class Pipeline:
         delta = report.get("overall", {}).get("paired_delta", {}).get("equal_semantic_cluster", {})
         outcome = delta.get("complete_outcome_accuracy")
         brier = delta.get("categorical_brier_absolute_improvement")
-        if type(gate) is not bool or isinstance(outcome, bool) or not isinstance(outcome, (int, float)) \
-                or isinstance(brier, bool) or not isinstance(brier, (int, float)):
+        if (type(gate) is not bool or isinstance(outcome, bool)
+                or not isinstance(outcome, (int, float)) or not math.isfinite(outcome)
+                or isinstance(brier, bool) or not isinstance(brier, (int, float))
+                or not math.isfinite(brier)):
             raise ValueError("comparison is missing its gate or deterministic tie-break metrics")
         return {"sha256": file_hash(path), "passed": gate,
                 "complete_outcome_gain": outcome, "brier_gain": brier}
 
     def _retention_evidence(self, arm_id: str) -> dict[str, Any]:
         directory = self.root / "retention" / arm_id
-        marker, _ = self._dir_completion(
+        marker, receipt = self._dir_completion(
             directory, _runtime_contracts()["retention_completion_schema"])
+        self._validate_code_receipt(receipt, (
+            "run_r050_retention.py", "singleton_option_scorer.py",
+            "train_gemma_decision_lora.py", "build_r047_model_inventory.py",
+            "preflight_r043_assets.py", "run_r050_eval.py", "run_r050_arm.py",
+            "build_r050_replay_pools.py"))
         report = _read_json(directory / "report.json", "retention report")
         passed = report.get("promotion_pass")
         if type(passed) is not bool or marker.get("promotion_pass") is not passed:
@@ -673,41 +750,50 @@ class Pipeline:
 
     def run(self) -> dict[str, Any]:
         binding = preflight(self.config, check_model_assets=True)
-        created = False
         try:
             self.root.mkdir(parents=True, exist_ok=False)
-            created = True
         except FileExistsError:
             pass
         lock = self.root / ".pipeline.lock"
+        # The file is a stable rendezvous inode, not the lock itself.  flock is
+        # released by the OS on process death, so a SIGKILL cannot brick resume.
+        lock_stream = lock.open("a+b")
         try:
-            descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError as error:
-            raise RuntimeError("another pipeline invocation is active or left a recovery lock") from error
-        os.close(descriptor)
-        try:
-            if self.state_path.exists():
-                self.state = _read_json(self.state_path, "pipeline state")
-                if (self.state.get("schema") != SCHEMA
-                        or self.state.get("binding_sha256") != binding["binding_sha256"]
-                        or self.state.get("binding") != binding["binding"]):
-                    raise ValueError("pipeline state input/code binding drifted")
-            else:
-                unexpected = [item for item in self.root.iterdir() if item != lock]
-                if unexpected or not created:
-                    raise FileExistsError("output root exists without a valid state ledger")
-                self.state = {"schema": SCHEMA, **binding, "stages": {}}
-                self._save()
-            return self.execute(binding)
+            try:
+                fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise RuntimeError("another pipeline invocation is active") from error
+            try:
+                if self.state_path.exists():
+                    self.state = _read_json(self.state_path, "pipeline state")
+                    if (self.state.get("schema") != SCHEMA
+                            or self.state.get("binding_sha256") != binding["binding_sha256"]
+                            or self.state.get("binding") != binding["binding"]):
+                        raise ValueError("pipeline state input/code binding drifted")
+                else:
+                    # A crash between mkdir/lock and the first atomic ledger
+                    # publish can leave an empty root or only this stale inode.
+                    unexpected = [item for item in self.root.iterdir() if item != lock]
+                    if unexpected:
+                        raise FileExistsError("output root exists without a valid state ledger")
+                    self.state = {"schema": SCHEMA, **binding, "stages": {}}
+                    self._save()
+                return self.execute(binding)
+            finally:
+                fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
         finally:
-            lock.unlink(missing_ok=True)
+            lock_stream.close()
 
 
 def _config_from_args(args: argparse.Namespace) -> PipelineConfig:
     suites = {name: Path(value) for name, value in
               _parse_assignments(args.retention_suite, "retention suite").items()}
     suite_hashes = _parse_assignments(args.retention_suite_sha256, "retention suite hash")
-    code_hashes = _parse_assignments(args.expected_code_sha256, "code hash")
+    code_hashes = {
+        name: _checked_hash(value, f"expected current code {name} sha256")
+        for name, value in _parse_assignments(
+            args.expected_code_sha256, "code hash").items()
+    }
     return PipelineConfig(
         out=args.out, headroom_data=args.headroom_data,
         headroom_data_sha256=args.headroom_data_sha256,
