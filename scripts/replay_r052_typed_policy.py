@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """Deterministically replay the frozen R052 typed-policy graph.
 
-This executor is intentionally small and hostile to ambiguous inputs.  It reads
+This executor is intentionally small and hostile to ambiguous inputs.  Its
+manual exact-key/type checks are the authoritative runtime validation; the
+bundled JSON Schema is a hard-hashed interchange description.  It reads
 canonical JSON, uses only exact rational arithmetic, and treats missing evidence
 as unknown rather than false.  It does not execute Python expressions or call a
 model.
+
+The ledger proves exact adjudication-receipt bytes, not when the human review
+happened.  Pre-question authoring plus pixel-region interpretation, image
+dimensions, and presentation order remain external human assurances where the
+panel does not expose those values.
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -29,11 +37,25 @@ SCHEMA_VERSION = "r052-policy-replay-schema-v1"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DECIMAL_RE = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-FORBIDDEN_FACT_WORDS = re.compile(r"(?:gold|answer|correct)", re.IGNORECASE)
+FACT_ID_RE = re.compile(r"^f[0-9]{4,}$")
 MAX_AST_DEPTH = 16
 MAX_AST_NODES = 256
 MAX_AST_ARGS = 64
 MAX_REMOVAL_CHUNKS = 12
+MAX_INPUT_BYTES = 128 * 1024 * 1024
+MAX_RECEIPT_ARTIFACT_BYTES = 16 * 1024 * 1024
+MAX_JSON_DEPTH = 64
+MAX_JSON_NODES = 1_000_000
+MAX_JSON_OBJECTS = 200_000
+MAX_INTEGER_DIGITS = 128
+MAX_FACTS = 100_000
+MAX_BINDINGS = 100_000
+MAX_GROUPS = 10_000
+MAX_PRESENTATIONS = 20_000
+MAX_RULES = 64
+EXPECTED_SCHEMA_SHA256 = (
+    "d278f39d20c1bf734d9c3fbbb88ea5ad3667d8123caab09041fae5e37472d3af"
+)
 
 
 class PolicyError(ValueError):
@@ -61,11 +83,14 @@ class DecisionResult:
 
 def canonical_json(value: Any) -> bytes:
     """Return the one accepted JSON encoding."""
-    _reject_non_json_numbers(value, "JSON")
-    return (
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        + "\n"
-    ).encode("utf-8")
+    _validate_json_shape(value, "JSON")
+    try:
+        return (
+            json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            + "\n"
+        ).encode("utf-8")
+    except (RecursionError, ValueError, OverflowError) as exc:
+        raise PolicyError("JSON cannot be canonically encoded") from exc
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -76,19 +101,42 @@ def sha256_json(value: Any) -> str:
     return sha256_bytes(canonical_json(value))
 
 
-def _reject_non_json_numbers(value: Any, label: str) -> None:
-    if isinstance(value, float) and not math.isfinite(value):
-        raise PolicyError(f"{label} must not contain non-finite numbers")
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise PolicyError(f"{label} object keys must be strings")
-            _reject_non_json_numbers(item, label)
-    elif isinstance(value, list):
-        for item in value:
-            _reject_non_json_numbers(item, label)
-    elif value is not None and not isinstance(value, (str, bool, int, float)):
-        raise PolicyError(f"{label} contains a non-JSON value")
+def _validate_json_shape(value: Any, label: str) -> None:
+    stack = [(value, 1)]
+    nodes = 0
+    objects = 0
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > MAX_JSON_NODES:
+            raise PolicyError(f"{label} exceeds the JSON node bound")
+        if depth > MAX_JSON_DEPTH:
+            raise PolicyError(f"{label} exceeds the JSON depth bound")
+        if isinstance(item, dict):
+            objects += 1
+            if objects > MAX_JSON_OBJECTS:
+                raise PolicyError(f"{label} exceeds the JSON object bound")
+            for key, child in item.items():
+                if not isinstance(key, str):
+                    raise PolicyError(f"{label} object keys must be strings")
+                stack.append((child, depth + 1))
+        elif isinstance(item, list):
+            stack.extend((child, depth + 1) for child in item)
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                raise PolicyError(f"{label} must not contain non-finite numbers")
+        elif type(item) is int:
+            if len(str(abs(item))) > MAX_INTEGER_DIGITS:
+                raise PolicyError(f"{label} integer exceeds the digit bound")
+        elif item is not None and not isinstance(item, (str, bool)):
+            raise PolicyError(f"{label} contains a non-JSON value")
+
+
+def _parse_bounded_integer(token: str) -> int:
+    digits = token.removeprefix("-")
+    if len(digits) > MAX_INTEGER_DIGITS:
+        raise PolicyError("JSON integer exceeds the digit bound")
+    return int(token)
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -101,17 +149,27 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def parse_canonical_json(raw: bytes, label: str) -> Any:
+    if not raw or len(raw) > MAX_INPUT_BYTES:
+        raise PolicyError(f"{label} exceeds the input byte bound or is empty")
     try:
         value = json.loads(
             raw,
             object_pairs_hook=_unique_object,
+            parse_int=_parse_bounded_integer,
             parse_constant=lambda token: (_ for _ in ()).throw(
                 PolicyError(f"{label} contains non-finite constant {token}")
             ),
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except PolicyError:
+        raise
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+    ) as exc:
         raise PolicyError(f"{label} must be valid UTF-8 JSON") from exc
-    _reject_non_json_numbers(value, label)
+    _validate_json_shape(value, label)
     if raw != canonical_json(value):
         raise PolicyError(f"{label} must use canonical JSON bytes")
     return value
@@ -121,7 +179,12 @@ def load_canonical_json(
     path: Path, expected_sha256: str, label: str
 ) -> tuple[Any, str]:
     expected_sha256 = _sha(expected_sha256, f"expected {label} sha256")
-    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size == 0
+        or path.stat().st_size > MAX_INPUT_BYTES
+    ):
         raise PolicyError(f"{label} must be a non-empty regular file")
     raw = path.read_bytes()
     observed = sha256_bytes(raw)
@@ -146,6 +209,12 @@ def _identifier(value: Any, label: str) -> str:
     value = _text(value, label)
     if IDENTIFIER_RE.fullmatch(value) is None:
         raise PolicyError(f"{label} is not an opaque identifier")
+    return value
+
+
+def _fact_id(value: Any, label: str) -> str:
+    if not isinstance(value, str) or FACT_ID_RE.fullmatch(value) is None:
+        raise PolicyError(f"{label} must match f[0-9]{{4,}}")
     return value
 
 
@@ -192,7 +261,11 @@ def _typed_value(
             raise PolicyError(f"{label} must be an integer")
         parsed = Fraction(raw)
     elif fact_type == "decimal":
-        if not isinstance(raw, str) or DECIMAL_RE.fullmatch(raw) is None:
+        if (
+            not isinstance(raw, str)
+            or len(raw.lstrip("-")) > MAX_INTEGER_DIGITS + 1
+            or DECIMAL_RE.fullmatch(raw) is None
+        ):
             raise PolicyError(f"{label} must be a canonical decimal string")
         parsed = Fraction(raw)
     else:
@@ -205,6 +278,8 @@ def _panel_index(
 ) -> tuple[dict[str, dict[str, Any]], dict[str, tuple[dict[str, Any], dict[str, Any]]]]:
     if not isinstance(panel, dict) or not isinstance(panel.get("cases"), list):
         raise PolicyError("panel must contain a cases array")
+    if not panel["cases"] or len(panel["cases"]) > MAX_PRESENTATIONS:
+        raise PolicyError("panel case count is outside the safe bound")
     cases: dict[str, dict[str, Any]] = {}
     chunks: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     for case in panel["cases"]:
@@ -217,8 +292,11 @@ def _panel_index(
             case.get("questions"), list
         ):
             raise PolicyError(f"panel case {case_key} lacks chunks/questions")
+        if len(case["chunks"]) > MAX_BINDINGS or len(case["questions"]) > MAX_BINDINGS:
+            raise PolicyError(f"panel case {case_key} exceeds collection bounds")
         cases[case_key] = case
         local_chunks: set[str] = set()
+        twin_chunk_anchors: set[str] = set()
         for chunk in case["chunks"]:
             if not isinstance(chunk, dict):
                 raise PolicyError("panel chunks must be objects")
@@ -262,8 +340,19 @@ def _panel_index(
                 raise PolicyError("panel chunk content_sha256 is not content-derived")
             if not isinstance(chunk.get("immutable"), bool):
                 raise PolicyError("panel chunk immutable must be boolean")
+            if chunk["immutable"] is not (chunk["kind"] == "global_policy"):
+                raise PolicyError(
+                    "chunk immutable must be true iff kind is global_policy"
+                )
+            anchor = chunk.get("twin_anchor")
+            if anchor is not None:
+                anchor = _identifier(anchor, "chunk twin_anchor")
+                if anchor in twin_chunk_anchors:
+                    raise PolicyError("panel case has duplicate chunk twin anchors")
+                twin_chunk_anchors.add(anchor)
             chunks[key] = (case, chunk)
         local_questions: set[str] = set()
+        twin_question_anchors: set[str] = set()
         for question in case["questions"]:
             if not isinstance(question, dict):
                 raise PolicyError("panel questions must be objects")
@@ -292,6 +381,12 @@ def _panel_index(
                 raise PolicyError(
                     "panel question content_sha256 is not content-derived"
                 )
+            anchor = question.get("twin_anchor")
+            if anchor is not None:
+                anchor = _identifier(anchor, "question twin_anchor")
+                if anchor in twin_question_anchors:
+                    raise PolicyError("panel case has duplicate question twin anchors")
+                twin_question_anchors.add(anchor)
     return cases, chunks
 
 
@@ -299,6 +394,7 @@ def validate_ledger(
     ledger: Any,
     panel: Any,
     panel_sha256: str,
+    adjudication_receipts: dict[str, bytes],
 ) -> tuple[dict[str, tuple[str, str | None]], list[dict[str, Any]]]:
     ledger = _exact(
         ledger,
@@ -311,21 +407,36 @@ def validate_ledger(
     ):
         raise PolicyError("fact ledger version or panel binding is invalid")
     facts_raw = ledger["facts"]
-    if not isinstance(facts_raw, dict) or not facts_raw:
+    if not isinstance(facts_raw, dict) or not facts_raw or len(facts_raw) > MAX_FACTS:
         raise PolicyError("fact ledger facts must be a non-empty object")
     facts: dict[str, tuple[str, str | None]] = {}
     for fact_id, declaration in facts_raw.items():
-        _identifier(fact_id, "fact id")
-        if FORBIDDEN_FACT_WORDS.search(fact_id):
-            raise PolicyError("fact ids must be opaque and question-blind")
+        _fact_id(fact_id, "fact id")
         facts[fact_id] = _fact_declaration(declaration, f"fact {fact_id}")
 
     cases, chunks = _panel_index(panel)
     bindings = ledger["bindings"]
-    if not isinstance(bindings, list) or not bindings:
+    if not isinstance(bindings, list) or not bindings or len(bindings) > MAX_BINDINGS:
         raise PolicyError("fact ledger bindings must be a non-empty array")
+    if (
+        not isinstance(adjudication_receipts, dict)
+        or len(adjudication_receipts) > MAX_BINDINGS
+    ):
+        raise PolicyError(
+            "adjudication receipt artifacts must be a hash-to-bytes object"
+        )
+    for digest, payload in adjudication_receipts.items():
+        _sha(digest, "adjudication receipt artifact key")
+        if (
+            not isinstance(payload, bytes)
+            or not payload
+            or len(payload) > MAX_RECEIPT_ARTIFACT_BYTES
+            or sha256_bytes(payload) != digest
+        ):
+            raise PolicyError("adjudication receipt artifact bytes/hash are invalid")
     seen_bindings: set[tuple[str, str]] = set()
     observed_facts: set[str] = set()
+    used_receipts: set[str] = set()
     for index, binding in enumerate(bindings):
         label = f"binding {index}"
         binding = _exact(
@@ -352,10 +463,18 @@ def validate_ledger(
         ):
             raise PolicyError(f"{label} references a foreign case/chunk pair")
         chunk = chunks[chunk_key][1]
+        if chunk["kind"] == "global_policy" or chunk["immutable"] is True:
+            raise PolicyError("policy chunks cannot bind facts")
         if binding["chunk_content_sha256"] != chunk["content_sha256"]:
             raise PolicyError(f"{label} chunk content hash mismatch")
         _sha(binding["chunk_content_sha256"], f"{label}.chunk_content_sha256")
-        _sha(binding["adjudication_receipt_sha256"], f"{label}.adjudication receipt")
+        receipt_hash = _sha(
+            binding["adjudication_receipt_sha256"],
+            f"{label}.adjudication receipt",
+        )
+        if receipt_hash not in adjudication_receipts:
+            raise PolicyError("binding adjudication receipt has no supplied artifact")
+        used_receipts.add(receipt_hash)
         observations = binding["observations"]
         if not isinstance(observations, list) or not observations:
             raise PolicyError(f"{label}.observations must be a non-empty array")
@@ -363,7 +482,7 @@ def validate_ledger(
         for number, observation in enumerate(observations):
             obs_label = f"{label}.observation {number}"
             observation = _exact(observation, {"fact", "value", "locator"}, obs_label)
-            fact_id = _identifier(observation["fact"], f"{obs_label}.fact")
+            fact_id = _fact_id(observation["fact"], f"{obs_label}.fact")
             if fact_id not in facts or fact_id in seen_local:
                 raise PolicyError(f"{obs_label} fact is unknown or duplicated")
             seen_local.add(fact_id)
@@ -403,6 +522,8 @@ def validate_ledger(
                 raise PolicyError(f"{obs_label}.locator kind is invalid")
     if observed_facts != set(facts):
         raise PolicyError("every declared fact must have at least one binding")
+    if used_receipts != set(adjudication_receipts):
+        raise PolicyError("adjudication receipt artifacts must cover bindings exactly")
     return facts, bindings
 
 
@@ -423,7 +544,7 @@ def _validate_ast(
     op = node["op"]
     if op == "fact":
         _exact(node, {"op", "id"}, "fact AST node")
-        fact_id = _identifier(node["id"], "AST fact id")
+        fact_id = _fact_id(node["id"], "AST fact id")
         if fact_id not in allowed_facts:
             raise PolicyError("policy rules may reference only declared group fact ids")
     elif op == "const":
@@ -591,16 +712,30 @@ def classify_transition(full: DecisionResult, removed: DecisionResult) -> str:
     if full.status == "invalid" or removed.status == "invalid":
         return "invalid"
     if full.status == "resolved" and removed.status == "resolved":
-        return "no_change" if full.output == removed.output else "label_flip"
+        return "no_change" if full.output == removed.output else "invalid"
     if full.status == "resolved" and removed.status == "unresolved":
         return "resolution_loss"
     return "no_change" if full == removed else "invalid"
 
 
-def _result_json(result: DecisionResult) -> dict[str, Any]:
+def _result_json(
+    result: DecisionResult,
+    question: dict[str, Any],
+    question_binding: dict[str, Any],
+) -> dict[str, Any]:
+    selected_option = None
+    if result.status == "resolved":
+        index = question_binding["output_option_indices"][result.output]
+        selected_option = {
+            "question_key": question["question_key"],
+            "question_content_sha256": question["content_sha256"],
+            "index": index,
+            "text": question["options"][index],
+        }
     return {
         "status": result.status,
         "output": result.output,
+        "selected_option": selected_option,
         "rules": [
             {
                 "output": output,
@@ -659,6 +794,63 @@ def _question(case: dict[str, Any], key: str) -> dict[str, Any]:
     return matches[0]
 
 
+def _causal_context_sha256(
+    case: dict[str, Any], question: dict[str, Any], removed: set[str]
+) -> str:
+    return sha256_json(
+        {
+            "question_content_sha256": question["content_sha256"],
+            "ordered_chunk_content_sha256": [
+                chunk["content_sha256"]
+                for chunk in case["chunks"]
+                if chunk["chunk_key"] not in removed
+            ],
+        }
+    )
+
+
+def _validate_causal_proof(
+    case: dict[str, Any],
+    question: dict[str, Any],
+    remove: list[str],
+    full: DecisionResult,
+    removed: DecisionResult,
+    option_index: int,
+) -> None:
+    proof = question.get("causal_proof")
+    if not isinstance(proof, dict):
+        raise PolicyError("question requires an inline causal_proof")
+    required = {
+        "kind",
+        "removed_chunk_keys",
+        "full_context_sha256",
+        "removed_context_sha256",
+        "full_outcome_sha256",
+        "removed_outcome_sha256",
+        "full_outcome",
+        "removed_outcome",
+        "changed_fields",
+    }
+    _exact(proof, required, "question causal_proof")
+    expected_full = {"status": "resolved", "option_index": option_index}
+    expected_removed = {"status": "unresolved"}
+    if (
+        proof["kind"] != "causal_annotation"
+        or proof["removed_chunk_keys"] != remove
+        or proof["full_outcome"] != expected_full
+        or proof["removed_outcome"] != expected_removed
+        or proof["changed_fields"] != ["status", "option_index"]
+        or proof["full_outcome_sha256"] != sha256_json(expected_full)
+        or proof["removed_outcome_sha256"] != sha256_json(expected_removed)
+        or proof["full_context_sha256"] != _causal_context_sha256(case, question, set())
+        or proof["removed_context_sha256"]
+        != _causal_context_sha256(case, question, set(remove))
+        or full.status != "resolved"
+        or removed.status != "unresolved"
+    ):
+        raise PolicyError("inline causal_proof contradicts authoritative replay")
+
+
 def _ordered_subset(full: list[str], included: set[str]) -> list[str]:
     return [item for item in full if item in included]
 
@@ -700,12 +892,49 @@ def _validate_images(
                 raise PolicyError("real/shuffled image controls require image bytes")
             if by_variant["missing"].get("media") is not None:
                 raise PolicyError("missing image controls cannot carry image bytes")
+            real_hash = _sha(
+                by_variant["real"]["media"].get("sha256"), "real image media hash"
+            )
+            shuffled_hash = _sha(
+                by_variant["shuffled"]["media"].get("sha256"),
+                "shuffled image media hash",
+            )
+            if real_hash == shuffled_hash:
+                raise PolicyError("real and shuffled controls require distinct media")
             if (
                 by_variant["shuffled"]["chunk_key"] in bound_chunks
                 or by_variant["missing"]["chunk_key"] in bound_chunks
             ):
                 raise PolicyError(
                     "shuffled/missing image controls must not bind policy facts"
+                )
+            real_key = by_variant["real"]["chunk_key"]
+            shuffled_key = by_variant["shuffled"]["chunk_key"]
+            missing_key = by_variant["missing"]["chunk_key"]
+            causal_questions = [
+                question
+                for question in case["questions"]
+                if real_key in question.get("decisive_chunk_keys", [])
+            ]
+            if len(causal_questions) != 1:
+                raise PolicyError(
+                    "each image control group requires exactly one causal question"
+                )
+            question = causal_questions[0]
+            distractors = set(question.get("known_distractor_chunk_keys", []))
+            if not {shuffled_key, missing_key} <= distractors:
+                raise PolicyError(
+                    "shuffled and missing images must be question distractors"
+                )
+            chunks_by_key = {chunk["chunk_key"]: chunk for chunk in case["chunks"]}
+            text_distractors = [
+                key
+                for key in distractors
+                if chunks_by_key.get(key, {}).get("modality") == "text"
+            ]
+            if len(text_distractors) < 5:
+                raise PolicyError(
+                    "image causal questions require at least five text distractors"
                 )
 
 
@@ -733,8 +962,8 @@ def _validate_hebrew(
                 )
             he_trace = traces[(group["group_id"], presentation["presentation_id"])]
             en_trace = traces[(group["group_id"], english[0]["presentation_id"])]
-            if he_trace["full_fact_state"] != en_trace["full_fact_state"]:
-                raise PolicyError("Hebrew/English twins disagree on full fact values")
+            if he_trace["fact_states"] != en_trace["fact_states"]:
+                raise PolicyError("Hebrew/English twins disagree on view fact values")
             he_chunks = {chunk.get("twin_anchor"): chunk for chunk in case["chunks"]}
             en_case = cases[english[0]["case_key"]]
             en_chunks = {chunk.get("twin_anchor"): chunk for chunk in en_case["chunks"]}
@@ -762,6 +991,25 @@ def _validate_hebrew(
                     and he_control.get("variant") != en_control.get("variant")
                 ):
                     raise PolicyError("Hebrew/English image-control graph drift")
+            for view_name in ("full", "removed", "decisive_only", "distractor_only"):
+                he_view = [
+                    next(
+                        chunk["twin_anchor"]
+                        for chunk in case["chunks"]
+                        if chunk["chunk_key"] == key
+                    )
+                    for key in presentation["views"][view_name]
+                ]
+                en_view = [
+                    next(
+                        chunk["twin_anchor"]
+                        for chunk in en_case["chunks"]
+                        if chunk["chunk_key"] == key
+                    )
+                    for key in english[0]["views"][view_name]
+                ]
+                if he_view != en_view:
+                    raise PolicyError("Hebrew/English view semantic graph drift")
             for decision_id, binding in presentation["question_bindings"].items():
                 he_question = _question(case, binding["question_key"])
                 en_binding = english[0]["question_bindings"].get(decision_id)
@@ -779,6 +1027,70 @@ def _validate_hebrew(
                     != len(en_question.get("options", []))
                 ):
                     raise PolicyError("Hebrew/English question semantic anchors drift")
+                if (
+                    binding["output_option_indices"]
+                    != en_binding["output_option_indices"]
+                ):
+                    raise PolicyError("Hebrew/English option index mappings drift")
+                he_decisive = [
+                    next(
+                        chunk["twin_anchor"]
+                        for chunk in case["chunks"]
+                        if chunk["chunk_key"] == key
+                    )
+                    for key in he_question["decisive_chunk_keys"]
+                ]
+                en_decisive = [
+                    next(
+                        chunk["twin_anchor"]
+                        for chunk in en_case["chunks"]
+                        if chunk["chunk_key"] == key
+                    )
+                    for key in en_question["decisive_chunk_keys"]
+                ]
+                he_distractors = [
+                    next(
+                        chunk["twin_anchor"]
+                        for chunk in case["chunks"]
+                        if chunk["chunk_key"] == key
+                    )
+                    for key in he_question["known_distractor_chunk_keys"]
+                ]
+                en_distractors = [
+                    next(
+                        chunk["twin_anchor"]
+                        for chunk in en_case["chunks"]
+                        if chunk["chunk_key"] == key
+                    )
+                    for key in en_question["known_distractor_chunk_keys"]
+                ]
+                if he_decisive != en_decisive or he_distractors != en_distractors:
+                    raise PolicyError("Hebrew/English evidence anchor mappings drift")
+
+            def semantic_decisions(trace: dict[str, Any]) -> list[dict[str, Any]]:
+                return [
+                    {
+                        "decision_id": decision["decision_id"],
+                        "transition": decision["transition"],
+                        "views": {
+                            name: {
+                                "status": result["status"],
+                                "output": result["output"],
+                                "option_index": (
+                                    None
+                                    if result["selected_option"] is None
+                                    else result["selected_option"]["index"]
+                                ),
+                                "rules": result["rules"],
+                            }
+                            for name, result in decision["views"].items()
+                        },
+                    }
+                    for decision in trace["decisions"]
+                ]
+
+            if semantic_decisions(he_trace) != semantic_decisions(en_trace):
+                raise PolicyError("Hebrew/English replay traces drift")
 
 
 def replay(
@@ -791,6 +1103,7 @@ def replay(
     rubric_sha256: str,
     evaluator_sha256: str,
     schema_sha256: str,
+    adjudication_receipts: dict[str, bytes],
 ) -> dict[str, Any]:
     """Validate and replay all frozen presentations, returning a deterministic receipt."""
     for value, label in (
@@ -801,13 +1114,17 @@ def replay(
         (schema_sha256, "schema"),
     ):
         _sha(value, f"{label} sha256")
+    if schema_sha256 != EXPECTED_SCHEMA_SHA256:
+        raise PolicyError("schema hash does not match the evaluator's frozen schema")
     if (
         sha256_json(panel) != panel_sha256
         or sha256_json(ledger) != ledger_sha256
         or sha256_json(rubric) != rubric_sha256
     ):
         raise PolicyError("in-memory artifact does not match its supplied content hash")
-    facts, bindings = validate_ledger(ledger, panel, panel_sha256)
+    facts, bindings = validate_ledger(
+        ledger, panel, panel_sha256, adjudication_receipts
+    )
     cases, _ = _panel_index(panel)
     _validate_images(cases, bindings)
     rubric = _exact(
@@ -822,8 +1139,14 @@ def replay(
     ):
         raise PolicyError("policy rubric artifact bindings are invalid")
     groups = rubric["semantic_groups"]
-    if not isinstance(groups, list) or not groups:
+    if not isinstance(groups, list) or not groups or len(groups) > MAX_GROUPS:
         raise PolicyError("policy rubric semantic_groups must be non-empty")
+    panel_questions = {
+        (case_key, question["question_key"])
+        for case_key, case in cases.items()
+        for question in case["questions"]
+    }
+    bound_questions: set[tuple[str, str]] = set()
     seen_groups: set[str] = set()
     seen_presentations: set[str] = set()
     receipt_groups: list[dict[str, Any]] = []
@@ -838,11 +1161,15 @@ def replay(
             raise PolicyError("semantic group ids must be unique")
         seen_groups.add(group_id)
         group_facts_raw = group["facts"]
-        if not isinstance(group_facts_raw, dict) or not group_facts_raw:
+        if (
+            not isinstance(group_facts_raw, dict)
+            or not group_facts_raw
+            or len(group_facts_raw) > MAX_FACTS
+        ):
             raise PolicyError("semantic group facts must be a non-empty object")
         group_facts: set[str] = set()
         for fact_id, declaration in group_facts_raw.items():
-            _identifier(fact_id, "semantic group fact id")
+            _fact_id(fact_id, "semantic group fact id")
             if (
                 fact_id not in facts
                 or _fact_declaration(declaration, f"group fact {fact_id}")
@@ -854,7 +1181,11 @@ def replay(
             group_facts.add(fact_id)
 
         decisions_raw = group["decisions"]
-        if not isinstance(decisions_raw, list) or not decisions_raw:
+        if (
+            not isinstance(decisions_raw, list)
+            or not decisions_raw
+            or len(decisions_raw) > MAX_RULES
+        ):
             raise PolicyError("semantic group decisions must be a non-empty array")
         decisions: dict[str, dict[str, Any]] = {}
         for decision in decisions_raw:
@@ -869,7 +1200,11 @@ def replay(
             if decision["type"] not in {"choice", "noul", "score"}:
                 raise PolicyError("decision type is invalid")
             outputs = decision["outputs"]
-            if not isinstance(outputs, list) or len(outputs) < 2:
+            if (
+                not isinstance(outputs, list)
+                or len(outputs) < 2
+                or len(outputs) > MAX_RULES
+            ):
                 raise PolicyError("decisions need at least two outputs")
             output_ids: list[str] = []
             for output in outputs:
@@ -888,7 +1223,11 @@ def replay(
                     "Noul decisions require explicit yes and no output ids"
                 )
             rules = decision["rules"]
-            if not isinstance(rules, list) or len(rules) != len(output_ids):
+            if (
+                not isinstance(rules, list)
+                or len(rules) != len(output_ids)
+                or len(rules) > MAX_RULES
+            ):
                 raise PolicyError("decisions require exactly one rule per output")
             rule_outputs: list[str] = []
             for rule in rules:
@@ -902,7 +1241,11 @@ def replay(
             decisions[decision_id] = decision
 
         presentations = group["presentations"]
-        if not isinstance(presentations, list) or not presentations:
+        if (
+            not isinstance(presentations, list)
+            or not presentations
+            or len(presentations) > MAX_PRESENTATIONS
+        ):
             raise PolicyError("semantic group presentations must be non-empty")
         group_receipt_presentations: list[dict[str, Any]] = []
         for presentation in presentations:
@@ -923,6 +1266,8 @@ def replay(
             if presentation_id in seen_presentations:
                 raise PolicyError("presentation ids must be globally unique")
             seen_presentations.add(presentation_id)
+            if len(seen_presentations) > MAX_PRESENTATIONS:
+                raise PolicyError("policy rubric exceeds the presentation bound")
             case_key = _identifier(presentation["case_key"], "presentation case_key")
             if case_key not in cases:
                 raise PolicyError("presentation references an unknown case")
@@ -938,7 +1283,11 @@ def replay(
             for decision_id, binding in question_bindings.items():
                 binding = _exact(
                     binding,
-                    {"question_key", "question_content_sha256"},
+                    {
+                        "question_key",
+                        "question_content_sha256",
+                        "output_option_indices",
+                    },
                     "question binding",
                 )
                 question = _question(
@@ -948,6 +1297,23 @@ def replay(
                     raise PolicyError("question binding content hash mismatch")
                 if question.get("decision_type") != decisions[decision_id]["type"]:
                     raise PolicyError("question and policy decision types disagree")
+                question_identity = (case_key, question["question_key"])
+                if question_identity in bound_questions:
+                    raise PolicyError("panel question is reused by multiple decisions")
+                bound_questions.add(question_identity)
+                option_indices = binding["output_option_indices"]
+                output_order = decisions[decision_id]["order"]
+                if (
+                    not isinstance(option_indices, dict)
+                    or set(option_indices) != set(output_order)
+                    or any(type(index) is not int for index in option_indices.values())
+                    or [option_indices[output] for output in output_order]
+                    != list(range(len(output_order)))
+                    or len(question.get("options", [])) != len(output_order)
+                ):
+                    raise PolicyError(
+                        "output_option_indices must bijectively follow question option order"
+                    )
                 questions[decision_id] = question
 
             views = _exact(
@@ -1080,8 +1446,7 @@ def replay(
                 )
                 transition = classify_transition(resolved["full"], resolved["removed"])
                 if (
-                    ablation["required_transition"]
-                    not in {"label_flip", "resolution_loss"}
+                    ablation["required_transition"] != "resolution_loss"
                     or transition != ablation["required_transition"]
                 ):
                     raise PolicyError(
@@ -1101,6 +1466,17 @@ def replay(
                     raise PolicyError(
                         "distractor-only evidence reproduces the full result"
                     )
+                selected_index = question_bindings[decision_id][
+                    "output_option_indices"
+                ][resolved["full"].output]
+                _validate_causal_proof(
+                    case,
+                    question,
+                    remove,
+                    resolved["full"],
+                    resolved["removed"],
+                    selected_index,
+                )
                 for subset_size in range(len(remove)):
                     for subset in combinations(remove, subset_size):
                         subset_env = _fact_environment(
@@ -1130,7 +1506,9 @@ def replay(
                     {
                         "decision_id": decision_id,
                         "views": {
-                            name: _result_json(result)
+                            name: _result_json(
+                                result, question, question_bindings[decision_id]
+                            )
                             for name, result in sorted(resolved.items())
                         },
                         "transition": transition,
@@ -1161,6 +1539,8 @@ def replay(
                 ),
             }
         )
+    if bound_questions != panel_questions:
+        raise PolicyError("rubric must bind every panel question exactly once")
     _validate_hebrew(groups, cases, twin_traces)
     receipt: dict[str, Any] = {
         "schema_version": RECEIPT_VERSION,
@@ -1170,11 +1550,69 @@ def replay(
             "rubric_sha256": rubric_sha256,
             "evaluator_sha256": evaluator_sha256,
             "schema_sha256": schema_sha256,
+            "adjudication_receipt_sha256": sorted(adjudication_receipts),
         },
         "semantic_groups": sorted(receipt_groups, key=lambda item: item["group_id"]),
     }
     receipt["receipt_sha256"] = sha256_json(receipt)
     return receipt
+
+
+def _load_adjudication_receipts(specifications: list[str]) -> dict[str, bytes]:
+    artifacts: dict[str, bytes] = {}
+    if not specifications or len(specifications) > MAX_BINDINGS:
+        raise PolicyError("at least one bounded adjudication receipt is required")
+    for specification in specifications:
+        digest, separator, raw_path = specification.partition("=")
+        if not separator:
+            raise PolicyError("adjudication receipts must use SHA256=PATH")
+        digest = _sha(digest, "adjudication receipt CLI hash")
+        path = Path(raw_path)
+        if (
+            not raw_path
+            or path.is_symlink()
+            or not path.is_file()
+            or path.stat().st_size == 0
+            or path.stat().st_size > MAX_RECEIPT_ARTIFACT_BYTES
+        ):
+            raise PolicyError("adjudication receipt must be a bounded regular file")
+        payload = path.read_bytes()
+        if sha256_bytes(payload) != digest or digest in artifacts:
+            raise PolicyError("adjudication receipt CLI hash mismatch or duplicate")
+        artifacts[digest] = payload
+    return artifacts
+
+
+def _write_exclusive_atomic(path: Path, payload: bytes) -> None:
+    if path.exists() or path.is_symlink():
+        raise PolicyError("output already exists; refusing to overwrite")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise PolicyError("output parent must be a real directory")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = -1
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except FileExistsError as exc:
+        raise PolicyError("output already exists; refusing to overwrite") from exc
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1188,6 +1626,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--schema", type=Path, required=True)
     parser.add_argument("--schema-sha256", required=True)
     parser.add_argument("--evaluator-sha256", required=True)
+    parser.add_argument(
+        "--adjudication-receipt",
+        action="append",
+        required=True,
+        metavar="SHA256=PATH",
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -1224,11 +1668,11 @@ def main(argv: list[str] | None = None) -> int:
             rubric_sha256=rubric_hash,
             evaluator_sha256=evaluator_hash,
             schema_sha256=schema_hash,
+            adjudication_receipts=_load_adjudication_receipts(
+                args.adjudication_receipt
+            ),
         )
-        if args.output.exists() or args.output.is_symlink():
-            raise PolicyError("output already exists; refusing to overwrite")
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_bytes(canonical_json(receipt))
+        _write_exclusive_atomic(args.output, canonical_json(receipt))
     except (OSError, PolicyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

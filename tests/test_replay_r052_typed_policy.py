@@ -7,10 +7,31 @@ import pytest
 from scripts import replay_r052_typed_policy as replay
 
 ZERO = "0" * 64
+ADJUDICATION_BYTES = b"independent pre-question adjudication receipt"
+ADJUDICATION_SHA256 = replay.sha256_bytes(ADJUDICATION_BYTES)
 
 
 def _hash_text(text: str) -> str:
     return replay.sha256_bytes(text.encode())
+
+
+def _set_causal_proof(case, question, option_index=0):
+    full = {"status": "resolved", "option_index": option_index}
+    removed = {"status": "unresolved"}
+    decisive = question["decisive_chunk_keys"]
+    question["causal_proof"] = {
+        "kind": "causal_annotation",
+        "removed_chunk_keys": decisive,
+        "full_context_sha256": replay._causal_context_sha256(case, question, set()),
+        "removed_context_sha256": replay._causal_context_sha256(
+            case, question, set(decisive)
+        ),
+        "full_outcome_sha256": replay.sha256_json(full),
+        "removed_outcome_sha256": replay.sha256_json(removed),
+        "full_outcome": full,
+        "removed_outcome": removed,
+        "changed_fields": ["status", "option_index"],
+    }
 
 
 def _fixture():
@@ -103,7 +124,7 @@ def _fixture():
     ledger = {
         "schema_version": replay.LEDGER_VERSION,
         "panel_sha256": panel_hash,
-        "facts": {"f.9f3a": {"type": "boolean", "unit": None}},
+        "facts": {"f0001": {"type": "boolean", "unit": None}},
         "bindings": [
             {
                 "case_key": "case.en",
@@ -111,7 +132,7 @@ def _fixture():
                 "chunk_content_sha256": chunks[1]["content_sha256"],
                 "observations": [
                     {
-                        "fact": "f.9f3a",
+                        "fact": "f0001",
                         "value": True,
                         "locator": {
                             "kind": "text_span",
@@ -121,12 +142,12 @@ def _fixture():
                         },
                     }
                 ],
-                "adjudication_receipt_sha256": "1" * 64,
+                "adjudication_receipt_sha256": ADJUDICATION_SHA256,
             }
         ],
     }
     ledger_hash = replay.sha256_json(ledger)
-    fact = {"op": "fact", "id": "f.9f3a"}
+    fact = {"op": "fact", "id": "f0001"}
     yes = {"op": "const", "type": "boolean", "unit": None, "value": True}
     no = {"op": "const", "type": "boolean", "unit": None, "value": False}
     rubric = {
@@ -136,7 +157,7 @@ def _fixture():
         "semantic_groups": [
             {
                 "group_id": "g.permit",
-                "facts": {"f.9f3a": {"type": "boolean", "unit": None}},
+                "facts": {"f0001": {"type": "boolean", "unit": None}},
                 "decisions": [
                     {
                         "decision_id": "d.permit",
@@ -166,6 +187,7 @@ def _fixture():
                             "d.permit": {
                                 "question_key": "q.permit",
                                 "question_content_sha256": question["content_sha256"],
+                                "output_option_indices": {"yes": 0, "no": 1},
                             }
                         },
                         "views": {
@@ -188,6 +210,7 @@ def _fixture():
             }
         ],
     }
+    _set_causal_proof(panel["cases"][0], question)
     return panel, ledger, rubric
 
 
@@ -203,13 +226,19 @@ def _seal(panel, ledger, rubric):
         "ledger_sha256": ledger_hash,
         "rubric_sha256": rubric_hash,
         "evaluator_sha256": "e" * 64,
-        "schema_sha256": "a" * 64,
+        "schema_sha256": replay.EXPECTED_SCHEMA_SHA256,
     }
 
 
 def _run(values=None):
     panel, ledger, rubric = values or _fixture()
-    return replay.replay(panel, ledger, rubric, **_seal(panel, ledger, rubric))
+    return replay.replay(
+        panel,
+        ledger,
+        rubric,
+        **_seal(panel, ledger, rubric),
+        adjudication_receipts={ADJUDICATION_SHA256: ADJUDICATION_BYTES},
+    )
 
 
 def test_happy_path_receipt_is_deterministic_and_missing_noul_is_never_false():
@@ -219,6 +248,14 @@ def test_happy_path_receipt_is_deterministic_and_missing_noul_is_never_false():
     assert first == second
     trace = first["semantic_groups"][0]["presentations"][0]["decisions"][0]
     assert trace["transition"] == "resolution_loss"
+    assert trace["views"]["full"]["selected_option"] == {
+        "question_key": "q.permit",
+        "question_content_sha256": values[0]["cases"][0]["questions"][0][
+            "content_sha256"
+        ],
+        "index": 0,
+        "text": "Yes",
+    }
     assert trace["views"]["removed"]["status"] == "unresolved"
     assert [item["truth"] for item in trace["views"]["removed"]["rules"]] == [
         "missing",
@@ -234,6 +271,7 @@ def test_unknown_competing_choice_and_multiple_true_fail_closed():
     decision["type"] = "choice"
     question = panel["cases"][0]["questions"][0]
     question["decision_type"] = "choice"
+    question["options"].append("Maybe")
     question["content_sha256"] = replay.sha256_json(
         {
             key: question[key]
@@ -243,19 +281,21 @@ def test_unknown_competing_choice_and_multiple_true_fail_closed():
     rubric["semantic_groups"][0]["presentations"][0]["question_bindings"]["d.permit"][
         "question_content_sha256"
     ] = question["content_sha256"]
+    rubric["semantic_groups"][0]["presentations"][0]["question_bindings"]["d.permit"][
+        "output_option_indices"
+    ] = {"yes": 0, "no": 1, "maybe": 2}
+    _set_causal_proof(panel["cases"][0], question)
     decision["outputs"].append({"id": "maybe", "label": "Maybe"})
     decision["order"].append("maybe")
-    decision["rules"].append(
-        {"output": "maybe", "when": {"op": "fact", "id": "f.absent"}}
-    )
-    rubric["semantic_groups"][0]["facts"]["f.absent"] = {
+    decision["rules"].append({"output": "maybe", "when": {"op": "fact", "id": "f0002"}})
+    rubric["semantic_groups"][0]["facts"]["f0002"] = {
         "type": "boolean",
         "unit": None,
     }
-    ledger["facts"]["f.absent"] = {"type": "boolean", "unit": None}
+    ledger["facts"]["f0002"] = {"type": "boolean", "unit": None}
     ledger["bindings"][0]["observations"].append(
         {
-            "fact": "f.absent",
+            "fact": "f0002",
             "value": False,
             "locator": {
                 "kind": "text_span",
@@ -273,7 +313,7 @@ def test_unknown_competing_choice_and_multiple_true_fail_closed():
             "chunk_key": "c.distractor",
             "chunk_content_sha256": panel["cases"][0]["chunks"][2]["content_sha256"],
             "observations": [competing],
-            "adjudication_receipt_sha256": "2" * 64,
+            "adjudication_receipt_sha256": ADJUDICATION_SHA256,
         }
     )
     with pytest.raises(replay.PolicyError, match="decisive-only"):
@@ -325,6 +365,7 @@ def test_duplicate_support_conflict_and_nonminimal_removal_are_rejected():
     presentation["views"]["decisive_only"] = ["c.policy", "c.decisive", "c.distractor"]
     presentation["views"]["distractor_only"] = ["c.policy"]
     presentation["ablations"][0]["remove_chunk_keys"].append("c.distractor")
+    _set_causal_proof(panel["cases"][0], question)
     with pytest.raises(replay.PolicyError, match="inclusion-minimal"):
         _run((panel, ledger, rubric))
 
@@ -409,6 +450,7 @@ def test_question_hash_tamper_hebrew_drift_image_leakage_and_policy_removal():
             "twin_group_key": "t",
             "chunks": [
                 {
+                    "chunk_key": "c.he",
                     "twin_anchor": "c",
                     "kind": "evidence",
                     "modality": "text",
@@ -431,6 +473,7 @@ def test_question_hash_tamper_hebrew_drift_image_leakage_and_policy_removal():
             "twin_group_key": "t",
             "chunks": [
                 {
+                    "chunk_key": "c.en",
                     "twin_anchor": "c",
                     "kind": "evidence",
                     "modality": "text",
@@ -456,19 +499,47 @@ def test_question_hash_tamper_hebrew_drift_image_leakage_and_policy_removal():
                 {
                     "presentation_id": "p.he",
                     "case_key": "he",
-                    "question_bindings": {"d": {"question_key": "q"}},
+                    "views": {
+                        name: ["c.he"]
+                        for name in (
+                            "full",
+                            "removed",
+                            "decisive_only",
+                            "distractor_only",
+                        )
+                    },
+                    "question_bindings": {
+                        "d": {
+                            "question_key": "q",
+                            "output_option_indices": {"yes": 0, "no": 1},
+                        }
+                    },
                 },
                 {
                     "presentation_id": "p.en",
                     "case_key": "en",
-                    "question_bindings": {"d": {"question_key": "q"}},
+                    "views": {
+                        name: ["c.en"]
+                        for name in (
+                            "full",
+                            "removed",
+                            "decisive_only",
+                            "distractor_only",
+                        )
+                    },
+                    "question_bindings": {
+                        "d": {
+                            "question_key": "q",
+                            "output_option_indices": {"yes": 0, "no": 1},
+                        }
+                    },
                 },
             ],
         }
     ]
     traces = {
-        ("g", "p.he"): {"full_fact_state": {}},
-        ("g", "p.en"): {"full_fact_state": {}},
+        ("g", "p.he"): {"fact_states": {}, "decisions": []},
+        ("g", "p.en"): {"fact_states": {}, "decisions": []},
     }
     with pytest.raises(replay.PolicyError, match="semantic anchors drift"):
         replay._validate_hebrew(groups, cases, traces)
@@ -478,13 +549,13 @@ def test_question_hash_tamper_hebrew_drift_image_leakage_and_policy_removal():
             {
                 "chunk_key": "real",
                 "text": "neutral",
-                "media": {},
+                "media": {"sha256": "1" * 64},
                 "image_control": {"group_key": "i", "variant": "real"},
             },
             {
                 "chunk_key": "shuffle",
                 "text": "neutral",
-                "media": {},
+                "media": {"sha256": "2" * 64},
                 "image_control": {"group_key": "i", "variant": "shuffled"},
             },
             {
@@ -516,7 +587,7 @@ def test_duplicate_nonfinite_noncanonical_extra_keys_and_depth_are_rejected():
         _run((panel, ledger, rubric))
 
     panel, ledger, rubric = _fixture()
-    node = {"op": "fact", "id": "f.9f3a"}
+    node = {"op": "fact", "id": "f0001"}
     for _ in range(replay.MAX_AST_DEPTH):
         node = {"op": "not", "arg": node}
     rubric["semantic_groups"][0]["decisions"][0]["rules"][0]["when"] = node
@@ -526,14 +597,337 @@ def test_duplicate_nonfinite_noncanonical_extra_keys_and_depth_are_rejected():
 
 def test_fact_ids_are_question_blind_and_text_spans_are_exact():
     panel, ledger, rubric = _fixture()
-    ledger["facts"]["correct_answer"] = ledger["facts"].pop("f.9f3a")
-    with pytest.raises(replay.PolicyError, match="question-blind"):
+    ledger["facts"]["correct_answer"] = ledger["facts"].pop("f0001")
+    with pytest.raises(replay.PolicyError, match=r"f\[0-9\]"):
         _run((panel, ledger, rubric))
 
     panel, ledger, rubric = _fixture()
     ledger["bindings"][0]["observations"][0]["locator"]["span_sha256"] = ZERO
     with pytest.raises(replay.PolicyError, match="text span hash mismatch"):
         _run((panel, ledger, rubric))
+
+
+def test_question_coverage_is_an_exact_bijection():
+    panel, ledger, rubric = _fixture()
+    extra = deepcopy(panel["cases"][0]["questions"][0])
+    extra["question_key"] = "q.unbound"
+    extra["twin_anchor"] = "permit-extra"
+    panel["cases"][0]["questions"].append(extra)
+    with pytest.raises(replay.PolicyError, match="every panel question exactly once"):
+        _run((panel, ledger, rubric))
+
+    panel, ledger, rubric = _fixture()
+    duplicate = deepcopy(rubric["semantic_groups"][0]["presentations"][0])
+    duplicate["presentation_id"] = "p.duplicate"
+    rubric["semantic_groups"][0]["presentations"].append(duplicate)
+    with pytest.raises(replay.PolicyError, match="reused"):
+        _run((panel, ledger, rubric))
+
+
+def test_option_mapping_causal_proof_and_resolution_loss_are_authoritative():
+    panel, ledger, rubric = _fixture()
+    binding = rubric["semantic_groups"][0]["presentations"][0]["question_bindings"][
+        "d.permit"
+    ]
+    binding["output_option_indices"] = {"yes": 1, "no": 0}
+    with pytest.raises(replay.PolicyError, match="option order"):
+        _run((panel, ledger, rubric))
+
+    panel, ledger, rubric = _fixture()
+    question = panel["cases"][0]["questions"][0]
+    question["causal_proof"]["full_outcome"] = {
+        "status": "resolved",
+        "option_index": 1,
+    }
+    question["causal_proof"]["full_outcome_sha256"] = replay.sha256_json(
+        question["causal_proof"]["full_outcome"]
+    )
+    with pytest.raises(replay.PolicyError, match="contradicts authoritative replay"):
+        _run((panel, ledger, rubric))
+
+    panel, ledger, rubric = _fixture()
+    rubric["semantic_groups"][0]["presentations"][0]["ablations"][0][
+        "required_transition"
+    ] = "label_flip"
+    with pytest.raises(replay.PolicyError, match="required causal transition"):
+        _run((panel, ledger, rubric))
+
+
+def test_receipt_artifacts_immutability_and_policy_binding_fail_closed():
+    panel, ledger, rubric = _fixture()
+    hashes = _seal(panel, ledger, rubric)
+    with pytest.raises(replay.PolicyError, match="no supplied artifact"):
+        replay.replay(
+            panel,
+            ledger,
+            rubric,
+            **hashes,
+            adjudication_receipts={},
+        )
+    with pytest.raises(replay.PolicyError, match="bytes/hash"):
+        replay.replay(
+            panel,
+            ledger,
+            rubric,
+            **hashes,
+            adjudication_receipts={ADJUDICATION_SHA256: b"tampered"},
+        )
+
+    panel, ledger, rubric = _fixture()
+    panel["cases"][0]["chunks"][2]["immutable"] = True
+    with pytest.raises(replay.PolicyError, match="true iff"):
+        _run((panel, ledger, rubric))
+
+    panel, ledger, rubric = _fixture()
+    policy = panel["cases"][0]["chunks"][0]
+    binding = ledger["bindings"][0]
+    binding["chunk_key"] = policy["chunk_key"]
+    binding["chunk_content_sha256"] = policy["content_sha256"]
+    with pytest.raises(replay.PolicyError, match="policy chunks cannot bind"):
+        _run((panel, ledger, rubric))
+
+
+def _image_control_case():
+    image_chunks = [
+        {
+            "chunk_key": "real",
+            "text": "neutral",
+            "modality": "image",
+            "media": {"sha256": "1" * 64},
+            "image_control": {"group_key": "i", "variant": "real"},
+        },
+        {
+            "chunk_key": "shuffle",
+            "text": "neutral",
+            "modality": "image",
+            "media": {"sha256": "2" * 64},
+            "image_control": {"group_key": "i", "variant": "shuffled"},
+        },
+        {
+            "chunk_key": "missing",
+            "text": "neutral",
+            "modality": "image",
+            "media": None,
+            "image_control": {"group_key": "i", "variant": "missing"},
+        },
+    ]
+    text_chunks = [
+        {
+            "chunk_key": f"t{index}",
+            "text": f"distractor {index}",
+            "modality": "text",
+            "media": None,
+            "image_control": None,
+        }
+        for index in range(5)
+    ]
+    return {
+        "chunks": image_chunks + text_chunks,
+        "questions": [
+            {
+                "decisive_chunk_keys": ["real"],
+                "known_distractor_chunk_keys": [
+                    "shuffle",
+                    "missing",
+                    *[f"t{index}" for index in range(5)],
+                ],
+            }
+        ],
+    }
+
+
+def test_image_controls_enforce_distinct_media_single_question_and_text_controls():
+    case = _image_control_case()
+    replay._validate_images({"case": case}, [])
+
+    same_media = deepcopy(case)
+    same_media["chunks"][1]["media"]["sha256"] = "1" * 64
+    with pytest.raises(replay.PolicyError, match="distinct media"):
+        replay._validate_images({"case": same_media}, [])
+
+    duplicate_question = deepcopy(case)
+    duplicate_question["questions"].append(deepcopy(case["questions"][0]))
+    with pytest.raises(replay.PolicyError, match="exactly one causal question"):
+        replay._validate_images({"case": duplicate_question}, [])
+
+    too_few = deepcopy(case)
+    too_few["questions"][0]["known_distractor_chunk_keys"] = [
+        "shuffle",
+        "missing",
+        "t0",
+    ]
+    with pytest.raises(replay.PolicyError, match="five text distractors"):
+        replay._validate_images({"case": too_few}, [])
+
+
+def test_hebrew_twins_compare_option_evidence_environment_and_replay_traces():
+    def twin_case(language, suffix):
+        return {
+            "language": language,
+            "twin_group_key": "twin",
+            "chunks": [
+                {
+                    "chunk_key": f"c.{suffix}",
+                    "twin_anchor": "evidence",
+                    "kind": "evidence",
+                    "modality": "text",
+                    "immutable": False,
+                    "image_control": None,
+                }
+            ],
+            "questions": [
+                {
+                    "question_key": f"q.{suffix}",
+                    "twin_anchor": "question",
+                    "decision_type": "noul",
+                    "policy_role": "role",
+                    "options": ["yes", "no"],
+                    "decisive_chunk_keys": [f"c.{suffix}"],
+                    "known_distractor_chunk_keys": [],
+                }
+            ],
+        }
+
+    cases = {"he": twin_case("he", "he"), "en": twin_case("en", "en")}
+    views = {
+        name: ["c.he"]
+        for name in ("full", "removed", "decisive_only", "distractor_only")
+    }
+    presentations = [
+        {
+            "presentation_id": "p.he",
+            "case_key": "he",
+            "views": views,
+            "question_bindings": {
+                "d": {
+                    "question_key": "q.he",
+                    "output_option_indices": {"yes": 0, "no": 1},
+                }
+            },
+        },
+        {
+            "presentation_id": "p.en",
+            "case_key": "en",
+            "views": {name: ["c.en"] for name in views},
+            "question_bindings": {
+                "d": {
+                    "question_key": "q.en",
+                    "output_option_indices": {"yes": 0, "no": 1},
+                }
+            },
+        },
+    ]
+    groups = [{"group_id": "g", "presentations": presentations}]
+    result = {
+        "status": "resolved",
+        "output": "yes",
+        "selected_option": {"index": 0},
+        "rules": [],
+    }
+    decision = {
+        "decision_id": "d",
+        "transition": "resolution_loss",
+        "views": {"full": result},
+    }
+    traces = {
+        ("g", "p.he"): {"fact_states": {"full": {}}, "decisions": [decision]},
+        ("g", "p.en"): {
+            "fact_states": {"full": {}},
+            "decisions": [deepcopy(decision)],
+        },
+    }
+    replay._validate_hebrew(groups, cases, traces)
+
+    option_drift = deepcopy(groups)
+    option_drift[0]["presentations"][1]["question_bindings"]["d"][
+        "output_option_indices"
+    ] = {"yes": 1, "no": 0}
+    with pytest.raises(replay.PolicyError, match="option index mappings drift"):
+        replay._validate_hebrew(option_drift, cases, traces)
+
+    evidence_drift = deepcopy(cases)
+    evidence_drift["en"]["questions"][0]["decisive_chunk_keys"] = []
+    with pytest.raises(replay.PolicyError, match="evidence anchor mappings drift"):
+        replay._validate_hebrew(groups, evidence_drift, traces)
+
+    environment_drift = deepcopy(traces)
+    environment_drift[("g", "p.en")]["fact_states"] = {"full": {"f0001": {}}}
+    with pytest.raises(replay.PolicyError, match="view fact values"):
+        replay._validate_hebrew(groups, cases, environment_drift)
+
+    trace_drift = deepcopy(traces)
+    trace_drift[("g", "p.en")]["decisions"][0]["views"]["full"]["output"] = "no"
+    with pytest.raises(replay.PolicyError, match="replay traces drift"):
+        replay._validate_hebrew(groups, cases, trace_drift)
+
+
+def test_duplicate_twin_anchors_are_rejected():
+    panel, ledger, rubric = _fixture()
+    panel["cases"][0]["chunks"][1]["twin_anchor"] = "duplicate"
+    panel["cases"][0]["chunks"][2]["twin_anchor"] = "duplicate"
+    with pytest.raises(replay.PolicyError, match="duplicate chunk twin anchors"):
+        _run((panel, ledger, rubric))
+
+
+def test_json_and_collection_bounds_and_recursion_are_fail_closed(monkeypatch):
+    with pytest.raises(replay.PolicyError, match="integer exceeds"):
+        replay.parse_canonical_json(
+            ('{"n":' + "9" * (replay.MAX_INTEGER_DIGITS + 1) + "}\n").encode(),
+            "huge integer",
+        )
+
+    nested = "0"
+    for _ in range(replay.MAX_JSON_DEPTH + 1):
+        nested = f"[{nested}]"
+    with pytest.raises(replay.PolicyError, match="depth bound|valid UTF-8 JSON"):
+        replay.parse_canonical_json((nested + "\n").encode(), "deep")
+
+    monkeypatch.setattr(replay, "MAX_JSON_NODES", 2)
+    with pytest.raises(replay.PolicyError, match="node bound"):
+        replay.parse_canonical_json(b'{"a":1,"b":2}\n', "wide")
+    monkeypatch.setattr(replay, "MAX_JSON_NODES", 1_000_000)
+    monkeypatch.setattr(replay, "MAX_JSON_OBJECTS", 1)
+    with pytest.raises(replay.PolicyError, match="object bound"):
+        replay.parse_canonical_json(b'{"a":{}}\n', "objects")
+    monkeypatch.setattr(replay, "MAX_JSON_OBJECTS", 200_000)
+    panel, ledger, rubric = _fixture()
+    monkeypatch.setattr(replay, "MAX_RULES", 1)
+    with pytest.raises(replay.PolicyError, match="outputs|rules"):
+        _run((panel, ledger, rubric))
+    monkeypatch.setattr(replay, "MAX_RULES", 64)
+    monkeypatch.setattr(replay, "MAX_BINDINGS", 2)
+    with pytest.raises(replay.PolicyError, match="collection bounds"):
+        _run(_fixture())
+    monkeypatch.setattr(replay, "MAX_BINDINGS", 100_000)
+    monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 0)
+    with pytest.raises(replay.PolicyError, match="case count"):
+        _run(_fixture())
+    monkeypatch.setattr(replay, "MAX_PRESENTATIONS", 20_000)
+    monkeypatch.setattr(replay, "MAX_INPUT_BYTES", 2)
+    with pytest.raises(replay.PolicyError, match="input byte bound"):
+        replay.parse_canonical_json(b"{}\n", "oversized")
+    monkeypatch.setattr(replay, "MAX_INPUT_BYTES", 128 * 1024 * 1024)
+    monkeypatch.setattr(
+        replay.json,
+        "loads",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RecursionError()),
+    )
+    with pytest.raises(replay.PolicyError, match="valid UTF-8 JSON"):
+        replay.parse_canonical_json(b"{}\n", "recursive")
+
+
+def test_schema_hash_is_hard_bound():
+    panel, ledger, rubric = _fixture()
+    hashes = _seal(panel, ledger, rubric)
+    hashes["schema_sha256"] = "a" * 64
+    with pytest.raises(replay.PolicyError, match="frozen schema"):
+        replay.replay(
+            panel,
+            ledger,
+            rubric,
+            **hashes,
+            adjudication_receipts={ADJUDICATION_SHA256: ADJUDICATION_BYTES},
+        )
 
 
 def test_cli_requires_external_hashes_and_never_overwrites(tmp_path):
@@ -546,6 +940,8 @@ def test_cli_requires_external_hashes_and_never_overwrites(tmp_path):
         paths[name] = path
     schema = Path("sources/r052/policy_replay.schema.json")
     evaluator = Path(replay.__file__)
+    adjudication = tmp_path / "adjudication.txt"
+    adjudication.write_bytes(ADJUDICATION_BYTES)
     output = tmp_path / "receipt.json"
     argv = [
         "--panel",
@@ -566,9 +962,18 @@ def test_cli_requires_external_hashes_and_never_overwrites(tmp_path):
         replay.sha256_bytes(schema.read_bytes()),
         "--evaluator-sha256",
         replay.sha256_bytes(evaluator.read_bytes()),
+        "--adjudication-receipt",
+        f"{ADJUDICATION_SHA256}={adjudication}",
         "--output",
         str(output),
     ]
     assert replay.main(argv) == 0
     assert replay.parse_canonical_json(output.read_bytes(), "receipt")["receipt_sha256"]
     assert replay.main(argv) == 2
+    target = tmp_path / "target.txt"
+    target.write_text("unchanged")
+    symlink_output = tmp_path / "symlink-output.json"
+    symlink_output.symlink_to(target)
+    argv[-1] = str(symlink_output)
+    assert replay.main(argv) == 2
+    assert target.read_text() == "unchanged"
