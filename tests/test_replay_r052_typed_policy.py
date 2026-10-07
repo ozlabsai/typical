@@ -1092,6 +1092,39 @@ def test_runtime_and_schema_group_bounds_match_and_maximum_is_valid():
     assert len(receipt["semantic_groups"]) == replay.MAX_GROUPS
 
 
+def test_replay_work_budget_rejects_max_product_but_minimum_passes():
+    panel, ledger, rubric = _fixture()
+    cases, _ = replay._panel_index(panel)
+    replay._validate_replay_work_budget(rubric["semantic_groups"], cases)
+    assert _run((panel, ledger, rubric))["semantic_groups"]
+
+    maximal = deepcopy(rubric["semantic_groups"][0])
+    maximal["facts"] = {
+        f"f{index:04d}": {"type": "boolean", "unit": None}
+        for index in range(replay.MAX_FACTS)
+    }
+    presentation = maximal["presentations"][0]
+    maximal["presentations"] = [presentation] * replay.MAX_PRESENTATIONS
+    with pytest.raises(replay.PolicyError, match="derived-work budget"):
+        replay._validate_replay_work_budget([maximal], cases)
+
+
+def test_fact_environments_are_scoped_to_semantic_group_declarations():
+    declarations = {"f0001": ("boolean", None)}
+    index = {
+        "case": {
+            "chunk": (
+                ("f0001", replay.TypedValue("boolean", None, True)),
+                ("f0002", replay.TypedValue("boolean", None, False)),
+            )
+        }
+    }
+    environment = replay._fact_environment(declarations, index, "case", {"chunk"})
+    assert environment == {
+        "f0001": replay.TypedValue("boolean", None, True),
+    }
+
+
 def test_cli_requires_external_hashes_and_never_overwrites(tmp_path):
     panel, ledger, rubric = _fixture()
     hashes = _seal(panel, ledger, rubric)

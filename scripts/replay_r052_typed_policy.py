@@ -61,8 +61,10 @@ MAX_BINDINGS = 16_384
 MAX_GROUPS = 64
 MAX_PRESENTATIONS = 2_048
 MAX_RULES = 32
+MAX_REPLAY_WORK_UNITS = 2_000_000
+MAX_CACHED_ENVIRONMENT_ENTRIES = 4 * MAX_FACTS
 EXPECTED_SCHEMA_SHA256 = (
-    "cc9207f950a52d20b296dba3d0d06770eebe3f52f5ce2d6cfa50d542568c03a8"
+    "5054b4cc025aff8f298d0bc818786862622737d03f3bb32c34fb79ba81d1f56c"
 )
 
 
@@ -639,7 +641,8 @@ def _fact_environment(
     by_chunk = observation_index.get(case_key, {})
     for chunk_key in visible_chunks:
         for fact_id, value in by_chunk.get(chunk_key, ()):
-            values[fact_id].append(value)
+            if fact_id in values:
+                values[fact_id].append(value)
     environment: dict[str, TypedValue | Signal] = {}
     for fact_id, candidates in values.items():
         if not candidates:
@@ -672,6 +675,61 @@ def _index_observations(
         case_key: {chunk_key: tuple(values) for chunk_key, values in chunks.items()}
         for case_key, chunks in mutable.items()
     }
+
+
+def _validate_replay_work_budget(
+    groups: list[Any], cases: dict[str, dict[str, Any]]
+) -> None:
+    """Reject multiplicative replay shapes before evaluating any policy rule."""
+    work_units = 0
+    for group in groups:
+        if not isinstance(group, dict):
+            raise PolicyError("semantic groups must be objects")
+        facts = group.get("facts")
+        presentations = group.get("presentations")
+        if not isinstance(facts, dict) or not isinstance(presentations, list):
+            raise PolicyError("semantic group work shape is invalid")
+        fact_count = len(facts)
+        for presentation in presentations:
+            if not isinstance(presentation, dict):
+                raise PolicyError("presentations must be objects")
+            case = cases.get(presentation.get("case_key"))
+            question_bindings = presentation.get("question_bindings")
+            ablations = presentation.get("ablations")
+            if (
+                case is None
+                or not isinstance(question_bindings, dict)
+                or not isinstance(ablations, list)
+            ):
+                raise PolicyError("presentation work shape is invalid")
+            for ablation in ablations:
+                if not isinstance(ablation, dict):
+                    raise PolicyError("ablations must be objects")
+                decision_id = ablation.get("decision_id")
+                binding = question_bindings.get(decision_id)
+                remove = ablation.get("remove_chunk_keys")
+                if not isinstance(binding, dict) or not isinstance(remove, list):
+                    raise PolicyError("ablation work shape is invalid")
+                question_key = binding.get("question_key")
+                matches = [
+                    question
+                    for question in case["questions"]
+                    if isinstance(question, dict)
+                    and question.get("question_key") == question_key
+                ]
+                if len(matches) != 1:
+                    raise PolicyError(
+                        "ablation work question must resolve exactly once"
+                    )
+                distractors = matches[0].get("known_distractor_chunk_keys")
+                if not isinstance(distractors, list):
+                    raise PolicyError("question distractor work shape is invalid")
+                # Four frozen views plus each immediate-subset and distractor check.
+                work_units += fact_count * (4 + len(remove) + len(distractors))
+                if work_units > MAX_REPLAY_WORK_UNITS:
+                    raise PolicyError(
+                        "policy replay exceeds the total derived-work budget"
+                    )
 
 
 def _as_bool(value: Any) -> bool | Signal:
@@ -1208,7 +1266,6 @@ def replay(
     facts, bindings = validate_ledger(
         ledger, panel, panel_sha256, adjudication_receipts
     )
-    observation_index = _index_observations(facts, bindings)
     cases, _ = _panel_index(panel)
     _validate_images(cases, bindings)
     rubric = _exact(
@@ -1225,6 +1282,8 @@ def replay(
     groups = rubric["semantic_groups"]
     if not isinstance(groups, list) or not groups or len(groups) > MAX_GROUPS:
         raise PolicyError("policy rubric semantic_groups must be non-empty")
+    _validate_replay_work_budget(groups, cases)
+    observation_index = _index_observations(facts, bindings)
     panel_questions = {
         (case_key, question["question_key"])
         for case_key, case in cases.items()
@@ -1263,6 +1322,7 @@ def replay(
                     "semantic group fact declarations must exactly match the ledger"
                 )
             group_facts.add(fact_id)
+        group_fact_declarations = {fact_id: facts[fact_id] for fact_id in group_facts}
 
         decisions_raw = group["decisions"]
         if (
@@ -1425,15 +1485,27 @@ def replay(
             def environment_for(
                 chunk_keys: set[str],
                 *,
+                cache: bool = True,
                 _cache: dict[
                     frozenset[str], dict[str, TypedValue | Signal]
                 ] = environment_cache,
                 _case_key: str = case_key,
+                _facts: dict[str, tuple[str, str | None]] = group_fact_declarations,
             ) -> dict[str, TypedValue | Signal]:
+                if not cache:
+                    return _fact_environment(
+                        _facts, observation_index, _case_key, chunk_keys
+                    )
                 cache_key = frozenset(chunk_keys)
                 if cache_key not in _cache:
+                    if (len(_cache) + 1) * len(_facts) > (
+                        MAX_CACHED_ENVIRONMENT_ENTRIES
+                    ):
+                        raise PolicyError(
+                            "policy replay exceeds the cached environment state budget"
+                        )
                     _cache[cache_key] = _fact_environment(
-                        facts, observation_index, _case_key, chunk_keys
+                        _facts, observation_index, _case_key, chunk_keys
                     )
                 return _cache[cache_key]
 
@@ -1570,7 +1642,8 @@ def replay(
                 for restored in remove:
                     immediate_removal = remove_set - {restored}
                     subset_result = _resolve(
-                        decision, environment_for(set(full) - immediate_removal)
+                        decision,
+                        environment_for(set(full) - immediate_removal, cache=False),
                     )
                     if (
                         subset_result.status != "resolved"
@@ -1578,7 +1651,7 @@ def replay(
                     ):
                         raise PolicyError("decisive removal is not inclusion-minimal")
                 for distractor in distractors:
-                    without = environment_for(set(full) - {distractor})
+                    without = environment_for(set(full) - {distractor}, cache=False)
                     without_result = _resolve(decision, without)
                     if (
                         without_result.status != resolved["full"].status
