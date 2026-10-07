@@ -25,8 +25,8 @@ from scripts.singleton_option_scorer import validate_runtime_fingerprint
 from scripts.train_gemma_decision_lora import SYSTEM
 
 
-SCHEMA = "r050_protected_retention_receipt_v1"
-COMPLETION_SCHEMA = "r050_protected_retention_completion_v1"
+SCHEMA = "r050_protected_retention_receipt_v2"
+COMPLETION_SCHEMA = "r050_protected_retention_completion_v2"
 ASSET_INVENTORY_SCHEMA = "r050_replay_pools_v1"
 MAX_LENGTH = 8192
 ROWS_PER_SUITE = 128
@@ -34,8 +34,18 @@ SUITES = ("he", "en", "real", "shuffled", "noimage", "mismatch", "gold_dropped")
 MM_SUITES = SUITES[2:]
 NULL_OPTION = "None of the options is supported by the image."
 SOURCE_SHA256 = {
-    "he": "604c99aaf56449fe5f836c4901e4ca400ff2625f0d5edc12aec8e35875e8956a",
-    "en": "4f0b50a65baa20dd3cbbc54e095950b52cb905a16b9a04a998c5debc441a9daa",
+    "he": "c88f816b3fe4a8f27f6406cb8beee35716a8c9bbc7a0cf40425d3ae072370fee",
+    "en": "36d41a4e44e8c75e26a52a13ccaac2642879197a503ad3bf638ea45a98d003a4",
+    "real": "05bc175eed370c6ec28ba6ce06cefbd0e881b516d1cfd3c1b32b7d91bd3fab11",
+    "shuffled": "7f625f23343185eda85d685c30dd2d4dd4f27131c156a0232c377ee7453900cf",
+    "noimage": "a8af9435a9a5d6538dd8c15d05b93031fe1340a0d0ae337123f62875a27455c7",
+    "mismatch": "850bc58e836fa9606b10303c7050fe079e0f063d106f1dd8441f10f0f643df13",
+    "gold_dropped": "05e7684f73aa2a6bf2be45c7bb3c22d7eebcecd6d62438b98b8dc5f7e6915de2",
+}
+# The authenticated replay inventory was built from the complete ScienceQA
+# corpora.  The protected benchmark is the historical 128-row R042/R044
+# subset, so bind its pixels through the corresponding full-corpus entries.
+SCIENCEQA_INVENTORY_SOURCE_SHA256 = {
     "real": "9ac7793c12484c30f01102a4daeac9c16576e48310185d3967b13d91193214c3",
     "shuffled": "604f0df603b20add7cb73c0767df9c5e8dfdf935aa24077554dd8016f3cd2715",
     "noimage": "c20efc463b80d08d687d38794722d8b5abaa1b8554a1146e9bd4c92d497d92e3",
@@ -143,7 +153,7 @@ def validate_sources(paths: dict[str, str | Path], expected_hashes: dict[str, st
                      asset_inventory_path: str | Path,
                      expected_asset_inventory_sha256: str) -> tuple[
                          dict[str, list[dict[str, Any]]], dict[str, Any]]:
-    """Validate literal source anchors, prefix selection, alignment, and image bytes."""
+    """Validate the literal historical 128-row suites, alignment, and pixels."""
     if set(paths) != set(SUITES) or set(expected_hashes) != set(SUITES):
         raise ValueError("source paths and expected hashes must name all seven suites")
     loaded, bindings = {}, {}
@@ -157,9 +167,9 @@ def validate_sources(paths: dict[str, str | Path], expected_hashes: dict[str, st
         if _sha(payload) != SOURCE_SHA256[suite]:
             raise ValueError(f"{suite}: source bytes differ from the literal frozen anchor")
         rows = [_parse(line, f"{suite} row") for line in payload.splitlines() if line.strip()]
-        if len(rows) < ROWS_PER_SUITE:
-            raise ValueError(f"{suite}: source has fewer than 128 rows")
-        selected = rows[:ROWS_PER_SUITE]
+        if len(rows) != ROWS_PER_SUITE:
+            raise ValueError(f"{suite}: historical protected source must contain exactly 128 rows")
+        selected = rows
         for index, row in enumerate(selected):
             _row_schema(row, suite, index)
             if not isinstance(row["meta"].get("pair"), str) or not row["meta"]["pair"]:
@@ -167,7 +177,7 @@ def validate_sources(paths: dict[str, str | Path], expected_hashes: dict[str, st
         loaded[suite] = selected
         bindings[suite] = {"path": str(path.resolve()), "sha256": _sha(payload),
                            "source_rows": len(rows), "selected_rows": ROWS_PER_SUITE,
-                           "selection": "first_128_in_frozen_source_order"}
+                           "selection": "all_rows_in_exact_historical_r042_r044_source"}
     he_ids = [row["meta"]["pair"] for row in loaded["he"]]
     if len(set(he_ids)) != ROWS_PER_SUITE:
         raise ValueError("Hebrew/English pair identities must be unique")
@@ -219,7 +229,7 @@ def validate_sources(paths: dict[str, str | Path], expected_hashes: dict[str, st
     by_source = {entry.get("sha256"): entry for entry in protection if isinstance(entry, dict)}
     image_bindings = {}
     for suite in MM_SUITES:
-        entry = by_source.get(SOURCE_SHA256[suite])
+        entry = by_source.get(SCIENCEQA_INVENTORY_SOURCE_SHA256[suite])
         images = entry.get("images") if isinstance(entry, dict) else None
         expected_files = 0 if suite == "noimage" else FROZEN_SCIENCEQA_IMAGE_TREE_FILES
         expected_tree = (_sha(b"") if suite == "noimage"

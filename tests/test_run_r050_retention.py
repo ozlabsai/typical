@@ -57,6 +57,8 @@ def _source_fixture(tmp_path, monkeypatch):
         path.write_bytes(payload)
         paths[suite], hashes[suite] = path, _sha(payload)
     monkeypatch.setattr(retention, "SOURCE_SHA256", hashes)
+    monkeypatch.setattr(retention, "SCIENCEQA_INVENTORY_SOURCE_SHA256",
+                        {suite: hashes[suite] for suite in retention.MM_SUITES})
     monkeypatch.setattr(retention, "FROZEN_SCIENCEQA_IMAGE_TREE_FILES", 129)
     image_tree = _sha("".join(
         f"{name}\0{digest}\n" for name, digest in sorted(images.items())).encode())
@@ -114,6 +116,16 @@ def test_source_validator_uses_literal_anchors_alignment_and_authenticated_pixel
         retention.validate_sources(paths, hashes, forged, retention.file_hash(forged))
     (image_dir / "0.png").write_bytes(b"changed")
     with pytest.raises(ValueError, match="authenticated inventory"):
+        retention.validate_sources(paths, hashes, inventory, inventory_sha)
+
+
+def test_source_validator_rejects_a_nonhistorical_prefix(tmp_path, monkeypatch):
+    paths, hashes, inventory, inventory_sha, _ = _source_fixture(tmp_path, monkeypatch)
+    he = paths["he"]
+    he.write_bytes(he.read_bytes() + he.read_bytes().splitlines(keepends=True)[0])
+    hashes["he"] = retention.file_hash(he)
+    monkeypatch.setattr(retention, "SOURCE_SHA256", hashes)
+    with pytest.raises(ValueError, match="exactly 128 rows"):
         retention.validate_sources(paths, hashes, inventory, inventory_sha)
 
 
