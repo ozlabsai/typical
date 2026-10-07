@@ -50,7 +50,7 @@ type a base-model or winner path by hand.
 set -euo pipefail
 umask 077
 
-export TYPICAL_REPO=/workspace/g1/r050-ab512c3/repo
+export TYPICAL_REPO=/workspace/g1/typical-eval-985a08e
 export R050_ROOT=/workspace/g1/r050-ab512c3/repo/.context/r050-gpu-run-a77fea5-resume2
 export EVAL_ROOT=/workspace/g1/r050-official-eval-20261007
 export WORKFLOWEVALS=/workspace/g1/WorkflowEvals-0ac3b8ad
@@ -58,6 +58,9 @@ export JEVBENCH=/workspace/g1/jevbench-bb05a335
 
 STATE="$R050_ROOT/state.json"
 COMPLETE="$R050_ROOT/complete.json"
+test "$(git -C "$TYPICAL_REPO" rev-parse HEAD)" = \
+  985a08ef89afd7dbcf0a5716b5c84cc6d97d9cc2
+test -z "$(git -C "$TYPICAL_REPO" status --porcelain)"
 test "$(jq -r .status "$COMPLETE")" = complete
 test "$(jq -c .official_evaluations_run "$COMPLETE")" = '[]'
 
