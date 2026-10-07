@@ -621,6 +621,73 @@ def test_zero_exact_policy_brier_weight_exactly_matches_field_ce_and_gradient(tm
     assert torch.equal(grouped_model.theta.grad, flat_model.theta.grad)
 
 
+def test_exact_policy_component_seam_preserves_field_only_graph(tmp_path):
+    row = exact_policy_row(reverse=True)
+    row["meta"]["decision_threshold"] = 0.5
+    path = tmp_path / "exact-components.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    group, = load_examples([path])
+    groups = [torch.tensor([1]), torch.tensor([2])]
+    component_model, field_model = TinyModel(), TinyModel()
+    field_model.load_state_dict(component_model.state_dict())
+
+    actual, _, _, components = loss_for_examples(
+        component_model, [group], TinyTokenizer(), groups, 100,
+        torch.device("cpu"), shuffle=False, action_loss_weight=0.0,
+        action_temperature=1.0, return_exact_policy_components=True)
+    expected, _, _ = loss_for_examples(
+        field_model, [group], TinyTokenizer(), groups, 100,
+        torch.device("cpu"), shuffle=False, action_loss_weight=0.0,
+        action_temperature=1.0)
+    actual.backward()
+    expected.backward()
+
+    assert set(components) == {"field_ce", "outcome_nll", "outcome_brier"}
+    assert torch.equal(actual, expected)
+    assert torch.equal(actual, components["field_ce"])
+    assert torch.equal(component_model.theta.grad, field_model.theta.grad)
+    assert all(value.requires_grad and torch.isfinite(value)
+               for value in components.values())
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda kwargs: kwargs.__setitem__("action_loss_weight", 0.1),
+         "zero action loss weight"),
+        (lambda kwargs: kwargs.__setitem__("return_components", True),
+         "mutually exclusive"),
+    ],
+)
+def test_exact_policy_component_seam_fails_closed(tmp_path, mutate, message):
+    row = exact_policy_row()
+    row["meta"]["decision_threshold"] = 0.5
+    path = tmp_path / "exact-components.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    group, = load_examples([path])
+    kwargs = {"return_exact_policy_components": True}
+    mutate(kwargs)
+
+    with pytest.raises(ValueError, match=message):
+        loss_for_examples(
+            TinyModel(), [group], TinyTokenizer(),
+            [torch.tensor([1]), torch.tensor([2])], 100,
+            torch.device("cpu"), shuffle=False, **kwargs)
+
+
+def test_exact_policy_component_seam_rejects_uncalibrated_brier_distribution(tmp_path):
+    path = tmp_path / "exact-components.jsonl"
+    path.write_text(json.dumps(exact_policy_row()) + "\n")
+    group, = load_examples([path])
+
+    with pytest.raises(ValueError, match="Brier calibration requires"):
+        loss_for_examples(
+            TinyModel(), [group], TinyTokenizer(),
+            [torch.tensor([1]), torch.tensor([2])], 100,
+            torch.device("cpu"), shuffle=False,
+            return_exact_policy_components=True)
+
+
 def test_positive_action_weight_changes_finite_tiny_model_loss_and_gradients(tmp_path):
     path = tmp_path / "action.jsonl"
     path.write_text(json.dumps(action_row()) + "\n")

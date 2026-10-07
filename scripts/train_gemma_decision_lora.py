@@ -579,11 +579,15 @@ def grouped_action_slot_loss(field_losses, field_scores, field_labels, gold_acti
 def grouped_exact_policy_slot_loss(
         field_losses, field_scores, field_labels, policy, gold_outcome,
         decision_threshold, action_loss_weight, action_temperature,
-        exact_policy_outcome_loss="nll"):
+        exact_policy_outcome_loss="nll", return_components=False):
     """Mean field CE plus a proper score over exact complete outcomes."""
     validate_action_objective(action_loss_weight, action_temperature)
     validate_exact_policy_outcome_objective(
         exact_policy_outcome_loss, decision_threshold, action_temperature)
+    if return_components:
+        # The probe compares both proper scores on one calibrated distribution.
+        validate_exact_policy_outcome_objective(
+            "brier", decision_threshold, action_temperature)
     if not field_losses:
         raise ValueError("exact-policy group needs at least one field loss")
     field_loss = torch.stack(field_losses).mean()
@@ -602,8 +606,15 @@ def grouped_exact_policy_slot_loss(
     # while preserving the field-only graph and gradients exactly at weight 0.
     loss = (field_loss if action_loss_weight == 0
             else field_loss + action_loss_weight * exact_loss)
-    return loss, {outcome: value.exp()
-                  for outcome, value in log_distribution.items()}, exact_loss
+    result = (loss, {outcome: value.exp()
+                     for outcome, value in log_distribution.items()}, exact_loss)
+    if return_components:
+        return (*result, {
+            "field_ce": field_loss,
+            "outcome_nll": exact_losses["nll"],
+            "outcome_brier": exact_losses["brier"],
+        })
+    return result
 
 
 def hard_action_from_scores(field_scores, field_labels, decision_threshold):
@@ -857,16 +868,25 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                       pair_consistency_clip=4.0, pair_consistency_beta=1.0,
                       pair_flip_weight=0.0, pair_flip_margin=1.0,
                       return_components=False, processor=None, action_loss_weight=0.0,
-                      action_temperature=1.0, exact_policy_outcome_loss="nll"):
+                      action_temperature=1.0, exact_policy_outcome_loss="nll",
+                      return_exact_policy_components=False):
     validate_pair_objectives(pair_consistency_weight, return_components,
                              pair_flip_weight, pair_flip_margin)
     validate_action_objective(action_loss_weight, action_temperature)
     if exact_policy_outcome_loss not in {"nll", "brier"}:
         raise ValueError("exact-policy outcome loss must be 'nll' or 'brier'")
     action_examples = [example for example in examples if "action_views" in example]
+    if return_exact_policy_components and return_components:
+        raise ValueError("exact-policy and guard components are mutually exclusive")
     if action_examples and (pair_consistency_weight > 0 or pair_flip_weight > 0
                             or return_components):
         raise ValueError("grouped action slots are incompatible with pair and guard objectives")
+    if return_exact_policy_components:
+        if action_loss_weight != 0:
+            raise ValueError("exact-policy component probing requires zero action loss weight")
+        if (not examples or any(example.get("action_kind") != "exact_policy_v1"
+                                for example in examples)):
+            raise ValueError("exact-policy components require only exact-policy groups")
     logical_views = [logical_slot_views(example) for example in examples]
     flat_examples = [view for views in logical_views for view in views]
     image_examples = [example for example in flat_examples if example.get("image")]
@@ -922,6 +942,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     action_losses = []
     action_loss_kinds = []
     action_correct = 0
+    exact_component_slots = []
     cursor = 0
     for logical_example, views in zip(examples, logical_views):
         end = cursor + len(views)
@@ -947,11 +968,15 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                 field_scores[field] = scores
                 field_labels[field] = labels
             if logical_example.get("action_kind") == "exact_policy_v1":
-                action_slot, _, action_loss = grouped_exact_policy_slot_loss(
+                exact_result = grouped_exact_policy_slot_loss(
                     slot_view_losses, field_scores, field_labels,
                     logical_example["compiled_policy"], logical_example["gold_outcome"],
                     logical_example["decision_threshold"], action_loss_weight,
-                    action_temperature, exact_policy_outcome_loss)
+                    action_temperature, exact_policy_outcome_loss,
+                    return_components=return_exact_policy_components)
+                action_slot, _, action_loss = exact_result[:3]
+                if return_exact_policy_components:
+                    exact_component_slots.append(exact_result[3])
                 predicted_action = hard_exact_outcome_from_scores(
                     field_scores, field_labels, logical_example["compiled_policy"],
                     logical_example["decision_threshold"])
@@ -1052,6 +1077,12 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
         canonical_views_correct, canonical_views_seen, canonical_ce_sum,
         auxiliary_views_correct, auxiliary_views_seen, auxiliary_ce_sum))
     loss = mean_logical_slot_loss(slot_losses)
+    if return_exact_policy_components:
+        components = {
+            name: torch.stack([slot[name] for slot in exact_component_slots]).mean()
+            for name in ("field_ce", "outcome_nll", "outcome_brier")
+        }
+        return loss, sum(slot_correct), stats, components
     if return_components:
         components = {"d_loss": loss,
                       "guard_loss": guard_logical_slot_loss(
