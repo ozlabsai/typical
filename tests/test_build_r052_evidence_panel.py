@@ -37,7 +37,7 @@ def _license_policy() -> dict:
 def _snapshot(reviewed: str, acquisition: str) -> dict:
     return {
         "reviewed_text_artifact": reviewed,
-        "acquisition_receipt_artifact": acquisition,
+        "acquisition_binding_artifact": acquisition,
         "source_family": "first_party",
         "upstream_url": f"https://example.invalid/snapshots/{reviewed}",
         "upstream_revision": f"immutable-{reviewed}-v1",
@@ -51,7 +51,14 @@ def _snapshot(reviewed: str, acquisition: str) -> dict:
     }
 
 
-def _case(language: str, suffix: str, source: str, image_a: str, image_b: str) -> dict:
+def _case(
+    language: str,
+    suffix: str,
+    source: str,
+    image_a: str,
+    image_b: str,
+    reviewed_text: str,
+) -> dict:
     hebrew = language == "he"
     chunks = [
         {
@@ -70,7 +77,7 @@ def _case(language: str, suffix: str, source: str, image_a: str, image_b: str) -
             "chunk_ref": "decisive-text",
             "kind": "evidence",
             "modality": "text",
-            "text": "האישור בתוקף." if hebrew else "The approval remains valid.",
+            "text": "האישור בתוקף." if hebrew else reviewed_text,
             "token_start": 5,
             "token_end": 10,
             "twin_anchor": "decisive-text",
@@ -88,7 +95,7 @@ def _case(language: str, suffix: str, source: str, image_a: str, image_b: str) -
                     "kind": "source_text_slice",
                     "source_artifact": "source-en",
                     "char_start": 0,
-                    "char_end": len("The approval remains valid."),
+                    "char_end": len(reviewed_text),
                 }
             ),
         },
@@ -148,11 +155,11 @@ def _case(language: str, suffix: str, source: str, image_a: str, image_b: str) -
 
 def _fixture(tmp_path: Path) -> dict:
     artifact_paths = {}
+    reviewed_en = " ".join(f"approval{i}" for i in range(8_192))
+    reviewed_he = " ".join(f"אישור{i}" for i in range(8_192))
     for name, text in {
-        "source-en": "The approval remains valid.",
-        "source-he": "האישור בתוקף.",
-        "acquisition-en": "Canonical acquisition record; no upstream PDF redistributed.",
-        "acquisition-he": "Canonical acquisition record; no upstream PDF redistributed in HE.",
+        "source-en": reviewed_en,
+        "source-he": reviewed_he,
         "alignment-receipt": "Human reviewer aligned the two authored cases.",
         "control-receipt": "Human reviewer designated real, shuffled, and absent controls.",
         "boundary-receipt": "Human author marked semantic section boundaries.",
@@ -165,11 +172,67 @@ def _fixture(tmp_path: Path) -> dict:
         Image.new("RGB", (2, 2), color=color).save(path)
         artifact_paths[name] = path
 
+    acquisition_manifest_sha = scorer.sha256_bytes(b"fixture acquisition manifest")
+    extracted_hashes = {
+        language: scorer.sha256_bytes(f"extracted-{language}".encode())
+        for language in ("en", "he")
+    }
+    acquisition_run = {
+        "schema_version": scorer.ACQUISITION_RUN_RECEIPT_VERSION,
+        "mode": "offline",
+        "manifest_sha256": acquisition_manifest_sha,
+        "verified": [
+            {
+                "id": f"snapshot-{language}",
+                "raw_sha256": scorer.sha256_bytes(f"raw-{language}".encode()),
+                "text_sha256": extracted_hashes[language],
+            }
+            for language in ("en", "he")
+        ],
+    }
+    run_path = tmp_path / "acquisition-run.json"
+    _write_json(run_path, acquisition_run)
+    artifact_paths["acquisition-run"] = run_path
+    run_sha = scorer.artifact_sha256(run_path)
+    for language, reviewed in (("en", reviewed_en), ("he", reviewed_he)):
+        reviewed_name = f"source-{language}"
+        binding = {
+            "schema_version": scorer.ACQUISITION_BINDING_VERSION,
+            "snapshot_id": f"snapshot-{language}",
+            "acquisition_manifest_sha256": acquisition_manifest_sha,
+            "acquisition_receipt_sha256": run_sha,
+            "extracted_text_sha256": extracted_hashes[language],
+            "review_receipt_sha256": scorer.sha256_bytes(b"review-receipt"),
+            "retained_ranges": [{"char_start": 0, "char_end": len(reviewed)}],
+            "range_mappings": [
+                {
+                    "source_char_start": 0,
+                    "source_char_end": len(reviewed),
+                    "output_char_start": 0,
+                    "output_char_end": len(reviewed),
+                }
+            ],
+            "reviewed_character_count": len(reviewed),
+            "reviewed_unicode_word_token_count": len(scorer.TOKEN_RE.findall(reviewed)),
+            "word_token_count_method": scorer.WORD_TOKEN_COUNT_METHOD,
+            "reviewed_text_sha256": scorer.artifact_sha256(
+                artifact_paths[reviewed_name]
+            ),
+            "upstream_url": f"https://example.invalid/snapshots/{reviewed_name}",
+            "upstream_revision": f"immutable-{reviewed_name}-v1",
+            "license_policy": "first-party",
+            "attribution": "R052 test fixture author",
+        }
+        path = tmp_path / f"binding-{language}.json"
+        _write_json(path, binding)
+        artifact_paths[f"binding-{language}"] = path
+
     roles = {
         "source-en": "reviewed_source_text",
         "source-he": "reviewed_source_text",
-        "acquisition-en": "source_acquisition_receipt",
-        "acquisition-he": "source_acquisition_receipt",
+        "acquisition-run": "source_acquisition_run_receipt",
+        "binding-en": "reviewed_source_acquisition_binding",
+        "binding-he": "reviewed_source_acquisition_binding",
         "alignment-receipt": "translation_alignment_receipt",
         "control-receipt": "image_control_receipt",
         "boundary-receipt": "chunk_boundary_receipt",
@@ -185,9 +248,10 @@ def _fixture(tmp_path: Path) -> dict:
             name: _artifact_declaration(artifact_paths[name], role)
             for name, role in roles.items()
         },
+        "acquisition_run_receipt_artifact": "acquisition-run",
         "snapshots": {
-            "snapshot-en": _snapshot("source-en", "acquisition-en"),
-            "snapshot-he": _snapshot("source-he", "acquisition-he"),
+            "snapshot-en": _snapshot("source-en", "binding-en"),
+            "snapshot-he": _snapshot("source-he", "binding-he"),
         },
     }
     spec = {
@@ -195,8 +259,22 @@ def _fixture(tmp_path: Path) -> dict:
         "panel_profile": "test_fixture",
         "benchmark_derived": False,
         "cases": [
-            _case("en", "en", "snapshot-en", "real-image", "shuffled-image"),
-            _case("he", "he", "snapshot-he", "real-image", "shuffled-image"),
+            _case(
+                "en",
+                "en",
+                "snapshot-en",
+                "real-image",
+                "shuffled-image",
+                reviewed_en,
+            ),
+            _case(
+                "he",
+                "he",
+                "snapshot-he",
+                "real-image",
+                "shuffled-image",
+                reviewed_he,
+            ),
         ],
     }
     annotations = {
@@ -414,18 +492,18 @@ def test_rejects_binary_pdf_as_reviewed_source_text(tmp_path):
         builder._validate_source_manifest(manifest, paths)
 
 
-def test_rejects_pdf_bytes_as_acquisition_receipt(tmp_path):
+def test_rejects_opaque_text_as_acquisition_binding(tmp_path):
     fixture = _fixture(tmp_path)
-    upstream_pdf = tmp_path / "upstream.pdf"
-    upstream_pdf.write_bytes(b"%PDF-1.7\nupstream bytes must not be redistributed\n")
+    opaque = tmp_path / "not-a-receipt.txt"
+    opaque.write_text("not a receipt")
     manifest = deepcopy(fixture["source_manifest"])
-    manifest["artifacts"]["acquisition-en"] = _artifact_declaration(
-        upstream_pdf, "source_acquisition_receipt"
+    manifest["artifacts"]["binding-en"] = _artifact_declaration(
+        opaque, "reviewed_source_acquisition_binding"
     )
     paths = dict(fixture["artifact_paths"])
-    paths["acquisition-en"] = upstream_pdf
+    paths["binding-en"] = opaque
 
-    with pytest.raises(ValueError, match="not a PDF or binary"):
+    with pytest.raises(ValueError, match="valid UTF-8 JSON"):
         builder._validate_source_manifest(manifest, paths)
 
 
@@ -459,7 +537,7 @@ def test_builder_rejects_invented_text_and_reviewed_source_slice_gaps(tmp_path):
 
     gap = deepcopy(fixture["spec"])
     gap["cases"][0]["chunks"][1]["derivation"]["char_start"] = 1
-    gap["cases"][0]["chunks"][1]["text"] = "he approval remains valid."
+    gap["cases"][0]["chunks"][1]["text"] = fixture["reviewed_en"][1:]
     with pytest.raises(ValueError, match="without gaps"):
         builder.build_audit_input(
             gap,

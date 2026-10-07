@@ -20,6 +20,7 @@ import re
 import tempfile
 import time
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from datetime import date
 from itertools import pairwise
 from pathlib import Path
@@ -30,9 +31,13 @@ import numpy as np
 
 SCHEMA_VERSION = "r052-evidence-panel-v4"
 RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v3"
-SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v3"
+SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v4"
 SOURCE_LICENSE_POLICY = "approved-evaluation-and-redistribution-v1"
 CHUNKING_RECEIPT_VERSION = "r052-case-chunking-receipt-v2"
+ACQUISITION_RUN_RECEIPT_VERSION = "r052-source-acquisition-receipt-v1"
+ACQUISITION_BINDING_VERSION = "r052-reviewed-source-acquisition-binding-v1"
+WORD_TOKEN_COUNT_METHOD = "python-re-unicode-word-v1-not-model-tokenizer"
+MIN_REVIEWED_WORD_TOKENS = 8_192
 MODEL_ID = "google/embeddinggemma-2"
 MODEL_REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b"
 TRANSFORMERS_VERSION = "5.19.0"
@@ -94,6 +99,7 @@ SOURCE_MANIFEST_KEYS = {
     "license_policies",
     "artifacts",
     "snapshots",
+    "acquisition_run_receipt_artifact",
 }
 SOURCE_LICENSE_KEYS = {
     "source_family",
@@ -107,7 +113,7 @@ SOURCE_LICENSE_KEYS = {
 SOURCE_ARTIFACT_KEYS = {"role", "sha256"}
 SOURCE_SNAPSHOT_KEYS = {
     "reviewed_text_artifact",
-    "acquisition_receipt_artifact",
+    "acquisition_binding_artifact",
     "source_family",
     "upstream_url",
     "upstream_revision",
@@ -122,13 +128,47 @@ SOURCE_SNAPSHOT_KEYS = {
 SOURCE_ARTIFACT_ROLES = frozenset(
     {
         "reviewed_source_text",
-        "source_acquisition_receipt",
+        "source_acquisition_run_receipt",
+        "reviewed_source_acquisition_binding",
         "image",
         "translation_alignment_receipt",
         "image_control_receipt",
         "chunk_boundary_receipt",
     }
 )
+ACQUISITION_RUN_RECEIPT_KEYS = {
+    "schema_version",
+    "mode",
+    "manifest_sha256",
+    "verified",
+}
+ACQUISITION_VERIFIED_KEYS = {"id", "raw_sha256", "text_sha256"}
+ACQUISITION_MODES = {"fetch", "offline", "verify-only"}
+ACQUISITION_BINDING_KEYS = {
+    "schema_version",
+    "snapshot_id",
+    "acquisition_manifest_sha256",
+    "acquisition_receipt_sha256",
+    "extracted_text_sha256",
+    "review_receipt_sha256",
+    "retained_ranges",
+    "range_mappings",
+    "reviewed_character_count",
+    "reviewed_unicode_word_token_count",
+    "word_token_count_method",
+    "reviewed_text_sha256",
+    "upstream_url",
+    "upstream_revision",
+    "license_policy",
+    "attribution",
+}
+RETAINED_RANGE_KEYS = {"char_start", "char_end"}
+RANGE_MAPPING_KEYS = {
+    "source_char_start",
+    "source_char_end",
+    "output_char_start",
+    "output_char_end",
+}
 CHUNKING_RECEIPT_KEYS = {
     "schema_version",
     "mode",
@@ -349,6 +389,224 @@ def validate_reviewed_text_artifact(path: Path, label: str) -> None:
         raise ValueError(f"{label} must contain non-empty reviewed text")
 
 
+def _canonical_artifact_json(path: Path, label: str) -> dict[str, Any]:
+    if not path.is_file():
+        raise ValueError(f"{label} must be one canonical JSON file")
+    raw = path.read_bytes()
+    value = parse_unique_finite_json(raw, label)
+    if not isinstance(value, dict):
+        raise TypeError(f"{label} must be an object")
+    if raw != canonical_json(value):
+        raise ValueError(f"{label} must use canonical JSON bytes")
+    return value
+
+
+def validate_source_acquisition_provenance(
+    manifest: Mapping[str, Any], artifact_paths: Mapping[str, Path]
+) -> None:
+    """Validate the whole-run receipt and every reviewed-source binding."""
+    artifacts = manifest["artifacts"]
+    snapshots = manifest["snapshots"]
+    run_name = _require_text(
+        manifest["acquisition_run_receipt_artifact"],
+        "acquisition_run_receipt_artifact",
+    )
+    run_artifacts = {
+        name
+        for name, declaration in artifacts.items()
+        if declaration["role"] == "source_acquisition_run_receipt"
+    }
+    if run_artifacts != {run_name}:
+        raise ValueError(
+            "source manifest must declare exactly one acquisition run receipt"
+        )
+    run_receipt = _canonical_artifact_json(
+        artifact_paths[run_name], "source acquisition run receipt"
+    )
+    _exact_keys(
+        run_receipt,
+        ACQUISITION_RUN_RECEIPT_KEYS,
+        "source acquisition run receipt",
+    )
+    if run_receipt["schema_version"] != ACQUISITION_RUN_RECEIPT_VERSION:
+        raise ValueError(
+            "source acquisition run receipt schema must be "
+            f"{ACQUISITION_RUN_RECEIPT_VERSION}"
+        )
+    if (
+        not isinstance(run_receipt["mode"], str)
+        or run_receipt["mode"] not in ACQUISITION_MODES
+    ):
+        raise ValueError("source acquisition run receipt mode is invalid")
+    run_manifest_sha256 = _require_sha(
+        run_receipt["manifest_sha256"], "acquisition manifest sha256"
+    )
+    verified = run_receipt["verified"]
+    if not isinstance(verified, list) or len(verified) != len(snapshots):
+        raise ValueError(
+            "source acquisition run receipt must cover every snapshot exactly"
+        )
+    verified_by_id: dict[str, dict[str, str]] = {}
+    for index, record in enumerate(verified):
+        label = f"source acquisition verified[{index}]"
+        if not isinstance(record, dict):
+            raise TypeError(f"{label} must be an object")
+        _exact_keys(record, ACQUISITION_VERIFIED_KEYS, label)
+        source_id = _require_text(record["id"], f"{label}.id")
+        if source_id in verified_by_id:
+            raise ValueError("source acquisition verified IDs must be unique")
+        _require_sha(record["raw_sha256"], f"{label}.raw_sha256")
+        _require_sha(record["text_sha256"], f"{label}.text_sha256")
+        verified_by_id[source_id] = record
+    if set(verified_by_id) != set(snapshots):
+        raise ValueError(
+            "source acquisition run receipt must cover every snapshot exactly"
+        )
+    if len({record["raw_sha256"] for record in verified}) != len(verified) or len(
+        {record["text_sha256"] for record in verified}
+    ) != len(verified):
+        raise ValueError("source acquisition raw/text hashes must be unique")
+
+    binding_names: set[str] = set()
+    run_receipt_sha256 = artifacts[run_name]["sha256"]
+    review_receipt_hashes: set[str] = set()
+    for source_id, snapshot in snapshots.items():
+        binding_name = _require_text(
+            snapshot["acquisition_binding_artifact"],
+            f"source snapshot {source_id} acquisition binding",
+        )
+        if binding_name in binding_names:
+            raise ValueError("source snapshots must have unique acquisition bindings")
+        binding_names.add(binding_name)
+        if (
+            binding_name not in artifacts
+            or artifacts[binding_name]["role"] != "reviewed_source_acquisition_binding"
+        ):
+            raise ValueError(
+                "source snapshot must bind a reviewed-source acquisition binding"
+            )
+        binding = _canonical_artifact_json(
+            artifact_paths[binding_name],
+            f"source snapshot {source_id} acquisition binding",
+        )
+        _exact_keys(
+            binding,
+            ACQUISITION_BINDING_KEYS,
+            f"source snapshot {source_id} acquisition binding",
+        )
+        if binding["schema_version"] != ACQUISITION_BINDING_VERSION:
+            raise ValueError(
+                "reviewed-source acquisition binding schema must be "
+                f"{ACQUISITION_BINDING_VERSION}"
+            )
+        reviewed_name = snapshot["reviewed_text_artifact"]
+        expected_values = {
+            "snapshot_id": source_id,
+            "acquisition_manifest_sha256": run_manifest_sha256,
+            "acquisition_receipt_sha256": run_receipt_sha256,
+            "extracted_text_sha256": verified_by_id[source_id]["text_sha256"],
+            "reviewed_text_sha256": artifacts[reviewed_name]["sha256"],
+            "upstream_url": snapshot["upstream_url"],
+            "upstream_revision": snapshot["upstream_revision"],
+            "license_policy": snapshot["license_policy"],
+            "attribution": snapshot["attribution"],
+        }
+        if any(binding[key] != value for key, value in expected_values.items()):
+            raise ValueError(
+                f"source snapshot {source_id} acquisition binding mismatch"
+            )
+        review_receipt_hashes.add(
+            _require_sha(
+                binding["review_receipt_sha256"],
+                f"source snapshot {source_id} review receipt sha256",
+            )
+        )
+
+        ranges = binding["retained_ranges"]
+        mappings = binding["range_mappings"]
+        if (
+            not isinstance(ranges, list)
+            or not ranges
+            or not isinstance(mappings, list)
+            or len(mappings) != len(ranges)
+        ):
+            raise ValueError(
+                f"source snapshot {source_id} ranges/mappings must align exactly"
+            )
+        previous_source_end = 0
+        previous_output_end = 0
+        for index, (retained_range, mapping) in enumerate(
+            zip(ranges, mappings, strict=True)
+        ):
+            label = f"source snapshot {source_id} range[{index}]"
+            if not isinstance(retained_range, dict) or not isinstance(mapping, dict):
+                raise TypeError(f"{label} and mapping must be objects")
+            _exact_keys(retained_range, RETAINED_RANGE_KEYS, label)
+            _exact_keys(mapping, RANGE_MAPPING_KEYS, f"{label} mapping")
+            start = retained_range["char_start"]
+            end = retained_range["char_end"]
+            source_start = mapping["source_char_start"]
+            source_end = mapping["source_char_end"]
+            output_start = mapping["output_char_start"]
+            output_end = mapping["output_char_end"]
+            if (
+                type(start) is not int
+                or type(end) is not int
+                or type(source_start) is not int
+                or type(source_end) is not int
+                or type(output_start) is not int
+                or type(output_end) is not int
+                or start < 0
+                or start >= end
+                or (index and start < previous_source_end)
+                or output_start != previous_output_end
+                or output_end <= output_start
+                or output_end - output_start != end - start
+                or source_start != start
+                or source_end != end
+            ):
+                raise ValueError(
+                    f"source snapshot {source_id} range mapping is invalid"
+                )
+            previous_source_end = end
+            previous_output_end = output_end
+
+        reviewed_text = artifact_paths[reviewed_name].read_text(encoding="utf-8")
+        character_count = binding["reviewed_character_count"]
+        if (
+            type(character_count) is not int
+            or character_count != len(reviewed_text)
+            or previous_output_end != character_count
+        ):
+            raise ValueError(
+                f"source snapshot {source_id} reviewed character count mismatch"
+            )
+        word_count = len(TOKEN_RE.findall(reviewed_text))
+        if (
+            binding["word_token_count_method"] != WORD_TOKEN_COUNT_METHOD
+            or type(binding["reviewed_unicode_word_token_count"]) is not int
+            or binding["reviewed_unicode_word_token_count"] != word_count
+            or word_count < MIN_REVIEWED_WORD_TOKENS
+        ):
+            raise ValueError(
+                f"source snapshot {source_id} Unicode-word token count/method mismatch"
+            )
+
+    declared_bindings = {
+        name
+        for name, declaration in artifacts.items()
+        if declaration["role"] == "reviewed_source_acquisition_binding"
+    }
+    if binding_names != declared_bindings:
+        raise ValueError(
+            "source snapshots must consume every acquisition binding exactly"
+        )
+    if len(review_receipt_hashes) != 1:
+        raise ValueError(
+            "source acquisition bindings must share one review receipt hash"
+        )
+
+
 def _artifact_contains_forbidden_lineage(path: Path) -> bool:
     files = (
         [path]
@@ -408,11 +666,14 @@ def validate_source_snapshot_manifest(
     _require_sha(expected_sha256, "trusted source snapshot manifest sha256")
     if not isinstance(manifest, dict):
         raise TypeError("trusted source snapshot manifest must be an object")
-    _exact_keys(manifest, SOURCE_MANIFEST_KEYS, "trusted source snapshot manifest")
-    if manifest["schema_version"] == "r052-source-provenance-manifest-v2":
+    if manifest.get("schema_version") in {
+        "r052-source-provenance-manifest-v2",
+        "r052-source-provenance-manifest-v3",
+    }:
         raise ValueError(
-            "source manifest v2 requires migration to v3 reviewed-source provenance"
+            "source manifest v2/v3 requires migration to v4 acquisition provenance"
         )
+    _exact_keys(manifest, SOURCE_MANIFEST_KEYS, "trusted source snapshot manifest")
     if (
         manifest["schema_version"] != SOURCE_MANIFEST_VERSION
         or manifest["license_policy"] != SOURCE_LICENSE_POLICY
@@ -478,7 +739,7 @@ def validate_source_snapshot_manifest(
         )
         if artifact_sha256(path) != digest:
             raise ValueError(f"source snapshot artifact {name} hash mismatch")
-        if role in {"reviewed_source_text", "source_acquisition_receipt"}:
+        if role == "reviewed_source_text":
             validate_reviewed_text_artifact(path, f"source snapshot artifact {name}")
         if _artifact_contains_forbidden_lineage(path):
             raise ValueError(
@@ -491,7 +752,7 @@ def validate_source_snapshot_manifest(
         raise ValueError("source snapshots must be a non-empty object")
     snapshot_by_reviewed_hash: dict[str, dict[str, Any]] = {}
     used_reviewed: set[str] = set()
-    used_acquisition_receipts: set[str] = set()
+    used_acquisition_bindings: set[str] = set()
     used_policies: set[str] = set()
     for name, snapshot in snapshots.items():
         _require_text(name, "source snapshot name")
@@ -503,12 +764,12 @@ def validate_source_snapshot_manifest(
             f"source snapshot {name} reviewed_text_artifact",
         )
         acquisition_name = _require_text(
-            snapshot["acquisition_receipt_artifact"],
-            f"source snapshot {name} acquisition_receipt_artifact",
+            snapshot["acquisition_binding_artifact"],
+            f"source snapshot {name} acquisition_binding_artifact",
         )
         if (
             reviewed_name in used_reviewed
-            or acquisition_name in used_acquisition_receipts
+            or acquisition_name in used_acquisition_bindings
         ):
             raise ValueError(
                 "source snapshots have duplicate reviewed/acquisition bindings"
@@ -517,13 +778,14 @@ def validate_source_snapshot_manifest(
             reviewed_name not in artifacts
             or artifacts[reviewed_name]["role"] != "reviewed_source_text"
             or acquisition_name not in artifacts
-            or artifacts[acquisition_name]["role"] != "source_acquisition_receipt"
+            or artifacts[acquisition_name]["role"]
+            != "reviewed_source_acquisition_binding"
         ):
             raise ValueError(
                 "source snapshot reviewed/acquisition artifact roles mismatch"
             )
         used_reviewed.add(reviewed_name)
-        used_acquisition_receipts.add(acquisition_name)
+        used_acquisition_bindings.add(acquisition_name)
         family = snapshot["source_family"]
         policy_name = snapshot["license_policy"]
         if (
@@ -571,17 +833,17 @@ def validate_source_snapshot_manifest(
         for name, item in artifacts.items()
         if item["role"] == "reviewed_source_text"
     }
-    declared_acquisition_receipts = {
+    declared_acquisition_bindings = {
         name
         for name, item in artifacts.items()
-        if item["role"] == "source_acquisition_receipt"
+        if item["role"] == "reviewed_source_acquisition_binding"
     }
     if (
         used_reviewed != declared_reviewed
-        or used_acquisition_receipts != declared_acquisition_receipts
+        or used_acquisition_bindings != declared_acquisition_bindings
     ):
         raise ValueError(
-            "source snapshots must bind every reviewed/acquisition artifact exactly"
+            "source snapshots must bind every reviewed text/acquisition binding exactly"
         )
     if used_policies != set(license_policies):
         raise ValueError("source snapshots must use every declared license policy")
@@ -597,6 +859,7 @@ def validate_source_snapshot_manifest(
         snapshot = snapshot_by_reviewed_hash[case["source_snapshot_sha256"]]
         if snapshot["source_family"] != case["source_family"]:
             raise ValueError("case source family mismatches its source snapshot")
+    validate_source_acquisition_provenance(manifest, artifact_paths)
     return expected_sha256, by_hash
 
 

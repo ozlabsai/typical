@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -11,16 +12,72 @@ from scripts import score_r052_evidence_retrieval as scorer
 TEST_ARTIFACT = Path(__file__).resolve()
 TEST_ARTIFACT_SHA256 = scorer.file_sha256(TEST_ARTIFACT)
 SOURCE_ARTIFACT_PATHS = {
-    "reviewed-en": Path("pyproject.toml").resolve(),
-    "reviewed-he": Path("uv.lock").resolve(),
-    "acquisition-en": Path("site/style.css").resolve(),
-    "acquisition-he": Path("site/exhibits.css").resolve(),
+    "reviewed-en": Path("uv.lock").resolve(),
+    "reviewed-he": Path("site/style.css").resolve(),
     "boundary-receipt": Path("site/package.json").resolve(),
     "alignment-receipt": Path("site/js/vendor/ScrollTrigger.min.js").resolve(),
     "control-receipt": Path("site/js/vendor/gsap.min.js").resolve(),
     "real-image": Path("site/favicon.png").resolve(),
     "shuffled-image": Path("site/og.png").resolve(),
 }
+
+_SOURCE_PROVENANCE_TEMP = tempfile.TemporaryDirectory()
+_SOURCE_PROVENANCE_ROOT = Path(_SOURCE_PROVENANCE_TEMP.name)
+_ACQUISITION_MANIFEST_SHA256 = scorer.sha256_bytes(b"fixture acquisition manifest")
+_EXTRACTED_TEXT_HASHES = {
+    language: scorer.sha256_bytes(f"extracted-{language}".encode())
+    for language in ("en", "he")
+}
+_RUN_RECEIPT = {
+    "schema_version": scorer.ACQUISITION_RUN_RECEIPT_VERSION,
+    "mode": "offline",
+    "manifest_sha256": _ACQUISITION_MANIFEST_SHA256,
+    "verified": [
+        {
+            "id": f"fixture-{language}",
+            "raw_sha256": scorer.sha256_bytes(f"raw-{language}".encode()),
+            "text_sha256": _EXTRACTED_TEXT_HASHES[language],
+        }
+        for language in ("en", "he")
+    ],
+}
+_RUN_RECEIPT_PATH = _SOURCE_PROVENANCE_ROOT / "acquisition-run.json"
+_RUN_RECEIPT_PATH.write_bytes(scorer.canonical_json(_RUN_RECEIPT))
+SOURCE_ARTIFACT_PATHS["acquisition-run"] = _RUN_RECEIPT_PATH
+_RUN_RECEIPT_SHA256 = scorer.artifact_sha256(_RUN_RECEIPT_PATH)
+for _language in ("en", "he"):
+    _reviewed_path = SOURCE_ARTIFACT_PATHS[f"reviewed-{_language}"]
+    _reviewed_text = _reviewed_path.read_text(encoding="utf-8")
+    _binding = {
+        "schema_version": scorer.ACQUISITION_BINDING_VERSION,
+        "snapshot_id": f"fixture-{_language}",
+        "acquisition_manifest_sha256": _ACQUISITION_MANIFEST_SHA256,
+        "acquisition_receipt_sha256": _RUN_RECEIPT_SHA256,
+        "extracted_text_sha256": _EXTRACTED_TEXT_HASHES[_language],
+        "review_receipt_sha256": scorer.sha256_bytes(b"review-receipt"),
+        "retained_ranges": [{"char_start": 0, "char_end": len(_reviewed_text)}],
+        "range_mappings": [
+            {
+                "source_char_start": 0,
+                "source_char_end": len(_reviewed_text),
+                "output_char_start": 0,
+                "output_char_end": len(_reviewed_text),
+            }
+        ],
+        "reviewed_character_count": len(_reviewed_text),
+        "reviewed_unicode_word_token_count": len(
+            scorer.TOKEN_RE.findall(_reviewed_text)
+        ),
+        "word_token_count_method": scorer.WORD_TOKEN_COUNT_METHOD,
+        "reviewed_text_sha256": scorer.artifact_sha256(_reviewed_path),
+        "upstream_url": f"https://example.invalid/r052/source-{_language}",
+        "upstream_revision": scorer.sha256_bytes(f"revision-{_language}".encode()),
+        "license_policy": "fixture-license",
+        "attribution": f"R052 {_language} fixture authors",
+    }
+    _binding_path = _SOURCE_PROVENANCE_ROOT / f"binding-{_language}.json"
+    _binding_path.write_bytes(scorer.canonical_json(_binding))
+    SOURCE_ARTIFACT_PATHS[f"binding-{_language}"] = _binding_path
 SOURCE_ARTIFACT_HASHES = {
     name: scorer.artifact_sha256(path) for name, path in SOURCE_ARTIFACT_PATHS.items()
 }
@@ -385,8 +442,10 @@ def _source_manifest() -> tuple[dict, str]:
             "role": (
                 "reviewed_source_text"
                 if name.startswith("reviewed-")
-                else "source_acquisition_receipt"
-                if name.startswith("acquisition-")
+                else "source_acquisition_run_receipt"
+                if name == "acquisition-run"
+                else "reviewed_source_acquisition_binding"
+                if name.startswith("binding-")
                 else "translation_alignment_receipt"
                 if name == "alignment-receipt"
                 else "image_control_receipt"
@@ -413,7 +472,7 @@ def _source_manifest() -> tuple[dict, str]:
     snapshots = {
         f"fixture-{language}": {
             "reviewed_text_artifact": f"reviewed-{language}",
-            "acquisition_receipt_artifact": f"acquisition-{language}",
+            "acquisition_binding_artifact": f"binding-{language}",
             "source_family": "synthetic",
             "upstream_url": f"https://example.invalid/r052/source-{language}",
             "upstream_revision": _sha(f"revision-{language}"),
@@ -433,6 +492,7 @@ def _source_manifest() -> tuple[dict, str]:
         "benchmark_derived": False,
         "license_policies": license_policies,
         "artifacts": artifacts,
+        "acquisition_run_receipt_artifact": "acquisition-run",
         "snapshots": snapshots,
     }
     return manifest, scorer.sha256_json(manifest)
@@ -845,6 +905,121 @@ def test_source_snapshots_bind_reviewed_acquisition_metadata_and_case_family(
         )
 
 
+def _rewrite_source_json(
+    tmp_path: Path,
+    manifest: dict,
+    paths: dict[str, Path],
+    name: str,
+    mutate,
+) -> tuple[dict, dict[str, Path]]:
+    changed_manifest = copy.deepcopy(manifest)
+    changed_paths = dict(paths)
+    value = json.loads(changed_paths[name].read_bytes())
+    mutate(value)
+    path = tmp_path / f"changed-{name}.json"
+    path.write_bytes(scorer.canonical_json(value))
+    changed_paths[name] = path
+    changed_manifest["artifacts"][name]["sha256"] = scorer.artifact_sha256(path)
+    return changed_manifest, changed_paths
+
+
+def test_acquisition_run_receipt_rejects_non_receipt_and_bad_entries(panel, tmp_path):
+    manifest, _ = _source_manifest()
+    paths = dict(SOURCE_ARTIFACT_PATHS)
+    opaque = tmp_path / "not-a-receipt.txt"
+    opaque.write_text("not a receipt")
+    paths["acquisition-run"] = opaque
+    manifest["artifacts"]["acquisition-run"]["sha256"] = scorer.artifact_sha256(opaque)
+    with pytest.raises(ValueError, match="valid UTF-8 JSON"):
+        scorer.validate_source_snapshot_manifest(
+            panel, manifest, scorer.sha256_json(manifest), paths
+        )
+
+    for mutate, message in (
+        (
+            lambda value: value["verified"][0].update(raw_sha256="0" * 63),
+            "raw_sha256",
+        ),
+        (
+            lambda value: value["verified"].pop(),
+            "cover every snapshot",
+        ),
+        (
+            lambda value: value["verified"][1].update(id="fixture-en"),
+            "IDs must be unique",
+        ),
+        (
+            lambda value: value["verified"][1].update(
+                raw_sha256=value["verified"][0]["raw_sha256"]
+            ),
+            "raw/text hashes must be unique",
+        ),
+        (
+            lambda value: value["verified"][0].update(text_sha256="0" * 64),
+            "binding mismatch",
+        ),
+    ):
+        base, _ = _source_manifest()
+        changed, changed_paths = _rewrite_source_json(
+            tmp_path, base, SOURCE_ARTIFACT_PATHS, "acquisition-run", mutate
+        )
+        with pytest.raises(ValueError, match=message):
+            scorer.validate_source_snapshot_manifest(
+                panel,
+                changed,
+                scorer.sha256_json(changed),
+                changed_paths,
+            )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value.update(upstream_revision="wrong-revision"),
+            "binding mismatch",
+        ),
+        (
+            lambda value: value["range_mappings"][0].update(output_char_start=1),
+            "range mapping is invalid",
+        ),
+        (
+            lambda value: value["range_mappings"][0].update(source_char_start=False),
+            "range mapping is invalid",
+        ),
+        (
+            lambda value: value.update(reviewed_character_count=1),
+            "character count mismatch",
+        ),
+        (
+            lambda value: value.update(reviewed_unicode_word_token_count=8_191),
+            "token count/method mismatch",
+        ),
+        (
+            lambda value: value.update(word_token_count_method="caller-claimed"),
+            "token count/method mismatch",
+        ),
+        (
+            lambda value: value.update(extracted_text_sha256="0" * 64),
+            "binding mismatch",
+        ),
+        (
+            lambda value: value.update(review_receipt_sha256="0" * 64),
+            "share one review receipt hash",
+        ),
+    ],
+)
+def test_acquisition_binding_semantics_fail_closed(panel, tmp_path, mutate, message):
+    manifest, _ = _source_manifest()
+    changed, paths = _rewrite_source_json(
+        tmp_path, manifest, SOURCE_ARTIFACT_PATHS, "binding-en", mutate
+    )
+    with pytest.raises(ValueError, match=message):
+        scorer.validate_source_snapshot_manifest(
+            panel, changed, scorer.sha256_json(changed), paths
+        )
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
@@ -1076,7 +1251,19 @@ def test_prior_panel_and_source_manifest_require_explicit_migration(panel):
 
     source, _ = _source_manifest()
     source["schema_version"] = "r052-source-provenance-manifest-v2"
-    with pytest.raises(ValueError, match="v2 requires migration to v3"):
+    source.pop("acquisition_run_receipt_artifact")
+    with pytest.raises(ValueError, match="v2/v3 requires migration to v4"):
+        scorer.validate_source_snapshot_manifest(
+            panel,
+            source,
+            scorer.sha256_json(source),
+            SOURCE_ARTIFACT_PATHS,
+        )
+
+    source, _ = _source_manifest()
+    source["schema_version"] = "r052-source-provenance-manifest-v3"
+    source.pop("acquisition_run_receipt_artifact")
+    with pytest.raises(ValueError, match="v2/v3 requires migration to v4"):
         scorer.validate_source_snapshot_manifest(
             panel,
             source,

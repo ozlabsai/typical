@@ -38,7 +38,7 @@ except ModuleNotFoundError:  # Supports ``uv run python scripts/build_...py``.
     import score_r052_evidence_retrieval as scoring
 
 SPEC_VERSION = "r052-authored-dossier-spec-v3"
-SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v3"
+SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v4"
 ANNOTATION_VERSION = "r052-authored-causal-annotations-v1"
 AUDIT_INPUT_VERSION = "r052-contamination-audit-input-v1"
 AUDIT_RESULTS_VERSION = "r052-external-contamination-results-v1"
@@ -106,6 +106,7 @@ SOURCE_MANIFEST_KEYS = {
     "license_policies",
     "artifacts",
     "snapshots",
+    "acquisition_run_receipt_artifact",
 }
 SOURCE_LICENSE_KEYS = {
     "source_family",
@@ -119,7 +120,7 @@ SOURCE_LICENSE_KEYS = {
 SOURCE_ARTIFACT_KEYS = {"role", "sha256"}
 SOURCE_SNAPSHOT_KEYS = {
     "reviewed_text_artifact",
-    "acquisition_receipt_artifact",
+    "acquisition_binding_artifact",
     "source_family",
     "upstream_url",
     "upstream_revision",
@@ -188,7 +189,8 @@ ALLOWED_LICENSES = {
 }
 ARTIFACT_ROLES = {
     "reviewed_source_text",
-    "source_acquisition_receipt",
+    "source_acquisition_run_receipt",
+    "reviewed_source_acquisition_binding",
     "image",
     "translation_alignment_receipt",
     "image_control_receipt",
@@ -301,11 +303,14 @@ def _validate_source_manifest(
 ) -> dict[str, Path]:
     if not isinstance(manifest, dict):
         raise TypeError("source manifest must be an object")
-    _exact_keys(manifest, SOURCE_MANIFEST_KEYS, "source manifest")
-    if manifest["schema_version"] == "r052-source-provenance-manifest-v2":
+    if manifest.get("schema_version") in {
+        "r052-source-provenance-manifest-v2",
+        "r052-source-provenance-manifest-v3",
+    }:
         raise ValueError(
-            "source manifest v2 requires migration to v3 reviewed-source provenance"
+            "source manifest v2/v3 requires migration to v4 acquisition provenance"
         )
+    _exact_keys(manifest, SOURCE_MANIFEST_KEYS, "source manifest")
     if (
         manifest["schema_version"] != SOURCE_MANIFEST_VERSION
         or manifest["license_policy"] != LICENSE_POLICY
@@ -363,10 +368,7 @@ def _validate_source_manifest(
         declared_hashes.add(declared_hash)
         if scoring.artifact_sha256(path) != declared_hash:
             raise ValueError(f"source artifact {name} hash mismatch")
-        if declaration["role"] in {
-            "reviewed_source_text",
-            "source_acquisition_receipt",
-        }:
+        if declaration["role"] == "reviewed_source_text":
             scoring.validate_reviewed_text_artifact(path, f"source artifact {name}")
         if _contains_forbidden_bytes(path):
             raise ValueError(
@@ -384,16 +386,17 @@ def _validate_source_manifest(
             raise TypeError(f"source snapshot {name} must be an object")
         _exact_keys(snapshot, SOURCE_SNAPSHOT_KEYS, f"source snapshot {name}")
         reviewed_name = snapshot["reviewed_text_artifact"]
-        acquisition_name = snapshot["acquisition_receipt_artifact"]
+        acquisition_name = snapshot["acquisition_binding_artifact"]
         if (
             reviewed_name not in artifacts
             or artifacts[reviewed_name]["role"] != "reviewed_source_text"
             or acquisition_name not in artifacts
-            or artifacts[acquisition_name]["role"] != "source_acquisition_receipt"
+            or artifacts[acquisition_name]["role"]
+            != "reviewed_source_acquisition_binding"
             or reviewed_name == acquisition_name
         ):
             raise ValueError(
-                "source snapshot must bind reviewed text and acquisition receipt"
+                "source snapshot must bind reviewed text and acquisition binding"
             )
         used_snapshot_artifacts.extend((reviewed_name, acquisition_name))
         policy_name = snapshot["license_policy"]
@@ -431,20 +434,22 @@ def _validate_source_manifest(
     expected_snapshot_artifacts = {
         name
         for name, declaration in artifacts.items()
-        if declaration["role"] in {"reviewed_source_text", "source_acquisition_receipt"}
+        if declaration["role"]
+        in {"reviewed_source_text", "reviewed_source_acquisition_binding"}
     }
     if (
         len(used_snapshot_artifacts) != len(set(used_snapshot_artifacts))
         or set(used_snapshot_artifacts) != expected_snapshot_artifacts
     ):
         raise ValueError(
-            "reviewed/acquisition artifacts must occur exactly once across snapshots"
+            "reviewed text/acquisition bindings must occur exactly once across snapshots"
         )
     if {snapshot["license_policy"] for snapshot in snapshots.values()} != set(
         license_policies
     ):
         raise ValueError("source snapshots must use every declared license policy")
     scoring._reject_benchmark_lineage(manifest)
+    scoring.validate_source_acquisition_provenance(manifest, resolved)
     return resolved
 
 
@@ -467,7 +472,7 @@ def _validate_spec(
     if not isinstance(cases, list) or not cases:
         raise ValueError("dossier spec cases must be a non-empty list")
     seen_cases: set[str] = set()
-    used_artifacts: set[str] = set()
+    used_artifacts: set[str] = {source_manifest["acquisition_run_receipt_artifact"]}
     has_long = False
     for case_index, case in enumerate(cases):
         label = f"cases[{case_index}]"
@@ -493,7 +498,7 @@ def _validate_spec(
         used_artifacts.update(
             (
                 snapshot["reviewed_text_artifact"],
-                snapshot["acquisition_receipt_artifact"],
+                snapshot["acquisition_binding_artifact"],
             )
         )
         if profile == "production" and snapshot["source_family"] not in {
