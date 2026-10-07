@@ -54,6 +54,7 @@ export TYPICAL_REPO=/workspace/g1/r050-ab512c3/repo
 export R050_ROOT=/workspace/g1/r050-ab512c3/repo/.context/r050-gpu-run-a77fea5-resume2
 export EVAL_ROOT=/workspace/g1/r050-official-eval-20261007
 export WORKFLOWEVALS=/workspace/g1/WorkflowEvals-0ac3b8ad
+export JEVBENCH=/workspace/g1/jevbench-bb05a335
 
 STATE="$R050_ROOT/state.json"
 COMPLETE="$R050_ROOT/complete.json"
@@ -206,11 +207,11 @@ uv run --frozen python scripts/verify_r050_official_eval.py preflight \
   --startup-receipt "$EVAL_ROOT/server-startup-receipt.json" \
   --workflowevals-dir "$WORKFLOWEVALS" \
   --workflow-patch "$PATCH" \
-  --jevbench-dir "$TYPICAL_REPO/.context/jevbench-v154" \
+  --jevbench-dir "$JEVBENCH" \
   --jev-runner "$TYPICAL_REPO/scripts/jevbench_gemma_lora.py" \
-  --task-file "$TYPICAL_REPO/.context/jevbench-v154/datasets/public/easy.jsonl" \
-  --task-file "$TYPICAL_REPO/.context/jevbench-v154/datasets/public/original.jsonl" \
-  --task-file "$TYPICAL_REPO/.context/jevbench-v154/datasets/public/hard.jsonl" \
+  --task-file "$JEVBENCH/datasets/public/easy.jsonl" \
+  --task-file "$JEVBENCH/datasets/public/original.jsonl" \
+  --task-file "$JEVBENCH/datasets/public/hard.jsonl" \
   --base-url "$TYPICAL_BASE_URL" \
   --timeout 1800 \
   --out "$EVAL_ROOT/preflight-receipt.json"
@@ -271,14 +272,15 @@ trap - EXIT
 
 cd "$TYPICAL_REPO"
 test ! -e "$EVAL_ROOT/jevbench-public-231"
-test "$(git -C .context/jevbench-v154 rev-parse HEAD)" = \
+test "$(git -C "$JEVBENCH" rev-parse HEAD)" = \
   bb05a335bc809e61b20c0f745d25499a82b326fc
+test -z "$(git -C "$JEVBENCH" status --porcelain)"
 
 uv run --frozen python scripts/jevbench_gemma_lora.py \
-  --jevbench-dir .context/jevbench-v154 \
-  --task-file .context/jevbench-v154/datasets/public/easy.jsonl \
-  --task-file .context/jevbench-v154/datasets/public/original.jsonl \
-  --task-file .context/jevbench-v154/datasets/public/hard.jsonl \
+  --jevbench-dir "$JEVBENCH" \
+  --task-file "$JEVBENCH/datasets/public/easy.jsonl" \
+  --task-file "$JEVBENCH/datasets/public/original.jsonl" \
+  --task-file "$JEVBENCH/datasets/public/hard.jsonl" \
   --model "$BASE_MODEL" \
   --model-revision "$BASE_REVISION" \
   --expected-model-tree-sha256 "$BASE_MODEL_SHA" \
@@ -316,7 +318,7 @@ uv run --frozen python scripts/verify_r050_official_eval.py postrun \
   --workflow-run "$WORKFLOWEVALS/runs/agent_trace_observability/$RUN_TAG" \
   --workflow-run "$WORKFLOWEVALS/runs/invoice_processing/$RUN_TAG" \
   --workflow-run "$WORKFLOWEVALS/runs/customer_service/$RUN_TAG" \
-  --jevbench-dir "$TYPICAL_REPO/.context/jevbench-v154" \
+  --jevbench-dir "$JEVBENCH" \
   --jev-runner "$TYPICAL_REPO/scripts/jevbench_gemma_lora.py" \
   --jev-run "$EVAL_ROOT/jevbench-public-231" \
   --out "$EVAL_ROOT/verification-receipt.json"
