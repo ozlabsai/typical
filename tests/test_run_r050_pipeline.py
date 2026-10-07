@@ -421,3 +421,68 @@ def test_child_receipt_cannot_reanchor_modified_code(tmp_path):
     forged = {**valid, "score_exact_policy_panel.py": "0" * 64}
     with pytest.raises(ValueError, match="pipeline binding"):
         runner._validate_code_receipt({"code_sha256": forged}, names)
+
+
+def _install_hash_drift(monkeypatch, filename, active):
+    real_hash = pipeline.file_hash
+
+    def observed(path):
+        if active["value"] and Path(path).name == filename:
+            return "0" * 64
+        return real_hash(path)
+
+    monkeypatch.setattr(pipeline, "file_hash", observed)
+
+
+def test_frozen_dependency_mutation_during_child_aborts_before_next_stage(
+        monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    fake = FakeGPU(config, headroom=True)
+    active = {"value": False}
+    _install_hash_drift(monkeypatch, "score_exact_policy_panel.py", active)
+
+    def mutating_child(*args, **kwargs):
+        result = fake(*args, **kwargs)
+        active["value"] = True
+        return result
+
+    with pytest.raises(ValueError, match="changed during pipeline execution"):
+        _run(monkeypatch, config, mutating_child)
+    assert [Path(call[0][1]).name for call in fake.calls] == ["run_r050_headroom.py"]
+    assert (config.out / "headroom" / "complete.json").is_file()
+    assert not (config.out / "gradient-probe.json").exists()
+    state = json.loads((config.out / "state.json").read_text())
+    assert state["stages"]["01-headroom"]["status"] == "failed"
+
+
+def test_running_stage_adoption_rejects_code_drift(monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    _state(config, {"01-headroom": {"status": "running"}})
+    fake = FakeGPU(config, headroom=False)
+    fake([str(config.python), str(config.scripts / "run_r050_headroom.py"),
+          "--out", str(config.out / "headroom")], check=False)
+    fake.calls.clear()
+    active = {"value": True}
+    _install_hash_drift(monkeypatch, "soft_action_executor.py", active)
+    with pytest.raises(RuntimeError, match="partial or invalid") as caught:
+        _run(monkeypatch, config, fake)
+    assert isinstance(caught.value.__cause__, ValueError)
+    assert "changed during pipeline execution" in str(caught.value.__cause__)
+    assert not fake.calls
+
+
+def test_orchestrator_mutation_during_invocation_is_also_rejected(
+        monkeypatch, tmp_path):
+    config = _config(tmp_path)
+    fake = FakeGPU(config, headroom=False)
+    active = {"value": False}
+    _install_hash_drift(monkeypatch, "run_r050_pipeline.py", active)
+
+    def mutating_child(*args, **kwargs):
+        result = fake(*args, **kwargs)
+        active["value"] = True
+        return result
+
+    with pytest.raises(ValueError, match="changed during pipeline execution"):
+        _run(monkeypatch, config, mutating_child)
+    assert len(fake.calls) == 1

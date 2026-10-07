@@ -343,7 +343,22 @@ class Pipeline:
     def _save(self) -> None:
         _atomic_replace(self.state_path, self.state)
 
+    def _validate_code(self) -> None:
+        """Re-authenticate the complete local code closure at every trust boundary."""
+        if set(self.config.code_hashes) != set(CODE_FILES):
+            raise ValueError("pipeline code binding is incomplete")
+        for name in CODE_FILES:
+            expected = _checked_hash(
+                self.config.code_hashes[name], f"expected current code {name} sha256")
+            if name in FROZEN_CODE_SHA256 and expected != FROZEN_CODE_SHA256[name]:
+                raise ValueError(f"current code {name} differs from the audited literal")
+            path = self.config.scripts / name
+            if path.is_symlink() or not path.is_file() or file_hash(path) != expected:
+                raise ValueError(f"current code {name} changed during pipeline execution")
+
     def _set_stage(self, name: str, status: str, evidence: dict[str, Any] | None = None) -> None:
+        if status == "complete":
+            self._validate_code()
         self.state["stages"][name] = {"status": status, **({"evidence": evidence} if evidence else {})}
         self._save()
 
@@ -353,7 +368,9 @@ class Pipeline:
         if existing:
             status = existing.get("status")
             if status == "complete":
+                self._validate_code()
                 evidence = validator()
+                self._validate_code()
                 if evidence != existing.get("evidence"):
                     raise ValueError(f"stage {name} completion evidence drifted")
                 return evidence
@@ -363,7 +380,9 @@ class Pipeline:
                         f"stage {name} was interrupted before publishing output; "
                         "refusing an unsafe retry")
                 try:
+                    self._validate_code()
                     evidence = validator()
+                    self._validate_code()
                 except Exception as error:
                     raise RuntimeError(
                         f"stage {name} has partial or invalid interrupted output; "
@@ -376,12 +395,16 @@ class Pipeline:
                 f"stage {name} previously failed; use a new output root after investigation")
         if os.path.lexists(output):
             raise FileExistsError(f"untracked or partial stage output exists: {output}")
+        self._validate_code()
         self._set_stage(name, "running")
         try:
+            self._validate_code()
             return_code = self._invoke(name, command)
+            self._validate_code()
             if return_code not in accepted:
                 raise RuntimeError(f"stage {name} exited with status {return_code}")
             evidence = validator()
+            self._validate_code()
         except Exception:
             self._set_stage(name, "failed")
             raise
@@ -603,6 +626,7 @@ class Pipeline:
             "--expected-adapter-tree-files", c.parent_tree_files), self._headroom_evidence,
             accepted=(0, 2))
         if not headroom["headroom_sufficient"]:
+            self._validate_code()
             result = {"schema": COMPLETE_SCHEMA, "status": "headroom_insufficient",
                       "binding_sha256": binding["binding_sha256"], "winner": None}
             if self.complete_path.exists():
@@ -741,6 +765,7 @@ class Pipeline:
             "comparisons": comparisons, "retention": retention,
             "official_evaluations_run": [],
         }
+        self._validate_code()
         if self.complete_path.exists():
             if _read_json(self.complete_path, "pipeline completion") != result:
                 raise ValueError("pipeline completion marker drifted")
