@@ -23,10 +23,11 @@ from typing import Any, Callable, Iterable
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import scripts.build_r048_action_panel as r048_builder
 from scripts.score_exact_policy_panel import NLL_PROBABILITY_FLOOR, classify
 
 
-SCHEMA = "r049_calibrated_comparison_v2"
+SCHEMA = "r049_calibrated_comparison_v3"
 DEFAULT_BOOTSTRAP_SEED = 490_049
 DEFAULT_BOOTSTRAP_REPLICATES = 20_000
 MIN_BOOTSTRAP_REPLICATES = 100
@@ -108,6 +109,18 @@ def _slice_value(row: dict[str, Any], key: str) -> str | None:
 def _validate_panel(rows: list[dict[str, Any]]) -> list[str]:
     if not isinstance(rows, list) or not rows:
         raise ValueError("panel must be a nonempty list")
+    versions = {
+        row.get("meta", {}).get("panel_version")
+        for row in rows if isinstance(row, dict) and isinstance(row.get("meta"), dict)
+    }
+    versions.discard(None)
+    if versions:
+        if versions != {r048_builder.PANEL_VERSION}:
+            raise ValueError("panel versions must match the canonical R048 version")
+        splits = {row.get("meta", {}).get("split") for row in rows}
+        if len(splits) != 1 or None in splits:
+            raise ValueError("canonical R048 comparison requires exactly one split")
+        r048_builder.validate_split(rows, str(next(iter(splits))), len(rows))
     identifiers = []
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
@@ -119,6 +132,7 @@ def _validate_panel(rows: list[dict[str, Any]]) -> list[str]:
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("panel row ids must be unique")
 
+    semantic_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         meta = row.get("meta")
         cluster = meta.get("semantic_group_id") if isinstance(meta, dict) else None
@@ -151,6 +165,65 @@ def _validate_panel(rows: list[dict[str, Any]]) -> list[str]:
                 _slice_value(row, key)
         except ValueError as error:
             raise ValueError(f"{row['id']}: invalid panel contract: {error}") from error
+        semantic_groups[cluster].append(row)
+
+    for group_id, group in semantic_groups.items():
+        invariant_keys = (
+            INFERENCE_KEY,
+            "field_order",
+            "qid_to_field",
+            "decision_threshold",
+            "policy",
+            "policy_mode",
+            "policy_topology",
+            "topology_slice",
+            "program_family",
+            "action_family",
+        )
+        inconsistent = [
+            key for key in invariant_keys
+            if len({
+                json.dumps(row["meta"].get(key), ensure_ascii=False,
+                           sort_keys=True, separators=(",", ":"))
+                for row in group
+            }) != 1
+        ]
+        if inconsistent:
+            raise ValueError(
+                f"{group_id}: semantic-group invariants disagree: "
+                + ", ".join(inconsistent)
+            )
+        variant_keys = [
+            (row["meta"]["counterfactual_side"], row["meta"].get("language"),
+             row["meta"].get("option_order"))
+            for row in group
+        ]
+        if len(variant_keys) != len(set(variant_keys)):
+            raise ValueError(
+                f"{group_id}: duplicate counterfactual/language/option-order variant"
+            )
+        for side in {row["meta"]["counterfactual_side"] for row in group}:
+            side_rows = [row for row in group
+                         if row["meta"]["counterfactual_side"] == side]
+            for key in ("action_trace", "gold_outcome", "facts"):
+                values = {
+                    json.dumps(row["meta"].get(key), ensure_ascii=False,
+                               sort_keys=True, separators=(",", ":"))
+                    for row in side_rows
+                }
+                if len(values) != 1:
+                    raise ValueError(
+                        f"{group_id}: side {side} has inconsistent {key}"
+                    )
+            targets = {
+                json.dumps(row["targets"], ensure_ascii=False,
+                           sort_keys=True, separators=(",", ":"))
+                for row in side_rows
+            }
+            if len(targets) != 1:
+                raise ValueError(
+                    f"{group_id}: side {side} has inconsistent semantic targets"
+                )
     return identifiers
 
 
@@ -202,7 +275,7 @@ def _score_arm(
             continue
         try:
             result = classify(row, prediction.get("probabilities"))
-        except ValueError:
+        except (ValueError, OverflowError, TypeError):
             records.append(_invalid_record(row, "invalid_prediction"))
             continue
         gold_trace = result["gold_trace"]
@@ -480,17 +553,29 @@ def _family_nonregression(slices: dict[str, Any]) -> dict[str, Any]:
 
 def _option_order_robustness(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Measure semantic agreement across option-order twins, fail closed."""
-    grouped: dict[tuple[str, int, str], dict[str, str | None]] = defaultdict(dict)
+    grouped: dict[tuple[str, str, int, str], dict[str, str | None]] = defaultdict(dict)
     for record in records:
         meta = record["row"]["meta"]
-        key = (meta["semantic_group_id"], meta["counterfactual_side"], meta["language"])
+        key = (
+            meta[INFERENCE_KEY],
+            meta["semantic_group_id"],
+            meta["counterfactual_side"],
+            meta["language"],
+        )
         grouped[key][str(meta["option_order"])] = record.get("predicted_outcome_key")
-    complete = [values for values in grouped.values()
-                if set(values) == {"no_yes", "yes_no"}
-                and all(value is not None for value in values.values())]
+    complete = {
+        key: values for key, values in grouped.items()
+        if set(values) == {"no_yes", "yes_no"}
+        and all(value is not None for value in values.values())
+    }
+    agreement_by_signature: dict[str, list[bool]] = defaultdict(list)
+    for key, values in complete.items():
+        agreement_by_signature[key[0]].append(
+            values["no_yes"] == values["yes_no"]
+        )
     agreement = (
-        sum(values["no_yes"] == values["yes_no"] for values in complete) / len(complete)
-        if complete else None
+        _mean(_mean(matches) for matches in agreement_by_signature.values())
+        if agreement_by_signature else None
     )
     by_order: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
@@ -507,6 +592,8 @@ def _option_order_robustness(records: list[dict[str, Any]]) -> dict[str, Any]:
         "expected_pairs": len(grouped),
         "complete_pairs": len(complete),
         "semantic_agreement": agreement,
+        "semantic_agreement_unit": INFERENCE_KEY,
+        "semantic_signatures": len(agreement_by_signature),
         "order_accuracy": accuracies,
         "order_accuracy_spread": spread,
     }
@@ -776,7 +863,16 @@ def _verify_manifest(
         manifest = json.loads(payload)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("cannot read a valid panel manifest") from error
-    outputs = manifest.get("outputs") if isinstance(manifest, dict) else None
+    if (not isinstance(manifest, dict)
+            or manifest.get("panel") != "exact_policy_v1"
+            or manifest.get("panel_version") != r048_builder.PANEL_VERSION):
+        raise ValueError(
+            f"panel manifest is not canonical R048 {r048_builder.PANEL_VERSION}"
+        )
+    expected_generator = _sha256(Path(r048_builder.__file__).read_bytes())
+    if manifest.get("generator_sha256") != expected_generator:
+        raise ValueError("panel manifest generator differs from current canonical builder")
+    outputs = manifest.get("outputs")
     if not isinstance(outputs, dict):
         raise ValueError("panel manifest needs an outputs object")
     matches = [outputs[key] for key in (panel_path.name, panel_path.stem) if key in outputs]
@@ -823,6 +919,8 @@ def compare_files(
         expected = _checked_hash(expected, f"{name} expected sha256")
         if hashes[name] != expected:
             raise ValueError(f"{name} sha256 mismatch")
+    if manifest_path is None:
+        raise ValueError("a canonical R048 panel manifest is required")
     provenance: dict[str, Any] = {
         "inputs": {
             name: {
@@ -835,12 +933,19 @@ def compare_files(
         },
         "manifest": None,
     }
-    if manifest_path is not None:
-        provenance["manifest"] = _verify_manifest(
-            Path(manifest_path), paths["panel"], loaded["panel"][1], loaded["panel"][0]
-        )
+    provenance["manifest"] = _verify_manifest(
+        Path(manifest_path), paths["panel"], loaded["panel"][1], loaded["panel"][0]
+    )
+    panel_rows = loaded["panel"][0]
+    if any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("meta"), dict)
+        or row["meta"].get("panel_version") != r048_builder.PANEL_VERSION
+        for row in panel_rows
+    ):
+        raise ValueError("file comparison requires canonical R048 panel row versions")
     return compare_rows(
-        loaded["panel"][0],
+        panel_rows,
         loaded["control"][0],
         loaded["candidate"][0],
         bootstrap_seed=bootstrap_seed,
@@ -892,7 +997,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--panel", type=Path, required=True)
     parser.add_argument("--control-predictions", type=Path, required=True)
     parser.add_argument("--candidate-predictions", type=Path, required=True)
-    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--panel-sha256")
     parser.add_argument("--control-sha256")
     parser.add_argument("--candidate-sha256")

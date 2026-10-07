@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.build_r048_action_panel import build, write_corpus
 from scripts.compare_r049_calibrated import (
     compare_files,
     compare_rows,
@@ -19,7 +20,7 @@ def _action(name):
 
 
 def _row(row_id, cluster, *, family="standard", language="en", order="no_yes",
-         topology_slice="heldout_topology"):
+         topology_slice="heldout_topology", side=0):
     policy = {
         "fields": ["risk", "evidence"],
         "mode": "priority",
@@ -53,7 +54,7 @@ def _row(row_id, cluster, *, family="standard", language="en", order="no_yes",
             "split": "eval",
             "semantic_group_id": cluster,
             "semantic_signature": cluster,
-            "counterfactual_side": 0,
+            "counterfactual_side": side,
             "language": language,
             "option_order": order,
             "policy_mode": "priority",
@@ -83,6 +84,17 @@ def _prediction(row, correct, confidence=1.0):
     }
 
 
+def _oracle_prediction(row):
+    return {
+        "id": row["id"],
+        "probabilities": {
+            qid: {"no": float(target["label"] == "no"),
+                  "yes": float(target["label"] == "yes")}
+            for qid, target in row["targets"].items()
+        },
+    }
+
+
 def _compare(rows, control, candidate, *, replicates=400):
     return compare_rows(
         rows,
@@ -103,6 +115,7 @@ def test_perfect_gain_passes_internal_stage1_gate():
 
     report = _compare(rows, control, candidate)
 
+    assert report["schema"] == "r049_calibrated_comparison_v3"
     delta = report["overall"]["paired_delta"]["equal_semantic_cluster"]
     assert delta["complete_outcome_accuracy"] == 1.0
     assert delta["categorical_brier_absolute_improvement"] == 2.0
@@ -134,8 +147,25 @@ def test_missing_and_invalid_predictions_are_scored_fail_closed():
     assert report["internal_stage1_gate"]["passed"] is False
 
 
+def test_extreme_numeric_prediction_is_scored_invalid_not_raised():
+    row = _row("a", "c0")
+    control = _prediction(row, False)
+    candidate = _prediction(row, True)
+    candidate["probabilities"]["q00"]["yes"] = 10**400
+
+    report = _compare([row], [control], [candidate])
+
+    assert report["coverage"]["candidate"]["invalid"] == 1
+    assert report["internal_stage1_gate"]["passed"] is False
+
+
 def test_cluster_estimate_and_bootstrap_do_not_treat_views_as_independent():
-    rows = [_row(f"many-{index}", "many") for index in range(9)]
+    rows = [
+        _row(f"many-{side}-{language}-{order}", "many", side=side,
+             language=language, order=order)
+        for side in (0, 1) for language in ("en", "he")
+        for order in ("no_yes", "yes_no")
+    ]
     rows.append(_row("one", "one"))
     control = [_prediction(row, row["id"] == "one") for row in rows]
     candidate = [_prediction(row, row["id"] != "one") for row in rows]
@@ -143,7 +173,7 @@ def test_cluster_estimate_and_bootstrap_do_not_treat_views_as_independent():
     report = _compare(rows, control, candidate, replicates=600)
 
     paired = report["overall"]["paired_delta"]
-    assert paired["rendered"]["complete_outcome_accuracy"] == pytest.approx(0.8)
+    assert paired["rendered"]["complete_outcome_accuracy"] == pytest.approx(7 / 9)
     assert paired["equal_semantic_cluster"]["complete_outcome_accuracy"] == 0.0
     interval = report["overall"]["paired_cluster_bootstrap"]["complete_outcome_accuracy"]
     assert interval["lower_95"] == -1.0
@@ -194,24 +224,26 @@ def test_program_or_action_family_loss_blocks_internal_gate():
 
 def _write_jsonl(path, rows):
     path.write_text(
-        "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows),
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
         encoding="utf-8",
     )
 
 
 def test_file_comparison_binds_manifest_hashes_and_is_deterministic(tmp_path):
-    rows = [_row(f"r{index}", f"c{index}") for index in range(4)]
-    panel = tmp_path / "eval.jsonl"
+    artifact = tmp_path / "panel"
+    write_corpus(
+        artifact,
+        seed=17,
+        row_counts={"train": 224, "cal": 224, "eval": 224},
+    )
+    panel = artifact / "eval.jsonl"
+    rows = [json.loads(line) for line in panel.read_text().splitlines()]
     control_path = tmp_path / "control.jsonl"
     candidate_path = tmp_path / "candidate.jsonl"
-    _write_jsonl(panel, rows)
-    _write_jsonl(control_path, [_prediction(row, False) for row in rows])
-    _write_jsonl(candidate_path, [_prediction(row, True) for row in rows])
+    _write_jsonl(control_path, [_oracle_prediction(row) for row in rows])
+    _write_jsonl(candidate_path, [_oracle_prediction(row) for row in rows])
     panel_sha = hashlib.sha256(panel.read_bytes()).hexdigest()
-    manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({
-        "outputs": {"eval": {"rows": len(rows), "sha256": panel_sha}},
-    }), encoding="utf-8")
+    manifest = artifact / "manifest.json"
 
     first = compare_files(
         panel,
@@ -235,6 +267,51 @@ def test_file_comparison_binds_manifest_hashes_and_is_deterministic(tmp_path):
     assert first == second
     assert first["provenance"]["manifest"]["verified"] is True
     assert "timestamp" not in json.dumps(first)
+
+
+def test_file_comparison_rejects_panel_version_stripping(tmp_path):
+    artifact = tmp_path / "panel"
+    write_corpus(
+        artifact,
+        seed=17,
+        row_counts={"train": 224, "cal": 224, "eval": 224},
+    )
+    panel = artifact / "eval.jsonl"
+    rows = [json.loads(line) for line in panel.read_text().splitlines()]
+    for row in rows:
+        row["meta"].pop("panel_version")
+        row["meta"]["semantic_signature"] = "forged-cluster"
+        row["meta"]["latent_signature"] = "forged-cluster"
+    _write_jsonl(panel, rows)
+    panel_sha = hashlib.sha256(panel.read_bytes()).hexdigest()
+    manifest_path = artifact / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["outputs"]["eval"] = {"rows": len(rows), "sha256": panel_sha}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    control_path = tmp_path / "control.jsonl"
+    candidate_path = tmp_path / "candidate.jsonl"
+    predictions = [_oracle_prediction(row) for row in rows]
+    _write_jsonl(control_path, predictions)
+    _write_jsonl(candidate_path, predictions)
+
+    with pytest.raises(ValueError, match="canonical R048 panel row versions"):
+        compare_files(
+            panel,
+            control_path,
+            candidate_path,
+            manifest_path=manifest_path,
+            bootstrap_replicates=100,
+        )
+
+
+def test_canonical_r048_signature_tampering_is_rejected():
+    rows = build("eval", 224, seed=48)
+    for row in rows:
+        row["meta"]["semantic_signature"] = "tampered"
+        row["meta"]["latent_signature"] = "tampered"
+    predictions = [_oracle_prediction(row) for row in rows]
+    with pytest.raises(ValueError, match="semantic signature"):
+        compare_rows(rows, predictions, predictions, bootstrap_replicates=100)
 
 
 def test_atomic_output_refuses_overwrite_and_has_deterministic_bytes(tmp_path):
@@ -273,6 +350,73 @@ def test_canonical_v13_cluster_and_topology_keys_are_required():
 
     with pytest.raises(ValueError, match="policy_topology is required"):
         _compare([row], [prediction], [prediction])
+
+
+def test_semantic_group_signature_and_variant_keys_fail_closed():
+    first = _row("a", "cluster", order="no_yes")
+    second = _row("b", "cluster", order="yes_no")
+    second["meta"]["semantic_signature"] = "tampered"
+    with pytest.raises(ValueError, match="semantic-group invariants disagree"):
+        _compare(
+            [first, second],
+            [_prediction(first, True), _prediction(second, True)],
+            [_prediction(first, True), _prediction(second, True)],
+        )
+
+    duplicate = _row("duplicate", "cluster", order="no_yes")
+    with pytest.raises(ValueError, match="duplicate counterfactual"):
+        _compare(
+            [first, duplicate],
+            [_prediction(first, True), _prediction(duplicate, True)],
+            [_prediction(first, True), _prediction(duplicate, True)],
+        )
+
+
+def test_option_order_agreement_uses_equal_semantic_signature_weighting():
+    rows = []
+    for group_index in range(3):
+        for order in ("no_yes", "yes_no"):
+            row = _row(
+                f"large-{group_index}-{order}",
+                f"large-group-{group_index}",
+                order=order,
+            )
+            row["meta"]["semantic_signature"] = "large-signature"
+            rows.append(row)
+    for order in ("no_yes", "yes_no"):
+        row = _row(f"small-{order}", "small-group", order=order)
+        row["meta"]["semantic_signature"] = "small-signature"
+        rows.append(row)
+    control = [_prediction(row, False) for row in rows]
+    candidate = []
+    for row in rows:
+        agrees = (row["meta"]["semantic_signature"] == "large-signature"
+                  or row["meta"]["option_order"] == "no_yes")
+        candidate.append(_prediction(row, agrees))
+
+    report = _compare(rows, control, candidate)
+    robustness = report["option_order_robustness"]
+
+    assert robustness["expected_pairs"] == 4
+    assert robustness["complete_pairs"] == 4
+    assert robustness["semantic_signatures"] == 2
+    assert robustness["semantic_agreement_unit"] == "semantic_signature"
+    assert robustness["semantic_agreement"] == 0.5
+
+
+@pytest.mark.parametrize("key", [
+    "program_family", "action_family", "policy_topology", "topology_slice",
+])
+def test_semantic_group_slice_metadata_cannot_be_split(key):
+    first = _row("a", "cluster", order="no_yes")
+    second = _row("b", "cluster", order="yes_no")
+    second["meta"][key] = "tampered"
+    with pytest.raises(ValueError, match="semantic-group invariants disagree"):
+        _compare(
+            [first, second],
+            [_prediction(first, True), _prediction(second, True)],
+            [_prediction(first, True), _prediction(second, True)],
+        )
 
 
 def test_absent_required_families_fail_closed():
