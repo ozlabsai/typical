@@ -17,6 +17,7 @@ COMMITTED_MANIFEST = ROOT / "sources" / "r052" / "ntsb_gao_v1.json"
 @pytest.fixture(autouse=True)
 def _compact_test_token_floor(monkeypatch):
     monkeypatch.setattr(promoter, "MIN_REVIEWED_WORD_TOKENS", 64)
+    monkeypatch.setattr(scorer, "MIN_REVIEWED_WORD_TOKENS", 64)
 
 
 def _sha(payload: bytes) -> str:
@@ -196,18 +197,23 @@ def _promote(fixture: dict) -> dict:
     )
 
 
-def test_happy_path_emits_deterministic_v3_accepted_by_builder_and_scorer(tmp_path):
+def test_happy_path_emits_deterministic_v4_accepted_by_builder_and_scorer(tmp_path):
     fixture = _fixture(tmp_path)
 
     receipt = _promote(fixture)
 
     output = fixture["output"]
-    manifest_raw = (output / "source-manifest-v3.json").read_bytes()
+    manifest_raw = (output / "source-manifest-v4.json").read_bytes()
     manifest = json.loads(manifest_raw)
     assert manifest_raw == promoter.canonical_json(manifest)
     assert receipt["semantic_review_verified_by_tool"] is False
     assert receipt["acquisition_receipt_sha256"] == fixture["acquisition_receipt_sha"]
     assert receipt["source_manifest_sha256"] == _sha(manifest_raw)
+    assert manifest["schema_version"] == "r052-source-provenance-manifest-v4"
+    assert (
+        manifest["acquisition_run_receipt_artifact"]
+        == promoter.ACQUISITION_RUN_ARTIFACT_NAME
+    )
     assert len(manifest["snapshots"]) == 10
     assert set(manifest["license_policies"]) == {
         "ntsb_staff_text",
@@ -220,6 +226,15 @@ def test_happy_path_emits_deterministic_v3_accepted_by_builder_and_scorer(tmp_pa
     artifact_paths = {
         name: output / relative for name, relative in receipt["artifact_paths"].items()
     }
+    run_name = manifest["acquisition_run_receipt_artifact"]
+    assert manifest["artifacts"][run_name] == {
+        "role": promoter.ACQUISITION_RUN_ARTIFACT_ROLE,
+        "sha256": fixture["acquisition_receipt_sha"],
+    }
+    assert (
+        artifact_paths[run_name].read_bytes()
+        == fixture["acquisition_receipt_path"].read_bytes()
+    )
     assert set(builder._validate_source_manifest(manifest, artifact_paths)) == set(
         artifact_paths
     )
@@ -239,7 +254,7 @@ def test_happy_path_emits_deterministic_v3_accepted_by_builder_and_scorer(tmp_pa
         panel, manifest, digest, artifact_paths
     )
     assert validated_digest == digest
-    assert len(by_hash) == 20
+    assert len(by_hash) == 21
 
     first_id = next(iter(manifest["snapshots"]))
     source_record = receipt["sources"][first_id]
@@ -247,7 +262,12 @@ def test_happy_path_emits_deterministic_v3_accepted_by_builder_and_scorer(tmp_pa
     expected = fixture["texts"][first_id]
     assert reviewed == expected
     acquisition_record = json.loads(
-        artifact_paths[source_record["acquisition_receipt_artifact"]].read_bytes()
+        artifact_paths[source_record["acquisition_binding_artifact"]].read_bytes()
+    )
+    binding_name = source_record["acquisition_binding_artifact"]
+    assert (
+        manifest["artifacts"][binding_name]["role"]
+        == promoter.ACQUISITION_BINDING_ARTIFACT_ROLE
     )
     assert acquisition_record["schema_version"] == promoter.ACQUISITION_BINDING_VERSION
     assert acquisition_record["schema_version"] != promoter.ACQUISITION_RECEIPT_VERSION
@@ -267,6 +287,35 @@ def test_happy_path_emits_deterministic_v3_accepted_by_builder_and_scorer(tmp_pa
     )
     completion = json.loads((output / "PROMOTION_COMPLETE.json").read_bytes())
     assert completion["source_manifest_sha256"] == receipt["source_manifest_sha256"]
+
+
+def test_generated_manifest_v3_requires_migration_in_current_consumers(tmp_path):
+    fixture = _fixture(tmp_path)
+    receipt = _promote(fixture)
+    output = fixture["output"]
+    manifest = json.loads((output / "source-manifest-v4.json").read_bytes())
+    artifact_paths = {
+        name: output / relative for name, relative in receipt["artifact_paths"].items()
+    }
+    manifest["schema_version"] = "r052-source-provenance-manifest-v3"
+
+    with pytest.raises(ValueError, match="migration to v4"):
+        builder._validate_source_manifest(manifest, artifact_paths)
+    panel = {
+        "cases": [
+            {
+                "source_snapshot_sha256": manifest["artifacts"][
+                    snapshot["reviewed_text_artifact"]
+                ]["sha256"],
+                "source_family": snapshot["source_family"],
+            }
+            for snapshot in manifest["snapshots"].values()
+        ]
+    }
+    with pytest.raises(ValueError, match="migration to v4"):
+        scorer.validate_source_snapshot_manifest(
+            panel, manifest, scorer.sha256_json(manifest), artifact_paths
+        )
 
 
 @pytest.mark.parametrize(

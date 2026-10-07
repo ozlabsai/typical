@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-r"""Promote externally reviewed R052 acquisitions into source manifest v3.
+r"""Promote externally reviewed R052 acquisitions into source manifest v4.
 
 This bridge verifies bytes and enforces a closed review-receipt contract.  It
 does not determine whether the retained text is actually government-authored
@@ -32,16 +32,19 @@ except ModuleNotFoundError:  # Supports ``uv run python scripts/promote_...py``.
     import score_r052_evidence_retrieval as scorer
 
 REVIEW_SCHEMA_VERSION = "r052-reviewed-source-review-v1"
-ACQUISITION_RECEIPT_VERSION = "r052-source-acquisition-receipt-v1"
-ACQUISITION_BINDING_VERSION = "r052-reviewed-source-acquisition-binding-v1"
+ACQUISITION_RECEIPT_VERSION = scorer.ACQUISITION_RUN_RECEIPT_VERSION
+ACQUISITION_BINDING_VERSION = scorer.ACQUISITION_BINDING_VERSION
 PROMOTION_RECEIPT_VERSION = "r052-reviewed-source-promotion-receipt-v1"
 COMPLETION_MARKER_VERSION = "r052-reviewed-source-promotion-complete-v1"
-SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v3"
-SOURCE_LICENSE_POLICY = "approved-evaluation-and-redistribution-v1"
+SOURCE_MANIFEST_VERSION = scorer.SOURCE_MANIFEST_VERSION
+SOURCE_LICENSE_POLICY = scorer.SOURCE_LICENSE_POLICY
 MANIFEST_LICENSE_ID = "LicenseRef-USGov-Public-Domain"
-PRODUCTION_MIN_REVIEWED_WORD_TOKENS = 8_192
+ACQUISITION_RUN_ARTIFACT_NAME = "acquisition-run"
+ACQUISITION_RUN_ARTIFACT_ROLE = "source_acquisition_run_receipt"
+ACQUISITION_BINDING_ARTIFACT_ROLE = "reviewed_source_acquisition_binding"
+PRODUCTION_MIN_REVIEWED_WORD_TOKENS = scorer.MIN_REVIEWED_WORD_TOKENS
 MIN_REVIEWED_WORD_TOKENS = PRODUCTION_MIN_REVIEWED_WORD_TOKENS
-WORD_TOKEN_COUNT_METHOD = "python-re-unicode-word-v1-not-model-tokenizer"
+WORD_TOKEN_COUNT_METHOD = scorer.WORD_TOKEN_COUNT_METHOD
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 REVIEWER_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]{0,126}[A-Za-z0-9])?$")
 UNICODE_WORD_RE = re.compile(r"\w+", re.UNICODE)
@@ -503,7 +506,11 @@ def promote(
     except acquisition.SnapshotError as error:
         raise PromotionError(str(error)) from error
 
-    acquisition_receipt, _, acquisition_receipt_digest = _read_hashed_json(
+    (
+        acquisition_receipt,
+        acquisition_receipt_payload,
+        acquisition_receipt_digest,
+    ) = _read_hashed_json(
         Path(acquisition_receipt_path),
         acquisition_receipt_sha256,
         "acquisition receipt",
@@ -584,16 +591,29 @@ def promote(
         tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent)
     )
     try:
-        artifact_declarations: dict[str, dict[str, str]] = {}
-        artifact_paths: dict[str, str] = {}
+        run_receipt_relative = "acquisition/acquisition-run-receipt.json"
+        copied_run_digest = _write(
+            temporary / run_receipt_relative, acquisition_receipt_payload
+        )
+        if copied_run_digest != acquisition_receipt_digest:
+            raise PromotionError("copied acquisition run receipt hash mismatch")
+        artifact_declarations: dict[str, dict[str, str]] = {
+            ACQUISITION_RUN_ARTIFACT_NAME: {
+                "role": ACQUISITION_RUN_ARTIFACT_ROLE,
+                "sha256": acquisition_receipt_digest,
+            }
+        }
+        artifact_paths: dict[str, str] = {
+            ACQUISITION_RUN_ARTIFACT_NAME: run_receipt_relative
+        }
         output_snapshots: dict[str, dict[str, Any]] = {}
         source_records: dict[str, dict[str, Any]] = {}
         for snapshot in snapshots:
             source_id = snapshot["id"]
             reviewed_name = f"reviewed-{source_id}"
-            acquisition_name = f"acquisition-{source_id}"
+            acquisition_name = f"binding-{source_id}"
             reviewed_relative = f"reviewed/{source_id}.txt"
-            acquisition_relative = f"acquisition/{source_id}.json"
+            acquisition_relative = f"bindings/{source_id}.json"
             reviewed_hash = _write(
                 temporary / reviewed_relative, reviewed_payloads[source_id]
             )
@@ -622,7 +642,7 @@ def promote(
                 "sha256": reviewed_hash,
             }
             artifact_declarations[acquisition_name] = {
-                "role": "source_acquisition_receipt",
+                "role": ACQUISITION_BINDING_ARTIFACT_ROLE,
                 "sha256": acquisition_hash,
             }
             artifact_paths[reviewed_name] = reviewed_relative
@@ -630,7 +650,7 @@ def promote(
             policy_name = snapshot["license_policy"]
             output_snapshots[source_id] = {
                 "reviewed_text_artifact": reviewed_name,
-                "acquisition_receipt_artifact": acquisition_name,
+                "acquisition_binding_artifact": acquisition_name,
                 "source_family": "public_domain",
                 "upstream_url": snapshot["upstream_url"],
                 "upstream_revision": snapshot["upstream_revision"],
@@ -649,8 +669,8 @@ def promote(
                 **reviewed_metadata[source_id],
                 "reviewed_text_artifact": reviewed_name,
                 "reviewed_text_sha256": reviewed_hash,
-                "acquisition_receipt_artifact": acquisition_name,
-                "acquisition_receipt_sha256": acquisition_hash,
+                "acquisition_binding_artifact": acquisition_name,
+                "acquisition_binding_sha256": acquisition_hash,
             }
 
         output_manifest = {
@@ -659,16 +679,18 @@ def promote(
             "benchmark_derived": False,
             "license_policies": output_policies,
             "artifacts": artifact_declarations,
+            "acquisition_run_receipt_artifact": ACQUISITION_RUN_ARTIFACT_NAME,
             "snapshots": output_snapshots,
         }
         output_manifest_payload = canonical_json(output_manifest)
         output_manifest_hash = _write(
-            temporary / "source-manifest-v3.json", output_manifest_payload
+            temporary / "source-manifest-v4.json", output_manifest_payload
         )
         promotion_receipt = {
             "schema_version": PROMOTION_RECEIPT_VERSION,
             "acquisition_manifest_sha256": manifest_digest,
             "acquisition_receipt_sha256": acquisition_receipt_digest,
+            "acquisition_run_receipt_artifact": ACQUISITION_RUN_ARTIFACT_NAME,
             "review_receipt_sha256": review_digest,
             "source_manifest_sha256": output_manifest_hash,
             "semantic_review_verified_by_tool": False,
