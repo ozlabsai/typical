@@ -23,20 +23,30 @@ Required receipt fields per source:
 
 ## 2. Evidence and typed-policy review
 
-Two reviewers independently assess each Choice, Noul, and Score question. An adjudicator resolves
-disagreements without seeing retrieval rankings. They verify:
+Before questions and options are frozen, two reviewers who cannot see them map exact reviewed-text
+spans or image regions to opaque typed fact IDs. They record value, unit, source chunk/content hash,
+locator hash, and an adjudication receipt in a question-blind fact ledger. A separate author then
+writes a bounded Choice/Noul/Score rule graph over those fact IDs; missing facts remain unknown and
+never imply false. The ledger and rubric are frozen before retrieval scoring.
+
+Two reviewers then independently assess each question. An adjudicator resolves disagreements without
+seeing retrieval rankings. They verify:
 
 - the answer follows from the declared decisive chunks;
 - every other retrievable chunk is explicitly labeled as a distractor for that question;
-- removing all and only the declared decisive chunks changes the result under the frozen policy
-  rubric, rather than merely lowering confidence;
+- removing all and only the declared decisive chunks produces the preregistered replay transition;
+- the removal is inclusion-minimal, decisive-only evidence reproduces the full result, distractor-only
+  evidence does not, and removing distractors leaves the result unchanged;
 - the answer cannot still be reconstructed by elimination, arithmetic using retained numbers, a
   duplicated statement, the question wording, title, or option wording;
 - the question, options, and evidence do not quote or derive from JevBench, WorkflowEvals, Open-Jev,
   typed-decisions, or any other target benchmark lineage.
 
-The rubric and replay executor are frozen before scoring. R052-B1 is described as decisive-evidence
-retrieval; causal downstream claims are reserved for R052-B2 and require executor replay.
+The standard-library replay executor recomputes outcomes from visible facts and exact rational
+arithmetic. A full resolved result becoming unresolved is reported as `resolution_loss`, not a
+semantic label flip; only two different resolved outputs are a `label_flip`. R052-B1 is described as
+retrieval of replay-eligible decisive evidence. Causal claims about Typical are reserved for R052-B2,
+where removal must measurably change the model's prediction.
 
 ## 3. Hebrew twin review
 
