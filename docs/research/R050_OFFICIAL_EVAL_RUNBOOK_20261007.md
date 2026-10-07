@@ -2,38 +2,24 @@
 
 Date: 2026-10-07
 
-Scored work in this runbook is executable only after R050 emits one eligible winner. The detached
-wrapper may be staged earlier with its bounded wait mode. The same frozen base, adapter,
-option-logit readout, and runtime settings are used for every external evaluation. External
-results must never feed back into checkpoint, temperature, prompt, or loss selection.
+Scored work is permitted only after R050 emits one eligible winner. The detached wrapper may be
+started earlier in its bounded wait mode. External results must never feed back into checkpoint,
+temperature, prompt, loss, or retry selection.
 
-## 0. Frozen targets and authority
+## Frozen authority
 
-The external target is the released Benchmark Heaven API artifact at
-`https://benchmarkheaven.com/api/jevbench/v1.5.4`, not the repository README's older
-"current" label. On 2026-10-07 that artifact declares:
+The released Benchmark Heaven target is
+`https://benchmarkheaven.com/api/jevbench/v1.5.4`. It declares revision `v1.5.4`, protocol
+`jevbench::v1.5`, run kind `official`, 1,624 decisions, and Jev 1.13.0 score
+`72.13292897895896`. The public 231-row checkout is a diagnostic, not a reproduction of the
+sealed official run.
 
-- revision `v1.5.4`, protocol `jevbench::v1.5`, status `released`, run kind `official`;
-- source SHA-256 `452885de2a84cd5b9ed393d541fd8d6c6a540f9d7f762f9d2df9349383f26173`;
-- 904 open plus 720 sealed decisions, 1,624 total;
-- frozen method SHA-256 `c25d3d8b8512e4d93370a9e0c99705d19b2a9389956ca33b8a4bd2b0ec501c07`;
-- official equal-axis/equal-type headline addendum SHA-256
-  `752ddccc4e191c81412631ee3121563421c4b9077cb6c3f2243ed1d1545cfab0`;
-- Jev 1.13.0 full coverage, 1,624 answered, zero missing, score
-  `72.13292897895896`, and Intelligence `71.99974990450261`.
+The public JevBench harness is frozen at
+`bb05a335bc809e61b20c0f745d25499a82b326fc`. WorkflowEvals is frozen at
+`0ac3b8ad845429f0d8e064ecfb2430a47c5a25cb` plus the reviewed Typical provider patch whose
+SHA-256 is `07106bf888aa53a2770b83503c58635708db32042ecb4b034a41963b1ba43908`.
 
-The public `fstandhartinger/jevbench` checkout is separately pinned at commit
-`bb05a335bc809e61b20c0f745d25499a82b326fc`. It contains the frozen v1.5 method but its
-README still calls v1.4.2.2 current. Its 231 public rows are therefore a legacy diagnostic,
-not a reproduction of the 1,624-row official v1.5.4 run.
-
-The frozen method originally proposed a 40/20/20/20 headline and 50/25/25 type weights. The
-disclosed post-leaderboard addendum makes official v1.5 headline A use equal Intelligence,
-Calibration, Speed, and Cost axes and equal Choice, Noul, and Score weights. Parity is always
-computed under that released amended headline, never the superseded proposal.
-
-WorkflowEvals parity means all 705 cases and 1,524 policy decisions at the pinned dataset
-revisions below, with these published Jev gates:
+Workflow parity covers 705 cases and 1,524 policy decisions. The published Jev gates are:
 
 - security incidents exact action set: at least `0.617`;
 - agent trace primary action: at least `0.716`;
@@ -42,412 +28,158 @@ revisions below, with these published Jev gates:
 - equal-workflow mean: at least `0.678`;
 - no missing case, failed request, failed decision, retry, or model substitution.
 
-## Autonomous execution (normative)
+## Stage private, immutable checkouts
 
-The wrapper is the single normative execution path. It holds one strict-mode process for the
-whole attempt, keeps scored stdout/stderr sealed, and makes the per-adapter exactly-once claim
-immediately before the first scored request. The expanded commands in sections 1–6 document its
-audited gates; do not execute those blocks separately.
+`/workspace` is persistent FUSE storage on the evaluation pod and does not enforce Unix mode
+bits. It is suitable for the rehashed model, adapter, pipeline state, and final completed archive,
+but not for active code, harnesses, logs, or scored intermediate results. Stage all executable
+checkouts on the container's local overlay under `/root/r050-eval`.
 
-Set `EXPECTED_TYPICAL_COMMIT` to the 40-character commit from the reviewed deployment handoff,
-not a value discovered from the checkout during launch. Then start the wrapper in one detached
-session. The launch log contains milestones and failures, while scored command logs remain under
-the mode-0700 evaluation root.
+Set `EXPECTED_TYPICAL_COMMIT` to the reviewed 40-character deployment commit supplied in the
+handoff. Do not discover or derive it from the checkout being launched.
 
 ```bash
 set -euo pipefail
 umask 077
 
-export TYPICAL_REPO=/workspace/g1/typical-eval-frozen
+export EXPECTED_TYPICAL_COMMIT='<reviewed-deployment-commit>'
+export R050_LOCAL_ROOT=/root/r050-eval
+export TYPICAL_REPO=/root/r050-eval/typical
+export WORKFLOWEVALS=/root/r050-eval/WorkflowEvals
+export JEVBENCH=/root/r050-eval/jevbench
+
+export TYPICAL_SOURCE=/workspace/g1/typical-eval-frozen
+export WORKFLOW_SOURCE=/workspace/g1/WorkflowEvals-0ac3b8ad
+export JEV_SOURCE=/workspace/g1/jevbench-bb05a335
+
+[[ "$EXPECTED_TYPICAL_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+test ! -e "$R050_LOCAL_ROOT"
+install -d -m 700 "$R050_LOCAL_ROOT"
+
+git clone --no-hardlinks "$TYPICAL_SOURCE" "$TYPICAL_REPO"
+git -C "$TYPICAL_REPO" checkout --detach "$EXPECTED_TYPICAL_COMMIT"
+test "$(git -C "$TYPICAL_REPO" rev-parse HEAD)" = "$EXPECTED_TYPICAL_COMMIT"
+test -z "$(git -C "$TYPICAL_REPO" status --porcelain=v1 --untracked-files=all)"
+
+git clone --no-hardlinks "$WORKFLOW_SOURCE" "$WORKFLOWEVALS"
+git -C "$WORKFLOWEVALS" checkout --detach 0ac3b8ad845429f0d8e064ecfb2430a47c5a25cb
+git -C "$WORKFLOWEVALS" apply \
+  "$TYPICAL_REPO/patches/workflowevals-typical-provider-0ac3b8ad.patch"
+
+git clone --no-hardlinks "$JEV_SOURCE" "$JEVBENCH"
+git -C "$JEVBENCH" checkout --detach bb05a335bc809e61b20c0f745d25499a82b326fc
+test -z "$(git -C "$JEVBENCH" status --porcelain=v1 --untracked-files=all)"
+
+# Remove write permission first as an explicit staging gate, then make every
+# checkout private. Owner execute bits on directories and scripts are retained.
+chmod -R go-w "$TYPICAL_REPO" "$WORKFLOWEVALS" "$JEVBENCH"
+chmod -R go-rwx "$TYPICAL_REPO" "$WORKFLOWEVALS" "$JEVBENCH"
+
+cd "$TYPICAL_REPO"
+uv sync --frozen --group dev
+cd "$WORKFLOWEVALS"
+uv sync --frozen
+cd "$JEVBENCH"
+uv sync --frozen
+```
+
+The wrapper scans all regular files and directories in each checkout after pipeline quiescence,
+including WorkflowEvals files created by the patch. It excludes only `.git`, virtual environments,
+caches, and generated run trees. Any group/other-writable runtime input fails closed.
+
+## Autonomous execution (single normative execution path)
+
+The wrapper is the single normative execution path. It owns one strict-mode process, validates
+the checkouts before and after waiting for pipeline quiescence, binds the exact pipeline completion
+lineage and winner hashes, warms both harnesses, and starts an authenticated loopback-only model
+server. It then reserves the persistent root and claims the adapter immediately before the first
+scored request.
+
+All preparation and scored output stays in mode-private local staging. A failed preclaim attempt is
+retained under `/root/r050-eval/failed-preclaim` and may be retried at most three times. Once the
+adapter claim exists, the wrapper never retries scored work. The persistent evidence root carries
+only an unguessable ownership token until postrun verification and both preservation checks pass.
+Publication itself is retried at most three times from the receipt-bound private evidence.
+
+```bash
+set -euo pipefail
+umask 077
+
+export EXPECTED_TYPICAL_COMMIT='<reviewed-deployment-commit>'
+export R050_LOCAL_ROOT=/root/r050-eval
+export TYPICAL_REPO=/root/r050-eval/typical
+export WORKFLOWEVALS=/root/r050-eval/WorkflowEvals
+export JEVBENCH=/root/r050-eval/jevbench
 export R050_ROOT=/workspace/g1/r050-ab512c3/repo/.context/r050-gpu-run-a77fea5-resume2
 export EVAL_ROOT=/workspace/g1/r050-official-eval-20261007
-export WORKFLOWEVALS=/workspace/g1/WorkflowEvals-0ac3b8ad
-export JEVBENCH=/workspace/g1/jevbench-bb05a335
-export EXPECTED_TYPICAL_COMMIT='<reviewed-deployment-commit>'
-export LAUNCH_LOG=/workspace/g1/r050-official-eval-20261007.launch.log
+export LAUNCH_LOG=/root/r050-eval/r050-official-eval.launch.log
 
 [[ "$EXPECTED_TYPICAL_COMMIT" =~ ^[0-9a-f]{40}$ ]]
 test "$(git -C "$TYPICAL_REPO" rev-parse HEAD)" = "$EXPECTED_TYPICAL_COMMIT"
+test -z "$(git -C "$TYPICAL_REPO" status --porcelain=v1 --untracked-files=all)"
 test ! -e "$EVAL_ROOT"
 test ! -e "$LAUNCH_LOG"
 ! tmux has-session -t r050-official 2>/dev/null
 
 tmux new-session -d -s r050-official \
-  "exec env R050_WAIT_FOR_COMPLETE=1 EXPECTED_TYPICAL_COMMIT=$EXPECTED_TYPICAL_COMMIT TYPICAL_REPO=$TYPICAL_REPO R050_ROOT=$R050_ROOT EVAL_ROOT=$EVAL_ROOT WORKFLOWEVALS=$WORKFLOWEVALS JEVBENCH=$JEVBENCH bash $TYPICAL_REPO/scripts/run_r050_official_eval.sh >$LAUNCH_LOG 2>&1"
+  "umask 077; exec env R050_WAIT_FOR_COMPLETE=1 R050_WAIT_TIMEOUT_SECONDS=86400 EXPECTED_TYPICAL_COMMIT=$EXPECTED_TYPICAL_COMMIT R050_LOCAL_ROOT=$R050_LOCAL_ROOT R050_LAUNCH_LOG=$LAUNCH_LOG TYPICAL_REPO=$TYPICAL_REPO R050_ROOT=$R050_ROOT EVAL_ROOT=$EVAL_ROOT WORKFLOWEVALS=$WORKFLOWEVALS JEVBENCH=$JEVBENCH bash $TYPICAL_REPO/scripts/run_r050_official_eval.sh >$LAUNCH_LOG 2>&1"
 tmux has-session -t r050-official
 ```
 
-Do not start a second session or choose another evaluation root after the adapter claim exists.
-A failure after that boundary invalidates the official attempt; it is not permission to rerun
-already scored cases. Monitor only process liveness, GPU utilization, and log/file byte growth
-until `official-eval-complete.json` exists.
+The `umask 077` inside the detached shell runs before its launch-log redirection. The log therefore
+lives on the local overlay with private mode; the wrapper checks this again. After a successful
+run it copies the closed launch log into the completed persistent archive and records its SHA-256.
 
-## 1. Winner and artifact gate
+## Safe monitoring
 
-Use a new evaluation directory and derive every artifact from the sealed pipeline state. Never
-type a base-model or winner path by hand.
-
-```bash
-set -euo pipefail
-umask 077
-
-export TYPICAL_REPO=/workspace/g1/typical-eval-frozen
-export R050_ROOT=/workspace/g1/r050-ab512c3/repo/.context/r050-gpu-run-a77fea5-resume2
-export EVAL_ROOT=/workspace/g1/r050-official-eval-20261007
-export WORKFLOWEVALS=/workspace/g1/WorkflowEvals-0ac3b8ad
-export JEVBENCH=/workspace/g1/jevbench-bb05a335
-
-STATE="$R050_ROOT/state.json"
-COMPLETE="$R050_ROOT/complete.json"
-: "${EXPECTED_TYPICAL_COMMIT:?inherited from the normative launcher}"
-test "$(git -C "$TYPICAL_REPO" rev-parse HEAD)" = "$EXPECTED_TYPICAL_COMMIT"
-test -z "$(git -C "$TYPICAL_REPO" status --porcelain)"
-test "$(jq -r .status "$COMPLETE")" = complete
-test "$(jq -c .official_evaluations_run "$COMPLETE")" = '[]'
-
-WINNER=$(jq -er .winner "$COMPLETE")
-jq -e --arg winner "$WINNER" '.eligible_candidates | index($winner) != null' "$COMPLETE"
-ARM_COMPLETION="$R050_ROOT/runs/$WINNER/completion.json"
-ADAPTER=$(jq -er .artifacts.checkpoint.path "$ARM_COMPLETION")
-ADAPTER_SHA=$(jq -er .artifacts.checkpoint.tree_sha256 "$ARM_COMPLETION")
-ADAPTER_FILES=$(jq -er .artifacts.checkpoint.files "$ARM_COMPLETION")
-
-BASE_MODEL=$(jq -er .binding.paths.model "$STATE")
-MODEL_INVENTORY=$(jq -er .binding.paths.model_inventory "$STATE")
-MODEL_INVENTORY_SHA=$(jq -er .binding.hashes.model_inventory "$STATE")
-BASE_MODEL_SHA=$(jq -er .tree_sha256 "$MODEL_INVENTORY")
-BASE_REVISION=$(jq -er .revision "$MODEL_INVENTORY")
-MODEL_ID="typical-r050-sha256-${ADAPTER_SHA:0:16}"
-
-test ! -e "$EVAL_ROOT"
-mkdir "$EVAL_ROOT"
-
-# Preserve the exact winner-selection state before any external score exists.
-cp "$STATE" "$EVAL_ROOT/r050-state.json"
-cp "$COMPLETE" "$EVAL_ROOT/r050-complete.json"
-cp "$ARM_COMPLETION" "$EVAL_ROOT/r050-winner-completion.json"
-git -C "$TYPICAL_REPO" rev-parse HEAD >"$EVAL_ROOT/typical-commit.txt"
-sha256sum \
-  "$EVAL_ROOT/r050-state.json" \
-  "$EVAL_ROOT/r050-complete.json" \
-  "$EVAL_ROOT/r050-winner-completion.json" \
-  "$TYPICAL_REPO/uv.lock" \
-  >"$EVAL_ROOT/frozen-input-sha256.txt"
-
-curl --fail --location --silent --show-error \
-  https://benchmarkheaven.com/api/jevbench/v1.5.4 \
-  --output "$EVAL_ROOT/jevbench-v1.5.4-target.json"
-
-cd "$TYPICAL_REPO"
-uv run --frozen python - "$EVAL_ROOT/jevbench-v1.5.4-target.json" <<'PY'
-import json
-import math
-import sys
-from pathlib import Path
-
-target = json.loads(Path(sys.argv[1]).read_text())
-assert (target["revision"], target["protocol"], target["status"], target["run_kind"]) == (
-    "v1.5.4", "jevbench::v1.5", "released", "official"
-)
-assert target["source_sha256"] == "452885de2a84cd5b9ed393d541fd8d6c6a540f9d7f762f9d2df9349383f26173"
-assert target["method_sha256"] == "c25d3d8b8512e4d93370a9e0c99705d19b2a9389956ca33b8a4bd2b0ec501c07"
-assert target["headline_method_addendum_sha256"] == "752ddccc4e191c81412631ee3121563421c4b9077cb6c3f2243ed1d1545cfab0"
-assert target["sample"] == {"open": 904, "sealed": 720, "total": 1624, "published_open": 601}
-assert target["headline"] == "A" and set(target["types"].values()) == {1 / 3}
-jev = next(row for row in target["systems"] if row["key"] == "jev-1.13.0")
-assert jev["status"] == {"status": "complete", "rows": 1624, "missing": 0, "answered_ok": 1624}
-assert math.isclose(jev["jevbench_score"], 72.13292897895896, rel_tol=0, abs_tol=1e-12)
-assert math.isclose(jev["axes"]["intelligence"], 71.99974990450261, rel_tol=0, abs_tol=1e-12)
-PY
-```
-
-Authenticate the full base and adapter trees before loading weights:
+Do not open scored outputs while the run is active. Monitor only process liveness, the launch-log
+tail, GPU ownership/utilization, and marker existence:
 
 ```bash
-cd "$TYPICAL_REPO"
-uv run --frozen python - "$MODEL_INVENTORY" "$BASE_MODEL" \
-  "$MODEL_INVENTORY_SHA" "$ADAPTER" "$ADAPTER_SHA" "$ADAPTER_FILES" <<'PY'
-import sys
-from pathlib import Path
-from scripts.build_r047_model_inventory import verify_inventory
-from scripts.preflight_r043_assets import tree_hash
-
-inventory, inventory_sha = verify_inventory(Path(sys.argv[1]), Path(sys.argv[2]))
-assert inventory_sha == sys.argv[3]
-adapter_sha, adapter_files = tree_hash(Path(sys.argv[4]))
-assert adapter_sha == sys.argv[5]
-assert adapter_files == int(sys.argv[6])
-print(inventory["tree_sha256"], adapter_sha)
-PY
+tmux has-session -t r050-official
+tail -n 30 /root/r050-eval/r050-official-eval.launch.log
+nvidia-smi
+test -e /workspace/g1/r050-official-eval-20261007/official-eval-complete.json && echo complete
 ```
 
-Before observing any benchmark result, archive `state.json`, `complete.json`, the winner
-completion receipt, their SHA-256 hashes, the repository commit, and `uv.lock` hash.
+The default pipeline-completion wait is bounded at 24 hours. If the pipeline terminates without an
+eligible winner, the wrapper exits before loading a model or creating an adapter claim. If the
+detached process dies before the claim, retained private evidence can be reviewed and a new wrapper
+may be started only after establishing that no claim exists. A failure after the claim invalidates
+the official scored attempt and is never permission to rerun scored work.
 
-## 2. Start the frozen TypeSafe-compatible server
-
-The SDK base URL is the host root; never append `/v1`. Use one private key and one server receipt
-for the complete WorkflowEvals run.
-
-Start it in the same shell that will run the harness. Keeping the key only in the shell
-environment avoids copying it into another terminal or exposing it on a command line.
+If all bounded publication attempts fail after scoring and verification succeeded, the wrapper
+prints the exact private attempt directory. Recovery is publication-only and must point at that
+directory; it revalidates the ready schema, adapter claim, reservation token, run tag, and three
+receipt hashes before copying. Run it with the same exported paths and reviewed commit as the
+normative launcher:
 
 ```bash
-export TYPICAL_API_KEY="$(openssl rand -hex 32)"
-export TYPICAL_BASE_URL=http://127.0.0.1:8090
-
-cd "$TYPICAL_REPO"
-uv run --frozen python - <<'PY'
-import socket
-
-with socket.socket() as sock:
-    sock.bind(("127.0.0.1", 8090))
-PY
-
-uv run --frozen python scripts/serve_typesafe_gemma_lora.py \
-  --model "$BASE_MODEL" \
-  --model-revision "$BASE_REVISION" \
-  --expected-model-tree-sha256 "$BASE_MODEL_SHA" \
-  --adapter "$ADAPTER" \
-  --expected-adapter-tree-sha256 "$ADAPTER_SHA" \
-  --model-id "$MODEL_ID" \
-  --receipt "$EVAL_ROOT/server-startup-receipt.json" \
-  --max-context 16384 \
-  --dtype bfloat16 \
-  --device cuda \
-  --attn-implementation sdpa \
-  --host 127.0.0.1 \
-  --port 8090 >"$EVAL_ROOT/server.log" 2>&1 &
-SERVER_PID=$!
-trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-
-while test ! -s "$EVAL_ROOT/server-startup-receipt.json"; do
-  kill -0 "$SERVER_PID"
-  sleep 5
-done
-
-READY=0
-for _ in $(seq 1 120); do
-  if curl --fail --silent --show-error \
-    --header "Authorization: Bearer $TYPICAL_API_KEY" \
-    "$TYPICAL_BASE_URL/v1/models" \
-    --output "$EVAL_ROOT/server-models.tmp.json"; then
-    READY=1
-    break
-  fi
-  kill -0 "$SERVER_PID"
-  sleep 5
-done
-test "$READY" = 1
-jq -e --arg model "$MODEL_ID" \
-  '.models | length == 1 and .[0].name == $model' \
-  "$EVAL_ROOT/server-models.tmp.json"
-mv "$EVAL_ROOT/server-models.tmp.json" "$EVAL_ROOT/server-models.json"
+export R050_PUBLISH_ONLY_ATTEMPT_ROOT=/root/r050-eval/attempts/<reported-attempt>
+R050_PUBLISH_ONLY_ATTEMPT_ROOT="$R050_PUBLISH_ONLY_ATTEMPT_ROOT" \
+  EXPECTED_TYPICAL_COMMIT="$EXPECTED_TYPICAL_COMMIT" \
+  R050_LOCAL_ROOT="$R050_LOCAL_ROOT" R050_LAUNCH_LOG="$LAUNCH_LOG" \
+  TYPICAL_REPO="$TYPICAL_REPO" R050_ROOT="$R050_ROOT" EVAL_ROOT="$EVAL_ROOT" \
+  WORKFLOWEVALS="$WORKFLOWEVALS" JEVBENCH="$JEVBENCH" \
+  bash "$TYPICAL_REPO/scripts/run_r050_official_eval.sh" >>"$LAUNCH_LOG" 2>&1
 ```
 
-The server refuses an unauthenticated non-loopback bind. Its immutable receipt must bind the exact
-base and adapter canonical hashes, model ID, runtime settings, and server/runtime/scorer code.
+This path never starts the model server or any benchmark command. If the claim or ownership token
+does not exactly match the verified attempt, it fails closed.
 
-## 3. Prepare the disclosed WorkflowEvals harness
+## Completion evidence
 
-Use the isolated checkout already staged with the tracked patch at the exact upstream commit. The
-patch gives Typical a distinct provider and credential, uses the native TypeSafe protocol, checks
-the echoed model ID, and sets `RetryPolicy(max_retries=0)` so failures cannot be hidden. Recompute
-the patched tree from the disclosed bytes before running anything; do not apply the patch again.
+Success requires `official-eval-complete.json` to be written last. Before publication, the parent
+process validates the child's exact ready schema, adapter identity, verification-receipt hash, and
+both preservation-receipt hashes. The completed persistent root contains:
 
-```bash
-PATCH="$TYPICAL_REPO/patches/workflowevals-typical-provider-0ac3b8ad.patch"
-test "$(sha256sum "$PATCH" | cut -d' ' -f1)" = \
-  07106bf888aa53a2770b83503c58635708db32042ecb4b034a41963b1ba43908
-test "$(git -C "$WORKFLOWEVALS" rev-parse HEAD)" = \
-  0ac3b8ad845429f0d8e064ecfb2430a47c5a25cb
+- frozen R050 state, completion, winner completion, and their hashes;
+- a path-independent relative hash manifest, including the copied Typical `uv.lock`;
+- exact Typical, WorkflowEvals, patch, JevBench, model, adapter, runtime, and server identities;
+- four complete WorkflowEvals run trees and the 231-row public JevBench diagnostic;
+- preflight, postrun, pre-archive, and post-archive preservation receipts;
+- the private launch log copy, its SHA-256, and a complete archive checksum manifest;
+- the final completion marker written only after every preceding copy and hash succeeds.
 
-cd "$TYPICAL_REPO"
-uv run --frozen python - "$WORKFLOWEVALS" "$PATCH" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-from scripts.verify_r050_official_eval import _workflow_patch_identity
-
-print(json.dumps(_workflow_patch_identity(Path(sys.argv[1]), Path(sys.argv[2])), sort_keys=True))
-PY
-
-cd "$WORKFLOWEVALS"
-uv lock --check
-uv run --frozen python -m unittest discover -v
-```
-
-The frozen verification suite must pass 9/9. The harness must record provider `typical`, lab
-`other`, exact model ID, native probabilities, zero retries, and no claimed price. Never route
-Typical through `typesafe:jev-1.13.0` and never reuse `TYPESAFE_API_KEY`.
-
-Freeze all server, harness, dataset, task, patch, dependency, and code identities before the first
-scored request. This receipt is immutable and the post-run verifier independently recomputes the
-same identities; a self-edited receipt cannot authorize drift.
-
-```bash
-cd "$TYPICAL_REPO"
-uv run --frozen python scripts/verify_r050_official_eval.py preflight \
-  --startup-receipt "$EVAL_ROOT/server-startup-receipt.json" \
-  --workflowevals-dir "$WORKFLOWEVALS" \
-  --workflow-patch "$PATCH" \
-  --jevbench-dir "$JEVBENCH" \
-  --jev-runner "$TYPICAL_REPO/scripts/jevbench_gemma_lora.py" \
-  --task-file "$JEVBENCH/datasets/public/easy.jsonl" \
-  --task-file "$JEVBENCH/datasets/public/original.jsonl" \
-  --task-file "$JEVBENCH/datasets/public/hard.jsonl" \
-  --base-url "$TYPICAL_BASE_URL" \
-  --timeout 1800 \
-  --out "$EVAL_ROOT/preflight-receipt.json"
-```
-
-## 4. Run WorkflowEvals exactly once
-
-Use a unique run tag and prove none of the four output directories exists. `--questions all`
-matches the Jev methodology. Both worker counts remain one because the correctness-first server
-keeps a case's multi-question request contiguous; invoice requests can contain 120 questions.
-
-```bash
-cd "$WORKFLOWEVALS"
-RUN_TAG="typical-r050-${ADAPTER_SHA:0:16}-$(date -u +%Y%m%dT%H%M%SZ)"
-printf '%s\n' "$RUN_TAG" >"$EVAL_ROOT/run-tag.txt"
-for workflow in security_incidents agent_trace_observability invoice_processing customer_service; do
-  test ! -e "$WORKFLOWEVALS/runs/$workflow/$RUN_TAG"
-done
-
-uv run --frozen python run.py security_incidents \
-  --model "typical:$MODEL_ID" --name "$RUN_TAG" \
-  --base-url "$TYPICAL_BASE_URL" --workers 1 --question-workers 1 \
-  --questions all --timeout 1800 \
-  --dataset-revision fbe1ea5c69cf494157fd23f2002a0d9d9a418443 \
-  >"$EVAL_ROOT/workflow-security_incidents.log" 2>&1
-
-uv run --frozen python run.py agent_trace_observability \
-  --model "typical:$MODEL_ID" --name "$RUN_TAG" \
-  --base-url "$TYPICAL_BASE_URL" --workers 1 --question-workers 1 \
-  --questions all --timeout 1800 \
-  --dataset-revision 8635540973910a92465fe2bc53e195375aa6e1a8 \
-  >"$EVAL_ROOT/workflow-agent_trace_observability.log" 2>&1
-
-uv run --frozen python run.py invoice_processing \
-  --model "typical:$MODEL_ID" --name "$RUN_TAG" \
-  --base-url "$TYPICAL_BASE_URL" --workers 1 --question-workers 1 \
-  --questions all --timeout 1800 \
-  --dataset-revision 6beeb2d2acd65c086c835022f5f4d7434114cafc \
-  >"$EVAL_ROOT/workflow-invoice_processing.log" 2>&1
-
-uv run --frozen python run.py customer_service \
-  --model "typical:$MODEL_ID" --name "$RUN_TAG" \
-  --base-url "$TYPICAL_BASE_URL" --workers 1 --question-workers 1 \
-  --questions all --timeout 1800 \
-  --dataset-revision b1342f5a704587dbc465867c38c2694348ff86e4 \
-  >"$EVAL_ROOT/workflow-customer_service.log" 2>&1
-```
-
-Do not use `--limit` or `--retry-errors`. A failure after the wrapper creates the adapter claim
-invalidates the official attempt; never resume, rename, or rerun a scored candidate.
-
-## 5. Run the 231-row public JevBench diagnostic
-
-Stop the HTTP server first so a second 12B model cannot be loaded beside it. Confirm that it exits;
-do not start the diagnostic while the server still owns GPU memory. This command uses the
-same base, adapter, dtype, context, and native option-logit readout, and binds local artifacts to
-the exact canonical R050 hashes before model load:
-
-```bash
-kill "$SERVER_PID"
-wait "$SERVER_PID" || true
-trap - EXIT
-unset TYPICAL_API_KEY
-
-cd "$TYPICAL_REPO"
-test ! -e "$EVAL_ROOT/jevbench-public-231"
-test "$(git -C "$JEVBENCH" rev-parse HEAD)" = \
-  bb05a335bc809e61b20c0f745d25499a82b326fc
-test -z "$(git -C "$JEVBENCH" status --porcelain)"
-
-uv run --frozen python scripts/jevbench_gemma_lora.py \
-  --jevbench-dir "$JEVBENCH" \
-  --task-file "$JEVBENCH/datasets/public/easy.jsonl" \
-  --task-file "$JEVBENCH/datasets/public/original.jsonl" \
-  --task-file "$JEVBENCH/datasets/public/hard.jsonl" \
-  --model "$BASE_MODEL" \
-  --model-revision "$BASE_REVISION" \
-  --expected-model-tree-sha256 "$BASE_MODEL_SHA" \
-  --adapter "$ADAPTER" \
-  --expected-adapter-tree-sha256 "$ADAPTER_SHA" \
-  --out "$EVAL_ROOT/jevbench-public-231" \
-  --max-context 16384 \
-  --dtype bfloat16 \
-  --device cuda \
-  --attn-implementation sdpa \
-  --seed 42 \
-  >"$EVAL_ROOT/jevbench-public-231.log" 2>&1
-```
-
-The 231-row output is diagnostic evidence only. It cannot establish v1.5.4 parity and must not
-change the model. Official parity requires the external evaluator's fixed 1,624-row run with all
-720 sealed decisions, zero missing/invalid outputs, score at least `72.13292897895896`, and
-Intelligence at least `71.99974990450261`.
-
-## 6. Verify and preserve evidence
-
-Run the committed verifier after all four workflow directories and the Jev diagnostic are closed.
-It schema-validates the upstream WorkflowEvals bundles and recomputes their scores, then replays
-Jev's frozen per-task scoring from the pinned tasks and native probabilities. It also validates
-exact IDs/counts, failure and retry absence, immutable model/config identity, startup receipt,
-input hashes, harness commit, runner code, raw records, and the reservation ledger before any claim
-is reported.
-
-```bash
-cd "$TYPICAL_REPO"
-uv run --frozen python scripts/verify_r050_official_eval.py postrun \
-  --preflight "$EVAL_ROOT/preflight-receipt.json" \
-  --startup-receipt "$EVAL_ROOT/server-startup-receipt.json" \
-  --workflowevals-dir "$WORKFLOWEVALS" \
-  --workflow-run "$WORKFLOWEVALS/runs/security_incidents/$RUN_TAG" \
-  --workflow-run "$WORKFLOWEVALS/runs/agent_trace_observability/$RUN_TAG" \
-  --workflow-run "$WORKFLOWEVALS/runs/invoice_processing/$RUN_TAG" \
-  --workflow-run "$WORKFLOWEVALS/runs/customer_service/$RUN_TAG" \
-  --jevbench-dir "$JEVBENCH" \
-  --jev-runner "$TYPICAL_REPO/scripts/jevbench_gemma_lora.py" \
-  --jev-run "$EVAL_ROOT/jevbench-public-231" \
-  --out "$EVAL_ROOT/verification-receipt.json"
-
-jq -e '.integrity_pass == true' "$EVAL_ROOT/verification-receipt.json"
-
-uv run --frozen python scripts/verify_r050_official_eval.py preserved \
-  --verification "$EVAL_ROOT/verification-receipt.json" \
-  --workflow-run "$WORKFLOWEVALS/runs/security_incidents/$RUN_TAG" \
-  --workflow-run "$WORKFLOWEVALS/runs/agent_trace_observability/$RUN_TAG" \
-  --workflow-run "$WORKFLOWEVALS/runs/invoice_processing/$RUN_TAG" \
-  --workflow-run "$WORKFLOWEVALS/runs/customer_service/$RUN_TAG" \
-  --jev-run "$EVAL_ROOT/jevbench-public-231" \
-  --out "$EVAL_ROOT/preservation-receipt.json"
-
-jq -e '.evidence_preserved == true' "$EVAL_ROOT/preservation-receipt.json"
-```
-
-`integrity_pass` proves that the evidence is authentic and complete; it does not itself assert
-benchmark parity. Workflow parity is reported separately in `.workflow_parity`, while official
-JevBench v1.5.4 parity remains `unmeasured` until the external 1,624-row evaluator returns it.
-The receipt is an internal, content-addressed consistency proof, not hardware-backed remote
-attestation: a cryptographic claim about physical model execution requires the external evaluator
-to sign or append-only commit its run. Do not describe the local receipt as that stronger claim.
-The wrapper writes `preservation-before-archive-receipt.json`, copies the complete run trees into
-the attempt archive, and writes the distinct `preservation-after-archive-receipt.json` against
-those copies. These checks bind the whole run trees, so later byte edits or added files invalidate
-the preservation receipt.
-
-Archive the JSON verification and preservation receipts alongside:
-
-- winner, pipeline, model-inventory, and startup receipts;
-- repository commit and UV lock hash;
-- WorkflowEvals upstream commit, patch hash, four manifests/results/scores, and dataset revisions;
-- JevBench harness commit, task-file hashes, raw records, ledger, and manifest;
-- complete commands, stdout/stderr, latency, token usage, GPU and cost telemetry;
-- every procedural deviation, including the already logged R050 operator blinding deviation.
-
-The final integrity audit is run once after these artifacts exist. Any missing evidence is a failed
-gate, not permission to infer success.
+Any missing gate or receipt is a failed evaluation, not permission to infer success or rerun scored
+requests.
