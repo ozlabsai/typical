@@ -2,7 +2,7 @@ import copy
 import hashlib
 import json
 from collections import Counter, defaultdict
-from itertools import product
+from itertools import combinations, permutations, product
 
 import pytest
 
@@ -28,7 +28,7 @@ from scripts.build_r048_action_panel import (
     validate_split,
     write_corpus,
 )
-from scripts.exact_policy_executor import execute_policy
+from scripts.exact_policy_executor import compile_policy, execute_policy
 from scripts.score_exact_policy_panel import summarize
 from scripts.train_gemma_decision_lora import load_examples
 
@@ -135,7 +135,7 @@ def test_program_and_action_families_are_executable_not_nominal():
         ("priority_fieldwise", "ordered_field_conditions", "first_remediation"),
         ("collect_fieldwise", "independent_field_conditions", "remediation_set"),
     }
-    assert all(row["meta"]["panel_version"] == PANEL_VERSION == "1.5" for row in rows)
+    assert all(row["meta"]["panel_version"] == PANEL_VERSION == "1.6" for row in rows)
 
 
 def test_clusters_are_one_fact_causal_twins_with_all_eight_views():
@@ -223,6 +223,14 @@ def test_semantic_signatures_are_reconstructed_without_split_ids_or_raw_values(d
                 meta["field_order"], meta["flipped_field"], facts, meta["policy"],
             )
             assert reconstructed == meta["semantic_signature"]
+            independent = {
+                "encoder_case": _encoder_semantic_signature(
+                    meta["field_order"], meta["flipped_field"], facts),
+                "policy_outcomes": [json.loads(outcome) for outcome in _executed_outcome_mapping(
+                    meta["field_order"], meta["policy"])],
+            }
+            assert hashlib.sha256(json.dumps(independent, ensure_ascii=False, sort_keys=True,
+                                             separators=(",", ":")).encode()).hexdigest() == reconstructed
             signatures[split].add(reconstructed)
         allowed = SPLIT_FAMILIES[split]
         assert {row["meta"]["renderer_family"] for row in rows} == set(allowed["renderer"])
@@ -446,11 +454,131 @@ def test_case_keys_do_not_use_surface_regime_side_order_or_field_order():
     assert _encoder_semantic_signature(fields, fields[0], renamed) == original
 
     # Encoder permutations are views; ordered external policies can change the
-    # outcome partition and therefore define different policy-bearing cases.
+    # exact outcome function and therefore define different policy-bearing cases.
     direct = _policy("priority", fields, "priority_fieldwise")
     reordered = _policy("priority", list(reversed(fields)), "priority_fieldwise")
     assert _semantic_signature(fields, fields[0], facts, direct) != _semantic_signature(
         list(reversed(fields)), fields[0], facts, reordered)
+
+
+def _signature_facts(fields):
+    return {side: {field: _make_fact(field, bool(side) if index == 0 else True,
+                                   200 + index, "raw_operands", "all_of_3", causal=index == 0)
+                   for index, field in enumerate(fields)} for side in (0, 1)}
+
+
+def _executed_outcome_mapping(fields, policy):
+    """Independent oracle: execute every canonical trace, without table indices."""
+    compiled = compile_policy(policy)
+    return tuple(json.dumps(execute_policy(compiled, dict(zip(sorted(fields), values))).as_dict(),
+                            ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                 for values in product((False, True), repeat=len(fields)))
+
+
+def _assert_permutation_identity(fields, orders, mode, topology):
+    facts = _signature_facts(fields)
+    keyed_mappings = []
+    for order in orders:
+        order = list(order)
+        policy = _policy(mode, order, topology)
+        key = _semantic_signature(order, fields[0], facts, policy)
+        mapping = _executed_outcome_mapping(fields, policy)
+        keyed_mappings.append((key, mapping))
+        # Merely permuting the schema declaration leaves execution unchanged.
+        declaration_only = copy.deepcopy(policy)
+        declaration_only["fields"] = list(reversed(order))
+        assert _executed_outcome_mapping(fields, declaration_only) == mapping
+        assert _semantic_signature(declaration_only["fields"], fields[0], facts,
+                                   declaration_only) == key
+    for (left_key, left_mapping), (right_key, right_mapping) in combinations(keyed_mappings, 2):
+        assert (left_key == right_key) == (left_mapping == right_mapping)
+
+
+@pytest.mark.parametrize("mode", ["priority", "collect"])
+@pytest.mark.parametrize("kind", ["coarse_gate", "fieldwise"])
+def test_policy_identity_exhausts_two_field_permutations(mode, kind):
+    for fields in combinations(FIELDS, 2):
+        _assert_permutation_identity(list(fields), permutations(fields), mode, f"{mode}_{kind}")
+
+
+@pytest.mark.parametrize("size", range(3, 9))
+@pytest.mark.parametrize("mode", ["priority", "collect"])
+@pytest.mark.parametrize("kind", ["coarse_gate", "fieldwise"])
+def test_policy_identity_samples_larger_field_permutations(size, mode, kind):
+    fields = list(FIELDS[:size])
+    orders = (list(permutations(fields)) if size == 3 else
+              {tuple(fields), tuple(reversed(fields)), tuple(fields[1:] + fields[:1]),
+               tuple([fields[1], fields[0], *fields[2:]]),
+               tuple([fields[0], *reversed(fields[1:])])})
+    _assert_permutation_identity(fields, sorted(orders), mode, f"{mode}_{kind}")
+
+
+@pytest.mark.parametrize("mutation", ["primary", "name", "payload", "payload_type"])
+def test_policy_identity_binds_exact_primary_actions_and_typed_payloads(mutation):
+    fields = list(FIELDS[:2])
+    facts = _signature_facts(fields)
+    policy = _policy("collect", fields, "collect_fieldwise")
+    changed = copy.deepcopy(policy)
+    if mutation == "primary":
+        changed["rules"][0]["primary_rank"] = 0
+    elif mutation == "name":
+        changed["rules"][0]["action"]["name"] = "renamed_remediation"
+    elif mutation == "payload":
+        changed["rules"][0]["action"]["payload"]["queue"] = "other_queue"
+    else:
+        policy["rules"][0]["action"]["payload"]["count"] = 1
+        changed["rules"][0]["action"]["payload"]["count"] = 1.0
+    assert _executed_outcome_mapping(fields, policy) != _executed_outcome_mapping(fields, changed)
+    assert _semantic_signature(fields, fields[0], facts, policy) != _semantic_signature(
+        fields, fields[0], facts, changed)
+
+
+def test_collect_primary_only_reordering_changes_policy_identity():
+    fields = list(FIELDS[:2])
+    facts = _signature_facts(fields)
+    direct = _policy("collect", fields, "collect_fieldwise")
+    reverse = _policy("collect", list(reversed(fields)), "collect_fieldwise")
+    trace = dict.fromkeys(fields, False)
+    left = execute_policy(direct, trace).as_dict()
+    right = execute_policy(reverse, trace).as_dict()
+    assert left["actions"] == right["actions"]
+    assert left["primary"] != right["primary"]
+    assert _partition_signature(direct) == _partition_signature(reverse)
+    assert _semantic_signature(fields, fields[0], facts, direct) != _semantic_signature(
+        list(reversed(fields)), fields[0], facts, reverse)
+
+
+def test_policy_identity_does_not_bind_inoperative_syntax_or_mode():
+    fields = list(FIELDS[:2])
+    facts = _signature_facts(fields)
+    policy = _policy("priority", fields, "priority_coarse_gate")
+    wrapped = copy.deepcopy(policy)
+    wrapped["rules"][0]["when"] = {"any": [wrapped["rules"][0]["when"], {"const": False}]}
+    assert _semantic_signature(fields, fields[0], facts, policy) == _semantic_signature(
+        fields, fields[0], facts, wrapped)
+    # Equal exact functions stay equal even when their execution mode differs.
+    collect = copy.deepcopy(policy)
+    collect["mode"] = "collect"
+    collect["rules"][0]["primary_rank"] = 0
+    assert _executed_outcome_mapping(fields, policy) == _executed_outcome_mapping(fields, collect)
+    assert _semantic_signature(fields, fields[0], facts, policy) == _semantic_signature(
+        fields, fields[0], facts, collect)
+
+
+@pytest.mark.parametrize("key", ["semantic_signature", "latent_signature", "exact_cluster_signature"])
+def test_validation_reconstructs_policy_identity_instead_of_trusting_group_labels(key):
+    rows = build("train", 112, seed=5)
+    group = rows[:8]
+    meta = group[0]["meta"]
+    facts = {side: next(row["meta"]["facts"] for row in group
+                       if row["meta"]["counterfactual_side"] == side) for side in (0, 1)}
+    changed = copy.deepcopy(meta["policy"])
+    changed["rules"][0]["action"]["payload"]["queue"] = "forged_queue"
+    forged = _semantic_signature(meta["field_order"], meta["flipped_field"], facts, changed)
+    for row in group:
+        row["meta"][key] = forged
+    with pytest.raises(ValueError, match="split-neutral semantic signature"):
+        validate_split(rows, "train", 112)
 
 
 def test_default_design_crosses_surface_schema_operator_and_interior_pivots(default_corpus):

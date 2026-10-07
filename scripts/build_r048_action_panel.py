@@ -1,4 +1,4 @@
-"""Build the deterministic, counterfactual R048 exact-policy v1.5 panel."""
+"""Build the deterministic, counterfactual R048 exact-policy v1.6 panel."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ SPLITS = tuple(DEFAULT_ROWS)
 OPTION_ORDERS = ("no_yes", "yes_no")
 LANGUAGES = ("en", "he")
 CLUSTER_SIZE = 8
-PANEL_VERSION = "1.5"
+PANEL_VERSION = "1.6"
 FUZZY_THRESHOLD = 0.92
 SPLIT_OFFSETS = {"train": 0, "cal": 100_000, "eval": 200_000}
 
@@ -815,18 +815,17 @@ def _semantic_signature(fields: list[str], flipped_field: str,
                         facts_by_side: dict[int, dict[str, Any]],
                         policy: dict[str, Any]) -> str:
     compiled = compile_policy(policy)
-    classes = {}
-    partition = []
-    # Canonical field order prevents a mere field permutation from creating an
-    # independent case, while retaining genuinely different priority mappings.
+    outcomes = []
+    canonical_fields = sorted(fields)
+    # Identity is the exact assignment -> outcome function, not its unlabeled
+    # partition. Canonical enumeration permits field-order invariance only when
+    # primary actions and full action names/typed payloads are also identical.
     for values in product((False, True), repeat=len(fields)):
-        trace = dict(zip(sorted(fields), values))
+        trace = dict(zip(canonical_fields, values))
         assignment = sum(int(trace[field]) << bit for bit, field in enumerate(compiled.fields))
-        outcome = compiled.truth_outcomes[assignment]
-        classes.setdefault(outcome, len(classes))
-        partition.append(classes[outcome])
+        outcomes.append(compiled.truth_outcomes[assignment].as_dict())
     return _sha({"encoder_case": _encoder_semantic_signature(fields, flipped_field, facts_by_side),
-                 "policy_mode": compiled.mode, "policy_partition": partition})
+                 "policy_outcomes": outcomes})
 
 
 def _normalized_model_input(row: dict[str, Any], include_surface: bool = True) -> str:
@@ -1417,6 +1416,7 @@ def write_corpus(out: Path, seed: int = 48,
             "decision_threshold": 0.5,
             "heldout_predicate_operator": "at_least_2_of_3",
             "case_reservation": "both canonical encoder endpoints sha256 modulo three splits",
+            "policy_identity": "canonical sorted-field exact assignment-to-outcome truth table",
         },
         "headroom": {
             "status": "deferred",
