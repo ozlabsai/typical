@@ -34,6 +34,9 @@ EVAL_ROWS = 2688
 EVAL_CLUSTERS = 336
 FROZEN_EVAL_SHA256 = "b764082343c68ec29bd94d9ca041c3e922b5aa421d40c06519683b804fd3a5e7"
 FROZEN_MANIFEST_SHA256 = "9a477c41999abf2dab8c5e00f156ed96c01d318b9fd54364802be0c3e6cd95bb"
+FROZEN_INVENTORY_SHA256 = "5c97d1ed2179841c5824733d6b1c83c2de300d8458a6eb22e50846a18ec7e605"
+FROZEN_BASE_TREE_SHA256 = "30ef898307067e89a7349ede93920d2914105053b02fdc53b8c9dfc57fcb896b"
+FROZEN_BASE_TREE_FILES = 9
 FROZEN_OUTPUTS = {
     "train": {"rows": 1792,
               "sha256": "086e461c1342ca05a9ddcc64bae2b35853f7bac1468598f861eb2df6817e6234"},
@@ -300,12 +303,18 @@ def run(data, manifest, model, inventory, adapter, out, *, expected_data_sha256,
     manifest_payload = Path(manifest).read_bytes()
     rows, checked_manifest = validate_full_panel(
         data_payload, manifest_payload, expected_data_sha256, expected_manifest_sha256)
+    if (_hash(expected_inventory_sha256, "expected model inventory sha256")
+            != FROZEN_INVENTORY_SHA256):
+        raise ValueError("expected model inventory sha256 is not the frozen literal anchor")
     asset_kwargs = {
         "expected_inventory_sha256": expected_inventory_sha256,
         "expected_adapter_tree_sha256": expected_adapter_tree_sha256,
         "expected_adapter_tree_files": expected_adapter_tree_files,
     }
     assets = trusted_runtime.verify_assets(model, inventory, adapter, **asset_kwargs)
+    if (assets.get("base_model_tree_sha256") != FROZEN_BASE_TREE_SHA256
+            or assets.get("base_model_tree_files") != FROZEN_BASE_TREE_FILES):
+        raise ValueError("base model tree differs from the frozen literal anchor")
     completion = validate_arm_completion(
         arm_completion, expected_arm_completion_sha256, adapter_path=adapter, assets=assets,
         model_path=model, inventory_path=inventory)

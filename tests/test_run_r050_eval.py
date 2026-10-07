@@ -250,6 +250,8 @@ def test_run_detects_asset_change_after_cpu_mocked_inference(tmp_path, monkeypat
                         lambda *args: ([row], {"outputs": {}}))
     expected_adapter = evaluator.file_hash(adapter)
     assets = {"adapter": expected_adapter}
+    assets.update({"base_model_tree_sha256": evaluator.FROZEN_BASE_TREE_SHA256,
+                   "base_model_tree_files": evaluator.FROZEN_BASE_TREE_FILES})
     def verify(*args, **kwargs):
         if evaluator.file_hash(adapter) != expected_adapter:
             raise ValueError("asset changed")
@@ -266,6 +268,25 @@ def test_run_detects_asset_change_after_cpu_mocked_inference(tmp_path, monkeypat
         evaluator.run(
             data, manifest, tmp_path / "model", inventory, adapter, tmp_path / "out",
             expected_data_sha256="0" * 64, expected_manifest_sha256="0" * 64,
-            expected_inventory_sha256="0" * 64,
+            expected_inventory_sha256=evaluator.FROZEN_INVENTORY_SHA256,
             expected_adapter_tree_sha256="0" * 64, expected_adapter_tree_files=1)
     assert not (tmp_path / "out").exists()
+
+
+def test_run_rejects_rewritten_inventory_anchor_before_asset_validation(tmp_path, monkeypatch):
+    data = tmp_path / "eval.jsonl"
+    manifest = tmp_path / "manifest.json"
+    data.write_bytes(b"panel\n")
+    manifest.write_bytes(b"manifest\n")
+    monkeypatch.setattr(evaluator, "validate_full_panel", lambda *args: ([], {}))
+    monkeypatch.setattr(
+        evaluator.trusted_runtime, "verify_assets",
+        lambda *args, **kwargs: pytest.fail("must reject before asset validation"),
+    )
+    with pytest.raises(ValueError, match="frozen literal anchor"):
+        evaluator.run(
+            data, manifest, tmp_path / "model", tmp_path / "inventory.json",
+            tmp_path / "adapter", tmp_path / "out",
+            expected_data_sha256="0" * 64, expected_manifest_sha256="0" * 64,
+            expected_inventory_sha256="0" * 64,
+            expected_adapter_tree_sha256="0" * 64, expected_adapter_tree_files=1)
