@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from scripts import build_r052_evidence_panel as builder
+from scripts import r052_review_receipts as review_receipts
 from scripts import replay_r052_typed_policy as replay
 from scripts import score_r052_evidence_retrieval as scorer
 
@@ -30,6 +31,68 @@ def _artifact_declaration(path: Path, role: str) -> dict:
         "role": role,
         "sha256": scorer.artifact_sha256(path),
     }
+
+
+def _trusted_team_manifest() -> dict:
+    body = {
+        "schema_version": review_receipts.TEAM_MANIFEST_SCHEMA,
+        "trust_scope": review_receipts.TRUST_SCOPE,
+        "members": sorted(
+            [
+                {
+                    "reviewer_id": "fixture-r1",
+                    "allowed_roles": ["reviewer_1"],
+                    "status": "trusted",
+                },
+                {
+                    "reviewer_id": "fixture-r2",
+                    "allowed_roles": ["reviewer_2"],
+                    "status": "trusted",
+                },
+                {
+                    "reviewer_id": "fixture-adjudicator",
+                    "allowed_roles": ["adjudicator"],
+                    "status": "trusted",
+                },
+            ],
+            key=review_receipts.canonical_json,
+        ),
+    }
+    return {**body, "manifest_sha256": review_receipts.sha256_json(body)}
+
+
+TRUSTED_TEAM_MANIFEST = _trusted_team_manifest()
+TRUSTED_TEAM_MANIFEST_SHA256 = scorer.sha256_bytes(
+    scorer.canonical_json(TRUSTED_TEAM_MANIFEST)
+)
+
+
+def _human_review_receipt(schema: str, items: list[dict]) -> dict:
+    body = {
+        "schema_version": schema,
+        "status": "pass",
+        "claim_scope": review_receipts.CLAIM_SCOPE,
+        "review_team_manifest_sha256": TRUSTED_TEAM_MANIFEST_SHA256,
+        "review_team": [
+            {"reviewer_id": "fixture-r1", "role": "reviewer_1", "status": "pass"},
+            {"reviewer_id": "fixture-r2", "role": "reviewer_2", "status": "pass"},
+            {
+                "reviewer_id": "fixture-adjudicator",
+                "role": "adjudicator",
+                "status": "pass",
+            },
+        ],
+        "coverage": [
+            {
+                "item": item,
+                "reviewer_roles": ["reviewer_1", "reviewer_2"],
+                "adjudicator_role": "adjudicator",
+                "status": "pass",
+            }
+            for item in sorted(items, key=review_receipts.canonical_json)
+        ],
+    }
+    return {**body, "receipt_sha256": review_receipts.sha256_json(body)}
 
 
 def _license_policy(acquired_policy: dict) -> dict:
@@ -352,12 +415,20 @@ def _fixture(tmp_path: Path) -> dict:
     for name, text in {
         "source-en": reviewed_en,
         "source-he": reviewed_he,
-        "alignment-receipt": "Human reviewer aligned the two authored cases.",
-        "control-receipt": "Human reviewer designated real, shuffled, and absent controls.",
-        "boundary-receipt": "Human author marked semantic section boundaries.",
     }.items():
         path = tmp_path / f"{name}.txt"
         path.write_text(text)
+        artifact_paths[name] = path
+    team_manifest_path = tmp_path / "trusted-review-team.json"
+    _write_json(team_manifest_path, TRUSTED_TEAM_MANIFEST)
+    artifact_paths["trusted-review-team"] = team_manifest_path
+    for name, schema in (
+        ("alignment-receipt", review_receipts.TRANSLATION_SCHEMA),
+        ("control-receipt", review_receipts.IMAGE_SCHEMA),
+        ("boundary-receipt", review_receipts.BOUNDARY_SCHEMA),
+    ):
+        path = tmp_path / f"{name}.json"
+        _write_json(path, _human_review_receipt(schema, []))
         artifact_paths[name] = path
     for name, color in (("real-image", "red"), ("shuffled-image", "blue")):
         path = tmp_path / f"{name}.png"
@@ -453,6 +524,7 @@ def _fixture(tmp_path: Path) -> dict:
         "alignment-receipt": "translation_alignment_receipt",
         "control-receipt": "image_control_receipt",
         "boundary-receipt": "chunk_boundary_receipt",
+        "trusted-review-team": review_receipts.TEAM_MANIFEST_ROLE,
         "real-image": "image",
         "shuffled-image": "image",
     }
@@ -520,6 +592,51 @@ def _fixture(tmp_path: Path) -> dict:
             for case in spec["cases"]
         ],
     }
+    provisional_cases, _ = builder._build_cases(
+        spec,
+        source_manifest,
+        builder._validate_annotations(annotations),
+        artifact_paths,
+        "1" * 64,
+        "2" * 64,
+    )
+    expected_reviews = review_receipts.expected_receipt_items(provisional_cases)
+    for name, role in (
+        ("alignment-receipt", "translation_alignment_receipt"),
+        ("control-receipt", "image_control_receipt"),
+    ):
+        groups = expected_reviews[role]
+        assert len(groups) == 1
+        items = next(iter(groups.values()))
+        _write_json(
+            artifact_paths[name],
+            _human_review_receipt(review_receipts.ROLE_TO_SCHEMA[role], items),
+        )
+        source_manifest["artifacts"][name] = _artifact_declaration(
+            artifact_paths[name], role
+        )
+    provisional_cases, _ = builder._build_cases(
+        spec,
+        source_manifest,
+        builder._validate_annotations(annotations),
+        artifact_paths,
+        "1" * 64,
+        "2" * 64,
+    )
+    boundary_items = next(
+        iter(
+            review_receipts.expected_receipt_items(provisional_cases)[
+                "chunk_boundary_receipt"
+            ].values()
+        )
+    )
+    _write_json(
+        artifact_paths["boundary-receipt"],
+        _human_review_receipt(review_receipts.BOUNDARY_SCHEMA, boundary_items),
+    )
+    source_manifest["artifacts"]["boundary-receipt"] = _artifact_declaration(
+        artifact_paths["boundary-receipt"], "chunk_boundary_receipt"
+    )
     spec_path = tmp_path / "spec.json"
     source_path = tmp_path / "sources.json"
     annotation_path = tmp_path / "annotations.json"
@@ -606,6 +723,59 @@ def _fixture(tmp_path: Path) -> dict:
     provider_sha = _write_json(provider_path, provider)
     policy = _policy_artifacts(tmp_path, audit_input)
     return locals()
+
+
+def _refresh_review_receipts(fixture: dict, spec: dict) -> tuple[dict, dict]:
+    manifest = deepcopy(fixture["source_manifest"])
+    provisional, _ = builder._build_cases(
+        spec,
+        manifest,
+        fixture["annotation_map"],
+        fixture["artifact_paths"],
+        scorer.artifact_sha256(fixture["tokenizer"]),
+        scorer.artifact_sha256(fixture["chunker"]),
+    )
+    expected = review_receipts.expected_receipt_items(provisional)
+    for name, role in (
+        ("alignment-receipt", "translation_alignment_receipt"),
+        ("control-receipt", "image_control_receipt"),
+    ):
+        groups = expected[role]
+        assert len(groups) == 1
+        _write_json(
+            fixture["artifact_paths"][name],
+            _human_review_receipt(
+                review_receipts.ROLE_TO_SCHEMA[role], next(iter(groups.values()))
+            ),
+        )
+        manifest["artifacts"][name] = _artifact_declaration(
+            fixture["artifact_paths"][name], role
+        )
+    provisional, _ = builder._build_cases(
+        spec,
+        manifest,
+        fixture["annotation_map"],
+        fixture["artifact_paths"],
+        scorer.artifact_sha256(fixture["tokenizer"]),
+        scorer.artifact_sha256(fixture["chunker"]),
+    )
+    boundary_items = next(
+        iter(
+            review_receipts.expected_receipt_items(provisional)[
+                "chunk_boundary_receipt"
+            ].values()
+        )
+    )
+    _write_json(
+        fixture["artifact_paths"]["boundary-receipt"],
+        _human_review_receipt(review_receipts.BOUNDARY_SCHEMA, boundary_items),
+    )
+    manifest["artifacts"]["boundary-receipt"] = _artifact_declaration(
+        fixture["artifact_paths"]["boundary-receipt"], "chunk_boundary_receipt"
+    )
+    return manifest, builder._validate_source_manifest(
+        manifest, fixture["artifact_paths"]
+    )
 
 
 def _finalize(fixture: dict, output_name: str = "bundle", **overrides):
@@ -795,6 +965,29 @@ def test_rejects_opaque_text_as_acquisition_binding(tmp_path):
         builder._validate_source_manifest(manifest, paths)
 
 
+def test_builder_rejects_arbitrary_text_as_human_review_receipt(tmp_path):
+    fixture = _fixture(tmp_path)
+    opaque = fixture["artifact_paths"]["alignment-receipt"]
+    opaque.write_text("Human reviewer says this is aligned.\n")
+    manifest = deepcopy(fixture["source_manifest"])
+    manifest["artifacts"]["alignment-receipt"] = _artifact_declaration(
+        opaque, "translation_alignment_receipt"
+    )
+    resolved = builder._validate_source_manifest(manifest, fixture["artifact_paths"])
+    with pytest.raises(ValueError, match="strict finite UTF-8 JSON"):
+        builder.build_audit_input(
+            fixture["spec"],
+            manifest,
+            fixture["annotation_map"],
+            resolved,
+            scorer.artifact_sha256(fixture["tokenizer"]),
+            scorer.artifact_sha256(fixture["chunker"]),
+            spec_sha256=fixture["hashes"]["dossier_spec_sha256"],
+            source_manifest_sha256=scorer.sha256_json(manifest),
+            annotations_sha256=fixture["hashes"]["causal_annotations_sha256"],
+        )
+
+
 def test_rejects_semantic_chunk_gaps_that_fake_long_context(tmp_path):
     fixture = _fixture(tmp_path)
     spec = deepcopy(fixture["spec"])
@@ -806,7 +999,7 @@ def test_rejects_semantic_chunk_gaps_that_fake_long_context(tmp_path):
         )
 
 
-def test_builder_rejects_invented_text_and_reviewed_source_slice_gaps(tmp_path):
+def test_builder_rejects_invented_text_but_allows_short_source_subsets(tmp_path):
     fixture = _fixture(tmp_path)
     invented = deepcopy(fixture["spec"])
     invented["cases"][0]["chunks"][1]["text"] = "invented evidence"
@@ -823,14 +1016,78 @@ def test_builder_rejects_invented_text_and_reviewed_source_slice_gaps(tmp_path):
             annotations_sha256=fixture["hashes"]["causal_annotations_sha256"],
         )
 
-    gap = deepcopy(fixture["spec"])
-    gap["cases"][0]["chunks"][1]["derivation"]["char_start"] = 1
-    gap["cases"][0]["chunks"][1]["text"] = fixture["reviewed_en"][
+    subset = deepcopy(fixture["spec"])
+    subset["cases"][0]["chunks"][1]["derivation"]["char_start"] = 1
+    subset["cases"][0]["chunks"][1]["text"] = fixture["reviewed_en"][
         1 : len(fixture["reviewed_en"]) // 6
     ]
-    with pytest.raises(ValueError, match="without gaps"):
+    subset_manifest, subset_resolved = _refresh_review_receipts(fixture, subset)
+    _, cases, _ = builder.build_audit_input(
+        subset,
+        subset_manifest,
+        fixture["annotation_map"],
+        subset_resolved,
+        scorer.artifact_sha256(fixture["tokenizer"]),
+        scorer.artifact_sha256(fixture["chunker"]),
+        spec_sha256="0" * 64,
+        source_manifest_sha256=scorer.sha256_json(subset_manifest),
+        annotations_sha256=fixture["hashes"]["causal_annotations_sha256"],
+    )
+    assert cases[0]["chunks"][1]["text"] == subset["cases"][0]["chunks"][1]["text"]
+
+
+def test_builder_rejects_short_source_overlap_and_long_source_gaps(tmp_path):
+    fixture = _fixture(tmp_path)
+    split = len(fixture["reviewed_en"]) // 6
+
+    overlap = deepcopy(fixture["spec"])
+    overlap["cases"][0]["chunks"][2]["derivation"]["char_start"] = split - 1
+    overlap["cases"][0]["chunks"][2]["text"] = fixture["reviewed_en"][
+        split - 1 : 2 * split
+    ]
+    with pytest.raises(ValueError, match="source-ordered and non-overlapping"):
         builder.build_audit_input(
-            gap,
+            overlap,
+            fixture["source_manifest"],
+            fixture["annotation_map"],
+            fixture["resolved"],
+            scorer.artifact_sha256(fixture["tokenizer"]),
+            scorer.artifact_sha256(fixture["chunker"]),
+            spec_sha256="0" * 64,
+            source_manifest_sha256=fixture["hashes"]["source_manifest_sha256"],
+            annotations_sha256=fixture["hashes"]["causal_annotations_sha256"],
+        )
+
+    reordered = deepcopy(fixture["spec"])
+    first = reordered["cases"][0]["chunks"][1]
+    second = reordered["cases"][0]["chunks"][2]
+    first["text"], second["text"] = second["text"], first["text"]
+    first["derivation"], second["derivation"] = (
+        second["derivation"],
+        first["derivation"],
+    )
+    with pytest.raises(ValueError, match="source-ordered and non-overlapping"):
+        builder.build_audit_input(
+            reordered,
+            fixture["source_manifest"],
+            fixture["annotation_map"],
+            fixture["resolved"],
+            scorer.artifact_sha256(fixture["tokenizer"]),
+            scorer.artifact_sha256(fixture["chunker"]),
+            spec_sha256="0" * 64,
+            source_manifest_sha256=fixture["hashes"]["source_manifest_sha256"],
+            annotations_sha256=fixture["hashes"]["causal_annotations_sha256"],
+        )
+
+    long_gap = deepcopy(fixture["spec"])
+    long_gap["cases"][0]["context_tokens"] = builder.LONG_CONTEXT_TOKENS
+    long_gap["cases"][0]["chunks"][2]["derivation"]["char_start"] = split + 1
+    long_gap["cases"][0]["chunks"][2]["text"] = fixture["reviewed_en"][
+        split + 1 : 2 * split
+    ]
+    with pytest.raises(ValueError, match="long English.*without gaps"):
+        builder.build_audit_input(
+            long_gap,
             fixture["source_manifest"],
             fixture["annotation_map"],
             fixture["resolved"],
@@ -972,3 +1229,53 @@ def test_refuses_to_replace_existing_bundle(tmp_path):
     _finalize(fixture)
     with pytest.raises(FileExistsError, match="refusing to replace"):
         _finalize(fixture)
+
+
+@pytest.mark.parametrize(
+    "mutation,match",
+    [
+        ("matched_text", "exactly matched text"),
+        ("duplicate_media", "must differ"),
+        ("missing_media", "must have null media"),
+    ],
+)
+def test_receipt_layer_enforces_image_control_invariants(tmp_path, mutation, match):
+    fixture = _fixture(tmp_path)
+    cases = deepcopy(fixture["cases"])
+    controls = {
+        chunk["image_control"]["variant"]: chunk
+        for chunk in cases[0]["chunks"]
+        if chunk["image_control"] is not None
+    }
+    if mutation == "matched_text":
+        controls["shuffled"]["text"] = "Different control text."
+    elif mutation == "duplicate_media":
+        controls["shuffled"]["media"] = deepcopy(controls["real"]["media"])
+    else:
+        controls["missing"]["media"] = deepcopy(controls["real"]["media"])
+    with pytest.raises(ValueError, match=match):
+        review_receipts.expected_receipt_items(cases)
+
+
+def test_builder_uses_shared_matched_image_text_invariant(tmp_path):
+    fixture = _fixture(tmp_path)
+    spec = deepcopy(fixture["spec"])
+    shuffled = next(
+        chunk
+        for chunk in spec["cases"][0]["chunks"]
+        if chunk["image_control"] is not None
+        and chunk["image_control"]["variant"] == "shuffled"
+    )
+    shuffled["text"] = "Different control text."
+    with pytest.raises(ValueError, match="exactly matched text"):
+        builder.build_audit_input(
+            spec,
+            fixture["source_manifest"],
+            fixture["annotation_map"],
+            fixture["resolved"],
+            scorer.artifact_sha256(fixture["tokenizer"]),
+            scorer.artifact_sha256(fixture["chunker"]),
+            spec_sha256="0" * 64,
+            source_manifest_sha256=fixture["hashes"]["source_manifest_sha256"],
+            annotations_sha256=fixture["hashes"]["causal_annotations_sha256"],
+        )

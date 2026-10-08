@@ -300,6 +300,21 @@ def test_schema_gold_isolation_missing_media_and_exact_bm25_tie(
         "available": False,
         "reason": "complete_translation_overlay_not_supplied",
     }
+    agreement = receipt["hebrew"]["summary"]["he_en_ranking_agreement"]["768"]
+    assert set(agreement) == {
+        "questions",
+        "mean_jaccard_at_1",
+        "mean_ordered_position_agreement_at_1",
+        "exact_set_fraction_at_1",
+        "mean_jaccard_at_2",
+        "mean_ordered_position_agreement_at_2",
+        "exact_set_fraction_at_2",
+        "mean_jaccard_at_4",
+        "mean_ordered_position_agreement_at_4",
+        "exact_set_fraction_at_4",
+        "mean_absolute_decisive_rank_delta",
+    }
+    assert agreement["questions"] == 1
     row = receipt["multimodal"]["rows"][0]
     assert row["bm25"]["matched_control_exact_tie"] is True
     assert len(set(row["bm25"]["matched_control_scores"].values())) == 1
@@ -377,17 +392,100 @@ def test_hebrew_option_and_candidate_order_do_not_change_scores(
     assert first_row["en_to_en"] == second_row["en_to_en"]
 
 
+def _translation_overlay_fixture(inputs: dict[str, Path]) -> dict[str, Any]:
+    base, base_sha = diag._load_json(inputs["he_base"], "base")
+    patch, patch_sha = diag._load_json(inputs["he_overlay"], "overlay")
+    effective = diag.materialize_hebrew_v4(base, base_sha, patch)
+    candidates, candidate_bindings = diag._candidate_maps(
+        inputs["ntsb_candidates"], inputs["gao_candidates"]
+    )
+    rows = []
+    for ref, he_text in (("d1", "ראיה מכרעת"), ("d2", "ראיה מסיחה")):
+        en_text = candidates["SRC"][ref]
+        rows.append(
+            {
+                "chunk_ref": ref,
+                "en_text_sha256": retrieval.sha256_bytes(en_text.encode()),
+                "he_text": he_text,
+                "he_text_sha256": retrieval.sha256_bytes(he_text.encode()),
+            }
+        )
+    body = {
+        "schema_version": diag.TRANSLATION_SCHEMA,
+        "status": "ai_unreviewed_development_only",
+        "human_reviewed": False,
+        "eligible_for_b1_or_benchmark_claims": False,
+        "translation_policy": "uniform exact-anchor fixture translations",
+        "source_bindings": {
+            "gao_candidate_sha256": candidate_bindings["gao_candidate_sha256"],
+            "hebrew_v2_raw_sha256": base_sha,
+            "hebrew_v4_effective_canonical_sha256": retrieval.sha256_bytes(
+                diag._canonical_bytes(effective)
+            ),
+            "hebrew_v4_raw_sha256": patch_sha,
+            "ntsb_candidate_sha256": candidate_bindings["ntsb_candidate_sha256"],
+        },
+        "counts": {"groups": 1, "rows": 2, "catalog_translations": 2},
+        "groups": {"he_en_09_gao_positive_assurance": rows},
+    }
+    return {**body, "overlay_sha256": retrieval.sha256_json(body)}
+
+
 def test_hebrew_translation_overlay_rejects_missing_coverage(
     inputs: dict[str, Path], tmp_path: Path
 ) -> None:
+    value = _translation_overlay_fixture(inputs)
+    value["groups"]["he_en_09_gao_positive_assurance"].pop()
+    value["counts"]["rows"] = 1
+    value["counts"]["catalog_translations"] = 1
+    body = {key: item for key, item in value.items() if key != "overlay_sha256"}
+    value["overlay_sha256"] = retrieval.sha256_json(body)
     overlay = _write_json(
         tmp_path / "translations.json",
-        {
-            "schema_version": diag.TRANSLATION_SCHEMA,
-            "groups": {"he_en_09_gao_positive_assurance": []},
-        },
+        value,
     )
     with pytest.raises(ValueError, match="coverage mismatch"):
+        diag.build_receipt(
+            **inputs,
+            he_translation_overlay=overlay,
+            provider=FakeProvider(),
+            artifact_bindings={
+                "runtime_lock_sha256": diag.text_pilot.RUNTIME_LOCK_SHA256
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("status", "development-only false flags"),
+        ("binding", "source bindings mismatch"),
+        ("counts", "counts mismatch"),
+        ("self_hash", "self-hash mismatch"),
+        ("duplicate", "duplicate rows"),
+    ],
+)
+def test_hebrew_translation_overlay_rejects_tampered_contract(
+    inputs: dict[str, Path], tmp_path: Path, mutation: str, message: str
+) -> None:
+    value = _translation_overlay_fixture(inputs)
+    if mutation == "status":
+        value["status"] = "pass"
+    elif mutation == "binding":
+        value["source_bindings"]["hebrew_v2_raw_sha256"] = "0" * 64
+    elif mutation == "counts":
+        value["counts"]["rows"] = 3
+    elif mutation == "duplicate":
+        value["groups"]["he_en_09_gao_positive_assurance"][1] = deepcopy(
+            value["groups"]["he_en_09_gao_positive_assurance"][0]
+        )
+    if mutation != "self_hash":
+        body = {key: item for key, item in value.items() if key != "overlay_sha256"}
+        value["overlay_sha256"] = retrieval.sha256_json(body)
+    else:
+        value["overlay_sha256"] = "0" * 64
+    overlay = _write_json(tmp_path / f"translations-{mutation}.json", value)
+    with pytest.raises(ValueError, match=message):
         diag.build_receipt(
             **inputs,
             he_translation_overlay=overlay,

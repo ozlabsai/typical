@@ -31,9 +31,11 @@ import numpy as np
 
 try:
     from scripts import fetch_r052_source_snapshot as acquisition
+    from scripts import r052_review_receipts as review_receipts
     from scripts import replay_r052_typed_policy as policy_replay
 except ModuleNotFoundError:  # Supports ``uv run python scripts/score_...py``.
     import fetch_r052_source_snapshot as acquisition
+    import r052_review_receipts as review_receipts
     import replay_r052_typed_policy as policy_replay
 
 SCHEMA_VERSION = "r052-evidence-panel-v5"
@@ -143,6 +145,7 @@ SOURCE_ARTIFACT_ROLES = frozenset(
         "translation_alignment_receipt",
         "image_control_receipt",
         "chunk_boundary_receipt",
+        review_receipts.TEAM_MANIFEST_ROLE,
     }
 )
 ACQUISITION_RUN_RECEIPT_KEYS = {
@@ -2090,6 +2093,10 @@ def validate_panel(
         raise ValueError(
             "panel requires at least one real/shuffled/missing image causal control"
         )
+
+    review_receipts.validate_panel_review_receipts(
+        panel["cases"], source_artifacts_by_hash
+    )
 
     validate_providers(
         panel,

@@ -34,16 +34,22 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution
     import run_r052_embedding_dev_pilot as text_pilot
     import score_r052_evidence_retrieval as retrieval
 
-SCHEMA_VERSION = "r052-he-mm-development-diagnostic-receipt-v1"
+SCHEMA_VERSION = "r052-he-mm-development-diagnostic-receipt-v3"
 RUNTIME_SCHEMA_VERSION = "r052-he-mm-development-diagnostic-runtime-v1"
 CLAIM_STATUS = "development_only_unreviewed_not_b1_not_benchmark"
 HE_V2_SCHEMA = "r052-he-en-twin-panel-development-draft-v2"
 HE_V4_SCHEMA = "r052-he-en-twin-panel-development-draft-v4-overlay"
 HE_EFFECTIVE_SCHEMA = "r052-he-en-twin-panel-development-draft-v4-effective"
 MM_SCHEMA = "r052-mm-development-receipt-v2"
-TRANSLATION_SCHEMA = "r052-hebrew-complete-candidate-translation-overlay-v1"
+TRANSLATION_SCHEMA = "r052-hebrew-complete-candidate-translation-overlay-v2"
 DIMENSIONS = (768, 256)
 TOP_KS = (1, 2, 4)
+BILINGUAL_DOCUMENT_TEMPLATE = "English evidence:\n{english}\nHebrew evidence:\n{hebrew}"
+BILINGUAL_TEMPLATE_VERSION = "r052-fixed-en-he-evidence-v1"
+ADVANCE_MIN_RECALL_AT_4 = 1.0
+ADVANCE_MIN_JACCARD_AT_4 = 0.85
+ADVANCE_MIN_JACCARD_GAIN = 0.15
+ADVANCE_MAX_AGGREGATE_TOP1_LOSS = 1
 
 
 @dataclass(frozen=True)
@@ -209,7 +215,9 @@ def _candidate_maps(
 
 
 def _translation_overlay(
-    path: Path | None, expected_refs: Mapping[str, Sequence[str]]
+    path: Path | None,
+    expected_en_hashes: Mapping[str, Mapping[str, str]],
+    expected_bindings: Mapping[str, str],
 ) -> tuple[dict[str, dict[str, str]] | None, dict[str, Any]]:
     if path is None:
         return None, {
@@ -219,18 +227,44 @@ def _translation_overlay(
     value, raw_sha = _load_json(path, "Hebrew translation overlay")
     if value.get("schema_version") != TRANSLATION_SCHEMA:
         raise ValueError("unexpected Hebrew translation overlay schema")
+    expected_root_keys = {
+        "schema_version",
+        "status",
+        "human_reviewed",
+        "eligible_for_b1_or_benchmark_claims",
+        "translation_policy",
+        "source_bindings",
+        "counts",
+        "groups",
+        "overlay_sha256",
+    }
+    if set(value) != expected_root_keys:
+        raise ValueError("translation overlay root schema mismatch")
+    if (
+        value["status"] != "ai_unreviewed_development_only"
+        or value["human_reviewed"] is not False
+        or value["eligible_for_b1_or_benchmark_claims"] is not False
+    ):
+        raise ValueError("translation overlay must retain development-only false flags")
+    _text(value["translation_policy"], "translation policy")
+    if value["source_bindings"] != dict(sorted(expected_bindings.items())):
+        raise ValueError("translation overlay source bindings mismatch")
     groups = value.get("groups")
     if not isinstance(groups, dict):
         raise TypeError("translation overlay groups must be an object")
     result: dict[str, dict[str, str]] = {}
-    if set(groups) != set(expected_refs):
+    if set(groups) != set(expected_en_hashes):
         raise ValueError("translation overlay must cover every Hebrew group exactly")
-    for group_id, refs in expected_refs.items():
+    row_count = 0
+    for group_id, hashes in expected_en_hashes.items():
         rows = groups[group_id]
         if not isinstance(rows, list):
             raise TypeError(f"translation overlay rows missing for {group_id}")
         mapping: dict[str, str] = {}
-        if {row.get("chunk_ref") for row in rows if isinstance(row, dict)} != set(refs):
+        refs = [row.get("chunk_ref") for row in rows if isinstance(row, dict)]
+        if len(refs) != len(rows) or len(set(refs)) != len(refs):
+            raise ValueError(f"translation overlay contains duplicate rows for {group_id}")
+        if set(refs) != set(hashes):
             raise ValueError(f"translation overlay coverage mismatch for {group_id}")
         for row in rows:
             if not isinstance(row, dict) or set(row) != {
@@ -243,8 +277,20 @@ def _translation_overlay(
             he_text = _text(row["he_text"], f"translation {group_id}")
             if retrieval.sha256_bytes(he_text.encode()) != row["he_text_sha256"]:
                 raise ValueError("Hebrew translation text hash mismatch")
+            if row["en_text_sha256"] != hashes[row["chunk_ref"]]:
+                raise ValueError("translation overlay English binding mismatch")
             mapping[row["chunk_ref"]] = he_text
         result[group_id] = mapping
+        row_count += len(rows)
+    if value["counts"] != {
+        "groups": len(expected_en_hashes),
+        "rows": row_count,
+        "catalog_translations": row_count,
+    }:
+        raise ValueError("translation overlay counts mismatch")
+    body = {key: item for key, item in value.items() if key != "overlay_sha256"}
+    if value["overlay_sha256"] != retrieval.sha256_json(body):
+        raise ValueError("translation overlay self-hash mismatch")
     return result, {"available": True, "input_sha256": raw_sha}
 
 
@@ -329,6 +375,29 @@ def _input_key(item: EmbeddingInput) -> str:
     )
 
 
+def _bilingual_document(english: str, hebrew: str) -> EmbeddingInput:
+    english = _text(english, "bilingual English evidence")
+    hebrew = _text(hebrew, "bilingual Hebrew evidence")
+    return EmbeddingInput(
+        BILINGUAL_DOCUMENT_TEMPLATE.format(english=english, hebrew=hebrew), None
+    )
+
+
+def _normalized_centroid(
+    english: np.ndarray, hebrew: np.ndarray, dimension: int
+) -> np.ndarray:
+    left = retrieval.normalize_mrl(english, dimension)
+    right = retrieval.normalize_mrl(hebrew, dimension)
+    combined = left + right
+    norm = float(np.linalg.norm(combined))
+    if not math.isfinite(norm) or norm <= 0:
+        raise ValueError("English/Hebrew centroid must have a finite nonzero norm")
+    centroid = combined / norm
+    if centroid.shape != (dimension,) or not np.isfinite(centroid).all():
+        raise ValueError("English/Hebrew centroid is invalid")
+    return centroid
+
+
 def _rank(
     query: EmbeddingInput,
     documents: Sequence[tuple[str, EmbeddingInput]],
@@ -344,6 +413,25 @@ def _rank(
     }
     if not all(math.isfinite(score) for score in scores.values()):
         raise ValueError("dense similarity must be finite")
+    ranking = [
+        key for key, _ in sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))
+    ]
+    return ranking, dict(sorted(scores.items()))
+
+
+def _rank_derived(
+    query: EmbeddingInput,
+    documents: Mapping[str, np.ndarray],
+    vectors: Mapping[str, np.ndarray],
+    dimension: int,
+) -> tuple[list[str], dict[str, float]]:
+    query_vector = retrieval.normalize_mrl(vectors[_input_key(query)], dimension)
+    scores = {
+        key: float(np.dot(query_vector, document))
+        for key, document in documents.items()
+    }
+    if not all(math.isfinite(score) for score in scores.values()):
+        raise ValueError("derived dense similarity must be finite")
     ranking = [
         key for key, _ in sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))
     ]
@@ -371,6 +459,158 @@ def _retrieval_metrics(
         for row in rows
     ) / len(rows)
     return result
+
+
+def _ranking_agreement(
+    rows: Sequence[Mapping[str, Any]],
+    left_mode: str,
+    left_dimension: str,
+    right_mode: str,
+    right_dimension: str,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {"questions": len(rows)}
+    for k in TOP_KS:
+        jaccards: list[float] = []
+        ordered: list[float] = []
+        exact_sets = 0
+        for row in rows:
+            left = row[left_mode][left_dimension]["ranking"][:k]
+            right = row[right_mode][right_dimension]["ranking"][:k]
+            left_set, right_set = set(left), set(right)
+            jaccards.append(len(left_set & right_set) / len(left_set | right_set))
+            ordered.append(
+                sum(left_item == right_item for left_item, right_item in zip(left, right, strict=True))
+                / len(left)
+            )
+            exact_sets += left_set == right_set
+        result[f"mean_jaccard_at_{k}"] = math.fsum(jaccards) / len(jaccards)
+        result[f"mean_ordered_position_agreement_at_{k}"] = (
+            math.fsum(ordered) / len(ordered)
+        )
+        result[f"exact_set_fraction_at_{k}"] = exact_sets / len(rows)
+
+    decisive_rank_deltas = []
+    for row in rows:
+        left = row[left_mode][left_dimension]["ranking"]
+        right = row[right_mode][right_dimension]["ranking"]
+        decisive_rank_deltas.extend(
+            abs(left.index(ref) - right.index(ref)) for ref in row["decisive_refs"]
+        )
+    result["mean_absolute_decisive_rank_delta"] = (
+        math.fsum(decisive_rank_deltas) / len(decisive_rank_deltas)
+    )
+    return result
+
+
+def _mode_metrics(
+    rows: Sequence[Mapping[str, Any]], mode: str, dimension: str
+) -> dict[str, Any]:
+    return _retrieval_metrics(
+        [
+            {**row, "ranking": row[mode][dimension]["ranking"]}
+            for row in rows
+        ],
+        "ranking",
+    )
+
+
+def _complete_top1_count(
+    rows: Sequence[Mapping[str, Any]], mode: str, dimension: str
+) -> int:
+    return sum(
+        set(row["decisive_refs"]).issubset(row[mode][dimension]["ranking"][:1])
+        for row in rows
+    )
+
+
+def _bilingual_advance_gate(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    thresholds = {
+        "he_and_en_complete_recall_at_4": ADVANCE_MIN_RECALL_AT_4,
+        "cross_query_mean_jaccard_at_4": ADVANCE_MIN_JACCARD_AT_4,
+        "jaccard_gain_over_stronger_monolingual_baseline": (
+            ADVANCE_MIN_JACCARD_GAIN
+        ),
+        "maximum_aggregate_top1_loss": ADVANCE_MAX_AGGREGATE_TOP1_LOSS,
+        "exact_option_order_invariance": True,
+    }
+    arms = {
+        "bilingual_concat": ("he_to_bilingual", "en_to_bilingual"),
+        "normalized_centroid": ("he_to_centroid", "en_to_centroid"),
+    }
+    output: dict[str, Any] = {"thresholds": thresholds, "arms": {}}
+    for arm, (he_mode, en_mode) in arms.items():
+        dimensions: dict[str, Any] = {}
+        for dimension in map(str, DIMENSIONS):
+            he_metrics = _mode_metrics(rows, he_mode, dimension)
+            en_metrics = _mode_metrics(rows, en_mode, dimension)
+            agreement = _ranking_agreement(
+                rows, he_mode, dimension, en_mode, dimension
+            )
+            mono_en = _ranking_agreement(
+                rows, "he_to_en", dimension, "en_to_en", dimension
+            )["mean_jaccard_at_4"]
+            mono_he = _ranking_agreement(
+                rows, "he_to_he", dimension, "en_to_he", dimension
+            )["mean_jaccard_at_4"]
+            baseline = max(mono_en, mono_he)
+            jaccard = agreement["mean_jaccard_at_4"]
+            he_top1_loss = max(
+                0,
+                _complete_top1_count(rows, "he_to_he", dimension)
+                - _complete_top1_count(rows, he_mode, dimension),
+            )
+            en_top1_loss = max(
+                0,
+                _complete_top1_count(rows, "en_to_en", dimension)
+                - _complete_top1_count(rows, en_mode, dimension),
+            )
+            aggregate_top1_loss = he_top1_loss + en_top1_loss
+            conditions = {
+                "he_complete_recall_at_4": (
+                    he_metrics["complete_recall_at_4"]
+                    >= ADVANCE_MIN_RECALL_AT_4
+                ),
+                "en_complete_recall_at_4": (
+                    en_metrics["complete_recall_at_4"]
+                    >= ADVANCE_MIN_RECALL_AT_4
+                ),
+                "cross_query_mean_jaccard_at_4": (
+                    jaccard >= ADVANCE_MIN_JACCARD_AT_4
+                ),
+                "jaccard_gain_over_stronger_monolingual_baseline": (
+                    jaccard - baseline >= ADVANCE_MIN_JACCARD_GAIN
+                ),
+                "aggregate_top1_loss": (
+                    aggregate_top1_loss <= ADVANCE_MAX_AGGREGATE_TOP1_LOSS
+                ),
+                "exact_option_order_invariance": True,
+            }
+            dimensions[dimension] = {
+                "passed": all(conditions.values()),
+                "conditions": conditions,
+                "he_complete_recall_at_4": he_metrics["complete_recall_at_4"],
+                "en_complete_recall_at_4": en_metrics["complete_recall_at_4"],
+                "cross_query_mean_jaccard_at_4": jaccard,
+                "monolingual_baseline": {
+                    "mono_en_mean_jaccard_at_4": mono_en,
+                    "mono_he_mean_jaccard_at_4": mono_he,
+                    "selected_stronger_value": baseline,
+                },
+                "jaccard_gain": jaccard - baseline,
+                "aggregate_top1_loss": aggregate_top1_loss,
+                "he_top1_loss": he_top1_loss,
+                "en_top1_loss": en_top1_loss,
+            }
+        output["arms"][arm] = {
+            "dimensions": dimensions,
+            "passed_both_dimensions": all(
+                item["passed"] for item in dimensions.values()
+            ),
+        }
+    output["passed"] = any(
+        arm["passed_both_dimensions"] for arm in output["arms"].values()
+    )
+    return output
 
 
 def _production_bm25(
@@ -419,7 +659,6 @@ def build_receipt(
         raise ValueError("Hebrew draft does not bind the supplied candidate dossiers")
 
     he_specs = []
-    expected_translations: dict[str, list[str]] = {}
     expected_en_hashes: dict[str, dict[str, str]] = {}
     for group in effective["groups"]:
         group_id = _text(group.get("group_id"), "group id")
@@ -438,27 +677,26 @@ def build_receipt(
         refs = decisive + distractors
         if not decisive or len(refs) != len(set(refs)) or not set(refs) <= set(corpus):
             raise ValueError(f"{group_id}: invalid complete English corpus partition")
-        expected_translations[group_id] = sorted(refs)
         expected_en_hashes[group_id] = {
             ref: retrieval.sha256_bytes(corpus[ref].encode()) for ref in refs
         }
         he_specs.append(
             (group, sorted(decisive), [(ref, corpus[ref]) for ref in sorted(refs)])
         )
+    expected_translation_bindings = {
+        "hebrew_v2_raw_sha256": base_sha,
+        "hebrew_v4_raw_sha256": overlay_sha,
+        "hebrew_v4_effective_canonical_sha256": retrieval.sha256_bytes(
+            _canonical_bytes(effective)
+        ),
+        "ntsb_candidate_sha256": candidate_bindings["ntsb_candidate_sha256"],
+        "gao_candidate_sha256": candidate_bindings["gao_candidate_sha256"],
+    }
     translations, he_he_status = _translation_overlay(
-        he_translation_overlay, expected_translations
+        he_translation_overlay,
+        expected_en_hashes,
+        expected_translation_bindings,
     )
-    if translations is not None:
-        overlay_value, _ = _load_json(
-            he_translation_overlay, "Hebrew translation overlay"
-        )  # type: ignore[arg-type]
-        for group_id, rows in overlay_value["groups"].items():
-            for row in rows:
-                if (
-                    row["en_text_sha256"]
-                    != expected_en_hashes[group_id][row["chunk_ref"]]
-                ):
-                    raise ValueError("translation overlay English binding mismatch")
 
     mm, mm_sha = _load_json(mm_receipt, "multimodal v2 receipt")
     if mm.get("schema_version") != MM_SCHEMA:
@@ -747,6 +985,18 @@ def build_receipt(
             [{**row, "ranking": row["en_to_en"]["bm25"]["ranking"]} for row in he_rows],
             "ranking",
         ),
+        "he_en_ranking_agreement": {
+            str(dim): _ranking_agreement(
+                he_rows, "he_to_en", str(dim), "en_to_en", str(dim)
+            )
+            for dim in DIMENSIONS
+        },
+        "mrl_ranking_agreement": {
+            mode: _ranking_agreement(
+                he_rows, mode, "768", mode, "256"
+            )
+            for mode in ("he_to_en", "en_to_en")
+        },
         "he_to_he": he_he_status,
     }
     if translations is not None:
@@ -757,6 +1007,12 @@ def build_receipt(
                     for row in he_rows
                 ],
                 "ranking",
+            )
+            for dim in DIMENSIONS
+        }
+        he_summary["he_to_he"]["he_en_ranking_agreement"] = {
+            str(dim): _ranking_agreement(
+                he_rows, "he_to_he", str(dim), "en_to_en", str(dim)
             )
             for dim in DIMENSIONS
         }
@@ -808,7 +1064,11 @@ def build_receipt(
         "limitations": [
             "Hebrew translations and multimodal cases are AI-authored and not human-reviewed.",
             "Hebrew-to-English is a ten-case within-document candidate retrieval diagnostic.",
-            "Hebrew-to-Hebrew is unavailable without an exact full-candidate translation overlay.",
+            (
+                "Hebrew-to-Hebrew is unavailable without an exact full-candidate translation overlay."
+                if translations is None
+                else "Hebrew-to-Hebrew uses an AI-authored, unreviewed exact-anchor translation overlay."
+            ),
             "The image slice is Choice-only and cannot establish typed-workflow parity.",
         ],
         "input_sha256": {

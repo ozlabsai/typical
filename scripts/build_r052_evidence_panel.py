@@ -33,9 +33,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 try:
+    from scripts import r052_review_receipts as review_receipts
     from scripts import replay_r052_typed_policy as policy_replay
     from scripts import score_r052_evidence_retrieval as scoring
 except ModuleNotFoundError:  # Supports ``uv run python scripts/build_...py``.
+    import r052_review_receipts as review_receipts
     import replay_r052_typed_policy as policy_replay
     import score_r052_evidence_retrieval as scoring
 
@@ -200,6 +202,7 @@ ARTIFACT_ROLES = {
     "translation_alignment_receipt",
     "image_control_receipt",
     "chunk_boundary_receipt",
+    review_receipts.TEAM_MANIFEST_ROLE,
 }
 FORBIDDEN_MARKERS = tuple(
     marker.encode() for marker in scoring.FORBIDDEN_LINEAGE_MARKERS
@@ -486,6 +489,16 @@ def _validate_spec(
         source_manifest["acquisition_manifest_artifact"],
         source_manifest["acquisition_run_receipt_artifact"],
     }
+    team_manifests = [
+        name
+        for name, declaration in sources.items()
+        if declaration["role"] == review_receipts.TEAM_MANIFEST_ROLE
+    ]
+    if len(team_manifests) != 1:
+        raise ValueError(
+            "source manifest requires exactly one trusted review-team manifest"
+        )
+    used_artifacts.add(team_manifests[0])
     has_long = False
     for case_index, case in enumerate(cases):
         label = f"cases[{case_index}]"
@@ -1121,18 +1134,25 @@ def _build_cases(
                 {"chunk_key": chunk_key, **partial, "content_sha256": content_hash}
             )
             built_chunks[(authored["case_ref"], item["chunk_ref"])] = chunks[-1]
-        if authored["language"] == "en" and (
-            not source_slices
-            or source_slices[0][0] != 0
-            or source_slices[-1][1] != len(reviewed_text)
-            or any(
-                previous[1] != current[0]
+        if authored["language"] == "en":
+            if not source_slices or any(
+                previous[1] > current[0]
                 for previous, current in pairwise(source_slices)
-            )
-        ):
-            raise ValueError(
-                "English reviewed source slices must cover the artifact without gaps"
-            )
+            ):
+                raise ValueError(
+                    "English reviewed source slices must be source-ordered and non-overlapping"
+                )
+            if authored["context_tokens"] >= LONG_CONTEXT_TOKENS and (
+                source_slices[0][0] != 0
+                or source_slices[-1][1] != len(reviewed_text)
+                or any(
+                    previous[1] != current[0]
+                    for previous, current in pairwise(source_slices)
+                )
+            ):
+                raise ValueError(
+                    "long English reviewed source slices must cover the artifact without gaps"
+                )
         questions: list[dict[str, Any]] = []
         for question_index, item in enumerate(authored["questions"]):
             annotation_key = (authored["case_ref"], item["question_ref"])
@@ -1280,6 +1300,16 @@ def build_audit_input(
         source_artifact_paths,
         tokenizer_artifact_sha256,
         chunker_artifact_sha256,
+    )
+    review_receipts.validate_panel_review_receipts(
+        cases,
+        {
+            declaration["sha256"]: {
+                **declaration,
+                "path": source_artifact_paths[name],
+            }
+            for name, declaration in source_manifest["artifacts"].items()
+        },
     )
     audit_cases = []
     for authored, case in zip(spec["cases"], cases, strict=True):

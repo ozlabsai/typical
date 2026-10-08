@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from scripts import r052_review_receipts as review_receipts
 from scripts import replay_r052_typed_policy as replay
 from scripts import score_r052_evidence_retrieval as scorer
 
@@ -24,15 +25,89 @@ def _compact_acquisition_contract(monkeypatch):
 SOURCE_ARTIFACT_PATHS = {
     "reviewed-en": Path("uv.lock").resolve(),
     "reviewed-he": Path("site/style.css").resolve(),
-    "boundary-receipt": Path("site/package.json").resolve(),
-    "alignment-receipt": Path("site/js/vendor/ScrollTrigger.min.js").resolve(),
-    "control-receipt": Path("site/js/vendor/gsap.min.js").resolve(),
     "real-image": Path("site/favicon.png").resolve(),
     "shuffled-image": Path("site/og.png").resolve(),
 }
 
 _SOURCE_PROVENANCE_TEMP = tempfile.TemporaryDirectory()
 _SOURCE_PROVENANCE_ROOT = Path(_SOURCE_PROVENANCE_TEMP.name)
+
+
+def _trusted_team_manifest() -> dict:
+    body = {
+        "schema_version": review_receipts.TEAM_MANIFEST_SCHEMA,
+        "trust_scope": review_receipts.TRUST_SCOPE,
+        "members": sorted(
+            [
+                {
+                    "reviewer_id": "fixture-r1",
+                    "allowed_roles": ["reviewer_1"],
+                    "status": "trusted",
+                },
+                {
+                    "reviewer_id": "fixture-r2",
+                    "allowed_roles": ["reviewer_2"],
+                    "status": "trusted",
+                },
+                {
+                    "reviewer_id": "fixture-adjudicator",
+                    "allowed_roles": ["adjudicator"],
+                    "status": "trusted",
+                },
+            ],
+            key=review_receipts.canonical_json,
+        ),
+    }
+    return {**body, "manifest_sha256": review_receipts.sha256_json(body)}
+
+
+TRUSTED_TEAM_MANIFEST = _trusted_team_manifest()
+TRUSTED_TEAM_MANIFEST_SHA256 = scorer.sha256_bytes(
+    scorer.canonical_json(TRUSTED_TEAM_MANIFEST)
+)
+
+
+def _human_review_receipt(schema: str, items: list[dict]) -> dict:
+    body = {
+        "schema_version": schema,
+        "status": "pass",
+        "claim_scope": review_receipts.CLAIM_SCOPE,
+        "review_team_manifest_sha256": TRUSTED_TEAM_MANIFEST_SHA256,
+        "review_team": [
+            {"reviewer_id": "fixture-r1", "role": "reviewer_1", "status": "pass"},
+            {"reviewer_id": "fixture-r2", "role": "reviewer_2", "status": "pass"},
+            {
+                "reviewer_id": "fixture-adjudicator",
+                "role": "adjudicator",
+                "status": "pass",
+            },
+        ],
+        "coverage": [
+            {
+                "item": item,
+                "reviewer_roles": ["reviewer_1", "reviewer_2"],
+                "adjudicator_role": "adjudicator",
+                "status": "pass",
+            }
+            for item in sorted(items, key=review_receipts.canonical_json)
+        ],
+    }
+    return {**body, "receipt_sha256": review_receipts.sha256_json(body)}
+
+
+_TRUSTED_TEAM_MANIFEST_PATH = _SOURCE_PROVENANCE_ROOT / "trusted-review-team.json"
+_TRUSTED_TEAM_MANIFEST_PATH.write_bytes(scorer.canonical_json(TRUSTED_TEAM_MANIFEST))
+SOURCE_ARTIFACT_PATHS["trusted-review-team"] = _TRUSTED_TEAM_MANIFEST_PATH
+
+
+for _name, _schema in (
+    ("alignment-receipt", review_receipts.TRANSLATION_SCHEMA),
+    ("control-receipt", review_receipts.IMAGE_SCHEMA),
+    ("boundary-receipt", review_receipts.BOUNDARY_SCHEMA),
+):
+    _path = _SOURCE_PROVENANCE_ROOT / f"{_name}.json"
+    _path.write_bytes(scorer.canonical_json(_human_review_receipt(_schema, [])))
+    SOURCE_ARTIFACT_PATHS[_name] = _path
 _EXTRACTED_TEXT_HASHES = {
     language: scorer.sha256_bytes(f"extracted-{language}".encode())
     for language in ("en", "he")
@@ -119,6 +194,7 @@ for _language in ("en", "he"):
 SOURCE_ARTIFACT_HASHES = {
     name: scorer.artifact_sha256(path) for name, path in SOURCE_ARTIFACT_PATHS.items()
 }
+_REVIEW_RECEIPTS_INSTALLED = False
 
 
 def _sha(value: str | bytes) -> str:
@@ -440,6 +516,7 @@ def _case(
 
 
 def make_panel() -> dict:
+    global _REVIEW_RECEIPTS_INSTALLED
     twin_group = _sha("twins")
     english = _case("en", twin_group)
     english_chunks = {chunk["twin_anchor"]: chunk for chunk in english["chunks"]}
@@ -479,12 +556,35 @@ def make_panel() -> dict:
         "dimension": 4,
         **vectors,
     }
-    return {
+    panel = {
         "schema_version": scorer.SCHEMA_VERSION,
         "provenance": {"kind": "independent_internal", "benchmark_derived": False},
         "cases": cases,
         "providers": {"fixture-dense": provider},
     }
+    if not _REVIEW_RECEIPTS_INSTALLED:
+        expected = review_receipts.expected_receipt_items(panel["cases"])
+        for name, role in (
+            ("alignment-receipt", "translation_alignment_receipt"),
+            ("control-receipt", "image_control_receipt"),
+            ("boundary-receipt", "chunk_boundary_receipt"),
+        ):
+            groups = expected[role]
+            assert len(groups) == 1
+            SOURCE_ARTIFACT_PATHS[name].write_bytes(
+                scorer.canonical_json(
+                    _human_review_receipt(
+                        review_receipts.ROLE_TO_SCHEMA[role],
+                        next(iter(groups.values())),
+                    )
+                )
+            )
+            SOURCE_ARTIFACT_HASHES[name] = scorer.artifact_sha256(
+                SOURCE_ARTIFACT_PATHS[name]
+            )
+        _REVIEW_RECEIPTS_INSTALLED = True
+        return make_panel()
+    return panel
 
 
 def _causal_manifest(panel: dict) -> tuple[dict, str]:
@@ -516,6 +616,8 @@ def _source_manifest() -> tuple[dict, str]:
                 if name == "alignment-receipt"
                 else "image_control_receipt"
                 if name == "control-receipt"
+                else review_receipts.TEAM_MANIFEST_ROLE
+                if name == "trusted-review-team"
                 else "image"
                 if name.endswith("-image")
                 else "chunk_boundary_receipt"
@@ -1666,6 +1768,101 @@ def test_image_derivation_binds_image_and_control_receipts(panel):
     _replace_chunk_derivation(case, 6, derivation)
     with pytest.raises(ValueError, match="supplied image artifact"):
         _validate(changed)
+
+
+@pytest.mark.parametrize(
+    "mutation,match",
+    [
+        ("development_schema", "canonical completed human-review receipt"),
+        ("false_status", "canonical completed human-review receipt"),
+        ("duplicate_role", "duplicate reviewer roles"),
+        ("incomplete_coverage", "coverage must be complete"),
+        ("coverage_hash", "exact coverage/hash mismatch"),
+    ],
+)
+def test_strict_human_review_receipt_failures(tmp_path, mutation, match):
+    expected = [{"subject_sha256": "1" * 64}]
+    receipt = _human_review_receipt(
+        review_receipts.TRANSLATION_SCHEMA, copy.deepcopy(expected)
+    )
+    if mutation == "development_schema":
+        receipt["schema_version"] = "r052-translation-development-draft-v1"
+    elif mutation == "false_status":
+        receipt["status"] = False
+    elif mutation == "duplicate_role":
+        receipt["review_team"][1]["role"] = "reviewer_1"
+    elif mutation == "incomplete_coverage":
+        receipt["coverage"] = []
+    else:
+        receipt["coverage"][0]["item"]["subject_sha256"] = "2" * 64
+    body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    receipt["receipt_sha256"] = review_receipts.sha256_json(body)
+    path = tmp_path / "review.json"
+    path.write_bytes(scorer.canonical_json(receipt))
+    with pytest.raises(ValueError, match=match):
+        review_receipts.validate_review_receipt(
+            path,
+            "translation_alignment_receipt",
+            expected,
+            TRUSTED_TEAM_MANIFEST_SHA256,
+            review_receipts.validate_trusted_review_team_manifest(
+                _TRUSTED_TEAM_MANIFEST_PATH, TRUSTED_TEAM_MANIFEST_SHA256
+            ),
+        )
+
+
+def test_review_receipt_rejects_self_asserted_fake_reviewer_ids(tmp_path):
+    expected = [{"subject_sha256": "1" * 64}]
+    receipt = _human_review_receipt(review_receipts.TRANSLATION_SCHEMA, expected)
+    for index, member in enumerate(receipt["review_team"], start=1):
+        member["reviewer_id"] = f"self-asserted-fake-{index}"
+    body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    receipt["receipt_sha256"] = review_receipts.sha256_json(body)
+    path = tmp_path / "fake-reviewers.json"
+    path.write_bytes(scorer.canonical_json(receipt))
+    trusted = review_receipts.validate_trusted_review_team_manifest(
+        _TRUSTED_TEAM_MANIFEST_PATH, TRUSTED_TEAM_MANIFEST_SHA256
+    )
+    with pytest.raises(ValueError, match="not in the trusted allowlist"):
+        review_receipts.validate_review_receipt(
+            path,
+            "translation_alignment_receipt",
+            expected,
+            TRUSTED_TEAM_MANIFEST_SHA256,
+            trusted,
+        )
+
+
+def test_trusted_review_team_manifest_is_externally_hash_anchored(tmp_path):
+    changed = copy.deepcopy(TRUSTED_TEAM_MANIFEST)
+    changed["members"][0]["reviewer_id"] = "substituted-identity"
+    body = {key: value for key, value in changed.items() if key != "manifest_sha256"}
+    changed["manifest_sha256"] = review_receipts.sha256_json(body)
+    path = tmp_path / "substituted-team.json"
+    path.write_bytes(scorer.canonical_json(changed))
+    with pytest.raises(ValueError, match="artifact hash mismatch"):
+        review_receipts.validate_trusted_review_team_manifest(
+            path, TRUSTED_TEAM_MANIFEST_SHA256
+        )
+
+
+def test_boundary_receipt_binds_chunk_key_and_source_char_range(panel):
+    expected = review_receipts.expected_receipt_items(panel["cases"])
+    original = expected["chunk_boundary_receipt"]
+
+    changed_key = copy.deepcopy(panel["cases"])
+    changed_key[0]["chunks"][1]["chunk_key"] = _sha("changed-chunk-key")
+    assert (
+        review_receipts.expected_receipt_items(changed_key)["chunk_boundary_receipt"]
+        != original
+    )
+
+    changed_range = copy.deepcopy(panel["cases"])
+    changed_range[0]["chunks"][1]["derivation"]["char_start"] += 1
+    assert (
+        review_receipts.expected_receipt_items(changed_range)["chunk_boundary_receipt"]
+        != original
+    )
 
 
 def test_rejects_chunking_receipt_derivation_tampering(panel):
