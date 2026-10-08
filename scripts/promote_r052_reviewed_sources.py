@@ -784,6 +784,7 @@ def _complete_verified_install(
     _require_parent_entry_identity(parent_fd, output_name, staging_identity)
     _require_exact_tree_fd(root_fd, final_files)
     os.fsync(root_fd)
+    _require_parent_entry_identity(parent_fd, output_name, staging_identity)
     os.fsync(parent_fd)
     # POSIX cannot exclude a malicious same-UID writer after this last check.
     # Consumers therefore treat the marker as valid only after replaying every

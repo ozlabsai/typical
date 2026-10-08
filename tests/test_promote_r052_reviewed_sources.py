@@ -1061,6 +1061,31 @@ def test_mutation_after_marker_commit_returns_failure(tmp_path, monkeypatch):
     assert not (fixture["output"] / "source-manifest-v5.json").exists()
 
 
+def test_root_replacement_inside_final_tree_replay_returns_failure(
+    tmp_path, monkeypatch
+):
+    fixture = _fixture(tmp_path)
+    real_require_tree = promoter._require_exact_tree_fd
+    escaped = tmp_path / "escaped-after-final-replay"
+
+    def replay_then_replace(root_fd, expected_files):
+        result = real_require_tree(root_fd, expected_files)
+        if "PROMOTION_COMPLETE.json" in expected_files:
+            fixture["output"].rename(escaped)
+            fixture["output"].mkdir()
+            (fixture["output"] / "owned-by-racer.txt").write_text("keep")
+        return result
+
+    monkeypatch.setattr(promoter, "_require_exact_tree_fd", replay_then_replace)
+    with pytest.raises(promoter.PromotionError, match="entry changed"):
+        _promote(fixture)
+
+    assert (fixture["output"] / "owned-by-racer.txt").read_text() == "keep"
+    assert not (fixture["output"] / "PROMOTION_COMPLETE.json").exists()
+    assert (escaped / "PROMOTION_COMPLETE.json").is_file()
+    assert (escaped / "source-manifest-v5.json").is_file()
+
+
 def test_completion_marker_symlink_collision_fails_closed(tmp_path, monkeypatch):
     fixture = _fixture(tmp_path)
     outside = tmp_path / "outside-marker.txt"
