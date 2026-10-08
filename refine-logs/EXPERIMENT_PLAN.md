@@ -23,8 +23,8 @@ The prior multimodal/Hebrew plan and completed E1 history remain in `EXPERIMENT_
 
 | Evaluation | Jev target | Promotion gate |
 |---|---:|---:|
-| JevBench official v1.4.2.2 (current 2026-10-06) | Jev score 63.292057; Intelligence 53.059046 | ≥ both on a fresh full-coverage submission; also report distance to current leader Imajev-4B score 67.368216 |
-| JevBench official v1.2-era frozen target (historical contract) | score 72.1; Intelligence 72.0 | retain as a separately labelled historical result; never compare across scorer versions |
+| JevBench official v1.5.4 (released board, reverified 2026-10-08) | Jev score 72.132929; Intelligence 71.999750 | ≥ both on a fresh full-coverage submission; also report distance to Cygnet score 73.701267 and Winnow Intelligence 74.434686 |
+| JevBench official v1.4.2.2 (historical scorer) | Jev score 63.292057; Intelligence 53.059046 | retain as a separately labelled historical result; never compare across scorer versions |
 | JevBench public diagnostic | Cygnet 203/231; Winnow 199/231 | report paired/family results; no pass/fail threshold |
 | WorkflowEvals security, current exact-actions/policy mean | 59.5833% | ≥57.5833% |
 | WorkflowEvals agent trace, current exact-actions/policy mean | 70.8419% | ≥68.8419% |
@@ -35,9 +35,11 @@ The prior multimodal/Hebrew plan and completed E1 history remain in `EXPERIMENT_
 
 Image JevBench and the paired Hebrew suite are additional release gates, not substitutes for the text/workflow targets.
 
-Target refresh provenance (2026-10-06): JevBench repository commit
-`bb05a335bc809e61b20c0f745d25499a82b326fc`, result
-`results/v1.4.2.2/jevbench-v1.4.2.2-results.json`. Current WorkflowEvals code is commit
+Target refresh provenance (2026-10-08): the released JevBench API
+`https://benchmarkheaven.com/api/jevbench/v1.5.4` declares revision `v1.5.4`, protocol
+`jevbench::v1.5`, status `released`, 106 ranked systems, and source SHA256
+`452885de2a84cd5b9ed393d541fd8d6c6a540f9d7f762f9d2df9349383f26173`; the retrieved response-byte
+SHA256 was `0cf210b76bf85084a5f3fb40fb109e9a2c2f93df42ff6628696377666e89db45`. Current WorkflowEvals code is commit
 `0ac3b8ad845429f0d8e064ecfb2430a47c5a25cb`; the exact-actions figures above are recomputed by its
 published `plot.py average --hf` path from pinned dataset revisions invoice
 `6beeb2d2acd65c086c835022f5f4d7434114cafc`, customer
