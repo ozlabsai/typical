@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import stat
@@ -479,6 +480,109 @@ def _write(path: Path, payload: bytes) -> str:
     return sha256_bytes(payload)
 
 
+def _directory_open_flags() -> int:
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise PromotionError(
+            "exclusive publication requires O_DIRECTORY and O_NOFOLLOW support"
+        )
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _open_directory(path: Path, label: str) -> int:
+    try:
+        descriptor = os.open(path, _directory_open_flags())
+    except OSError as error:
+        raise PromotionError(f"{label} must be a no-follow directory") from error
+    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise PromotionError(f"{label} must be a directory")
+    return descriptor
+
+
+def _open_child_directory(parent_fd: int, name: str, label: str) -> int:
+    try:
+        descriptor = os.open(
+            name,
+            _directory_open_flags(),
+            dir_fd=parent_fd,
+        )
+    except OSError as error:
+        raise PromotionError(f"{label} must be a no-follow directory") from error
+    metadata = os.fstat(descriptor)
+    try:
+        entry_metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as error:
+        os.close(descriptor)
+        raise PromotionError(f"{label} identity changed during publication") from error
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_dev != entry_metadata.st_dev
+        or metadata.st_ino != entry_metadata.st_ino
+    ):
+        os.close(descriptor)
+        raise PromotionError(f"{label} identity changed during publication")
+    return descriptor
+
+
+def _make_exclusive_directory(parent_fd: int, name: str, label: str) -> int:
+    try:
+        os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+    except FileExistsError as error:
+        raise PromotionError(
+            f"{label} already exists; publication never overwrites"
+        ) from error
+    except OSError as error:
+        raise PromotionError(f"could not create {label}") from error
+    return _open_child_directory(parent_fd, name, label)
+
+
+def _write_exclusive_file(
+    directory_fd: int, name: str, payload: bytes, label: str
+) -> str:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise PromotionError("exclusive publication requires O_NOFOLLOW support")
+    flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
+    except FileExistsError as error:
+        raise PromotionError(
+            f"{label} already exists; publication never overwrites"
+        ) from error
+    except OSError as error:
+        raise PromotionError(
+            f"could not create {label} without following links"
+        ) from error
+    try:
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("exclusive publication made no write progress")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return sha256_bytes(payload)
+
+
+def _copy_staged_tree_exclusive(source: Path, destination_fd: int) -> None:
+    for entry in sorted(source.iterdir(), key=lambda item: item.name):
+        label = f"published artifact {entry.relative_to(source)}"
+        if entry.is_symlink():
+            raise PromotionError(f"{label} may not be a symlink")
+        if entry.is_dir():
+            child_fd = _make_exclusive_directory(destination_fd, entry.name, label)
+            try:
+                _copy_staged_tree_exclusive(entry, child_fd)
+            finally:
+                os.close(child_fd)
+        elif entry.is_file():
+            _write_exclusive_file(destination_fd, entry.name, entry.read_bytes(), label)
+        else:
+            raise PromotionError(f"{label} must be a regular file or directory")
+
+
 def _directory_identity(path: Path) -> tuple[int, int]:
     """Return a directory's stable filesystem identity without following symlinks."""
     try:
@@ -495,6 +599,32 @@ def _directory_identity(path: Path) -> tuple[int, int]:
 def _require_directory_identity(path: Path, expected: tuple[int, int]) -> None:
     if _directory_identity(path) != expected:
         raise PromotionError("output directory identity changed during promotion")
+
+
+def _reserve_output_directory(output_dir: Path) -> tuple[int, tuple[int, int]]:
+    parent_fd = _open_directory(output_dir.parent, "output parent")
+    try:
+        try:
+            os.mkdir(output_dir.name, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError as error:
+            raise PromotionError(
+                "output directory already exists; promotion never overwrites"
+            ) from error
+        except OSError as error:
+            raise PromotionError("could not reserve output directory") from error
+        output_fd = _open_child_directory(
+            parent_fd, output_dir.name, "reserved output directory"
+        )
+    finally:
+        os.close(parent_fd)
+    identity = os.fstat(output_fd)
+    expected = (identity.st_dev, identity.st_ino)
+    try:
+        _require_directory_identity(output_dir, expected)
+    except Exception:
+        os.close(output_fd)
+        raise
+    return output_fd, expected
 
 
 def promote(
@@ -734,26 +864,25 @@ def promote(
         _reject_markers(promotion_payload, "generated promotion receipt")
         promotion_hash = _write(temporary / "promotion-receipt.json", promotion_payload)
 
-        try:
-            output_dir.mkdir()
-        except FileExistsError as error:
-            raise PromotionError(
-                "output directory already exists; promotion never overwrites"
-            ) from error
-        published_identity = _directory_identity(output_dir)
-        shutil.copytree(temporary, output_dir, dirs_exist_ok=True)
-        _require_directory_identity(output_dir, published_identity)
+        output_fd, published_identity = _reserve_output_directory(output_dir)
         completion_marker = {
             "schema_version": COMPLETION_MARKER_VERSION,
             "source_manifest_sha256": output_manifest_hash,
             "promotion_receipt_sha256": promotion_hash,
         }
-        _write(
-            output_dir / "PROMOTION_COMPLETE.json",
-            canonical_json(completion_marker),
-        )
-        _require_directory_identity(output_dir, published_identity)
-        return promotion_receipt
+        try:
+            _copy_staged_tree_exclusive(temporary, output_fd)
+            _require_directory_identity(output_dir, published_identity)
+            _write_exclusive_file(
+                output_fd,
+                "PROMOTION_COMPLETE.json",
+                canonical_json(completion_marker),
+                "promotion completion marker",
+            )
+            _require_directory_identity(output_dir, published_identity)
+            return promotion_receipt
+        finally:
+            os.close(output_fd)
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
 
