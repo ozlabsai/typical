@@ -880,6 +880,187 @@ def test_validated_child_swap_before_rename_cannot_complete(tmp_path, monkeypatc
     assert (escaped / "acquisition-run-receipt.json").is_file()
 
 
+def test_marker_boundary_root_move_replacement_cannot_complete(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    real_complete = promoter._complete_verified_install
+    escaped_name = "escaped-at-marker-boundary"
+
+    def replace_root(
+        parent_fd,
+        output_name,
+        root_fd,
+        staging_identity,
+        expected_files,
+        completion_payload,
+    ):
+        os.rename(
+            output_name,
+            escaped_name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        os.mkdir(output_name, mode=0o700, dir_fd=parent_fd)
+        replacement_fd = os.open(
+            output_name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=parent_fd
+        )
+        try:
+            leaf_fd = os.open(
+                "owned-by-racer.txt",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=replacement_fd,
+            )
+            os.write(leaf_fd, b"keep")
+            os.close(leaf_fd)
+        finally:
+            os.close(replacement_fd)
+        return real_complete(
+            parent_fd,
+            output_name,
+            root_fd,
+            staging_identity,
+            expected_files,
+            completion_payload,
+        )
+
+    monkeypatch.setattr(promoter, "_complete_verified_install", replace_root)
+    with pytest.raises(promoter.PromotionError, match="entry changed"):
+        _promote(fixture)
+
+    assert (fixture["output"] / "owned-by-racer.txt").read_text() == "keep"
+    assert not (fixture["output"] / "PROMOTION_COMPLETE.json").exists()
+    escaped = tmp_path / escaped_name
+    assert (escaped / "source-manifest-v5.json").is_file()
+    assert not (escaped / "PROMOTION_COMPLETE.json").exists()
+
+
+@pytest.mark.parametrize("mutation", ["delete", "replace"])
+def test_marker_boundary_artifact_mutation_cannot_complete(
+    tmp_path, monkeypatch, mutation
+):
+    fixture = _fixture(tmp_path)
+    real_complete = promoter._complete_verified_install
+
+    def mutate_artifact(
+        parent_fd,
+        output_name,
+        root_fd,
+        staging_identity,
+        expected_files,
+        completion_payload,
+    ):
+        os.fchmod(root_fd, 0o700)
+        os.unlink("source-manifest-v5.json", dir_fd=root_fd)
+        if mutation == "replace":
+            artifact_fd = os.open(
+                "source-manifest-v5.json",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o400,
+                dir_fd=root_fd,
+            )
+            os.write(artifact_fd, b"racer-owned")
+            os.close(artifact_fd)
+        return real_complete(
+            parent_fd,
+            output_name,
+            root_fd,
+            staging_identity,
+            expected_files,
+            completion_payload,
+        )
+
+    monkeypatch.setattr(promoter, "_complete_verified_install", mutate_artifact)
+    with pytest.raises(
+        promoter.PromotionError, match="set or hashes changed before completion"
+    ):
+        _promote(fixture)
+
+    assert not (fixture["output"] / "PROMOTION_COMPLETE.json").exists()
+    if mutation == "replace":
+        assert (fixture["output"] / "source-manifest-v5.json").read_text() == (
+            "racer-owned"
+        )
+
+
+def test_marker_boundary_child_swap_cannot_complete(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    real_complete = promoter._complete_verified_install
+    escaped_name = "escaped-child-at-marker"
+
+    def swap_child(
+        parent_fd,
+        output_name,
+        root_fd,
+        staging_identity,
+        expected_files,
+        completion_payload,
+    ):
+        os.fchmod(root_fd, 0o700)
+        child_fd = os.open("acquisition", os.O_RDONLY | os.O_DIRECTORY, dir_fd=root_fd)
+        os.fchmod(child_fd, 0o700)
+        os.close(child_fd)
+        os.rename(
+            "acquisition",
+            escaped_name,
+            src_dir_fd=root_fd,
+            dst_dir_fd=parent_fd,
+        )
+        os.mkdir("acquisition", mode=0o700, dir_fd=root_fd)
+        replacement_fd = os.open(
+            "acquisition", os.O_RDONLY | os.O_DIRECTORY, dir_fd=root_fd
+        )
+        try:
+            leaf_fd = os.open(
+                "owned-by-racer.txt",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=replacement_fd,
+            )
+            os.write(leaf_fd, b"keep")
+            os.close(leaf_fd)
+        finally:
+            os.close(replacement_fd)
+        return real_complete(
+            parent_fd,
+            output_name,
+            root_fd,
+            staging_identity,
+            expected_files,
+            completion_payload,
+        )
+
+    monkeypatch.setattr(promoter, "_complete_verified_install", swap_child)
+    with pytest.raises(
+        promoter.PromotionError, match="set or hashes changed before completion"
+    ):
+        _promote(fixture)
+
+    assert (fixture["output"] / "acquisition" / "owned-by-racer.txt").read_text() == (
+        "keep"
+    )
+    assert not (fixture["output"] / "PROMOTION_COMPLETE.json").exists()
+    escaped = tmp_path / escaped_name
+    assert (escaped / "acquisition-manifest.json").is_file()
+
+
+def test_mutation_after_marker_commit_returns_failure(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    real_write_marker = promoter._write_completion_marker
+
+    def write_then_mutate(root_fd, payload):
+        real_write_marker(root_fd, payload)
+        os.unlink("source-manifest-v5.json", dir_fd=root_fd)
+
+    monkeypatch.setattr(promoter, "_write_completion_marker", write_then_mutate)
+    with pytest.raises(
+        promoter.PromotionError, match="set or hashes changed before completion"
+    ):
+        _promote(fixture)
+
+    assert (fixture["output"] / "PROMOTION_COMPLETE.json").is_file()
+    assert not (fixture["output"] / "source-manifest-v5.json").exists()
+
+
 def test_completion_marker_symlink_collision_fails_closed(tmp_path, monkeypatch):
     fixture = _fixture(tmp_path)
     outside = tmp_path / "outside-marker.txt"

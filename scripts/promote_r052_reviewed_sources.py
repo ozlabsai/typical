@@ -743,6 +743,53 @@ def _write_completion_marker(root_fd: int, payload: bytes) -> None:
     )
 
 
+def _require_parent_entry_identity(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    try:
+        metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as error:
+        raise PromotionError("installed publication entry changed") from error
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or (metadata.st_dev, metadata.st_ino) != expected_identity
+    ):
+        raise PromotionError("installed publication entry changed")
+
+
+def _complete_verified_install(
+    parent_fd: int,
+    output_name: str,
+    root_fd: int,
+    staging_identity: tuple[int, int],
+    expected_files: Mapping[str, str],
+    completion_payload: bytes,
+) -> None:
+    """Reconcile the installed entry/tree immediately around marker commit."""
+    if "PROMOTION_COMPLETE.json" in expected_files:
+        raise PromotionError("precompletion tree must not contain completion marker")
+    _require_parent_entry_identity(parent_fd, output_name, staging_identity)
+    _require_exact_tree_fd(root_fd, expected_files)
+    os.fchmod(root_fd, 0o700)
+    try:
+        _write_completion_marker(root_fd, completion_payload)
+    finally:
+        os.fchmod(root_fd, 0o500)
+    final_files = {
+        **expected_files,
+        "PROMOTION_COMPLETE.json": sha256_bytes(completion_payload),
+    }
+    _require_parent_entry_identity(parent_fd, output_name, staging_identity)
+    _require_exact_tree_fd(root_fd, final_files)
+    os.fsync(root_fd)
+    os.fsync(parent_fd)
+    # POSIX cannot exclude a malicious same-UID writer after this last check.
+    # Consumers therefore treat the marker as valid only after replaying every
+    # source-manifest-v5 artifact hash against the installed tree.
+
+
 def _atomic_install_and_complete(
     staged: Path,
     output_dir: Path,
@@ -778,13 +825,14 @@ def _atomic_install_and_complete(
                         "installed publication inode mismatches staging"
                     )
                 _require_exact_tree_fd(installed_fd, expected_files)
-                os.fchmod(installed_fd, 0o700)
-                try:
-                    _write_completion_marker(installed_fd, completion_payload)
-                finally:
-                    os.fchmod(installed_fd, 0o500)
-                os.fsync(installed_fd)
-                os.fsync(parent_fd)
+                _complete_verified_install(
+                    parent_fd,
+                    output_dir.name,
+                    installed_fd,
+                    staging_identity,
+                    expected_files,
+                    completion_payload,
+                )
             finally:
                 os.close(installed_fd)
         finally:
