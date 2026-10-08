@@ -15,6 +15,7 @@ import json
 import math
 import os
 import platform
+import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -29,12 +30,13 @@ try:
 except ModuleNotFoundError:  # Supports ``uv run python scripts/run_...py``.
     import score_r052_evidence_retrieval as retrieval
 
-SCHEMA_VERSION = "r052-embedding-development-pilot-receipt-v2"
+SCHEMA_VERSION = "r052-embedding-development-pilot-receipt-v3"
 RUNTIME_SCHEMA_VERSION = "r052-embedding-development-pilot-runtime-v1"
 CLAIM_STATUS = "development_only_not_human_reviewed_not_b1_not_benchmark"
 MODES = ("question_only", "all", "per_option", "fact_all")
 DIMENSIONS = (768, 256)
 TOP_KS = (1, 2, 4)
+RUNTIME_LOCK_SHA256 = "1efdac9dfe879bf76da25c9a6abb3d6303fc62863cea7f048ec8d493a85425ac"
 EXPECTED_CANDIDATE_SCHEMAS = {
     "ntsb": "r052-ntsb-candidate-dossier-plan-v1",
     "gao": "r052-gao-candidate-dossier-plan-v1",
@@ -374,7 +376,7 @@ def _metrics(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             None,
         )
         reciprocal_ranks.append(0.0 if rank is None else 1.0 / rank)
-    result["mrr_first_decisive"] = sum(reciprocal_ranks) / len(records)
+    result["mrr_first_decisive"] = math.fsum(reciprocal_ranks) / len(records)
     return result
 
 
@@ -412,6 +414,8 @@ def build_receipt(
     provider: TextEmbeddingProvider,
     artifact_bindings: Mapping[str, str],
 ) -> dict[str, Any]:
+    if artifact_bindings.get("runtime_lock_sha256") != RUNTIME_LOCK_SHA256:
+        raise ValueError("pilot requires the dedicated R052 runtime lock")
     query_metadata: dict[tuple[str, str], dict[str, tuple[dict[str, str], ...]]] = {}
     embedding_inputs: set[str] = set()
     input_roles: dict[str, set[str]] = {}
@@ -685,7 +689,6 @@ class LocalEmbeddingGemma2TextProvider:
         model_snapshot: Path,
         model_snapshot_tree_sha256: str,
         runtime_lock: Path,
-        runtime_lock_sha256: str,
         transformers_wheel: Path,
         dtype: str,
         device: str,
@@ -694,12 +697,14 @@ class LocalEmbeddingGemma2TextProvider:
         if observed_tree != model_snapshot_tree_sha256:
             raise ValueError("model snapshot does not match external tree sha256")
         retrieval.verify_frozen_snapshot(model_snapshot.resolve())
+        verify_runtime_lock(runtime_lock)
+        verify_runtime_environment(runtime_lock)
         self._provider = retrieval.LocalEmbeddingGemma2Provider(
             dtype=dtype,
             device=device,
             truncate_dim=None,
             runtime_lock=runtime_lock,
-            runtime_lock_sha256=runtime_lock_sha256,
+            runtime_lock_sha256=RUNTIME_LOCK_SHA256,
             transformers_wheel=transformers_wheel,
         )
         if self._provider.snapshot_hash != observed_tree:
@@ -724,13 +729,40 @@ class LocalEmbeddingGemma2TextProvider:
         return self._identity
 
     def runtime_identity(self) -> Mapping[str, Any]:
-        return dict(self._provider.identity()["runtime_identity"])
+        return {
+            **dict(self._provider.identity()["runtime_identity"]),
+            "interpreter_prefix": str(Path(sys.prefix).resolve()),
+        }
 
 
 def _sha(value: str, label: str) -> str:
     if not retrieval.SHA256_RE.fullmatch(value):
         raise argparse.ArgumentTypeError(f"{label} must be a lowercase sha256")
     return value
+
+
+def verify_runtime_lock(path: Path) -> str:
+    """Require the dedicated, frozen R052 EmbeddingGemma 2 UV lock."""
+    return retrieval.verify_artifact(
+        path, RUNTIME_LOCK_SHA256, "dedicated R052 EmbeddingGemma 2 runtime lock"
+    )
+
+
+def verify_runtime_environment(
+    runtime_lock: Path, interpreter_prefix: Path | None = None
+) -> Path:
+    """Prove execution is inside the UV environment described by the lock."""
+    expected = (runtime_lock.resolve().parent / ".venv").resolve()
+    observed = (
+        Path(sys.prefix).resolve()
+        if interpreter_prefix is None
+        else interpreter_prefix.resolve()
+    )
+    if observed != expected:
+        raise ValueError(
+            "pilot must execute inside the dedicated R052 EmbeddingGemma 2 UV project"
+        )
+    return observed
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -742,7 +774,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model-snapshot", type=Path, required=True)
     parser.add_argument("--model-snapshot-tree-sha256", required=True)
     parser.add_argument("--runtime-lock", type=Path, required=True)
-    parser.add_argument("--runtime-lock-sha256", required=True)
     parser.add_argument("--transformers-wheel", type=Path, required=True)
     parser.add_argument("--dtype", choices=("bf16", "fp32"), default="fp32")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
@@ -750,21 +781,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     model_tree_sha256 = _sha(
         args.model_snapshot_tree_sha256, "model snapshot tree sha256"
     )
-    runtime_lock_sha256 = _sha(args.runtime_lock_sha256, "runtime lock sha256")
     if args.output.exists() or args.runtime_sidecar.exists():
         parser.error("output artifacts already exist; overwrite is forbidden")
     provider = LocalEmbeddingGemma2TextProvider(
         model_snapshot=args.model_snapshot,
         model_snapshot_tree_sha256=model_tree_sha256,
         runtime_lock=args.runtime_lock,
-        runtime_lock_sha256=runtime_lock_sha256,
         transformers_wheel=args.transformers_wheel,
         dtype=args.dtype,
         device=args.device,
     )
     artifact_bindings = {
         "model_snapshot_tree_sha256": model_tree_sha256,
-        "runtime_lock_sha256": runtime_lock_sha256,
+        "runtime_lock_sha256": verify_runtime_lock(args.runtime_lock),
         "transformers_wheel_sha256": retrieval.verify_artifact(
             args.transformers_wheel,
             retrieval.TRANSFORMERS_WHEEL_SHA256,

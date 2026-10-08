@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -156,7 +157,7 @@ def _run(
         provider=actual_provider,
         artifact_bindings={
             "model_snapshot_tree_sha256": "1" * 64,
-            "runtime_lock_sha256": "2" * 64,
+            "runtime_lock_sha256": pilot.RUNTIME_LOCK_SHA256,
             "transformers_wheel_sha256": "3" * 64,
         },
     )
@@ -331,7 +332,7 @@ def test_outputs_are_no_overwrite_and_provider_is_not_called(
             output=output,
             runtime_sidecar=tmp_path / "runtime.json",
             provider=provider,
-            artifact_bindings={},
+            artifact_bindings={"runtime_lock_sha256": pilot.RUNTIME_LOCK_SHA256},
         )
     assert output.read_text() == "owned"
     assert provider.calls == []
@@ -397,7 +398,45 @@ def test_rejects_bad_provider_dimension_without_publishing(
             output=output,
             runtime_sidecar=runtime,
             provider=BadProvider(),
-            artifact_bindings={},
+            artifact_bindings={"runtime_lock_sha256": pilot.RUNTIME_LOCK_SHA256},
         )
     assert not output.exists()
     assert not runtime.exists()
+
+
+def test_only_dedicated_r052_runtime_lock_is_accepted() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    dedicated = repository / "runtimes/r052-embeddinggemma2/uv.lock"
+    assert pilot.verify_runtime_lock(dedicated) == pilot.RUNTIME_LOCK_SHA256
+    root_lock = repository / "uv.lock"
+    assert retrieval.file_sha256(root_lock) == (
+        "14b5475dafd704235030adfd1a726b30353054d59794ef8a9eb971a69b9dc876"
+    )
+    with pytest.raises(ValueError, match="artifact hash mismatch"):
+        pilot.verify_runtime_lock(root_lock)
+
+
+def test_runtime_environment_must_match_dedicated_uv_project() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    runtime_lock = repository / "runtimes/r052-embeddinggemma2/uv.lock"
+    expected_prefix = runtime_lock.parent / ".venv"
+    assert (
+        pilot.verify_runtime_environment(runtime_lock, expected_prefix)
+        == expected_prefix.resolve()
+    )
+    with pytest.raises(ValueError, match="must execute inside the dedicated"):
+        pilot.verify_runtime_environment(runtime_lock, repository / ".venv")
+
+
+def test_mrr_uses_stable_fsum_aggregation() -> None:
+    records = [
+        {"decisive": ["gold"], "ranking": ranking}
+        for ranking in (
+            ["gold", "x", "y"],
+            ["x", "gold", "y"],
+            ["x", "y", "gold"],
+        )
+    ]
+    assert pilot._metrics(records)["mrr_first_decisive"] == math.fsum(
+        [1.0, 0.5, 1.0 / 3.0]
+    ) / len(records)
