@@ -1,0 +1,170 @@
+diff --git a/core/clients.py b/core/clients.py
+index a9c6cf3..3ff8310 100644
+--- a/core/clients.py
++++ b/core/clients.py
+@@ -31,16 +31,17 @@ from .question_types import SystemOneResponse, question_record
+ class ConfiguredProvider:
+     """PydanticAI handles model settings; the adapter handles answer schemas and retries."""
+ 
+-    def __init__(self, model):
++    def __init__(self, model, schema_in_prompt=False):
+         self.model = model
+         self.model_name = model.model_name
++        self.schema_in_prompt = schema_in_prompt
+ 
+     def request(self, messages, *, schema, structured):
+         with translating(self.translate_error):
+             return self._request(messages, schema=schema, structured=structured)
+ 
+     def _request(self, messages, *, schema, structured):
+-        if not structured:
++        if not structured and not self.schema_in_prompt:
+             raise ValueError("Workflow evaluations require structured probability answers")
+         history = []
+         for message in messages:
+@@ -85,6 +86,7 @@ class QuestionClient:
+ 
+     def __init__(self, config):
+         self.native = config.provider in ("typesafe", "typical")
++        self.schema_in_prompt = config.provider == "vllm"
+         self.typical = config.provider == "typical"
+         if self.typical:
+             api_key = os.getenv("TYPICAL_API_KEY")
+@@ -102,8 +104,10 @@ class QuestionClient:
+             if self.native:
+                 self.client = TypeSafeClient(base_url=config.base_url, timeout=config.timeout_s, retry=retry)
+             else:
++                # vLLM only constrains decoding to the schema; unlike hosted APIs it never shows the schema
++                # (where the questions live) to the model, so the adapter also writes it into the prompt.
+                 self.client = SystemOneAdapterClient(
+-                    structured_outputs=True,
++                    structured_outputs=not self.schema_in_prompt,
+                     llm_answer_mode="probabilities",
+                     normalize_probabilities=True,
+                     n_retry_malformed_structure=config.malformed_retries,
+@@ -114,7 +118,7 @@ class QuestionClient:
+         response = self.client.system_one(
+             state=state,
+             questions={key: question_record(question) for key, question in questions.items()},
+-            model=model if self.native else ConfiguredProvider(model),
++            model=model if self.native else ConfiguredProvider(model, self.schema_in_prompt),
+         )
+         if self.typical and response.model != model:
+             raise TypeSafeError(
+diff --git a/core/providers.py b/core/providers.py
+index 9bd4750..082bd42 100644
+--- a/core/providers.py
++++ b/core/providers.py
+@@ -8,7 +8,7 @@ from typesafe_sdk.constants import DEFAULT_BASE_URL
+ 
+ from .contract import ModelIdentity, Record
+ 
+-Provider = Literal["openai", "anthropic", "fireworks", "groq", "cerebras", "typesafe", "typical"]
++Provider = Literal["openai", "anthropic", "fireworks", "groq", "cerebras", "typesafe", "typical", "vllm"]
+ PROVIDERS: tuple[Provider, ...] = (
+     "openai",
+     "anthropic",
+@@ -17,9 +17,10 @@ PROVIDERS: tuple[Provider, ...] = (
+     "cerebras",
+     "typesafe",
+     "typical",
++    "vllm",
+ )
+ # Hosts serving models from multiple labs.
+-OPEN_MODEL_HOSTS: frozenset[Provider] = frozenset({"fireworks", "groq", "cerebras", "typical"})
++OPEN_MODEL_HOSTS: frozenset[Provider] = frozenset({"fireworks", "groq", "cerebras", "typical", "vllm"})
+ NATIVE_DECISION_PROVIDERS: frozenset[Provider] = frozenset({"typesafe", "typical"})
+ # Reject unsupported effort levels rather than letting PydanticAI remap them.
+ GRADED_EFFORTS = ("default", "off", "low", "medium", "high")
+@@ -47,8 +48,13 @@ class ModelConfig(Record):
+             raise ValueError("Typical has no thinking setting; use --thinking off")
+         if self.provider == "typical" and (not self.base_url or not self.base_url.strip()):
+             raise ValueError("Typical requires --base-url or TYPICAL_BASE_URL")
+-        if self.base_url and self.provider not in NATIVE_DECISION_PROVIDERS:
+-            raise ValueError("--base-url currently applies to TypeSafe and Typical only")
++        # Only the real Jev may be recorded as typesafe:jev-1.13.0; self-hosted models use typical:/vllm:.
++        if self.provider == "typesafe" and self.base_url != DEFAULT_BASE_URL:
++            raise ValueError("A custom endpoint is not Jev; run it as typical:<model> or vllm:<model>")
++        if self.provider == "vllm" and (not self.base_url or not self.base_url.strip()):
++            raise ValueError("vllm requires --base-url or VLLM_BASE_URL (an OpenAI-compatible /v1 root)")
++        if self.base_url and self.provider not in (*NATIVE_DECISION_PROVIDERS, "vllm"):
++            raise ValueError("--base-url currently applies to TypeSafe, Typical and vllm only")
+         if self.provider in ("groq", "cerebras") and self.thinking not in GRADED_EFFORTS:
+             raise ValueError(
+                 f"{self.provider} grades reasoning effort as low, medium, or high; "
+@@ -77,6 +83,8 @@ def configuration(model: str, thinking: str | None = None, **kwargs) -> ModelCon
+             or os.getenv("TYPESAFE_BASE_URL")
+             or DEFAULT_BASE_URL
+         )
++    elif provider == "vllm":
++        kwargs["base_url"] = kwargs.get("base_url") or os.getenv("VLLM_BASE_URL")
+     elif provider == "typical":
+         base_url = kwargs.get("base_url") or os.getenv("TYPICAL_BASE_URL")
+         if not base_url or not base_url.strip():
+@@ -121,6 +129,18 @@ def resolve_model(config: ModelConfig):
+         return _chat_model(config, CerebrasProvider(), settings)
+     if explicit:
+         settings["openai_reasoning_effort"] = "none" if config.thinking == "off" else config.thinking
++    if config.provider == "vllm":
++        from pydantic_ai.providers.openai import OpenAIProvider
++
++        # Self-hosted thinking is a chat-template switch: off disables it, anything else enables it;
++        # a named effort is forwarded to the template (e.g. Qwen3.8 low|medium|xhigh), default omits it.
++        settings.pop("openai_reasoning_effort", None)
++        template = {"enable_thinking": config.thinking != "off"}
++        if config.thinking not in ("default", "off"):
++            template["reasoning_effort"] = config.thinking
++        settings["extra_body"] = {"chat_template_kwargs": template}
++        provider = OpenAIProvider(base_url=config.base_url, api_key=os.getenv("VLLM_API_KEY") or "EMPTY")
++        return _chat_model(config, provider, settings)
+     if config.provider == "openai":
+         from pydantic_ai.models.openai import OpenAIResponsesModel
+ 
+diff --git a/run.py b/run.py
+index 3231b1a..f933a9c 100644
+--- a/run.py
++++ b/run.py
+@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
+     parser.add_argument(
+         "--reference", type=Path, action="append", default=[], help="Saved run to use as reference answers"
+     )
+-    parser.add_argument("--base-url", help="TypeSafe override or required Typical endpoint")
++    parser.add_argument("--base-url", help="TypeSafe override, or the required Typical / vllm endpoint")
+     parser.add_argument("--timeout", type=float, default=600, help="Request timeout in seconds")
+     parser.add_argument("--max-output-tokens", type=int, default=64000)
+     parser.add_argument("--retry-errors", action="store_true", help="Rerun failed cases")
+diff --git a/tests/test_vllm_provider.py b/tests/test_vllm_provider.py
+new file mode 100644
+index 0000000..7dfba24
+--- /dev/null
++++ b/tests/test_vllm_provider.py
+@@ -0,0 +1,29 @@
++import os
++import unittest
++from unittest.mock import patch
++
++from core.providers import configuration, resolve_model
++
++
++class VllmProviderTests(unittest.TestCase):
++    def test_custom_endpoint_cannot_be_recorded_as_jev(self):
++        with self.assertRaisesRegex(ValueError, "not Jev"):
++            configuration("typesafe:jev-1.13.0", base_url="http://127.0.0.1:8010")
++
++    def test_vllm_identity_and_thinking_switch(self):
++        with patch.dict(os.environ, {"VLLM_BASE_URL": "http://127.0.0.1:8000/v1"}, clear=True):
++            config = configuration("vllm:google/gemma-4-12B-it", thinking="medium")
++            self.assertEqual(config.identity.name, "vllm:google/gemma-4-12B-it")
++            self.assertEqual(config.identity.effort, "medium")
++            self.assertEqual(config.question_mode, "one")
++            model = resolve_model(config)
++        self.assertEqual(model.settings["extra_body"],
++                         {"chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "medium"}})
++        off = resolve_model(configuration("vllm:x", thinking="off", base_url="http://h/v1"))
++        self.assertEqual(off.settings["extra_body"], {"chat_template_kwargs": {"enable_thinking": False}})
++        with self.assertRaisesRegex(ValueError, "VLLM_BASE_URL"):
++            configuration("vllm:x")
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -1,0 +1,354 @@
+{
+ "gemma4-12b-think": {
+  "headline": {
+   "security_incidents": 0.3958333333333333,
+   "agent_trace_observability": 0.6396396396396397,
+   "invoice_processing": 0.6644444444444444,
+   "customer_service": 0.7467320261437909
+  },
+  "mean": 0.611662360890302,
+  "invoice_primary": 0.8911111111111111,
+  "per_question": {
+   "security_incidents": {
+    "noul_mae": 0.22015228426395939,
+    "noul_flip": 0.1649746192893401,
+    "choice_flip": 0.4898989898989899,
+    "n": 1578
+   },
+   "agent_trace_observability": {
+    "noul_mae": 0.1579593023255814,
+    "noul_flip": 0.14069767441860465,
+    "choice_flip": 0.22072072072072071,
+    "n": 1082
+   },
+   "invoice_processing": {
+    "noul_mae": 0.038959163778162914,
+    "noul_flip": 0.023613518197573655,
+    "choice_flip": 0.15057573073516387,
+    "n": 6874
+   },
+   "customer_service": {
+    "noul_mae": 0.06201409869083585,
+    "noul_flip": 0.044310171198388724,
+    "choice_flip": 0.17574257425742573,
+    "n": 3198
+   }
+  },
+  "execution": {
+   "security_incidents": {
+    "cases": 240,
+    "failed": 0,
+    "wall_s_mean": 315.5383285054452,
+    "calls": 2172,
+    "input_tokens": 5845583,
+    "output_tokens": 2386014
+   },
+   "agent_trace_observability": {
+    "cases": 111,
+    "failed": 0,
+    "wall_s_mean": 501.17650778482977,
+    "calls": 1094,
+    "input_tokens": 2680830,
+    "output_tokens": 1009730
+   },
+   "invoice_processing": {
+    "cases": 150,
+    "failed": 0,
+    "wall_s_mean": 737.3353714497595,
+    "calls": 6874,
+    "input_tokens": 53925895,
+    "output_tokens": 7778001
+   },
+   "customer_service": {
+    "cases": 204,
+    "failed": 0,
+    "wall_s_mean": 324.669312540873,
+    "calls": 3237,
+    "input_tokens": 2045745,
+    "output_tokens": 1881582
+   }
+  },
+  "jev231": {
+   "correct": 225,
+   "n": 231,
+   "failed": 2,
+   "latency_p50": 73.32314750101068,
+   "latency_p95": 262.8614967649919,
+   "output_tokens": 292836
+  }
+ },
+ "qwen38-27b-think": {
+  "headline": {
+   "security_incidents": 0.4875,
+   "agent_trace_observability": 0.7236842105263158,
+   "invoice_processing": 0.74,
+   "customer_service": 0.7843137254901961
+  },
+  "mean": 0.683874484004128,
+  "invoice_primary": 0.78,
+  "per_question": {
+   "security_incidents": {
+    "noul_mae": 0.13050143266475644,
+    "noul_flip": 0.166189111747851,
+    "choice_flip": 0.5327868852459017,
+    "n": 471
+   },
+   "agent_trace_observability": {
+    "noul_mae": 0.09586206896551724,
+    "noul_flip": 0.08275862068965517,
+    "choice_flip": 0.18571428571428572,
+    "n": 360
+   },
+   "invoice_processing": {
+    "noul_mae": 0.026819960212201593,
+    "noul_flip": 0.012599469496021221,
+    "choice_flip": 0.08823529411764706,
+    "n": 2290
+   },
+   "customer_service": {
+    "noul_mae": 0.04126853377265239,
+    "noul_flip": 0.02800658978583196,
+    "choice_flip": 0.12631578947368421,
+    "n": 987
+   }
+  },
+  "execution": {
+   "security_incidents": {
+    "cases": 80,
+    "failed": 0,
+    "wall_s_mean": 1221.236073617923,
+    "calls": 570,
+    "input_tokens": 1414047,
+    "output_tokens": 968751
+   },
+   "agent_trace_observability": {
+    "cases": 38,
+    "failed": 0,
+    "wall_s_mean": 2101.1039251917646,
+    "calls": 360,
+    "input_tokens": 854371,
+    "output_tokens": 523553
+   },
+   "invoice_processing": {
+    "cases": 50,
+    "failed": 9,
+    "wall_s_mean": 3333.2879524711393,
+    "calls": 2303,
+    "input_tokens": 13635774,
+    "output_tokens": 2481091
+   },
+   "customer_service": {
+    "cases": 68,
+    "failed": 0,
+    "wall_s_mean": 1449.335888033589,
+    "calls": 1038,
+    "input_tokens": 679140,
+    "output_tokens": 363718
+   }
+  },
+  "jev231": {
+   "correct": 229,
+   "n": 231,
+   "failed": 0,
+   "latency_p50": 489.0177721459768,
+   "latency_p95": 841.5890167170146,
+   "output_tokens": 207598
+  },
+  "same_case_subset": {
+   "n_cases": {
+    "security_incidents": 80,
+    "agent_trace_observability": 38,
+    "invoice_processing": 50,
+    "customer_service": 68
+   },
+   "gemma4-12b-think": {
+    "headline": {
+     "security_incidents": 0.4625,
+     "agent_trace_observability": 0.6710526315789473,
+     "invoice_processing": 0.7466666666666667,
+     "customer_service": 0.7745098039215687
+    },
+    "mean": 0.6636822755417957
+   },
+   "qwen38-27b-think": {
+    "headline": {
+     "security_incidents": 0.4875,
+     "agent_trace_observability": 0.7236842105263158,
+     "invoice_processing": 0.74,
+     "customer_service": 0.7843137254901961
+    },
+    "mean": 0.683874484004128
+   },
+   "d1-3b": {
+    "headline": {
+     "security_incidents": 0.5625,
+     "agent_trace_observability": 0.5131578947368421,
+     "invoice_processing": 0.32,
+     "customer_service": 0.5392156862745098
+    },
+    "mean": 0.483718395252838
+   },
+   "frozen Cygnet": {
+    "headline": {
+     "security_incidents": 0.325,
+     "agent_trace_observability": 0.631578947368421,
+     "invoice_processing": 0.5533333333333333,
+     "customer_service": 0.7843137254901961
+    },
+    "mean": 0.5735565015479877
+   },
+   "R044": {
+    "headline": {
+     "security_incidents": 0.275,
+     "agent_trace_observability": 0.6052631578947368,
+     "invoice_processing": 0.58,
+     "customer_service": 0.7696078431372549
+    },
+    "mean": 0.5574677502579979
+   },
+   "Jev 1.13": {
+    "headline": {
+     "security_incidents": 0.5625,
+     "agent_trace_observability": 0.6842105263157895,
+     "invoice_processing": 0.6466666666666666,
+     "customer_service": 0.8480392156862745
+    },
+    "mean": 0.6853541021671826
+   }
+  }
+ },
+ "d1-3b": {
+  "headline": {
+   "security_incidents": 0.55,
+   "agent_trace_observability": 0.536036036036036,
+   "invoice_processing": 0.31555555555555553,
+   "customer_service": 0.48366013071895425
+  },
+  "mean": 0.47131293057763646,
+  "invoice_primary": 0.6688888888888889,
+  "per_question": {
+   "security_incidents": {
+    "noul_mae": 0.23390390427592567,
+    "noul_flip": 0.3314917127071823,
+    "choice_flip": 0.4881889763779528,
+    "n": 797
+   },
+   "agent_trace_observability": {
+    "noul_mae": 0.19916437318809355,
+    "noul_flip": 0.21420256111757857,
+    "choice_flip": 0.4439461883408072,
+    "n": 1082
+   },
+   "invoice_processing": {
+    "noul_mae": 0.2988814629084699,
+    "noul_flip": 0.24870017331022531,
+    "choice_flip": 0.2945084145261293,
+    "n": 6874
+   },
+   "customer_service": {
+    "noul_mae": 0.08588633615660214,
+    "noul_flip": 0.08720040795512493,
+    "choice_flip": 0.28901734104046245,
+    "n": 3172
+   }
+  },
+  "execution": {
+   "security_incidents": {
+    "cases": 240,
+    "failed": 0,
+    "wall_s_mean": 2.6187484864837947,
+    "calls": 255,
+    "input_tokens": 550569,
+    "output_tokens": 0
+   },
+   "agent_trace_observability": {
+    "cases": 111,
+    "failed": 0,
+    "wall_s_mean": 6.400268034440012,
+    "calls": 366,
+    "input_tokens": 705422,
+    "output_tokens": 0
+   },
+   "invoice_processing": {
+    "cases": 150,
+    "failed": 0,
+    "wall_s_mean": 3.3980786217116594,
+    "calls": 150,
+    "input_tokens": 4161570,
+    "output_tokens": 0
+   },
+   "customer_service": {
+    "cases": 204,
+    "failed": 0,
+    "wall_s_mean": 3.6999598510439826,
+    "calls": 492,
+    "input_tokens": 412518,
+    "output_tokens": 0
+   }
+  },
+  "jev231": {
+   "correct": 174,
+   "n": 231,
+   "failed": 0,
+   "latency_p50": 4.381491778010968,
+   "latency_p95": 4.847936369013041,
+   "output_tokens": 0
+  }
+ },
+ "ref:frozen Cygnet": {
+  "per_question": {
+   "security_incidents": {
+    "noul_mae": 0.2529025852160135,
+    "noul_flip": 0.2918781725888325,
+    "choice_flip": 0.49242424242424243,
+    "n": 1578
+   },
+   "agent_trace_observability": {
+    "noul_mae": 0.1497346159567116,
+    "noul_flip": 0.17757009345794392,
+    "choice_flip": 0.3565217391304348,
+    "n": 1086
+   },
+   "invoice_processing": {
+    "noul_mae": 0.17686115200434271,
+    "noul_flip": 0.0658578856152513,
+    "choice_flip": 0.17847652790079716,
+    "n": 6874
+   },
+   "customer_service": {
+    "noul_mae": 0.049319609729297074,
+    "noul_flip": 0.049270990447461034,
+    "choice_flip": 0.16284779050736498,
+    "n": 3211
+   }
+  }
+ },
+ "ref:R044": {
+  "per_question": {
+   "security_incidents": {
+    "noul_mae": 0.27406474337197095,
+    "noul_flip": 0.28701180744777477,
+    "choice_flip": 0.47883597883597884,
+    "n": 1479
+   },
+   "agent_trace_observability": {
+    "noul_mae": 0.14931649214318002,
+    "noul_flip": 0.17249417249417248,
+    "choice_flip": 0.2974137931034483,
+    "n": 1090
+   },
+   "invoice_processing": {
+    "noul_mae": 0.08888451513423683,
+    "noul_flip": 0.05979202772963605,
+    "choice_flip": 0.1744906997342781,
+    "n": 6874
+   },
+   "customer_service": {
+    "noul_mae": 0.048454846553453404,
+    "noul_flip": 0.04122674710910005,
+    "choice_flip": 0.20458265139116202,
+    "n": 3211
+   }
+  }
+ }
+}
