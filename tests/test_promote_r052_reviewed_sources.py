@@ -666,145 +666,149 @@ def test_existing_empty_output_directory_is_not_race_overwritten(tmp_path):
     assert list(fixture["output"].iterdir()) == []
 
 
-def test_concurrent_empty_output_reservation_is_not_overwritten(tmp_path, monkeypatch):
+def test_atomic_target_race_never_overwrites_racer_directory(tmp_path, monkeypatch):
     fixture = _fixture(tmp_path)
-    real_reserve = promoter._reserve_output_directory
+    real_install = promoter._atomic_install_no_replace
 
-    def reserve_before_publish(path):
-        path.mkdir()
-        (path / "owned-by-racer.txt").write_text("keep")
-        return real_reserve(path)
+    def race_target(staged, output, identity, expected_files):
+        assert not output.exists()
+        output.mkdir()
+        (output / "owned-by-racer.txt").write_text("keep")
+        return real_install(staged, output, identity, expected_files)
 
-    monkeypatch.setattr(promoter, "_reserve_output_directory", reserve_before_publish)
+    monkeypatch.setattr(promoter, "_atomic_install_no_replace", race_target)
     with pytest.raises(promoter.PromotionError, match="never overwrites"):
         _promote(fixture)
+    assert sorted(path.name for path in fixture["output"].iterdir()) == [
+        "owned-by-racer.txt"
+    ]
     assert (fixture["output"] / "owned-by-racer.txt").read_text() == "keep"
 
 
-def test_completion_failure_leaves_owned_incomplete_output(tmp_path, monkeypatch):
-    fixture = _fixture(tmp_path)
-    real_write = promoter._write_exclusive_file
-
-    def fail_completion(directory_fd, name, payload, label):
-        if name == "PROMOTION_COMPLETE.json":
-            raise OSError("injected completion failure")
-        return real_write(directory_fd, name, payload, label)
-
-    monkeypatch.setattr(promoter, "_write_exclusive_file", fail_completion)
-    with pytest.raises(OSError, match="injected completion failure"):
-        _promote(fixture)
-    assert fixture["output"].is_dir()
-    assert not (fixture["output"] / "PROMOTION_COMPLETE.json").exists()
-
-
-def test_replaced_output_cannot_be_reported_as_success(tmp_path, monkeypatch):
-    fixture = _fixture(tmp_path)
-    real_write = promoter._write_exclusive_file
-
-    def replace_before_completion(directory_fd, name, payload, label):
-        if name == "PROMOTION_COMPLETE.json":
-            promoter.shutil.rmtree(fixture["output"])
-            fixture["output"].mkdir()
-            (fixture["output"] / "owned-by-racer.txt").write_text("keep")
-        return real_write(directory_fd, name, payload, label)
-
-    monkeypatch.setattr(promoter, "_write_exclusive_file", replace_before_completion)
-    with pytest.raises(promoter.PromotionError):
-        _promote(fixture)
-    assert (fixture["output"] / "owned-by-racer.txt").read_text() == "keep"
-    assert not (fixture["output"] / "source-manifest-v5.json").exists()
-
-
-def test_copy_failure_never_deletes_replacement_directory(tmp_path, monkeypatch):
-    fixture = _fixture(tmp_path)
-
-    def replace_then_fail(_source, _destination_fd):
-        promoter.shutil.rmtree(fixture["output"])
-        fixture["output"].mkdir()
-        (fixture["output"] / "owned-by-racer.txt").write_text("keep")
-        raise OSError("injected copy failure after replacement")
-
-    monkeypatch.setattr(promoter, "_copy_staged_tree_exclusive", replace_then_fail)
-    with pytest.raises(OSError, match="injected copy failure"):
-        _promote(fixture)
-    assert (fixture["output"] / "owned-by-racer.txt").read_text() == "keep"
-
-
-def test_child_directory_symlink_race_never_mutates_outside(tmp_path, monkeypatch):
-    fixture = _fixture(tmp_path)
-    outside = tmp_path / "outside-directory"
-    outside.mkdir()
-    sentinel = outside / "sentinel.txt"
-    sentinel.write_text("keep")
-    real_make_directory = promoter._make_exclusive_directory
-
-    def insert_symlink(parent_fd, name, label):
-        if name == "acquisition":
-            os.symlink(outside, name, dir_fd=parent_fd)
-        return real_make_directory(parent_fd, name, label)
-
-    monkeypatch.setattr(promoter, "_make_exclusive_directory", insert_symlink)
-    with pytest.raises(promoter.PromotionError, match="never overwrites"):
-        _promote(fixture)
-
-    assert sentinel.read_text() == "keep"
-    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
-    assert (fixture["output"] / "acquisition").is_symlink()
-    assert not (fixture["output"] / "PROMOTION_COMPLETE.json").exists()
-
-
-@pytest.mark.parametrize("entry_kind", ["symlink", "file"])
-def test_leaf_collision_race_never_overwrites_or_mutates_outside(
-    tmp_path, monkeypatch, entry_kind
+def test_platform_without_atomic_no_replace_primitive_fails_closed(
+    tmp_path, monkeypatch
 ):
     fixture = _fixture(tmp_path)
-    outside = tmp_path / "outside-leaf.txt"
-    outside.write_text("outside-keep")
-    real_write = promoter._write_exclusive_file
+    monkeypatch.setattr(promoter.sys, "platform", "unsupported-test-platform")
 
-    def insert_leaf(directory_fd, name, payload, label):
-        if name == "acquisition-manifest.json":
-            if entry_kind == "symlink":
-                os.symlink(outside, name, dir_fd=directory_fd)
-            else:
-                descriptor = os.open(
-                    name,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    0o600,
-                    dir_fd=directory_fd,
-                )
-                os.write(descriptor, b"racer-owned")
-                os.close(descriptor)
-        return real_write(directory_fd, name, payload, label)
-
-    monkeypatch.setattr(promoter, "_write_exclusive_file", insert_leaf)
-    with pytest.raises(promoter.PromotionError, match="never overwrites"):
+    with pytest.raises(promoter.PromotionError, match="unsupported"):
         _promote(fixture)
 
-    assert outside.read_text() == "outside-keep"
-    leaf = fixture["output"] / "acquisition" / "acquisition-manifest.json"
-    if entry_kind == "symlink":
-        assert leaf.is_symlink()
-    else:
-        assert leaf.read_bytes() == b"racer-owned"
-    assert not (fixture["output"] / "PROMOTION_COMPLETE.json").exists()
+    assert not fixture["output"].exists()
 
 
-def test_completion_marker_symlink_race_fails_closed(tmp_path, monkeypatch):
+def test_completion_failure_never_exposes_partial_output(tmp_path, monkeypatch):
+    fixture = _fixture(tmp_path)
+    real_write = promoter._write
+
+    def fail_completion(path, payload):
+        if path.name == "PROMOTION_COMPLETE.json":
+            raise OSError("injected completion failure")
+        return real_write(path, payload)
+
+    monkeypatch.setattr(promoter, "_write", fail_completion)
+    with pytest.raises(OSError, match="injected completion failure"):
+        _promote(fixture)
+    assert not fixture["output"].exists()
+
+
+def test_staging_root_replacement_is_retained_and_never_published(
+    tmp_path, monkeypatch
+):
+    fixture = _fixture(tmp_path)
+    real_install = promoter._atomic_install_no_replace
+    raced: dict[str, Path] = {}
+
+    def replace_staging(staged, output, identity, expected_files):
+        escaped = tmp_path / "original-staging"
+        staged.rename(escaped)
+        staged.mkdir()
+        (staged / "owned-by-racer.txt").write_text("keep")
+        raced.update(staged=staged, escaped=escaped)
+        return real_install(staged, output, identity, expected_files)
+
+    monkeypatch.setattr(promoter, "_atomic_install_no_replace", replace_staging)
+    with pytest.raises(promoter.PromotionError, match="identity changed"):
+        _promote(fixture)
+
+    assert not fixture["output"].exists()
+    assert (raced["staged"] / "owned-by-racer.txt").read_text() == "keep"
+    assert (raced["escaped"] / "PROMOTION_COMPLETE.json").is_file()
+
+
+def test_child_directory_rename_replacement_cannot_escape_publish(
+    tmp_path, monkeypatch
+):
+    fixture = _fixture(tmp_path)
+    real_install = promoter._atomic_install_no_replace
+    escaped = tmp_path / "escaped-acquisition"
+    raced: dict[str, Path] = {}
+
+    def replace_child(staged, output, identity, expected_files):
+        os.chmod(staged, 0o700)
+        child = staged / "acquisition"
+        os.chmod(child, 0o700)
+        child.rename(escaped)
+        child.mkdir()
+        (child / "owned-by-racer.txt").write_text("keep")
+        raced["replacement"] = child
+        return real_install(staged, output, identity, expected_files)
+
+    monkeypatch.setattr(promoter, "_atomic_install_no_replace", replace_child)
+    with pytest.raises(promoter.PromotionError, match="file set or hashes changed"):
+        _promote(fixture)
+
+    assert not fixture["output"].exists()
+    assert (raced["replacement"] / "owned-by-racer.txt").read_text() == "keep"
+    assert (escaped / "acquisition-manifest.json").is_file()
+    assert (escaped / "acquisition-run-receipt.json").is_file()
+
+
+@pytest.mark.parametrize("mutation", ["delete", "replace", "extra-directory"])
+def test_required_artifact_mutation_before_publish_fails_closed(
+    tmp_path, monkeypatch, mutation
+):
+    fixture = _fixture(tmp_path)
+    real_install = promoter._atomic_install_no_replace
+    observed: dict[str, Path] = {}
+
+    def mutate_artifact(staged, output, identity, expected_files):
+        os.chmod(staged, 0o700)
+        artifact = staged / "source-manifest-v5.json"
+        if mutation == "extra-directory":
+            (staged / "racer-owned-empty-directory").mkdir()
+        else:
+            artifact.unlink()
+            if mutation == "replace":
+                artifact.write_text("racer-owned")
+                observed["artifact"] = artifact
+        return real_install(staged, output, identity, expected_files)
+
+    monkeypatch.setattr(promoter, "_atomic_install_no_replace", mutate_artifact)
+    with pytest.raises(promoter.PromotionError, match="file set or hashes changed"):
+        _promote(fixture)
+
+    assert not fixture["output"].exists()
+    if mutation == "replace":
+        assert observed["artifact"].read_text() == "racer-owned"
+
+
+def test_completion_marker_symlink_before_publish_fails_closed(tmp_path, monkeypatch):
     fixture = _fixture(tmp_path)
     outside = tmp_path / "outside-marker.txt"
     outside.write_text("outside-keep")
-    real_write = promoter._write_exclusive_file
+    real_install = promoter._atomic_install_no_replace
 
-    def insert_marker(directory_fd, name, payload, label):
-        if name == "PROMOTION_COMPLETE.json":
-            os.symlink(outside, name, dir_fd=directory_fd)
-        return real_write(directory_fd, name, payload, label)
+    def replace_marker(staged, output, identity, expected_files):
+        os.chmod(staged, 0o700)
+        marker = staged / "PROMOTION_COMPLETE.json"
+        marker.unlink()
+        marker.symlink_to(outside)
+        return real_install(staged, output, identity, expected_files)
 
-    monkeypatch.setattr(promoter, "_write_exclusive_file", insert_marker)
-    with pytest.raises(promoter.PromotionError, match="never overwrites"):
+    monkeypatch.setattr(promoter, "_atomic_install_no_replace", replace_marker)
+    with pytest.raises(promoter.PromotionError, match="file entry was replaced"):
         _promote(fixture)
 
-    marker = fixture["output"] / "PROMOTION_COMPLETE.json"
-    assert marker.is_symlink()
+    assert not fixture["output"].exists()
     assert outside.read_text() == "outside-keep"
