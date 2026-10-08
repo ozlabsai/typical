@@ -52,24 +52,18 @@
 | R048-P | B3/B4 | Exact-action loss causal pilot | identical 3,200-slot grouped+text+pixel+Hebrew mixture; weight `0` vs `.1` | exact actions, clustered CI, twins, fields, calibration, retention | BLOCKED | Generic grouped exact-policy trainer is committed and audited (`95` focused; `729` passed, `11` skipped broader); supports priority/collect, empty/multi-action outcomes, nullable primary, arbitrary 2--12 fields, and exact outcome NLL. Waits for R048-H, immutable orchestration, and R047 parent decision. |
 | R048-X | B3 | Generic exact-outcome DSL | enumerate Boolean assignments through arbitrary deterministic action programs | exact action sets/primary actions, topology transfer | CPU DONE | Generic compiler/executor, exact differentiable outcome marginalization, singleton scorer, and trainer integration are implemented. The replacement leakage-safe efficacy panel is being rebuilt incrementally before any GPU training. |
 | R049 | B3/B4 | Calibrated-decision post-training | field CE control versus exact-outcome NLL versus bounded exact-outcome Brier; optional outcome-only diagnostic | unseen-policy exact outcomes, Brier/NLL/AURC, selective risk, predicates, HE/MM retention | CPU READY | Stage-1 categorical Brier, fail-closed `.5/1.0` calibration contract, unambiguous telemetry, and complete-outcome NLL/Brier/ECE/AURC scoring are implemented and independently audited with no blocking findings (`4058ba0`, `e729d1b`, `dc40fe4`, `cb736e1`; latest focused audit suite `156` passed). Online rationale RL remains gated on `+5pp` single-rationale headroom or `>=10%` NLL reduction. Design: `docs/research/R049_CALIBRATED_DECISION_POSTTRAIN_20261006.md`. |
+| R050 | B3/B4 | Three-seed calibrated-outcome causal screen | matched control, complete-outcome NLL, and complete-outcome Brier arms with sealed candidate evaluation | exact outcomes, Brier/NLL, protected retention, eligibility | COMPLETE / NO WINNER | All three seeds and sealed candidate evaluations completed. Neither treatment met the preregistered improvement and retention gates, so the fail-closed supervisor promoted no checkpoint and ran no official benchmark evaluation. This closes the tested proper-score coefficients, not calibrated decision training in general. |
+| R052 | B0/B2 | Frozen multimodal evidence-routing diagnostic | local pinned EmbeddingGemma 2 versus production BM25, Typical states, and gold evidence; unchanged Typical decides | decisive recall, downstream exact actions, HE twins, real/shuffled/missing images, latency | PANEL REVIEW | Runtime P0 passes. A tracked 30-question English development pilot is directional only: EG2 all-options 768d/256d complete recall@4 `.9333` versus BM25 `.8333`; paired exact `p=.375`. The full preregistered 40-case/60-question B1 panel still requires independent English, bilingual, image-rights, semantic, and contamination review before any GPU or benchmark claim. |
 
 ## Active resource
 
-- Replacement secure A100 80 GB pod `0qo2n2896fplod` is `RUNNING`; BF16 CUDA matmul passed on
-  pinned Torch `2.14.0+cu130`. Pod `3g3tg0kpljlw0m` was stopped after the reference failure when
-  the A100 was confirmed idle; old pod `e9msxa6ocjth2k` remains `EXITED`. R047-P is archived at
-  `.context/r047-run/ARCHIVE_RECEIPT.json`; R046 remains archived at
-  `.context/r046-run/ARCHIVE_RECEIPT.json`.
-- The replacement preparation is immutable at `/workspace/g1/r047-m1-v2/prepared` and mirrored under
-  `.context/r047-m1/prepared-v2/`. Exact hashes: recipe
-  `b97c6acaa68c742474cc9a33b446f1657d12a0df434450b2db7b1440ad3d7863`, assignment
-  `9d5b1e8e831604156e40f2c6a35dfcf841a18bc60908735154df29697e02c275`, preparation receipt
-  `1a1467750e37659b9ca3e4e2596d8f9f4496bcc91976dfb43182966915b7e48c`, and reference provenance
-  `108afb5c1246668a4ffc49743bdc482303febdde52374deea55e6173ed039613`.
-- Current job: R047 treatment singleton evaluation is live under fail-closed controller PID `2340`;
-  reference/control/training receipts are complete. In parallel, R048-H rebuilds the first
-  leakage-safe v1.3 exact-policy efficacy panel after rejecting v1.2 pre-GPU; R049 bounded
-  proper-score training and outcome calibration metrics are CPU-ready. R047-S, R048-P, and every
-  R049 GPU arm remain gated on causal
-  evidence and measured panel headroom.
-- The 30-minute cost guard remains loaded. Any new ephemeral pod must receive a fresh archive receipt before shutdown.
+- No paid GPU is running. The latest R050 pod `0y9whvekbyqs13` is `EXITED`; its persistent volume is
+  retained. The previous R047/R050 controllers and cost guard are no longer active, so no idle GPU
+  spend is accruing.
+- Current work is CPU-only R052 panel construction, provenance hardening, and local
+  EmbeddingGemma 2 retrieval validation. The exact open checkpoint and isolated UV runtime are
+  staged locally.
+- Restart paid compute only after the 40-case/60-question R052 B1 panel has independent semantic,
+  bilingual, rights, pixel-causality, and contamination receipts and the complete frozen job is
+  ready. Any new ephemeral pod must receive a fresh 30-minute cost guard and archive receipt before
+  shutdown.

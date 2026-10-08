@@ -65,17 +65,39 @@ unit-normalized 768d Hebrew-query vector that was bitwise identical on repeat. P
 The paid GPU remains stopped; the remaining run blocker is the reviewed natural panel, not runtime or
 weight access.
 
-**Current panel evidence:** commit `5623b91` pins and independently re-verifies ten long natural
-NTSB/GovInfo reports (10,523–37,579 extracted words each) with immutable upstream URLs, raw and
-extracted-text hashes, and an exact `pdftotext 26.04.0` recipe. Its acquisition-manifest SHA256 is
-`6b1d9a30fed29dcf665cc2caa84e96afc023855a5cdf81ba4d7e425e58216b43`; a fresh local verification
-passes 10/10. Raw PDFs remain local and non-redistributable. Only reviewed US-government staff text
-may enter the panel, and third-party passages and images remain excluded. Commit `b876cf9` adds the
-two-stage `prepare-audit`/`finalize` builder, while commit `59fa20b` binds scoring to exact source,
-chunk, translation-alignment, image-control, causal-annotation, and contamination receipts. The
-combined acquisition/builder/scorer suite passes 58 tests with one intentional missing-provider
-skip. This establishes reproducible machinery and source inputs, not a quality result or semantic
-ground-truth claim.
+**Current panel evidence:** ten long natural NTSB/GovInfo reports (10,523–37,579 extracted words
+each) are pinned to immutable upstream URLs, raw and extracted-text hashes, and an exact
+`pdftotext 26.04.0` recipe. The noncanonical acquisition manifest is preserved byte-for-byte at
+SHA256 `6b1d9a30fed29dcf665cc2caa84e96afc023855a5cdf81ba4d7e425e58216b43`.
+Commit `5ca1c2a` makes source manifest v5 bind those exact acquisition bytes and reconciles every run,
+license, URL, revision, attribution, raw hash, and reviewed-text hash. Commit `8f16424` holds the
+validated staging inode, atomically installs it with a dirfd no-replace rename, revalidates the
+installed inode and exact hashes, and only then publishes a fsynced completion marker. Commit
+`5f42c3c` binds provider panels to exact typed-policy replay,
+stable semantic option IDs, and order-invariant retrieval queries. The combined promoter, builder,
+scorer, and development-pilot suite passes 154 tests with one intentional missing-provider skip.
+Raw PDFs remain local and non-redistributable. This establishes reproducible machinery and source
+inputs, not a semantic ground-truth or benchmark-quality claim.
+
+**Current development result:** commits `d7144c1` and `d567603` add a tracked local-only pilot and
+enforce the exact isolated UV lock and interpreter environment. Two isolated runs produced the same
+v3 receipt byte-for-byte (file SHA256
+`58e49a5acc20b03da755146a686cd6d8a54dba79624313f4fafadaa85a6f87af`), and an independent audit
+recomputed every query, document, vector, BM25 score, ranking, metric, and cache binding. On 30
+English development questions over 85 short candidate anchors, production BM25 complete recall@4 is
+`.8333`; EmbeddingGemma 2 all-options at both 768d and 256d is `.9333` with item recall@4 `.95`.
+Only four questions favor the dense arm and one favors BM25 (exact paired `p=.375`). This is a
+directional signal to execute B1, not evidence of a JevBench, downstream decision, Hebrew,
+multimodal, long-context, or speed gain.
+
+**Current authoring state:** independently audited development-only drafts cover ten Hebrew↔English
+twin groups (v4 overlay SHA256 `7e08ed31ba0ab64f628fe1e4807b81c4a55993cdb65d77c3f5250b787ff303e8`;
+effective artifact SHA256 `0f485e3d3528dda689e43fb4b10b552d87a1fb966a9d879f181cdb09482cbf76`)
+and ten materialized real/shuffled/missing image groups (receipt SHA256
+`053789622b5267e20e98f722f3c016a79df801058865ccd7610c1b4b9a7600a5`). They are AI-authored,
+unreviewed candidates; all superseded drafts are retained for forensic comparison. Mechanical
+red-team findings are closed, but they cannot enter B1 until the specified human bilingual, rights,
+semantic, pixel-causality, and contamination reviews produce frozen receipts.
 
 Two secondary uses are conditional on B1/B2 succeeding: contamination-safe diversity sampling and
 hard-negative mining for R051/RLCD (never embedding vectors as answer labels), and HE↔EN plus
@@ -221,7 +243,7 @@ regression, and the same calibration/latency gates. Otherwise keep the frozen ro
 | Run | Goal | Decision gate | Estimated compute | Status |
 |---|---|---|---:|---|
 | R052-P0 | pinned-model/runtime preflight | deterministic finite normalized vectors | CPU metadata only | PASS: exact public checkpoint cached; CPU/FP32 Hebrew smoke finite, normalized, deterministic |
-| R052-R | retrieval-only diagnostic | B1 recall and cross-modal/cross-lingual gates | <1 A100-hour | SOURCE/BUILDER READY; authored review and audit pending |
+| R052-R | retrieval-only diagnostic | B1 recall and cross-modal/cross-lingual gates | <1 A100-hour | DEV PILOT PASS; full B1 human review and audit pending |
 | R052-D | downstream no-training causal ablation | B2 exact-action and oracle-headroom gates | 1–2 A100-hours | BLOCKED on R052-R |
 | R052-I | frozen-router integration | B3 quality, retention, latency | 1–3 A100-hours | BLOCKED on R052-D |
 | R052-L | optional router LoRA | B4 incremental gain | 2–4 A100-hours | CONDITIONAL |
@@ -245,6 +267,8 @@ decision remains wrong, train the typed policy executor rather than the router.
 - [x] Hosted API and training-use boundary documented
 - [x] Immutable natural long-source acquisition and panel machinery verified
 - [x] Exact public checkpoint staged and local deterministic P0 smoke passed
+- [x] Tracked English development pilot passed independent reproducibility audit
+- [x] Ten Hebrew-twin and ten image-control candidate groups drafted, explicitly unreviewed
 - [ ] 40-case/60-question panel authored, human-reviewed where required, and contamination-audited
 - [ ] Retrieval baselines and oracle run
 - [ ] Retrieve-then-decide causal ablation passes
