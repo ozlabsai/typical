@@ -12,6 +12,15 @@ from scripts import score_r052_evidence_retrieval as scorer
 
 TEST_ARTIFACT = Path(__file__).resolve()
 TEST_ARTIFACT_SHA256 = scorer.file_sha256(TEST_ARTIFACT)
+ACQUISITION_SOURCE = Path("sources/r052/ntsb_gao_v1.json").resolve()
+TEST_SOURCE_IDS = ("AAR0002", "GAO-01-203")
+
+
+@pytest.fixture(autouse=True)
+def _compact_acquisition_contract(monkeypatch):
+    monkeypatch.setattr(scorer.acquisition, "EXPECTED_IDS", TEST_SOURCE_IDS)
+
+
 SOURCE_ARTIFACT_PATHS = {
     "reviewed-en": Path("uv.lock").resolve(),
     "reviewed-he": Path("site/style.css").resolve(),
@@ -24,19 +33,42 @@ SOURCE_ARTIFACT_PATHS = {
 
 _SOURCE_PROVENANCE_TEMP = tempfile.TemporaryDirectory()
 _SOURCE_PROVENANCE_ROOT = Path(_SOURCE_PROVENANCE_TEMP.name)
-_ACQUISITION_MANIFEST_SHA256 = scorer.sha256_bytes(b"fixture acquisition manifest")
 _EXTRACTED_TEXT_HASHES = {
     language: scorer.sha256_bytes(f"extracted-{language}".encode())
     for language in ("en", "he")
 }
+_ACQUISITION_MANIFEST = json.loads(ACQUISITION_SOURCE.read_text(encoding="utf-8"))
+_ACQUISITION_MANIFEST["snapshots"] = [
+    snapshot
+    for snapshot in _ACQUISITION_MANIFEST["snapshots"]
+    if snapshot["id"] in TEST_SOURCE_IDS
+]
+_ACQUIRED_BY_ID = {
+    snapshot["id"]: snapshot for snapshot in _ACQUISITION_MANIFEST["snapshots"]
+}
+_LANGUAGE_TO_SOURCE_ID = dict(zip(("en", "he"), TEST_SOURCE_IDS, strict=True))
+for _language, _source_id in _LANGUAGE_TO_SOURCE_ID.items():
+    _ACQUIRED_BY_ID[_source_id]["extracted_text"].update(
+        {
+            "sha256": _EXTRACTED_TEXT_HASHES[_language],
+            "bytes": 100,
+            "words": 10,
+        }
+    )
+_ACQUISITION_MANIFEST_PATH = _SOURCE_PROVENANCE_ROOT / "acquisition-manifest.json"
+_ACQUISITION_MANIFEST_PATH.write_bytes(scorer.canonical_json(_ACQUISITION_MANIFEST))
+SOURCE_ARTIFACT_PATHS["acquisition-manifest"] = _ACQUISITION_MANIFEST_PATH
+_ACQUISITION_MANIFEST_SHA256 = scorer.artifact_sha256(_ACQUISITION_MANIFEST_PATH)
 _RUN_RECEIPT = {
     "schema_version": scorer.ACQUISITION_RUN_RECEIPT_VERSION,
     "mode": "offline",
     "manifest_sha256": _ACQUISITION_MANIFEST_SHA256,
     "verified": [
         {
-            "id": f"fixture-{language}",
-            "raw_sha256": scorer.sha256_bytes(f"raw-{language}".encode()),
+            "id": _LANGUAGE_TO_SOURCE_ID[language],
+            "raw_sha256": _ACQUIRED_BY_ID[_LANGUAGE_TO_SOURCE_ID[language]]["raw_pdf"][
+                "sha256"
+            ],
             "text_sha256": _EXTRACTED_TEXT_HASHES[language],
         }
         for language in ("en", "he")
@@ -47,11 +79,16 @@ _RUN_RECEIPT_PATH.write_bytes(scorer.canonical_json(_RUN_RECEIPT))
 SOURCE_ARTIFACT_PATHS["acquisition-run"] = _RUN_RECEIPT_PATH
 _RUN_RECEIPT_SHA256 = scorer.artifact_sha256(_RUN_RECEIPT_PATH)
 for _language in ("en", "he"):
+    _source_id = _LANGUAGE_TO_SOURCE_ID[_language]
+    _acquired = _ACQUIRED_BY_ID[_source_id]
+    _acquired_policy = _ACQUISITION_MANIFEST["license_policies"][
+        _acquired["license_policy"]
+    ]
     _reviewed_path = SOURCE_ARTIFACT_PATHS[f"reviewed-{_language}"]
     _reviewed_text = _reviewed_path.read_text(encoding="utf-8")
     _binding = {
         "schema_version": scorer.ACQUISITION_BINDING_VERSION,
-        "snapshot_id": f"fixture-{_language}",
+        "snapshot_id": _source_id,
         "acquisition_manifest_sha256": _ACQUISITION_MANIFEST_SHA256,
         "acquisition_receipt_sha256": _RUN_RECEIPT_SHA256,
         "extracted_text_sha256": _EXTRACTED_TEXT_HASHES[_language],
@@ -71,10 +108,10 @@ for _language in ("en", "he"):
         ),
         "word_token_count_method": scorer.WORD_TOKEN_COUNT_METHOD,
         "reviewed_text_sha256": scorer.artifact_sha256(_reviewed_path),
-        "upstream_url": f"https://example.invalid/r052/source-{_language}",
-        "upstream_revision": scorer.sha256_bytes(f"revision-{_language}".encode()),
-        "license_policy": "fixture-license",
-        "attribution": f"R052 {_language} fixture authors",
+        "upstream_url": _acquired["upstream_url"],
+        "upstream_revision": _acquired["upstream_revision"],
+        "license_policy": _acquired["license_policy"],
+        "attribution": _acquired_policy["attribution"],
     }
     _binding_path = _SOURCE_PROVENANCE_ROOT / f"binding-{_language}.json"
     _binding_path.write_bytes(scorer.canonical_json(_binding))
@@ -356,7 +393,7 @@ def _case(
         "case_key": _sha("case-" + language),
         "language": language,
         "twin_group_key": twin_group,
-        "source_family": "synthetic",
+        "source_family": "public_domain",
         "source_snapshot_sha256": SOURCE_ARTIFACT_HASHES[f"reviewed-{language}"],
         "source_domain": "general",
         "context_tokens": 8192,
@@ -469,6 +506,8 @@ def _source_manifest() -> tuple[dict, str]:
             "role": (
                 "reviewed_source_text"
                 if name.startswith("reviewed-")
+                else "source_acquisition_manifest"
+                if name == "acquisition-manifest"
                 else "source_acquisition_run_receipt"
                 if name == "acquisition-run"
                 else "reviewed_source_acquisition_binding"
@@ -486,27 +525,45 @@ def _source_manifest() -> tuple[dict, str]:
         for name in SOURCE_ARTIFACT_PATHS
     }
     license_policies = {
-        "fixture-license": {
-            "source_family": "synthetic",
-            "license_id": "LicenseRef-Synthetic",
-            "license_url": "https://example.invalid/licenses/synthetic-v1",
-            "attribution": "R052 synthetic fixture authors",
+        name: {
+            "source_family": policy["source_family"],
+            "license_id": "LicenseRef-USGov-Public-Domain",
+            "license_url": policy["policy_url"],
+            "attribution": policy["attribution"],
             "license_cleared": True,
             "evaluation_use_cleared": True,
             "redistribution_cleared": True,
         }
+        for name, policy in _ACQUISITION_MANIFEST["license_policies"].items()
     }
     snapshots = {
-        f"fixture-{language}": {
+        _LANGUAGE_TO_SOURCE_ID[language]: {
             "reviewed_text_artifact": f"reviewed-{language}",
             "acquisition_binding_artifact": f"binding-{language}",
-            "source_family": "synthetic",
-            "upstream_url": f"https://example.invalid/r052/source-{language}",
-            "upstream_revision": _sha(f"revision-{language}"),
-            "upstream_date": "2026-10-01",
-            "untouched_split": "authored-eval-v1",
-            "license_policy": "fixture-license",
-            "attribution": f"R052 {language} fixture authors",
+            "source_family": _ACQUISITION_MANIFEST["license_policies"][
+                _ACQUIRED_BY_ID[_LANGUAGE_TO_SOURCE_ID[language]]["license_policy"]
+            ]["source_family"],
+            "upstream_url": _ACQUIRED_BY_ID[_LANGUAGE_TO_SOURCE_ID[language]][
+                "upstream_url"
+            ],
+            "upstream_revision": _ACQUIRED_BY_ID[_LANGUAGE_TO_SOURCE_ID[language]][
+                "upstream_revision"
+            ],
+            "upstream_date": _ACQUIRED_BY_ID[_LANGUAGE_TO_SOURCE_ID[language]][
+                "public_release_date"
+            ]
+            or _ACQUIRED_BY_ID[_LANGUAGE_TO_SOURCE_ID[language]][
+                "adoption_or_issue_date"
+            ],
+            "untouched_split": _ACQUIRED_BY_ID[_LANGUAGE_TO_SOURCE_ID[language]][
+                "untouched_split"
+            ],
+            "license_policy": _ACQUIRED_BY_ID[_LANGUAGE_TO_SOURCE_ID[language]][
+                "license_policy"
+            ],
+            "attribution": _ACQUISITION_MANIFEST["license_policies"][
+                _ACQUIRED_BY_ID[_LANGUAGE_TO_SOURCE_ID[language]]["license_policy"]
+            ]["attribution"],
             "third_party_images_excluded": True,
             "natural_language_authored": True,
             "benchmark_derived": False,
@@ -519,6 +576,7 @@ def _source_manifest() -> tuple[dict, str]:
         "benchmark_derived": False,
         "license_policies": license_policies,
         "artifacts": artifacts,
+        "acquisition_manifest_artifact": "acquisition-manifest",
         "acquisition_run_receipt_artifact": "acquisition-run",
         "snapshots": snapshots,
     }
@@ -1209,7 +1267,7 @@ def test_source_snapshots_bind_reviewed_acquisition_metadata_and_case_family(
         )
 
     duplicate_binding = copy.deepcopy(manifest)
-    duplicate_binding["snapshots"]["fixture-he"]["reviewed_text_artifact"] = (
+    duplicate_binding["snapshots"][TEST_SOURCE_IDS[1]]["reviewed_text_artifact"] = (
         "reviewed-en"
     )
     with pytest.raises(ValueError, match="duplicate reviewed/acquisition bindings"):
@@ -1287,6 +1345,93 @@ def _rewrite_source_json(
     return changed_manifest, changed_paths
 
 
+def test_acquisition_manifest_rejects_self_consistent_wrapper_rewrites(panel, tmp_path):
+    manifest, _ = _source_manifest()
+    changed = copy.deepcopy(manifest)
+    changed_paths = dict(SOURCE_ARTIFACT_PATHS)
+    source_id = TEST_SOURCE_IDS[0]
+    changed["snapshots"][source_id]["upstream_url"] = (
+        "https://example.invalid/investigations/AccidentReports/Reports/AAR0002.pdf"
+    )
+    changed["snapshots"][source_id]["upstream_revision"] = "immutable-rewrite-v2"
+    binding = json.loads(changed_paths["binding-en"].read_bytes())
+    binding["upstream_url"] = changed["snapshots"][source_id]["upstream_url"]
+    binding["upstream_revision"] = changed["snapshots"][source_id]["upstream_revision"]
+    binding_path = tmp_path / "rewritten-binding.json"
+    binding_path.write_bytes(scorer.canonical_json(binding))
+    changed_paths["binding-en"] = binding_path
+    changed["artifacts"]["binding-en"]["sha256"] = scorer.artifact_sha256(binding_path)
+
+    with pytest.raises(ValueError, match="metadata mismatches acquisition manifest"):
+        scorer.validate_source_snapshot_manifest(
+            panel, changed, scorer.sha256_json(changed), changed_paths
+        )
+
+
+def test_acquisition_manifest_bytes_and_exact_record_coverage_are_authoritative(
+    panel, tmp_path
+):
+    manifest, _ = _source_manifest()
+    substituted = copy.deepcopy(_ACQUISITION_MANIFEST)
+    substituted["purpose"] += " rewritten"
+    substituted_path = tmp_path / "substituted-acquisition.json"
+    substituted_path.write_bytes(scorer.canonical_json(substituted))
+    changed = copy.deepcopy(manifest)
+    changed_paths = dict(SOURCE_ARTIFACT_PATHS)
+    changed_paths["acquisition-manifest"] = substituted_path
+    changed["artifacts"]["acquisition-manifest"]["sha256"] = scorer.artifact_sha256(
+        substituted_path
+    )
+    with pytest.raises(ValueError, match="does not bind exact manifest bytes"):
+        scorer.validate_source_snapshot_manifest(
+            panel, changed, scorer.sha256_json(changed), changed_paths
+        )
+
+    for suffix, mutate in (
+        ("missing", lambda value: value["snapshots"].pop()),
+        (
+            "extra",
+            lambda value: value["snapshots"].append(
+                copy.deepcopy(value["snapshots"][0])
+            ),
+        ),
+    ):
+        value = copy.deepcopy(_ACQUISITION_MANIFEST)
+        mutate(value)
+        path = tmp_path / f"{suffix}-acquisition.json"
+        path.write_bytes(scorer.canonical_json(value))
+        changed = copy.deepcopy(manifest)
+        changed_paths = dict(SOURCE_ARTIFACT_PATHS)
+        changed_paths["acquisition-manifest"] = path
+        changed["artifacts"]["acquisition-manifest"]["sha256"] = scorer.artifact_sha256(
+            path
+        )
+        with pytest.raises(ValueError, match="source acquisition manifest is invalid"):
+            scorer.validate_source_snapshot_manifest(
+                panel, changed, scorer.sha256_json(changed), changed_paths
+            )
+
+
+def test_acquisition_license_attribution_rewrite_is_rejected(panel, tmp_path):
+    manifest, _ = _source_manifest()
+    changed = copy.deepcopy(manifest)
+    changed_paths = dict(SOURCE_ARTIFACT_PATHS)
+    policy_name = "ntsb_staff_text"
+    rewritten = "Self-consistent but unauthorized attribution"
+    changed["license_policies"][policy_name]["attribution"] = rewritten
+    changed["snapshots"][TEST_SOURCE_IDS[0]]["attribution"] = rewritten
+    binding = json.loads(changed_paths["binding-en"].read_bytes())
+    binding["attribution"] = rewritten
+    binding_path = tmp_path / "rewritten-attribution-binding.json"
+    binding_path.write_bytes(scorer.canonical_json(binding))
+    changed_paths["binding-en"] = binding_path
+    changed["artifacts"]["binding-en"]["sha256"] = scorer.artifact_sha256(binding_path)
+    with pytest.raises(ValueError, match="license policy mismatches acquisition"):
+        scorer.validate_source_snapshot_manifest(
+            panel, changed, scorer.sha256_json(changed), changed_paths
+        )
+
+
 def test_acquisition_run_receipt_rejects_non_receipt_and_bad_entries(panel, tmp_path):
     manifest, _ = _source_manifest()
     paths = dict(SOURCE_ARTIFACT_PATHS)
@@ -1309,18 +1454,18 @@ def test_acquisition_run_receipt_rejects_non_receipt_and_bad_entries(panel, tmp_
             "cover every snapshot",
         ),
         (
-            lambda value: value["verified"][1].update(id="fixture-en"),
+            lambda value: value["verified"][1].update(id=TEST_SOURCE_IDS[0]),
             "IDs must be unique",
         ),
         (
             lambda value: value["verified"][1].update(
                 raw_sha256=value["verified"][0]["raw_sha256"]
             ),
-            "raw/text hashes must be unique",
+            "raw/text hashes must be unique|run entries",
         ),
         (
             lambda value: value["verified"][0].update(text_sha256="0" * 64),
-            "binding mismatch",
+            "run entries",
         ),
     ):
         base, _ = _source_manifest()
@@ -1388,31 +1533,31 @@ def test_acquisition_binding_semantics_fail_closed(panel, tmp_path, mutate, mess
     ("mutate", "message"),
     [
         (
-            lambda value: value["snapshots"]["fixture-en"].update(
+            lambda value: value["snapshots"][TEST_SOURCE_IDS[0]].update(
                 upstream_revision="latest"
             ),
             "immutable and exact",
         ),
         (
-            lambda value: value["snapshots"]["fixture-en"].update(
+            lambda value: value["snapshots"][TEST_SOURCE_IDS[0]].update(
                 upstream_date="October 1"
             ),
             "ISO YYYY-MM-DD",
         ),
         (
-            lambda value: value["snapshots"]["fixture-en"].update(
+            lambda value: value["snapshots"][TEST_SOURCE_IDS[0]].update(
                 untouched_split="unknown"
             ),
             "untouched_split must be exact",
         ),
         (
-            lambda value: value["snapshots"]["fixture-en"].update(
+            lambda value: value["snapshots"][TEST_SOURCE_IDS[0]].update(
                 third_party_images_excluded=False
             ),
             "exclude third-party images",
         ),
         (
-            lambda value: value["license_policies"]["fixture-license"].update(
+            lambda value: value["license_policies"]["ntsb_staff_text"].update(
                 license_url="http://example.invalid/license"
             ),
             "HTTPS URL",
@@ -1616,7 +1761,7 @@ def test_prior_panel_and_source_manifest_require_explicit_migration(panel):
     source, _ = _source_manifest()
     source["schema_version"] = "r052-source-provenance-manifest-v2"
     source.pop("acquisition_run_receipt_artifact")
-    with pytest.raises(ValueError, match="v2/v3 requires migration to v4"):
+    with pytest.raises(ValueError, match="v2/v3/v4 requires migration to v5"):
         scorer.validate_source_snapshot_manifest(
             panel,
             source,
@@ -1627,7 +1772,7 @@ def test_prior_panel_and_source_manifest_require_explicit_migration(panel):
     source, _ = _source_manifest()
     source["schema_version"] = "r052-source-provenance-manifest-v3"
     source.pop("acquisition_run_receipt_artifact")
-    with pytest.raises(ValueError, match="v2/v3 requires migration to v4"):
+    with pytest.raises(ValueError, match="v2/v3/v4 requires migration to v5"):
         scorer.validate_source_snapshot_manifest(
             panel,
             source,
@@ -1658,11 +1803,20 @@ def test_receipt_is_content_bound_timestamp_free_and_atomic(panel, tmp_path):
     method = scorer.score_method(panel, "bm25", (1, 2, 4))
     _, causal_digest = _causal_manifest(panel)
     _, contamination_digest = _contamination_manifest(panel)
-    _, source_digest = _source_manifest()
+    source, source_digest = _source_manifest()
+    provenance_artifact_digests = {
+        "acquisition_manifest": source["artifacts"][
+            source["acquisition_manifest_artifact"]
+        ]["sha256"],
+        "acquisition_run_receipt": source["artifacts"][
+            source["acquisition_run_receipt_artifact"]
+        ]["sha256"],
+    }
     receipt = scorer.build_receipt(
         panel,
         _sha("raw"),
         source_digest,
+        provenance_artifact_digests,
         causal_digest,
         contamination_digest,
         _policy_artifacts(panel)["policy_replay_receipt_sha256"],
@@ -1670,6 +1824,10 @@ def test_receipt_is_content_bound_timestamp_free_and_atomic(panel, tmp_path):
         [method],
     )
     assert "timestamp" not in json.dumps(receipt)
+    assert (
+        receipt["trusted_source_provenance_artifact_sha256"]
+        == provenance_artifact_digests
+    )
     expected = scorer.sha256_json(
         {k: v for k, v in receipt.items() if k != "receipt_sha256"}
     )

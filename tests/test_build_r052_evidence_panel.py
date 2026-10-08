@@ -9,6 +9,15 @@ from scripts import build_r052_evidence_panel as builder
 from scripts import replay_r052_typed_policy as replay
 from scripts import score_r052_evidence_retrieval as scorer
 
+ROOT = Path(__file__).resolve().parents[1]
+ACQUISITION_SOURCE = ROOT / "sources" / "r052" / "ntsb_gao_v1.json"
+TEST_SOURCE_IDS = ("AAR0002", "GAO-01-203")
+
+
+@pytest.fixture(autouse=True)
+def _compact_acquisition_contract(monkeypatch):
+    monkeypatch.setattr(scorer.acquisition, "EXPECTED_IDS", TEST_SOURCE_IDS)
+
 
 def _write_json(path: Path, value) -> str:
     payload = scorer.canonical_json(value)
@@ -23,29 +32,32 @@ def _artifact_declaration(path: Path, role: str) -> dict:
     }
 
 
-def _license_policy() -> dict:
+def _license_policy(acquired_policy: dict) -> dict:
     return {
-        "source_family": "first_party",
-        "license_id": "LicenseRef-First-Party",
-        "license_url": "https://example.invalid/license/first-party",
-        "attribution": "R052 test fixture author",
+        "source_family": acquired_policy["source_family"],
+        "license_id": "LicenseRef-USGov-Public-Domain",
+        "license_url": acquired_policy["policy_url"],
+        "attribution": acquired_policy["attribution"],
         "license_cleared": True,
         "evaluation_use_cleared": True,
         "redistribution_cleared": True,
     }
 
 
-def _snapshot(reviewed: str, acquisition: str) -> dict:
+def _snapshot(
+    reviewed: str, acquisition: str, acquired: dict, acquired_policy: dict
+) -> dict:
     return {
         "reviewed_text_artifact": reviewed,
         "acquisition_binding_artifact": acquisition,
-        "source_family": "first_party",
-        "upstream_url": f"https://example.invalid/snapshots/{reviewed}",
-        "upstream_revision": f"immutable-{reviewed}-v1",
-        "upstream_date": "2026-10-08",
-        "untouched_split": "authored-test-eval-v1",
-        "license_policy": "first-party",
-        "attribution": "R052 test fixture author",
+        "source_family": acquired_policy["source_family"],
+        "upstream_url": acquired["upstream_url"],
+        "upstream_revision": acquired["upstream_revision"],
+        "upstream_date": acquired["public_release_date"]
+        or acquired["adoption_or_issue_date"],
+        "untouched_split": acquired["untouched_split"],
+        "license_policy": acquired["license_policy"],
+        "attribution": acquired_policy["attribution"],
         "third_party_images_excluded": True,
         "natural_language_authored": True,
         "benchmark_derived": False,
@@ -352,19 +364,38 @@ def _fixture(tmp_path: Path) -> dict:
         Image.new("RGB", (2, 2), color=color).save(path)
         artifact_paths[name] = path
 
-    acquisition_manifest_sha = scorer.sha256_bytes(b"fixture acquisition manifest")
-    extracted_hashes = {
-        language: scorer.sha256_bytes(f"extracted-{language}".encode())
-        for language in ("en", "he")
+    acquisition_manifest = json.loads(ACQUISITION_SOURCE.read_text(encoding="utf-8"))
+    acquisition_manifest["snapshots"] = [
+        snapshot
+        for snapshot in acquisition_manifest["snapshots"]
+        if snapshot["id"] in TEST_SOURCE_IDS
+    ]
+    acquired_by_id = {
+        snapshot["id"]: snapshot for snapshot in acquisition_manifest["snapshots"]
     }
+    language_to_id = dict(zip(("en", "he"), TEST_SOURCE_IDS, strict=True))
+    extracted_hashes = {}
+    for language, source_id in language_to_id.items():
+        digest = scorer.sha256_bytes(f"extracted-{language}".encode())
+        acquired_by_id[source_id]["extracted_text"].update(
+            {"sha256": digest, "bytes": 100, "words": 10}
+        )
+        extracted_hashes[language] = digest
+    acquisition_manifest_path = tmp_path / "acquisition-manifest.json"
+    acquisition_manifest_sha = _write_json(
+        acquisition_manifest_path, acquisition_manifest
+    )
+    artifact_paths["acquisition-manifest"] = acquisition_manifest_path
     acquisition_run = {
         "schema_version": scorer.ACQUISITION_RUN_RECEIPT_VERSION,
         "mode": "offline",
         "manifest_sha256": acquisition_manifest_sha,
         "verified": [
             {
-                "id": f"snapshot-{language}",
-                "raw_sha256": scorer.sha256_bytes(f"raw-{language}".encode()),
+                "id": language_to_id[language],
+                "raw_sha256": acquired_by_id[language_to_id[language]]["raw_pdf"][
+                    "sha256"
+                ],
                 "text_sha256": extracted_hashes[language],
             }
             for language in ("en", "he")
@@ -375,10 +406,15 @@ def _fixture(tmp_path: Path) -> dict:
     artifact_paths["acquisition-run"] = run_path
     run_sha = scorer.artifact_sha256(run_path)
     for language, reviewed in (("en", reviewed_en), ("he", reviewed_he)):
+        source_id = language_to_id[language]
+        acquired = acquired_by_id[source_id]
+        acquired_policy = acquisition_manifest["license_policies"][
+            acquired["license_policy"]
+        ]
         reviewed_name = f"source-{language}"
         binding = {
             "schema_version": scorer.ACQUISITION_BINDING_VERSION,
-            "snapshot_id": f"snapshot-{language}",
+            "snapshot_id": source_id,
             "acquisition_manifest_sha256": acquisition_manifest_sha,
             "acquisition_receipt_sha256": run_sha,
             "extracted_text_sha256": extracted_hashes[language],
@@ -398,10 +434,10 @@ def _fixture(tmp_path: Path) -> dict:
             "reviewed_text_sha256": scorer.artifact_sha256(
                 artifact_paths[reviewed_name]
             ),
-            "upstream_url": f"https://example.invalid/snapshots/{reviewed_name}",
-            "upstream_revision": f"immutable-{reviewed_name}-v1",
-            "license_policy": "first-party",
-            "attribution": "R052 test fixture author",
+            "upstream_url": acquired["upstream_url"],
+            "upstream_revision": acquired["upstream_revision"],
+            "license_policy": acquired["license_policy"],
+            "attribution": acquired_policy["attribution"],
         }
         path = tmp_path / f"binding-{language}.json"
         _write_json(path, binding)
@@ -410,6 +446,7 @@ def _fixture(tmp_path: Path) -> dict:
     roles = {
         "source-en": "reviewed_source_text",
         "source-he": "reviewed_source_text",
+        "acquisition-manifest": "source_acquisition_manifest",
         "acquisition-run": "source_acquisition_run_receipt",
         "binding-en": "reviewed_source_acquisition_binding",
         "binding-he": "reviewed_source_acquisition_binding",
@@ -423,15 +460,26 @@ def _fixture(tmp_path: Path) -> dict:
         "schema_version": builder.SOURCE_MANIFEST_VERSION,
         "license_policy": builder.LICENSE_POLICY,
         "benchmark_derived": False,
-        "license_policies": {"first-party": _license_policy()},
+        "license_policies": {
+            name: _license_policy(policy)
+            for name, policy in acquisition_manifest["license_policies"].items()
+        },
         "artifacts": {
             name: _artifact_declaration(artifact_paths[name], role)
             for name, role in roles.items()
         },
+        "acquisition_manifest_artifact": "acquisition-manifest",
         "acquisition_run_receipt_artifact": "acquisition-run",
         "snapshots": {
-            "snapshot-en": _snapshot("source-en", "binding-en"),
-            "snapshot-he": _snapshot("source-he", "binding-he"),
+            source_id: _snapshot(
+                f"source-{language}",
+                f"binding-{language}",
+                acquired_by_id[source_id],
+                acquisition_manifest["license_policies"][
+                    acquired_by_id[source_id]["license_policy"]
+                ],
+            )
+            for language, source_id in language_to_id.items()
         },
     }
     spec = {
@@ -442,7 +490,7 @@ def _fixture(tmp_path: Path) -> dict:
             _case(
                 "en",
                 "en",
-                "snapshot-en",
+                language_to_id["en"],
                 "real-image",
                 "shuffled-image",
                 reviewed_en,
@@ -450,7 +498,7 @@ def _fixture(tmp_path: Path) -> dict:
             _case(
                 "he",
                 "he",
-                "snapshot-he",
+                language_to_id["he"],
                 "real-image",
                 "shuffled-image",
                 reviewed_he,
@@ -854,8 +902,9 @@ def test_rejects_causal_claim_not_equal_to_authored_outcome_diff(tmp_path):
 def test_rejects_uncleared_or_family_incompatible_license(tmp_path):
     fixture = _fixture(tmp_path)
     manifest = deepcopy(fixture["source_manifest"])
-    manifest["license_policies"]["first-party"]["source_family"] = "permissive"
-    manifest["license_policies"]["first-party"]["license_id"] = "CC-BY-NC-SA-4.0"
+    policy_name = next(iter(manifest["license_policies"]))
+    manifest["license_policies"][policy_name]["source_family"] = "permissive"
+    manifest["license_policies"][policy_name]["license_id"] = "CC-BY-NC-SA-4.0"
     with pytest.raises(ValueError, match="license/family"):
         builder._validate_source_manifest(manifest, fixture["artifact_paths"])
 

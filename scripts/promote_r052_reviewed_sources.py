@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-r"""Promote externally reviewed R052 acquisitions into source manifest v4.
+r"""Promote externally reviewed R052 acquisitions into source manifest v5.
 
 This bridge verifies bytes and enforces a closed review-receipt contract.  It
 does not determine whether the retained text is actually government-authored
@@ -35,11 +35,13 @@ except ModuleNotFoundError:  # Supports ``uv run python scripts/promote_...py``.
 REVIEW_SCHEMA_VERSION = "r052-reviewed-source-review-v1"
 ACQUISITION_RECEIPT_VERSION = scorer.ACQUISITION_RUN_RECEIPT_VERSION
 ACQUISITION_BINDING_VERSION = scorer.ACQUISITION_BINDING_VERSION
-PROMOTION_RECEIPT_VERSION = "r052-reviewed-source-promotion-receipt-v1"
+PROMOTION_RECEIPT_VERSION = "r052-reviewed-source-promotion-receipt-v2"
 COMPLETION_MARKER_VERSION = "r052-reviewed-source-promotion-complete-v1"
 SOURCE_MANIFEST_VERSION = scorer.SOURCE_MANIFEST_VERSION
 SOURCE_LICENSE_POLICY = scorer.SOURCE_LICENSE_POLICY
 MANIFEST_LICENSE_ID = "LicenseRef-USGov-Public-Domain"
+ACQUISITION_MANIFEST_ARTIFACT_NAME = "acquisition-manifest"
+ACQUISITION_MANIFEST_ARTIFACT_ROLE = "source_acquisition_manifest"
 ACQUISITION_RUN_ARTIFACT_NAME = "acquisition-run"
 ACQUISITION_RUN_ARTIFACT_ROLE = "source_acquisition_run_receipt"
 ACQUISITION_BINDING_ARTIFACT_ROLE = "reviewed_source_acquisition_binding"
@@ -512,7 +514,7 @@ def promote(
             "output directory already exists; promotion never overwrites"
         )
 
-    manifest, _, manifest_digest = _read_hashed_json(
+    manifest, manifest_payload, manifest_digest = _read_hashed_json(
         Path(acquisition_manifest_path),
         acquisition_manifest_sha256,
         "acquisition manifest",
@@ -610,6 +612,10 @@ def promote(
         tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent)
     )
     try:
+        manifest_relative = "acquisition/acquisition-manifest.json"
+        copied_manifest_digest = _write(temporary / manifest_relative, manifest_payload)
+        if copied_manifest_digest != manifest_digest:
+            raise PromotionError("copied acquisition manifest hash mismatch")
         run_receipt_relative = "acquisition/acquisition-run-receipt.json"
         copied_run_digest = _write(
             temporary / run_receipt_relative, acquisition_receipt_payload
@@ -617,13 +623,18 @@ def promote(
         if copied_run_digest != acquisition_receipt_digest:
             raise PromotionError("copied acquisition run receipt hash mismatch")
         artifact_declarations: dict[str, dict[str, str]] = {
+            ACQUISITION_MANIFEST_ARTIFACT_NAME: {
+                "role": ACQUISITION_MANIFEST_ARTIFACT_ROLE,
+                "sha256": manifest_digest,
+            },
             ACQUISITION_RUN_ARTIFACT_NAME: {
                 "role": ACQUISITION_RUN_ARTIFACT_ROLE,
                 "sha256": acquisition_receipt_digest,
-            }
+            },
         }
         artifact_paths: dict[str, str] = {
-            ACQUISITION_RUN_ARTIFACT_NAME: run_receipt_relative
+            ACQUISITION_MANIFEST_ARTIFACT_NAME: manifest_relative,
+            ACQUISITION_RUN_ARTIFACT_NAME: run_receipt_relative,
         }
         output_snapshots: dict[str, dict[str, Any]] = {}
         source_records: dict[str, dict[str, Any]] = {}
@@ -698,16 +709,18 @@ def promote(
             "benchmark_derived": False,
             "license_policies": output_policies,
             "artifacts": artifact_declarations,
+            "acquisition_manifest_artifact": ACQUISITION_MANIFEST_ARTIFACT_NAME,
             "acquisition_run_receipt_artifact": ACQUISITION_RUN_ARTIFACT_NAME,
             "snapshots": output_snapshots,
         }
         output_manifest_payload = canonical_json(output_manifest)
         output_manifest_hash = _write(
-            temporary / "source-manifest-v4.json", output_manifest_payload
+            temporary / "source-manifest-v5.json", output_manifest_payload
         )
         promotion_receipt = {
             "schema_version": PROMOTION_RECEIPT_VERSION,
             "acquisition_manifest_sha256": manifest_digest,
+            "acquisition_manifest_artifact": ACQUISITION_MANIFEST_ARTIFACT_NAME,
             "acquisition_receipt_sha256": acquisition_receipt_digest,
             "acquisition_run_receipt_artifact": ACQUISITION_RUN_ARTIFACT_NAME,
             "review_receipt_sha256": review_digest,

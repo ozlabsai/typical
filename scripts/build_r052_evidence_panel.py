@@ -40,7 +40,7 @@ except ModuleNotFoundError:  # Supports ``uv run python scripts/build_...py``.
     import score_r052_evidence_retrieval as scoring
 
 SPEC_VERSION = "r052-authored-dossier-spec-v4"
-SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v4"
+SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v5"
 ANNOTATION_VERSION = "r052-authored-causal-annotations-v2"
 AUDIT_INPUT_VERSION = "r052-contamination-audit-input-v2"
 AUDIT_RESULTS_VERSION = "r052-external-contamination-results-v1"
@@ -109,6 +109,7 @@ SOURCE_MANIFEST_KEYS = {
     "license_policies",
     "artifacts",
     "snapshots",
+    "acquisition_manifest_artifact",
     "acquisition_run_receipt_artifact",
 }
 SOURCE_LICENSE_KEYS = {
@@ -193,6 +194,7 @@ ALLOWED_LICENSES = {
 ARTIFACT_ROLES = {
     "reviewed_source_text",
     "source_acquisition_run_receipt",
+    "source_acquisition_manifest",
     "reviewed_source_acquisition_binding",
     "image",
     "translation_alignment_receipt",
@@ -309,9 +311,10 @@ def _validate_source_manifest(
     if manifest.get("schema_version") in {
         "r052-source-provenance-manifest-v2",
         "r052-source-provenance-manifest-v3",
+        "r052-source-provenance-manifest-v4",
     }:
         raise ValueError(
-            "source manifest v2/v3 requires migration to v4 acquisition provenance"
+            "source manifest v2/v3/v4 requires migration to v5 acquisition provenance"
         )
     _exact_keys(manifest, SOURCE_MANIFEST_KEYS, "source manifest")
     if (
@@ -479,7 +482,10 @@ def _validate_spec(
     if not isinstance(cases, list) or not cases:
         raise ValueError("dossier spec cases must be a non-empty list")
     seen_cases: set[str] = set()
-    used_artifacts: set[str] = {source_manifest["acquisition_run_receipt_artifact"]}
+    used_artifacts: set[str] = {
+        source_manifest["acquisition_manifest_artifact"],
+        source_manifest["acquisition_run_receipt_artifact"],
+    }
     has_long = False
     for case_index, case in enumerate(cases):
         label = f"cases[{case_index}]"

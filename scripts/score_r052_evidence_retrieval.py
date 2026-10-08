@@ -30,13 +30,15 @@ from urllib.parse import urlparse
 import numpy as np
 
 try:
+    from scripts import fetch_r052_source_snapshot as acquisition
     from scripts import replay_r052_typed_policy as policy_replay
 except ModuleNotFoundError:  # Supports ``uv run python scripts/score_...py``.
+    import fetch_r052_source_snapshot as acquisition
     import replay_r052_typed_policy as policy_replay
 
 SCHEMA_VERSION = "r052-evidence-panel-v5"
-RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v4"
-SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v4"
+RECEIPT_VERSION = "r052-evidence-retrieval-receipt-v5"
+SOURCE_MANIFEST_VERSION = "r052-source-provenance-manifest-v5"
 SOURCE_LICENSE_POLICY = "approved-evaluation-and-redistribution-v1"
 CHUNKING_RECEIPT_VERSION = "r052-case-chunking-receipt-v2"
 ACQUISITION_RUN_RECEIPT_VERSION = "r052-source-acquisition-receipt-v1"
@@ -104,6 +106,7 @@ SOURCE_MANIFEST_KEYS = {
     "license_policies",
     "artifacts",
     "snapshots",
+    "acquisition_manifest_artifact",
     "acquisition_run_receipt_artifact",
 }
 SOURCE_LICENSE_KEYS = {
@@ -134,6 +137,7 @@ SOURCE_ARTIFACT_ROLES = frozenset(
     {
         "reviewed_source_text",
         "source_acquisition_run_receipt",
+        "source_acquisition_manifest",
         "reviewed_source_acquisition_binding",
         "image",
         "translation_alignment_receipt",
@@ -410,9 +414,44 @@ def _canonical_artifact_json(path: Path, label: str) -> dict[str, Any]:
 def validate_source_acquisition_provenance(
     manifest: Mapping[str, Any], artifact_paths: Mapping[str, Path]
 ) -> None:
-    """Validate the whole-run receipt and every reviewed-source binding."""
+    """Validate acquisition-v1 bytes, run receipt, and reviewed-source bindings."""
     artifacts = manifest["artifacts"]
     snapshots = manifest["snapshots"]
+    acquisition_name = _require_text(
+        manifest["acquisition_manifest_artifact"],
+        "acquisition_manifest_artifact",
+    )
+    acquisition_artifacts = {
+        name
+        for name, declaration in artifacts.items()
+        if declaration["role"] == "source_acquisition_manifest"
+    }
+    if acquisition_artifacts != {acquisition_name}:
+        raise ValueError(
+            "source manifest must declare exactly one acquisition manifest artifact"
+        )
+    try:
+        acquisition_manifest = acquisition._read_manifest(
+            artifact_paths[acquisition_name]
+        )
+        acquired_snapshots = acquisition.validate_manifest(acquisition_manifest)
+    except acquisition.SnapshotError as exc:
+        raise ValueError(f"source acquisition manifest is invalid: {exc}") from exc
+    acquired_by_id = {item["id"]: item for item in acquired_snapshots}
+    if len(acquired_by_id) != len(acquired_snapshots) or set(acquired_by_id) != set(
+        snapshots
+    ):
+        raise ValueError(
+            "source acquisition manifest and output snapshots must cover identical IDs"
+        )
+    if set(manifest["license_policies"]) != set(
+        acquisition_manifest["license_policies"]
+    ):
+        raise ValueError(
+            "source acquisition and output license policies must have exact coverage"
+        )
+    acquisition_manifest_sha256 = artifacts[acquisition_name]["sha256"]
+
     run_name = _require_text(
         manifest["acquisition_run_receipt_artifact"],
         "acquisition_run_receipt_artifact",
@@ -447,6 +486,10 @@ def validate_source_acquisition_provenance(
     run_manifest_sha256 = _require_sha(
         run_receipt["manifest_sha256"], "acquisition manifest sha256"
     )
+    if run_manifest_sha256 != acquisition_manifest_sha256:
+        raise ValueError(
+            "source acquisition run receipt does not bind exact manifest bytes"
+        )
     verified = run_receipt["verified"]
     if not isinstance(verified, list) or len(verified) != len(snapshots):
         raise ValueError(
@@ -464,9 +507,21 @@ def validate_source_acquisition_provenance(
         _require_sha(record["raw_sha256"], f"{label}.raw_sha256")
         _require_sha(record["text_sha256"], f"{label}.text_sha256")
         verified_by_id[source_id] = record
-    if set(verified_by_id) != set(snapshots):
+    if set(verified_by_id) != set(acquired_by_id):
         raise ValueError(
             "source acquisition run receipt must cover every snapshot exactly"
+        )
+    expected_verified = [
+        {
+            "id": item["id"],
+            "raw_sha256": item["raw_pdf"]["sha256"],
+            "text_sha256": item["extracted_text"]["sha256"],
+        }
+        for item in acquired_snapshots
+    ]
+    if verified != expected_verified:
+        raise ValueError(
+            "source acquisition run entries do not match acquisition manifest"
         )
     if len({record["raw_sha256"] for record in verified}) != len(verified) or len(
         {record["text_sha256"] for record in verified}
@@ -477,6 +532,40 @@ def validate_source_acquisition_provenance(
     run_receipt_sha256 = artifacts[run_name]["sha256"]
     review_receipt_hashes: set[str] = set()
     for source_id, snapshot in snapshots.items():
+        acquired = acquired_by_id[source_id]
+        acquired_policy = acquisition_manifest["license_policies"][
+            acquired["license_policy"]
+        ]
+        output_policy = manifest["license_policies"].get(acquired["license_policy"])
+        if output_policy is None or output_policy != {
+            "source_family": acquired_policy["source_family"],
+            "license_id": "LicenseRef-USGov-Public-Domain",
+            "license_url": acquired_policy["policy_url"],
+            "attribution": acquired_policy["attribution"],
+            "license_cleared": True,
+            "evaluation_use_cleared": True,
+            "redistribution_cleared": True,
+        }:
+            raise ValueError(
+                f"source snapshot {source_id} license policy mismatches acquisition manifest"
+            )
+        expected_snapshot = {
+            "source_family": acquired_policy["source_family"],
+            "upstream_url": acquired["upstream_url"],
+            "upstream_revision": acquired["upstream_revision"],
+            "upstream_date": acquired["public_release_date"]
+            or acquired["adoption_or_issue_date"],
+            "untouched_split": acquired["untouched_split"],
+            "license_policy": acquired["license_policy"],
+            "attribution": acquired_policy["attribution"],
+            "third_party_images_excluded": True,
+            "natural_language_authored": acquired["natural_language_authored"],
+            "benchmark_derived": False,
+        }
+        if any(snapshot[key] != value for key, value in expected_snapshot.items()):
+            raise ValueError(
+                f"source snapshot {source_id} metadata mismatches acquisition manifest"
+            )
         binding_name = _require_text(
             snapshot["acquisition_binding_artifact"],
             f"source snapshot {source_id} acquisition binding",
@@ -508,9 +597,9 @@ def validate_source_acquisition_provenance(
         reviewed_name = snapshot["reviewed_text_artifact"]
         expected_values = {
             "snapshot_id": source_id,
-            "acquisition_manifest_sha256": run_manifest_sha256,
+            "acquisition_manifest_sha256": acquisition_manifest_sha256,
             "acquisition_receipt_sha256": run_receipt_sha256,
-            "extracted_text_sha256": verified_by_id[source_id]["text_sha256"],
+            "extracted_text_sha256": acquired["extracted_text"]["sha256"],
             "reviewed_text_sha256": artifacts[reviewed_name]["sha256"],
             "upstream_url": snapshot["upstream_url"],
             "upstream_revision": snapshot["upstream_revision"],
@@ -675,9 +764,10 @@ def validate_source_snapshot_manifest(
     if manifest.get("schema_version") in {
         "r052-source-provenance-manifest-v2",
         "r052-source-provenance-manifest-v3",
+        "r052-source-provenance-manifest-v4",
     }:
         raise ValueError(
-            "source manifest v2/v3 requires migration to v4 acquisition provenance"
+            "source manifest v2/v3/v4 requires migration to v5 acquisition provenance"
         )
     _exact_keys(manifest, SOURCE_MANIFEST_KEYS, "trusted source snapshot manifest")
     if (
@@ -725,6 +815,7 @@ def validate_source_snapshot_manifest(
         raise ValueError("source snapshot artifact paths must cover manifest exactly")
 
     by_hash: dict[str, dict[str, Any]] = {}
+    resolved_artifact_paths: dict[str, Path] = {}
     for name, declaration in artifacts.items():
         _require_text(name, "source snapshot artifact name")
         if not isinstance(declaration, dict):
@@ -752,6 +843,7 @@ def validate_source_snapshot_manifest(
                 f"source snapshot artifact {name} contains benchmark lineage"
             )
         by_hash[digest] = {**declaration, "name": name, "path": path}
+        resolved_artifact_paths[name] = path
 
     snapshots = manifest["snapshots"]
     if not isinstance(snapshots, dict) or not snapshots:
@@ -865,7 +957,7 @@ def validate_source_snapshot_manifest(
         snapshot = snapshot_by_reviewed_hash[case["source_snapshot_sha256"]]
         if snapshot["source_family"] != case["source_family"]:
             raise ValueError("case source family mismatches its source snapshot")
-    validate_source_acquisition_provenance(manifest, artifact_paths)
+    validate_source_acquisition_provenance(manifest, resolved_artifact_paths)
     return expected_sha256, by_hash
 
 
@@ -2756,6 +2848,7 @@ def build_receipt(
     panel: dict[str, Any],
     raw_input_sha256: str,
     source_snapshot_manifest_sha256: str,
+    source_provenance_artifact_sha256: Mapping[str, str],
     causal_manifest_sha256: str,
     contamination_manifest_sha256: str,
     policy_replay_receipt_sha256: str,
@@ -2767,6 +2860,9 @@ def build_receipt(
         "input_raw_sha256": raw_input_sha256,
         "input_canonical_sha256": sha256_json(panel),
         "trusted_source_snapshot_manifest_sha256": source_snapshot_manifest_sha256,
+        "trusted_source_provenance_artifact_sha256": dict(
+            source_provenance_artifact_sha256
+        ),
         "trusted_causal_manifest_sha256": causal_manifest_sha256,
         "trusted_contamination_manifest_sha256": contamination_manifest_sha256,
         "trusted_policy_replay_receipt_sha256": policy_replay_receipt_sha256,
@@ -2997,6 +3093,9 @@ def main() -> None:
     causal_raw = args.causal_manifest.read_bytes()
     contamination_raw = args.contamination_manifest.read_bytes()
     source_snapshot_raw = args.source_snapshot_manifest.read_bytes()
+    source_snapshot_manifest = parse_unique_finite_json(
+        source_snapshot_raw, "source snapshot manifest"
+    )
     fact_ledger_raw = args.policy_fact_ledger.read_bytes()
     rubric_raw = args.policy_rubric.read_bytes()
     replay_receipt_raw = args.policy_replay_receipt.read_bytes()
@@ -3026,7 +3125,7 @@ def main() -> None:
             raise ValueError(f"{label} must use canonical JSON bytes")
     panel = validate_panel(
         parse_unique_finite_json(raw, "panel"),
-        parse_unique_finite_json(source_snapshot_raw, "source snapshot manifest"),
+        source_snapshot_manifest,
         args.source_snapshot_manifest_sha256,
         parse_unique_finite_json(causal_raw, "causal manifest"),
         args.causal_manifest_sha256,
@@ -3095,6 +3194,14 @@ def main() -> None:
         panel,
         sha256_bytes(raw),
         args.source_snapshot_manifest_sha256,
+        {
+            "acquisition_manifest": source_snapshot_manifest["artifacts"][
+                source_snapshot_manifest["acquisition_manifest_artifact"]
+            ]["sha256"],
+            "acquisition_run_receipt": source_snapshot_manifest["artifacts"][
+                source_snapshot_manifest["acquisition_run_receipt_artifact"]
+            ]["sha256"],
+        },
         args.causal_manifest_sha256,
         args.contamination_manifest_sha256,
         args.policy_replay_receipt_sha256,

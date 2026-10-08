@@ -197,19 +197,23 @@ def _promote(fixture: dict) -> dict:
     )
 
 
-def test_happy_path_emits_deterministic_v4_accepted_by_builder_and_scorer(tmp_path):
+def test_happy_path_emits_deterministic_v5_accepted_by_builder_and_scorer(tmp_path):
     fixture = _fixture(tmp_path)
 
     receipt = _promote(fixture)
 
     output = fixture["output"]
-    manifest_raw = (output / "source-manifest-v4.json").read_bytes()
+    manifest_raw = (output / "source-manifest-v5.json").read_bytes()
     manifest = json.loads(manifest_raw)
     assert manifest_raw == promoter.canonical_json(manifest)
     assert receipt["semantic_review_verified_by_tool"] is False
     assert receipt["acquisition_receipt_sha256"] == fixture["acquisition_receipt_sha"]
     assert receipt["source_manifest_sha256"] == _sha(manifest_raw)
-    assert manifest["schema_version"] == "r052-source-provenance-manifest-v4"
+    assert manifest["schema_version"] == "r052-source-provenance-manifest-v5"
+    assert (
+        manifest["acquisition_manifest_artifact"]
+        == promoter.ACQUISITION_MANIFEST_ARTIFACT_NAME
+    )
     assert (
         manifest["acquisition_run_receipt_artifact"]
         == promoter.ACQUISITION_RUN_ARTIFACT_NAME
@@ -227,6 +231,15 @@ def test_happy_path_emits_deterministic_v4_accepted_by_builder_and_scorer(tmp_pa
         name: output / relative for name, relative in receipt["artifact_paths"].items()
     }
     run_name = manifest["acquisition_run_receipt_artifact"]
+    acquisition_name = manifest["acquisition_manifest_artifact"]
+    assert manifest["artifacts"][acquisition_name] == {
+        "role": promoter.ACQUISITION_MANIFEST_ARTIFACT_ROLE,
+        "sha256": fixture["manifest_sha"],
+    }
+    assert (
+        artifact_paths[acquisition_name].read_bytes()
+        == fixture["manifest_path"].read_bytes()
+    )
     assert manifest["artifacts"][run_name] == {
         "role": promoter.ACQUISITION_RUN_ARTIFACT_ROLE,
         "sha256": fixture["acquisition_receipt_sha"],
@@ -254,7 +267,7 @@ def test_happy_path_emits_deterministic_v4_accepted_by_builder_and_scorer(tmp_pa
         panel, manifest, digest, artifact_paths
     )
     assert validated_digest == digest
-    assert len(by_hash) == 21
+    assert len(by_hash) == 22
 
     first_id = next(iter(manifest["snapshots"]))
     source_record = receipt["sources"][first_id]
@@ -289,17 +302,45 @@ def test_happy_path_emits_deterministic_v4_accepted_by_builder_and_scorer(tmp_pa
     assert completion["source_manifest_sha256"] == receipt["source_manifest_sha256"]
 
 
-def test_generated_manifest_v3_requires_migration_in_current_consumers(tmp_path):
+def test_noncanonical_genuine_manifest_bytes_are_copied_exactly(tmp_path):
+    fixture = _fixture(tmp_path)
+    payload = (
+        json.dumps(fixture["manifest"], ensure_ascii=False, indent=2) + "\n"
+    ).encode()
+    assert payload != promoter.canonical_json(fixture["manifest"])
+    fixture["manifest_path"].write_bytes(payload)
+    fixture["manifest_sha"] = _sha(payload)
+    fixture["acquisition_receipt"] = _genuine_acquisition_receipt(
+        fixture["manifest"], fixture["manifest_sha"]
+    )
+    _write_acquisition_receipt(fixture, bind_review=False)
+    fixture["review"]["acquisition_manifest_sha256"] = fixture["manifest_sha"]
+    fixture["review"]["acquisition_receipt_sha256"] = fixture["acquisition_receipt_sha"]
+    _write_review(fixture)
+
+    receipt = _promote(fixture)
+    copied = (
+        fixture["output"]
+        / receipt["artifact_paths"][promoter.ACQUISITION_MANIFEST_ARTIFACT_NAME]
+    )
+    assert copied.read_bytes() == payload
+    manifest = json.loads((fixture["output"] / "source-manifest-v5.json").read_bytes())
+    assert manifest["artifacts"][promoter.ACQUISITION_MANIFEST_ARTIFACT_NAME][
+        "sha256"
+    ] == _sha(payload)
+
+
+def test_generated_manifest_v4_requires_migration_in_current_consumers(tmp_path):
     fixture = _fixture(tmp_path)
     receipt = _promote(fixture)
     output = fixture["output"]
-    manifest = json.loads((output / "source-manifest-v4.json").read_bytes())
+    manifest = json.loads((output / "source-manifest-v5.json").read_bytes())
     artifact_paths = {
         name: output / relative for name, relative in receipt["artifact_paths"].items()
     }
-    manifest["schema_version"] = "r052-source-provenance-manifest-v3"
+    manifest["schema_version"] = "r052-source-provenance-manifest-v4"
 
-    with pytest.raises(ValueError, match="migration to v4"):
+    with pytest.raises(ValueError, match="migration to v5"):
         builder._validate_source_manifest(manifest, artifact_paths)
     panel = {
         "cases": [
@@ -312,7 +353,7 @@ def test_generated_manifest_v3_requires_migration_in_current_consumers(tmp_path)
             for snapshot in manifest["snapshots"].values()
         ]
     }
-    with pytest.raises(ValueError, match="migration to v4"):
+    with pytest.raises(ValueError, match="migration to v5"):
         scorer.validate_source_snapshot_manifest(
             panel, manifest, scorer.sha256_json(manifest), artifact_paths
         )
@@ -672,7 +713,7 @@ def test_replaced_output_cannot_be_reported_as_success(tmp_path, monkeypatch):
     with pytest.raises(promoter.PromotionError, match="identity changed"):
         _promote(fixture)
     assert (fixture["output"] / "owned-by-racer.txt").read_text() == "keep"
-    assert not (fixture["output"] / "source-manifest-v4.json").exists()
+    assert not (fixture["output"] / "source-manifest-v5.json").exists()
 
 
 def test_copy_failure_never_deletes_replacement_directory(tmp_path, monkeypatch):
