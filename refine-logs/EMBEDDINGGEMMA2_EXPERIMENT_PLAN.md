@@ -90,6 +90,22 @@ Only four questions favor the dense arm and one favors BM25 (exact paired `p=.37
 directional signal to execute B1, not evidence of a JevBench, downstream decision, Hebrew,
 multimodal, long-context, or speed gain.
 
+A second tracked development diagnostic now exercises the audited-but-unreviewed Hebrew and image
+drafts with the same frozen local provider. Its deterministic receipt has file SHA256
+`9399c295c1db3dbcd1ac98a89f4559076f7acc8a8dbf624cd987132e15b1427b`; three executions (two audit
+runs and the retained run) were byte-identical. Across ten Hebrew-query/English-evidence groups
+containing 12 decisive items, EG2 complete recall@1/@2/@4 is `.70/.90/1.00` at 768d and
+`.70/1.00/1.00` at 256d, versus BM25 `.00/.20/.40`. The English-query control reaches
+`.70/1.00/1.00` at 768d. Across ten image cases with real, shuffled, absent-media, and five exact text
+distractors per case, EG2 recall@1 is `1.00` and the real crop beats both its shuffled and missing
+control in `10/10` cases at both dimensions; the mean 768d real-minus-shuffled/missing margins are
+`.0967/.1134`. BM25 gives all three matched-text visual controls exactly tied scores in `10/10`
+cases, so its rank metrics there are deterministic tie-break artifacts, not vision evidence.
+Hebrew-to-Hebrew remains deliberately unavailable because 69 distractor chunks lack Hebrew text; a
+complete label-independent translation overlay is required. These are strong routing diagnostics,
+but still not B1 or benchmark evidence: the drafts lack human bilingual, semantic, rights,
+pixel-causality, and contamination review, and no unchanged-Typical downstream decision was tested.
+
 **Current authoring state:** independently audited development-only drafts cover ten Hebrew↔English
 twin groups (v4 overlay SHA256 `7e08ed31ba0ab64f628fe1e4807b81c4a55993cdb65d77c3f5250b787ff303e8`;
 effective artifact SHA256 `0f485e3d3528dda689e43fb4b10b552d87a1fb966a9d879f181cdb09482cbf76`)
@@ -98,6 +114,13 @@ and ten materialized real/shuffled/missing image groups (receipt SHA256
 unreviewed candidates; all superseded drafts are retained for forensic comparison. Mechanical
 red-team findings are closed, but they cannot enter B1 until the specified human bilingual, rights,
 semantic, pixel-causality, and contamination reviews produce frozen receipts.
+
+The exact review bridge now materializes a development-only packet binding 59 source, dossier,
+receipt, generator, PDF, text, image, and control files. The packet reproduces the 45,640-byte Hebrew
+effective candidate at SHA256 `0f485e3d3528dda689e43fb4b10b552d87a1fb966a9d879f181cdb09482cbf76`
+and leaves every human-review, audit, promotion, and production flag false. Independent red-team
+testing closed output-directory traversal, indirect-symlink, duplicate-distractor, publication, and
+rollback defects before the retained run.
 
 Two secondary uses are conditional on B1/B2 succeeding: contamination-safe diversity sampling and
 hard-negative mining for R051/RLCD (never embedding vectors as answer labels), and HE↔EN plus
