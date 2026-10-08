@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 import sys
 import tempfile
@@ -130,6 +131,9 @@ ACQUISITION_RECEIPT_KEYS = {
 }
 ACQUISITION_VERIFIED_KEYS = {"id", "raw_sha256", "text_sha256"}
 ACQUISITION_MODES = {"fetch", "offline", "verify-only"}
+MACOS_RENAME_EXCL = 0x00000004
+MACOS_RENAME_NOFOLLOW_ANY = 0x00000010
+LINUX_RENAME_NOREPLACE = 1
 
 
 class PromotionError(ValueError):
@@ -514,56 +518,165 @@ def _seal_staged_tree(staged: Path) -> None:
         os.chmod(directory_path, 0o500)
 
 
-def _validate_staged_tree(
-    staged: Path,
-    expected_identity: tuple[int, int],
-    expected_files: Mapping[str, str],
-) -> None:
-    if _directory_identity(staged) != expected_identity:
-        raise PromotionError("private staging directory identity changed")
-    actual_files: dict[str, str] = {}
-    actual_directories: set[str] = set()
-    for directory, names, filenames in os.walk(staged, followlinks=False):
-        directory_path = Path(directory)
-        relative_directory = directory_path.relative_to(staged).as_posix()
-        actual_directories.add("" if relative_directory == "." else relative_directory)
-        for name in names:
-            path = directory_path / name
-            if not stat.S_ISDIR(path.lstat().st_mode):
-                raise PromotionError("private staging directory entry was replaced")
-        for name in filenames:
-            path = directory_path / name
-            metadata = path.lstat()
-            if not stat.S_ISREG(metadata.st_mode):
-                raise PromotionError("private staging file entry was replaced")
-            relative = path.relative_to(staged).as_posix()
-            actual_files[relative] = sha256_bytes(path.read_bytes())
-    expected_directories = {""}
+def _directory_flags() -> int:
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise PromotionError(
+            "descriptor-bound publication requires O_DIRECTORY and O_NOFOLLOW"
+        )
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _open_directory_at(parent_fd: int, name: str, label: str) -> int:
+    try:
+        descriptor = os.open(name, _directory_flags(), dir_fd=parent_fd)
+    except OSError as error:
+        raise PromotionError(f"{label} must be a no-follow directory") from error
+    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise PromotionError(f"{label} must be a directory")
+    return descriptor
+
+
+def _open_parent_directory(path: Path) -> int:
+    try:
+        descriptor = os.open(path, _directory_flags())
+    except OSError as error:
+        raise PromotionError(
+            "publication parent must be a no-follow directory"
+        ) from error
+    return descriptor
+
+
+def _sha256_file_descriptor(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    while block := os.read(descriptor, 1024 * 1024):
+        digest.update(block)
+    return digest.hexdigest()
+
+
+def _expected_directories(expected_files: Mapping[str, str]) -> set[str]:
+    directories = {""}
     for relative in expected_files:
         parent = PurePosixPath(relative).parent
         while parent != PurePosixPath("."):
-            expected_directories.add(parent.as_posix())
+            directories.add(parent.as_posix())
             parent = parent.parent
-    if (
-        actual_files != dict(expected_files)
-        or actual_directories != expected_directories
-    ):
+    return directories
+
+
+def _validate_tree_fd(
+    directory_fd: int,
+    expected_files: Mapping[str, str],
+    *,
+    prefix: str = "",
+) -> tuple[dict[str, str], set[str]]:
+    actual_files: dict[str, str] = {}
+    actual_directories = {prefix}
+    try:
+        names = sorted(os.listdir(directory_fd))
+    except OSError as error:
+        raise PromotionError("could not enumerate publication tree") from error
+    for name in names:
+        relative = f"{prefix}/{name}" if prefix else name
+        try:
+            before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except OSError as error:
+            raise PromotionError(
+                "publication tree entry changed during validation"
+            ) from error
+        if stat.S_ISDIR(before.st_mode):
+            child_fd = _open_directory_at(
+                directory_fd, name, f"publication directory {relative}"
+            )
+            try:
+                opened = os.fstat(child_fd)
+                if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                    raise PromotionError(
+                        "publication directory entry changed during validation"
+                    )
+                child_files, child_directories = _validate_tree_fd(
+                    child_fd,
+                    expected_files,
+                    prefix=relative,
+                )
+                after = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino):
+                    raise PromotionError(
+                        "publication directory entry changed during validation"
+                    )
+                actual_files.update(child_files)
+                actual_directories.update(child_directories)
+            finally:
+                os.close(child_fd)
+            continue
+        if not stat.S_ISREG(before.st_mode):
+            raise PromotionError("publication file entry was replaced")
+        flags = os.O_RDONLY
+        if not hasattr(os, "O_NOFOLLOW"):
+            raise PromotionError("descriptor-bound publication requires O_NOFOLLOW")
+        flags |= os.O_NOFOLLOW
+        try:
+            file_fd = os.open(name, flags, dir_fd=directory_fd)
+        except OSError as error:
+            raise PromotionError(
+                "publication file entry changed during validation"
+            ) from error
+        try:
+            opened = os.fstat(file_fd)
+            if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+                before.st_dev,
+                before.st_ino,
+            ):
+                raise PromotionError("publication file entry changed during validation")
+            actual_files[relative] = _sha256_file_descriptor(file_fd)
+            after = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino):
+                raise PromotionError("publication file entry changed during validation")
+        finally:
+            os.close(file_fd)
+    return actual_files, actual_directories
+
+
+def _require_exact_tree_fd(
+    directory_fd: int, expected_files: Mapping[str, str]
+) -> None:
+    actual_files, actual_directories = _validate_tree_fd(directory_fd, expected_files)
+    if actual_files != dict(
+        expected_files
+    ) or actual_directories != _expected_directories(expected_files):
         raise PromotionError(
-            "private staging file set or hashes changed before publish"
+            "publication directory/file set or hashes changed before completion"
         )
 
 
-def _call_no_replace_rename(source: Path, destination: Path) -> None:
+def _call_no_replace_rename_at(
+    parent_fd: int,
+    source_name: str,
+    destination_name: str,
+    collision_label: str = "output directory",
+) -> None:
     library = ctypes.CDLL(None, use_errno=True)
-    source_bytes = os.fsencode(source)
-    destination_bytes = os.fsencode(destination)
+    source_bytes = os.fsencode(source_name)
+    destination_bytes = os.fsencode(destination_name)
     if sys.platform == "darwin":
-        rename = getattr(library, "renamex_np", None)
+        rename = getattr(library, "renameatx_np", None)
         if rename is None:
             raise PromotionError("atomic no-replace rename is unavailable on macOS")
-        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
         rename.restype = ctypes.c_int
-        result = rename(source_bytes, destination_bytes, 0x00000004)  # RENAME_EXCL
+        result = rename(
+            parent_fd,
+            source_bytes,
+            parent_fd,
+            destination_bytes,
+            MACOS_RENAME_EXCL | MACOS_RENAME_NOFOLLOW_ANY,
+        )
     elif sys.platform.startswith("linux"):
         rename = getattr(library, "renameat2", None)
         if rename is None:
@@ -576,7 +689,13 @@ def _call_no_replace_rename(source: Path, destination: Path) -> None:
             ctypes.c_uint,
         ]
         rename.restype = ctypes.c_int
-        result = rename(-100, source_bytes, -100, destination_bytes, 1)
+        result = rename(
+            parent_fd,
+            source_bytes,
+            parent_fd,
+            destination_bytes,
+            LINUX_RENAME_NOREPLACE,
+        )
     else:
         raise PromotionError(
             f"atomic no-replace rename is unsupported on {sys.platform}"
@@ -586,22 +705,92 @@ def _call_no_replace_rename(source: Path, destination: Path) -> None:
     error_number = ctypes.get_errno()
     if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
         raise PromotionError(
-            "output directory already exists; promotion never overwrites"
+            f"{collision_label} already exists; promotion never overwrites"
         )
     raise PromotionError(
         f"atomic no-replace publication failed: {os.strerror(error_number)}"
     )
 
 
-def _atomic_install_no_replace(
+def _write_completion_marker(root_fd: int, payload: bytes) -> None:
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise PromotionError("descriptor-bound publication requires O_NOFOLLOW")
+    pending_name = f".PROMOTION_COMPLETE.pending-{secrets.token_hex(16)}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(pending_name, flags, 0o400, dir_fd=root_fd)
+    except FileExistsError as error:
+        raise PromotionError("completion marker staging collision") from error
+    except OSError as error:
+        raise PromotionError(
+            "could not create completion marker exclusively"
+        ) from error
+    try:
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("completion marker write made no progress")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    _call_no_replace_rename_at(
+        root_fd,
+        pending_name,
+        "PROMOTION_COMPLETE.json",
+        "completion marker",
+    )
+
+
+def _atomic_install_and_complete(
     staged: Path,
     output_dir: Path,
     expected_identity: tuple[int, int],
     expected_files: Mapping[str, str],
+    completion_payload: bytes,
 ) -> None:
-    """Validate then atomically install one complete immutable directory tree."""
-    _validate_staged_tree(staged, expected_identity, expected_files)
-    _call_no_replace_rename(staged, output_dir)
+    """Install a validated inode, revalidate it, then create the success marker."""
+    if staged.parent != output_dir.parent:
+        raise PromotionError("private staging and output must be sibling directories")
+    parent_fd = _open_parent_directory(staged.parent)
+    try:
+        staging_fd = _open_directory_at(
+            parent_fd, staged.name, "private staging directory"
+        )
+        try:
+            staging_metadata = os.fstat(staging_fd)
+            staging_identity = (staging_metadata.st_dev, staging_metadata.st_ino)
+            if staging_identity != expected_identity:
+                raise PromotionError("private staging directory identity changed")
+            _require_exact_tree_fd(staging_fd, expected_files)
+            _call_no_replace_rename_at(parent_fd, staged.name, output_dir.name)
+            installed_fd = _open_directory_at(
+                parent_fd, output_dir.name, "installed publication directory"
+            )
+            try:
+                installed_metadata = os.fstat(installed_fd)
+                if (
+                    installed_metadata.st_dev,
+                    installed_metadata.st_ino,
+                ) != staging_identity:
+                    raise PromotionError(
+                        "installed publication inode mismatches staging"
+                    )
+                _require_exact_tree_fd(installed_fd, expected_files)
+                os.fchmod(installed_fd, 0o700)
+                try:
+                    _write_completion_marker(installed_fd, completion_payload)
+                finally:
+                    os.fchmod(installed_fd, 0o500)
+                os.fsync(installed_fd)
+                os.fsync(parent_fd)
+            finally:
+                os.close(installed_fd)
+        finally:
+            os.close(staging_fd)
+    finally:
+        os.close(parent_fd)
 
 
 def promote(
@@ -848,9 +1037,6 @@ def promote(
             "promotion_receipt_sha256": promotion_hash,
         }
         completion_payload = canonical_json(completion_marker)
-        completion_hash = _write(
-            temporary / "PROMOTION_COMPLETE.json", completion_payload
-        )
         expected_files = {
             relative: artifact_declarations[name]["sha256"]
             for name, relative in artifact_paths.items()
@@ -859,21 +1045,21 @@ def promote(
             {
                 "source-manifest-v5.json": output_manifest_hash,
                 "promotion-receipt.json": promotion_hash,
-                "PROMOTION_COMPLETE.json": completion_hash,
             }
         )
         _seal_staged_tree(temporary)
-        _atomic_install_no_replace(
+        _atomic_install_and_complete(
             temporary,
             output_dir,
             temporary_identity,
             expected_files,
+            completion_payload,
         )
         return promotion_receipt
     finally:
-        # Success consumes the private directory atomically.  On failure it is
-        # deliberately retained: path-based cleanup could delete racer-owned
-        # replacement material, which is worse than a mode-0500 orphan.
+        # Never path-delete publication state.  A preinstall failure retains
+        # private staging; a postinstall failure leaves an unmarked output.
+        # Either is safer than deleting a racer-owned replacement.
         pass
 
 
