@@ -3,10 +3,10 @@ import { Database, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Page, PageHeader } from "@/components/layout"
-import { msg } from "@/components/shared"
+import { ErrorState, msg } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -14,14 +14,16 @@ import { api, type Dataset } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { href } from "@/lib/router"
 
-const when = (iso: string | null, lang: string) =>
-  iso ? new Intl.DateTimeFormat(lang === "he" ? "he-IL" : "en", { dateStyle: "medium" }).format(new Date(iso)) : "—"
-
 /** Data: every table uploaded through Customize, the models trained from each, and a way to start again from one. */
 export function DataPage() {
-  const { t, lang } = useI18n()
+  const { t, date } = useI18n()
   const [rows, setRows] = useState<Dataset[] | null>(null)
-  const load = useCallback(() => void api.datasets().then(setRows).catch((e) => toast.error(msg(e))), [])
+  const [error, setError] = useState<string | null>(null)
+  // samples first: they never change, and every row then keeps the same action column
+  const load = useCallback(() => void api.datasets().then((all) => {
+    setRows([...all.filter((d) => d.sample), ...all.filter((d) => !d.sample)])
+    setError(null)
+  }).catch((e) => setError(msg(e))), [])
   useEffect(load, [load])
 
   async function remove(d: Dataset) {
@@ -39,10 +41,10 @@ export function DataPage() {
     <Page>
       <PageHeader title={t("data.title")} description={t("data.lede")}
         actions={<Button asChild><a href={href({ name: "new" })}><Plus data-icon="inline-start" /> {t("data.upload")}</a></Button>} />
-      <Card>
-        <CardContent className="px-0">
+      {error && !rows && <ErrorState detail={error} retry={load} />}
+      <Card className="gap-0 py-0">
           {!rows ? (
-            <div className="grid gap-2 px-6">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-10" />)}</div>
+            <div className="grid gap-2 p-6">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-10" />)}</div>
           ) : (
             <Table>
               <TableHeader>
@@ -63,8 +65,10 @@ export function DataPage() {
                         <span dir="auto" className="truncate">{d.name}</span>
                         {d.sample && <Badge variant="secondary">{t("app.sample")}</Badge>}
                       </span>
-                      <span className="block truncate ps-6 text-xs text-muted-foreground md:max-w-96" title={d.columns.join(", ")}>
-                        <span className="sm:hidden">{t("data.rowsN", { n: d.rows.toLocaleString() })} · </span>{t("data.cols", { n: d.columns.length })}: <bdi>{d.columns.slice(0, 4).join(", ")}{d.columns.length > 4 ? ", …" : ""}</bdi>
+                      <span className="flex min-w-0 gap-1 ps-6 text-xs text-muted-foreground md:max-w-96" title={d.columns.join(", ")}>
+                        <span className="shrink-0"><span className="sm:hidden">{t("data.rowsN", { n: d.rows.toLocaleString() })} · </span>{t("data.cols", { n: d.columns.length })}:</span>
+                        {/* column names are LTR identifiers: truncate their own end, also inside a Hebrew line */}
+                        <bdi dir="ltr" className="block min-w-0 truncate">{d.columns.join(", ")}</bdi>
                       </span>
                     </TableCell>
                     <TableCell className="hidden text-end font-mono text-sm tabular sm:table-cell">{d.rows.toLocaleString()}</TableCell>
@@ -75,11 +79,11 @@ export function DataPage() {
                         )) : <span className="text-muted-foreground">—</span>}
                       </div>
                     </TableCell>
-                    <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{when(d.created, lang)}</TableCell>
+                    <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{date(d.created)}</TableCell>
                     <TableCell className="pe-6">
                       <div className="flex justify-end gap-1">
-                        <Button variant="outline" size="sm" asChild><a href={href({ name: "new", data: d.token })}><Plus data-icon="inline-start" /> <span className="hidden sm:inline">{t("data.new")}</span></a></Button>
-                        {!d.sample && (
+                        <Button variant="ghost" size="sm" asChild><a href={href({ name: "new", data: d.token })} aria-label={t("data.new")} title={t("data.new")}><Plus data-icon="inline-start" /> <span className="hidden sm:inline">{t("data.new")}</span></a></Button>
+                        {d.sample ? <span aria-hidden className="size-8 shrink-0" /> : (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               {/* a span: a disabled button gets no pointer events, so the reason would never show */}
@@ -100,7 +104,6 @@ export function DataPage() {
               </TableBody>
             </Table>
           )}
-        </CardContent>
       </Card>
     </Page>
   )

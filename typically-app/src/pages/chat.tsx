@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, Check, FileText, ListChecks, Loader2, Pencil, Sparkles, Trash2, Undo2, X } from "lucide-react"
+import { ArrowUp, Check, FileText, Info, ListChecks, Loader2, Pencil, Sparkles, Trash2, Undo2, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { StatusDot } from "@/components/app-sidebar"
@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { corrections, library, type AskQuestion, type AskResult, type LibraryModel, type Result } from "@/lib/api"
+import { chatStore, useAuth } from "@/lib/auth"
 import { useI18n } from "@/lib/i18n"
 import { useLibrary } from "@/lib/library"
 import { pct, say, snippet, TYPES } from "@/lib/project"
@@ -29,13 +30,15 @@ interface Turn {
   compare: boolean
   result?: AskResult
   error?: string
-  fixes?: Record<number, Fix> // question index -> the correction saved for it
+  fixes?: Record<number, string> // question index -> the answer saved as its correction
 }
-interface Fix { answer: string; n: number } // n: its line in the model's corrections file (DELETE .../corrections/{n})
 
-const STORE = "typically.chat"
-const load = (): Turn[] => {
-  try { return JSON.parse(localStorage.getItem(STORE) ?? "[]") } catch { return [] }
+const load = (key: string): Turn[] => {
+  try {
+    const turns: Turn[] = JSON.parse(localStorage.getItem(key) ?? "[]")
+    // fixes were once stored as { answer, n }
+    return turns.map((x) => ({ ...x, fixes: Object.fromEntries(Object.entries(x.fixes ?? {}).map(([i, f]) => [i, typeof f === "string" ? f : (f as { answer: string }).answer])) }))
+  } catch { return [] }
 }
 const COLLAPSE_AT = 160 // a paste this long (or multi-line) becomes a Case card, like Claude's pasted-text chips
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length
@@ -69,37 +72,43 @@ function CaseCard({ text, onEdit, onRemove, className }: { text: string; onEdit?
 
 /* ------------------------------------------------------------------ answers */
 
+const optionsOf = (q: AskQuestion, r: Result) => (q.type === "noul" ? ["no", "yes"] : q.labels?.length ? q.labels : Object.keys(r.probs))
+const SHOWN = 6
+
+/** One model's answer. Options keep the question's order (so two models line up row for row); the top one is highlighted. */
 function Answer({ q, r, tone, label }: { q: AskQuestion; r: Result; tone: "standard" | "yours"; label?: string }) {
   const { t } = useI18n()
-  const ranked = Object.entries(r.probs).sort((a, b) => b[1] - a[1])
+  const options = optionsOf(q, r).filter((l) => l in r.probs)
+  const top = new Set([...options].sort((a, b) => r.probs[b] - r.probs[a]).slice(0, SHOWN))
   return (
-    <div className="grid gap-2">
+    <div className="grid content-start gap-2">
       {label && <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={cn("size-1.5 rounded-full", tone === "standard" ? "bg-standard" : "bg-yours")} /><span dir="auto">{label}</span></span>}
-      <div className="flex items-baseline gap-2">
-        <span dir="auto" className="text-base font-semibold">{say(t, q.type, r.argmax)}</span>
+      <div className="flex h-7 items-baseline gap-2">
+        <span dir="auto" className="truncate text-base font-semibold">{say(t, q.type, r.argmax)}</span>
         <span className="font-mono text-sm text-muted-foreground tabular">{pct(r.probs[r.argmax])}</span>
-        {r.p_null >= 0.5 && <Badge variant="outline" className="font-normal">{t("chat.notSure")}</Badge>}
       </div>
       <div className="grid gap-1">
-        {ranked.slice(0, 6).map(([l, p]) => (
-          <div key={l} className="grid grid-cols-[minmax(0,7rem)_1fr_2.5rem] items-center gap-2 text-xs">
-            <span dir="auto" className="truncate text-muted-foreground">{say(t, q.type, l)}</span>
+        {options.filter((l) => top.has(l)).map((l) => (
+          <div key={l} className="grid grid-cols-[minmax(0,7rem)_1fr_2.75rem] items-center gap-2 text-sm">
+            <span dir="auto" className={cn("truncate", l === r.argmax ? "font-medium" : "text-muted-foreground")}>{say(t, q.type, l)}</span>
             <div className="h-1 overflow-hidden rounded-full bg-muted">
-              <div className={cn("h-full rounded-full transition-[width] duration-200", l === r.argmax ? (tone === "standard" ? "bg-standard" : "bg-yours") : "bg-muted-foreground/30")} style={{ width: `${p * 100}%` }} />
+              <div className={cn("h-full rounded-full transition-[width] duration-200", l === r.argmax ? (tone === "standard" ? "bg-standard" : "bg-yours") : "bg-muted-foreground/30")} style={{ width: `${r.probs[l] * 100}%` }} />
             </div>
-            <span className="text-end font-mono text-muted-foreground tabular">{pct(p)}</span>
+            <span className="text-end font-mono text-xs text-muted-foreground tabular">{pct(r.probs[l])}</span>
           </div>
         ))}
-        {r.p_null >= 0.15 && <p className="text-xs text-muted-foreground">{t("chat.noneFit")}: {pct(r.p_null)}</p>}
+        {r.p_null >= 0.15 && (
+          <p className={cn("flex items-center gap-1.5 text-xs", r.p_null >= 0.5 ? "font-medium text-foreground" : "text-muted-foreground")}>
+            <Info className="size-3" /> {t(r.p_null >= 0.5 ? "chat.noneLikely" : "chat.noneFit", { p: pct(r.p_null) })}
+          </p>
+        )}
       </div>
     </div>
   )
 }
 
-const optionsOf = (q: AskQuestion, r: Result) => (q.type === "noul" ? ["no", "yes"] : q.labels?.length ? q.labels : Object.keys(r.probs))
-
 /** "Wrong?" on an answer card: pick the right option; once saved it becomes a "Correct: X" chip (click to change) with an undo. */
-function WrongAction({ q, r, fix, onPick, onUndo }: { q: AskQuestion; r: Result; fix?: Fix; onPick: (answer: string) => void; onUndo: () => void }) {
+function WrongAction({ q, r, fix, onPick, onUndo }: { q: AskQuestion; r: Result; fix?: string; onPick: (answer: string) => void; onUndo: () => void }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const options = optionsOf(q, r)
@@ -109,7 +118,7 @@ function WrongAction({ q, r, fix, onPick, onUndo }: { q: AskQuestion; r: Result;
         <PopoverTrigger asChild>
           {fix ? (
             <button type="button" className="inline-flex items-center gap-1 rounded-full border border-yours/40 bg-yours/10 py-0.5 ps-1.5 pe-2 text-xs text-yours hover:bg-yours/15">
-              <Check className="size-3" /> <span dir="auto">{t("chat.correct", { answer: say(t, q.type, fix.answer) })}</span>
+              <Check className="size-3" /> <span dir="auto">{t("chat.correct", { answer: say(t, q.type, fix) })}</span>
             </button>
           ) : (
             <Button variant="ghost" size="xs" className="text-muted-foreground">{t("chat.wrong")}</Button>
@@ -118,10 +127,10 @@ function WrongAction({ q, r, fix, onPick, onUndo }: { q: AskQuestion; r: Result;
         <PopoverContent align="end" className="grid w-60 gap-0.5 p-1.5">
           <p className="px-2 pt-1 pb-1.5 text-xs font-medium">{t("chat.wrongTitle")}</p>
           {options.map((l) => (
-            <button key={l} type="button" disabled={l === r.argmax || l === fix?.answer} onClick={() => { setOpen(false); onPick(l) }}
+            <button key={l} type="button" disabled={l === r.argmax || l === fix} onClick={() => { setOpen(false); onPick(l) }}
               className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-start text-sm hover:bg-muted disabled:pointer-events-none disabled:text-muted-foreground">
               <span dir="auto" className="truncate">{say(t, q.type, l)}</span>
-              {l === r.argmax ? <span className="shrink-0 text-xs">{t("chat.modelSaid")}</span> : l === fix?.answer && <Check className="size-3.5 shrink-0" />}
+              {l === r.argmax ? <span className="shrink-0 text-xs">{t("chat.modelSaid")}</span> : l === fix && <Check className="size-4 shrink-0" />}
             </button>
           ))}
           <p className="px-2 pt-1.5 pb-1 text-xs text-muted-foreground">{t("chat.wrongHint")}</p>
@@ -146,11 +155,10 @@ function TurnView({ turn, onFix, onUndo }: { turn: Turn; onFix?: (i: number, ans
           {turn.questions.map((q, i) => <Badge key={i} variant="secondary" className="font-normal" dir="auto">{q.question}</Badge>)}
         </div>
       </div>
-      <div className="grid gap-3">
+      <div className="grid gap-4">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="grid size-5 place-items-center rounded-full bg-primary/10"><span className="size-1.5 rounded-full bg-primary" /></span>
           <span dir="auto" className="font-medium text-foreground">{turn.modelName}</span>
-          {turn.result && <span className="font-mono tabular">{t("chat.ms", { n: Math.round(turn.result.ms) })}</span>}
         </div>
         {turn.error ? (
           <p role="alert" className="text-sm text-destructive">{turn.error}</p>
@@ -160,16 +168,16 @@ function TurnView({ turn, onFix, onUndo }: { turn: Turn; onFix?: (i: number, ans
           turn.questions.map((q, i) => {
             const mine = turn.result!.results[i], base = turn.result!.base?.results[i]
             return (
-              <div key={i} className="grid gap-3 rounded-xl border bg-card p-4">
+              <div key={i} className="grid gap-4 rounded-xl border bg-card p-4">
                 <div className="flex items-start justify-between gap-3">
                   <p dir="auto" className="text-sm font-medium">{q.question}</p>
                   <span className="flex shrink-0 items-center gap-1.5">
-                    {base && base.argmax !== mine.argmax && <Badge variant="secondary">{t("pg.disagree")}</Badge>}
+                    {base && base.argmax !== mine.argmax && <Badge variant="secondary">{t("chat.disagree")}</Badge>}
                     {onFix && onUndo && <WrongAction q={q} r={mine} fix={turn.fixes?.[i]} onPick={(a) => onFix(i, a)} onUndo={() => onUndo(i)} />}
                   </span>
                 </div>
                 {base ? (
-                  <div className="grid gap-5 sm:grid-cols-2">
+                  <div className="grid gap-4 sm:grid-cols-2">
                     <Answer q={q} r={base} tone="standard" label={t("ev.standardCol")} />
                     <Answer q={q} r={mine} tone="yours" label={turn.modelName} />
                   </div>
@@ -195,7 +203,7 @@ function QuestionChip({ q, onChange, onRemove }: { q: AskQuestion; onChange: (q:
             <span dir="auto" className="truncate">{q.question}</span>
           </button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="grid w-80 gap-3">
+        <PopoverContent align="start" className="grid w-80 gap-4">
           <div className="grid gap-1.5"><Label className="text-xs">{t("chat.edit")}</Label>
             <Input dir="auto" value={q.question} onChange={(e) => onChange({ ...q, question: e.target.value })} /></div>
           <div className="grid gap-1.5"><Label className="text-xs">{t("chat.type")}</Label>
@@ -205,7 +213,7 @@ function QuestionChip({ q, onChange, onRemove }: { q: AskQuestion; onChange: (q:
             </Select></div>
           {q.type !== "noul" && (
             <div className="grid gap-1.5"><Label className="text-xs">{t("chat.options")} <span className="font-normal text-muted-foreground">({t("chat.optionsHint")})</span></Label>
-              <Input dir="auto" defaultValue={(q.labels ?? []).join(", ")} onBlur={(e) => onChange({ ...q, labels: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} /></div>
+              <Input key={q.type} dir="auto" defaultValue={(q.labels ?? []).join(", ")} onBlur={(e) => onChange({ ...q, labels: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} /></div>
           )}
         </PopoverContent>
       </Popover>
@@ -244,7 +252,10 @@ function ModelPicker({ model }: { model?: LibraryModel }) {
 export function ChatPage({ modelId }: { modelId?: string }) {
   const { t, lang } = useI18n()
   const { lib, find, refresh } = useLibrary()
-  const [turns, setTurns] = useState<Turn[]>(load)
+  const { user } = useAuth()
+  const store = chatStore(user)
+  // a turn still waiting when the page was left never gets its answer: show it as interrupted, not "Reading the case…" forever
+  const [turns, setTurns] = useState<Turn[]>(() => load(store).map((x) => (x.result || x.error ? x : { ...x, error: t("chat.interrupted") })))
   const [caseText, setCaseText] = useState("")
   const [caseCard, setCaseCard] = useState(false) // collapsed into a Case card
   const [questions, setQuestions] = useState<AskQuestion[]>([])
@@ -256,13 +267,15 @@ export function ChatPage({ modelId }: { modelId?: string }) {
   const caseInput = useRef<HTMLTextAreaElement>(null)
 
   const ready = useMemo(() => [...(lib?.custom ?? []).filter((m) => m.status === "ready"), ...(lib?.base ?? [])], [lib])
-  const model: LibraryModel | undefined = find(modelId) ?? ready[0]
+  const asked = find(modelId)
+  const model: LibraryModel | undefined = asked ?? ready[0]
+  const missing = Boolean(lib && modelId && !asked)   // ?model= names no model: say so instead of silently showing another
   const custom = model?.kind === "custom"
   const trained = (model?.decisions ?? []).map(({ question, type, labels }) => ({ question, type, labels }))
   const shown = turns.filter((x) => x.model === model?.id)
   const canSend = Boolean(model && caseText.trim() && questions.length && !parsing)   // a question still being parsed would miss this send
 
-  useEffect(() => { localStorage.setItem(STORE, JSON.stringify(turns.slice(-50))) }, [turns])
+  useEffect(() => { localStorage.setItem(store, JSON.stringify(turns.slice(-50))) }, [turns, store])
   // braces: scrollIntoView returns a Promise in newer Chromium, which React would call as an effect cleanup
   // on a new turn or a new answer only: a correction on an older card must not jump to the bottom
   const settled = turns.filter((x) => x.result || x.error).length
@@ -307,7 +320,7 @@ export function ChatPage({ modelId }: { modelId?: string }) {
     }
   }
 
-  const setFix = (id: string, i: number, fix?: Fix) =>
+  const setFix = (id: string, i: number, fix?: string) =>
     setTurns((ts) => ts.map((x) => {
       if (x.id !== id) return x
       const { [i]: _, ...rest } = x.fixes ?? {}
@@ -317,23 +330,24 @@ export function ChatPage({ modelId }: { modelId?: string }) {
   async function saveFix(turn: Turn, i: number, answer: string) {
     const q = turn.questions[i], r = turn.result!.results[i]
     try {
-      const { count, n } = await corrections.add(turn.model, {
+      const { count } = await corrections.add(turn.model, {
         case: turn.case, question: q.question, type: q.type, labels: optionsOf(q, r), answer, model_answer: r.argmax, p: r.probs[r.argmax],
       })
-      setFix(turn.id, i, { answer, n })
+      setFix(turn.id, i, answer)
       refresh()
       toast.success(count === 1 ? t("chat.correctedOne", { name: turn.modelName }) : t("chat.corrected", { n: count, name: turn.modelName }),
-        { action: { label: t("chat.undo"), onClick: () => undoFix(turn, i, n) } })
+        { action: { label: t("chat.undo"), onClick: () => undoFix(turn, i) } })
     } catch (e) {
       toast.error(msg(e))
     }
   }
 
-  // ponytail: undo deletes by line index; a correction removed elsewhere in between shifts it. Delete by (case, question) if that bites.
-  async function undoFix(turn: Turn, i: number, n = turn.fixes?.[i]?.n) {
-    if (n === undefined) return
+  /** A correction's index shifts when another is added or removed, so look it up by (case, question) right before deleting it. */
+  async function undoFix(turn: Turn, i: number) {
     try {
-      await corrections.remove(turn.model, n)
+      const q = turn.questions[i]
+      const item = (await corrections.list(turn.model)).items.find((c) => c.case === turn.case && c.question === q.question)
+      if (item) await corrections.remove(turn.model, item.n)
       setFix(turn.id, i)
       refresh()
       toast(t("chat.undone"))
@@ -379,7 +393,7 @@ export function ChatPage({ modelId }: { modelId?: string }) {
             }}
             className={cn("h-6 w-full min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground", questions.length ? "px-1.5" : "px-0")}
           />
-          {parsing && <Loader2 className="absolute end-1 size-3.5 animate-spin text-muted-foreground" />}
+          {parsing && <Loader2 className="absolute end-1 size-4 animate-spin text-muted-foreground" />}
         </span>
       </div>
 
@@ -418,22 +432,25 @@ export function ChatPage({ modelId }: { modelId?: string }) {
         /* empty: everything centred, composer in the middle (ChatGPT / Gemini / Perplexity); top-anchored on phones,
            where the column is taller than the screen and re-centring as examples load would shift it (CLS .23) */
         <div className="flex flex-1 items-start overflow-y-auto md:items-center">
-          <div className="mx-auto grid w-full max-w-3xl gap-6 px-4 py-10 md:px-6">
-            <div className="grid justify-items-center gap-3 text-center">
+          <div className="mx-auto grid w-full max-w-3xl gap-6 px-4 py-8 md:px-6">
+            <div className="grid justify-items-center gap-4 text-center">
               <div className="grid size-10 place-items-center rounded-xl bg-primary/10"><Sparkles className="size-5 text-primary" /></div>
               <h1 dir="auto" className="text-xl font-semibold tracking-tight">{model ? t("chat.emptyTitle", { name: model.name }) : t("chat.title")}</h1>
               <p className="max-w-lg text-sm text-muted-foreground">{t("chat.emptyBody")}</p>
             </div>
+            {missing && model && <p role="status" dir="auto" className="text-center text-sm text-muted-foreground">{t("chat.unknownModel", { id: modelId!, name: model.name })}</p>}
             {composer}
             {examples.length > 0 && (
-              <div className="grid gap-2 sm:grid-cols-3">
-                {examples.slice(0, 3).map((ex, i) => (
-                  <button key={i} type="button" onClick={() => setCase(ex)}
-                    className="grid content-start gap-1 rounded-xl border bg-card p-3 text-start text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
-                    <span className="font-medium text-foreground">{t("chat.try")}</span>
-                    <span dir="auto" className="line-clamp-3">{snippet(ex)}</span>
-                  </button>
-                ))}
+              <div className="grid gap-2">
+                <p className="text-xs font-medium text-muted-foreground">{t("chat.try")}</p>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {examples.slice(0, 3).map((ex, i) => (
+                    <button key={i} type="button" onClick={() => setCase(ex)}
+                      className="rounded-lg border bg-card p-3 text-start text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
+                      <span dir="auto" className="line-clamp-3">{snippet(ex)}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -442,7 +459,7 @@ export function ChatPage({ modelId }: { modelId?: string }) {
         <>
           {/* conversation: one column; the composer floats at its foot with a fade, same width (Conductor / ChatGPT) */}
           <div className="flex-1 overflow-y-auto">
-            <div className="mx-auto grid max-w-3xl gap-8 px-4 pt-8 pb-6 md:px-6">
+            <div className="mx-auto grid max-w-3xl gap-6 px-4 pt-8 pb-6 md:px-6">
               {shown.map((turn) => (
                 <TurnView key={turn.id} turn={turn} onFix={custom ? (i, a) => saveFix(turn, i, a) : undefined} onUndo={(i) => undoFix(turn, i)} />
               ))}

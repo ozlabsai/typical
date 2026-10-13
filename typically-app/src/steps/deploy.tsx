@@ -2,7 +2,8 @@ import { useEffect, useState } from "react"
 import { AlertCircle, Download, ExternalLink, KeyRound, Loader2, Lock, UploadCloud } from "lucide-react"
 import { toast } from "sonner"
 
-import { CodeBlock, CopyButton, msg, PageHead } from "@/components/shared"
+import { SectionHeader } from "@/components/layout"
+import { CodeBlock, CopyButton, msg } from "@/components/shared"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -13,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, downloadUrl, type Snippets } from "@/lib/api"
+import { useAuth } from "@/lib/auth"
 import { useI18n } from "@/lib/i18n"
 import type { ModelRef } from "@/lib/library"
 import { slugify } from "@/lib/project"
@@ -21,13 +23,14 @@ const TABS: (keyof Snippets)[] = ["curl", "python", "javascript", "sdk"]
 
 export function DeployPanel({ model }: { model: ModelRef }) {
   const { t } = useI18n()
+  const { user } = useAuth()
   const id = model.id
   const url = `${window.location.origin}/v1/models/${id}/decide`
   const [key, setKey] = useState<string | null>(null)
   const [snips, setSnips] = useState<Snippets | null>(null)
   const [snipError, setSnipError] = useState<string | null>(null)
   const [busy, setBusy] = useState<"key" | "push" | null>(null)
-  const [ns, setNs] = useState<string | null>(null)
+  const [ns, setNs] = useState<string | null>(null) // set only when this user may push (else the Hugging Face card is not shown)
   const [hf, setHf] = useState({ repo: "", private: true })
   const [pushed, setPushed] = useState<string | null>(null)
   const [pushError, setPushError] = useState<string | null>(null)
@@ -36,10 +39,16 @@ export function DeployPanel({ model }: { model: ModelRef }) {
   useEffect(() => {
     api.snippets(id).then(setSnips).catch((e) => setSnipError(msg(e)))
     api.capabilities().then((c) => {
-      setNs(c.hf_namespace)
-      if (c.hf_namespace) setHf((h) => (h.repo ? h : { ...h, repo: `${c.hf_namespace}/${slugify(model.name).replace(/_/g, "-")}` }))
+      // hosted: a push lands in the operator's org, so only admins get it (the server's can_push; before it existed, the admin flag)
+      const may = c.can_push ?? (!user || user.admin)
+      const to = may ? c.hf_namespace : null
+      setNs(to)
+      if (to) setHf((h) => (h.repo ? h : { ...h, repo: `${to}/${slugify(model.name).replace(/_/g, "-")}` }))
     }).catch(() => setNs(null))
-  }, [id, model.name])
+  }, [id, model.name, user])
+
+  // the SDK snippet needs a published repo; without one the server fills in a placeholder, which is not shown
+  const tabs = TABS.filter((k) => snips?.[k] && !snips[k]!.includes("<hf-user>"))
 
   async function createKey() {
     setBusy("key")
@@ -70,16 +79,15 @@ export function DeployPanel({ model }: { model: ModelRef }) {
 
   return (
     <>
-      <PageHead title={t("dep.title")} action={<Button variant="outline" asChild><a href={downloadUrl(model.run)} download><Download data-icon="inline-start" /> {t("dep.weights")}</a></Button>}>
-        {t("dep.lede", { name: model.name })}
-      </PageHead>
+      <SectionHeader description={t("dep.lede", { name: model.name })}
+        actions={<Button variant="outline" size="sm" asChild><a href={downloadUrl(model.run)} download><Download data-icon="inline-start" /> {t("dep.download")}</a></Button>} />
 
       <div className="grid gap-4">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">{t("dep.endpoint")} <Badge variant="secondary" className="gap-1"><span className="size-1.5 rounded-full bg-primary" />{t("dep.live")}</Badge></CardTitle>
+            <CardTitle className="flex items-center gap-2">{t("dep.endpoint")} <Badge variant="secondary"><span className="size-1.5 rounded-full bg-success" />{t("dep.live")}</Badge></CardTitle>
             <CardDescription>{t("dep.endpointBody")}</CardDescription>
-            <CardAction><Badge variant="outline" className="gap-1 font-normal"><Lock className="size-3" /> {t("dep.protected")}</Badge></CardAction>
+            <CardAction><Badge variant="outline" className="font-normal"><Lock /> {t("dep.protected")}</Badge></CardAction>
           </CardHeader>
           <CardContent className="grid gap-4">
             <div className="flex items-center gap-2">
@@ -93,11 +101,11 @@ export function DeployPanel({ model }: { model: ModelRef }) {
                 <AlertTitle>{t("dep.key")}</AlertTitle>
                 <AlertDescription className="grid gap-2">
                   <span>{t("dep.keyOnce")}</span>
-                  <span className="flex items-center gap-2"><code dir="ltr" className="rounded bg-muted px-2 py-1 font-mono text-xs break-all">{key}</code><CopyButton text={key} /></span>
+                  <span className="flex items-center gap-2"><code dir="ltr" className="rounded-md bg-muted px-2 py-1 font-mono text-xs break-all">{key}</code><CopyButton text={key} /></span>
                 </AlertDescription>
               </Alert>
             ) : (
-              <div><Button onClick={createKey} disabled={busy === "key"}>{busy === "key" ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <KeyRound data-icon="inline-start" />} {t("dep.createKey")}</Button></div>
+              <div><Button variant="outline" size="sm" onClick={createKey} disabled={busy === "key"}>{busy === "key" ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <KeyRound data-icon="inline-start" />} {t("dep.createKey")}</Button></div>
             )}
           </CardContent>
         </Card>
@@ -111,17 +119,17 @@ export function DeployPanel({ model }: { model: ModelRef }) {
               <Skeleton className="h-40" />
             ) : (
               <Tabs defaultValue="curl">
-                <TabsList>{TABS.map((k) => <TabsTrigger key={k} value={k}>{t(`dep.snippet.${k}`)}</TabsTrigger>)}</TabsList>
-                {TABS.map((k) => <TabsContent key={k} value={k} className="pt-3" dir="ltr"><CodeBlock code={snips[k]} /></TabsContent>)}
+                <TabsList>{tabs.map((k) => <TabsTrigger key={k} value={k}>{t(`dep.snippet.${k}`)}</TabsTrigger>)}</TabsList>
+                {tabs.map((k) => <TabsContent key={k} value={k} className="pt-3"><CodeBlock code={snips[k]!} /></TabsContent>)}
               </Tabs>
             )}
           </CardContent>
         </Card>
 
-        <Card>
+        {ns && <Card>
           <CardHeader>
             <CardTitle>{t("dep.hf")}</CardTitle>
-            <CardDescription>{t("dep.hfBody", { ns: ns ?? "Hugging Face" })}</CardDescription>
+            <CardDescription>{t("dep.hfBody", { ns })}</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-1.5 sm:col-span-2 sm:max-w-md"><Label htmlFor="repo">{t("dep.repo")}</Label><Input id="repo" dir="ltr" value={hf.repo} onChange={(e) => setHf({ ...hf, repo: e.target.value })} className="font-mono text-xs" /></div>
@@ -131,19 +139,19 @@ export function DeployPanel({ model }: { model: ModelRef }) {
             {pushError && <p role="alert" className="flex items-center gap-2 text-sm text-destructive sm:col-span-2"><AlertCircle className="size-4" /> {pushError}</p>}
             {instead && (
               <div className="sm:col-span-2">
-                <Button variant="outline" disabled={busy === "push"} onClick={() => { setHf({ ...hf, repo: instead }); push(instead) }}>
+                <Button variant="outline" size="sm" disabled={busy === "push"} onClick={() => { setHf({ ...hf, repo: instead }); push(instead) }}>
                   <UploadCloud data-icon="inline-start" /> {t("dep.pushInstead", { ns: instead.split("/")[0] })}
                 </Button>
               </div>
             )}
           </CardContent>
           <CardFooter className="justify-between">
-            {pushed ? <a href={pushed} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline">{pushed.replace("https://", "")} <ExternalLink className="size-3.5" /></a> : <span />}
-            <Button onClick={() => push()} disabled={!ns || !hf.repo.includes("/") || busy === "push"}>
+            {pushed ? <a href={pushed} target="_blank" rel="noreferrer" dir="ltr" className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline">{pushed.replace("https://", "")} <ExternalLink className="size-4" /></a> : <span />}
+            <Button variant="outline" size="sm" onClick={() => push()} disabled={!hf.repo.includes("/") || busy === "push"}>
               {busy === "push" ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <UploadCloud data-icon="inline-start" />} {t("dep.push")}
             </Button>
           </CardFooter>
-        </Card>
+        </Card>}
       </div>
     </>
   )

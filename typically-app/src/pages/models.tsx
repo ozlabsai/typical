@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react"
-import { AlertCircle, Archive, Boxes, Loader2, MessageSquare, MoreHorizontal, Plus, RefreshCw, Rocket, X } from "lucide-react"
+import { AlertCircle, Archive, Boxes, Loader2, MessageSquare, MoreHorizontal, Plus, RefreshCw, SearchX, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { StatusDot } from "@/components/app-sidebar"
 import { ShareButton } from "@/components/share-dialog"
-import { Page, PageHeader, SectionHeader, Stat } from "@/components/layout"
-import { CodeBlock, msg, StatusCopy } from "@/components/shared"
+import { Page, PageHeader, SectionHeader } from "@/components/layout"
+import { msg, StatusCopy } from "@/components/shared"
 import { StatusLine, StopButton, TrainingProgress, useTrainStatus } from "@/components/training-progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -19,13 +19,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { corrections, library, type CorrectionItem, type LibraryModel } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { refOf, useLibrary } from "@/lib/library"
-import { BASES, pct, say, signed, snippet } from "@/lib/project"
+import { BASES, pct, say, snippet } from "@/lib/project"
 import { go, href } from "@/lib/router"
 import { DeployPanel } from "@/steps/deploy"
-import { Results } from "@/steps/evaluate"
-
-const when = (iso: string | undefined, lang: string) =>
-  iso ? new Intl.DateTimeFormat(lang === "he" ? "he-IL" : "en", { dateStyle: "medium" }).format(new Date(iso)) : "—"
+import { Results, ScoreStats } from "@/steps/evaluate"
 
 function Agreement({ m }: { m: LibraryModel }) {
   if (!m.metrics) return <span className="text-muted-foreground">—</span>
@@ -48,8 +45,19 @@ function StatusLabel({ m }: { m: LibraryModel }) {
   )
 }
 
+/** Icon + sentence + one action: every empty or missing state. */
+function Empty({ icon: Icon, text, action }: { icon: typeof Boxes; text: string; action: React.ReactNode }) {
+  return (
+    <div className="grid justify-items-center gap-4 px-6 py-8 text-center">
+      <Icon className="size-5 text-muted-foreground" />
+      <p className="text-sm text-muted-foreground">{text}</p>
+      {action}
+    </div>
+  )
+}
+
 export function ModelsPage() {
-  const { t, lang } = useI18n()
+  const { t, date } = useI18n()
   const { lib, refresh } = useLibrary()
 
   async function archive(m: LibraryModel) {
@@ -67,52 +75,54 @@ export function ModelsPage() {
       <PageHeader title={t("models.title")} description={t("models.lede")}
         actions={<Button asChild><a href={href({ name: "new" })}><Plus data-icon="inline-start" /> {t("app.new")}</a></Button>} />
 
-      <Card>
-        <CardHeader><CardTitle>{t("models.custom")}</CardTitle></CardHeader>
-        <CardContent className="px-0">
+      <section className="grid gap-4">
+        <SectionHeader title={t("models.custom")} />
+        <Card className="gap-0 py-0">
           {!lib ? (
-            <div className="grid gap-2 px-6">{[0, 1].map((i) => <Skeleton key={i} className="h-10" />)}</div>
+            <div className="grid gap-2 p-6">{[0, 1].map((i) => <Skeleton key={i} className="h-10" />)}</div>
           ) : !lib.custom.length ? (
-            <div className="grid justify-items-center gap-3 px-6 py-10 text-center">
-              <Boxes className="size-6 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">{t("models.empty")}</p>
-              <Button asChild><a href={href({ name: "new" })}>{t("models.train")}</a></Button>
-            </div>
+            <Empty icon={Boxes} text={t("models.empty")} action={<Button asChild><a href={href({ name: "new" })}>{t("models.train")}</a></Button>} />
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="ps-6">{t("models.name")}</TableHead>
                   <TableHead className="hidden md:table-cell">{t("models.from")}</TableHead>
-                  <TableHead>{t("models.status")}</TableHead>
+                  <TableHead className="hidden sm:table-cell">{t("models.status")}</TableHead>
                   <TableHead className="whitespace-normal">{t("models.agreement")}</TableHead>
                   <TableHead className="hidden md:table-cell">{t("models.created")}</TableHead>
-                  <TableHead className="hidden w-28 pe-6 md:table-cell"><span className="sr-only">{t("common.actions")}</span></TableHead>
+                  <TableHead className="w-0 pe-6"><span className="sr-only">{t("common.actions")}</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {lib.custom.map((m) => (
-                  <TableRow key={m.id} className="cursor-pointer" onClick={() => go({ name: "model", id: m.id })}>
+                  // the name is a real link stretched over the row: keyboard, middle-click and screen readers open it like any link
+                  <TableRow key={m.id} className="relative">
                     <TableCell className="ps-6 whitespace-normal">
                       <span className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
-                        <span dir="auto">{m.name}</span>
+                        <a href={href({ name: "model", id: m.id })} dir="auto"
+                          className="outline-none after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-3 focus-visible:after:ring-ring/50">{m.name}</a>
                         {m.sample && <Badge variant="secondary">{t("app.sample")}</Badge>}
                       </span>
-                      <span className="text-xs text-muted-foreground">{t("models.questions", { n: m.decisions?.length ?? 0 })}</span>
+                      <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                        <span className="sm:hidden"><StatusLabel m={m} /></span>
+                        {t("models.questions", { n: m.decisions?.length ?? 0 })}
+                      </span>
                     </TableCell>
-                    <TableCell className="hidden md:table-cell font-mono text-xs">{BASES[m.base].label}</TableCell>
-                    <TableCell><StatusLabel m={m} /></TableCell>
+                    <TableCell className="hidden md:table-cell text-sm">{BASES[m.base].label}</TableCell>
+                    <TableCell className="hidden sm:table-cell"><StatusLabel m={m} /></TableCell>
                     <TableCell><Agreement m={m} /></TableCell>
-                    <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{when(m.created_at, lang)}</TableCell>
-                    <TableCell className="hidden pe-6 md:table-cell" onClick={(e) => e.stopPropagation()}>
+                    <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{date(m.created_at)}</TableCell>
+                    <TableCell className="relative z-10 pe-6">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="sm" disabled={m.status !== "ready"} onClick={() => go({ name: "chat", model: m.id })}>
-                          <MessageSquare data-icon="inline-start" /> <span className="hidden md:inline">{t("models.chat")}</span>
+                        <Button variant="ghost" size="sm" className="hidden md:inline-flex" disabled={m.status !== "ready"} onClick={() => go({ name: "chat", model: m.id })}>
+                          <MessageSquare data-icon="inline-start" /> {t("models.chat")}
                         </Button>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={t("common.more")}><MoreHorizontal /></Button></DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => go({ name: "model", id: m.id })}>{t("models.open")}</DropdownMenuItem>
+                            <DropdownMenuItem disabled={m.status !== "ready"} onClick={() => go({ name: "chat", model: m.id })}><MessageSquare /> {t("models.chat")}</DropdownMenuItem>
                             <DropdownMenuItem disabled={m.sample || m.status === "training"} onClick={() => archive(m)}><Archive /> {t("models.archive")}</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -123,15 +133,16 @@ export function ModelsPage() {
               </TableBody>
             </Table>
           )}
-        </CardContent>
-      </Card>
+        </Card>
+      </section>
 
-      <SectionHeader title={t("models.baseTitle")} />
-      <div className="-mt-2 grid gap-4 sm:grid-cols-2">
+      <section className="grid gap-4">
+        <SectionHeader title={t("models.baseTitle")} />
+        <div className="grid gap-4 sm:grid-cols-2">
         {(lib?.base ?? []).map((m) => (
           <Card key={m.id} size="sm">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 font-mono text-sm">{m.name} <span className="text-muted-foreground">{m.params}</span></CardTitle>
+              <CardTitle className="flex items-center gap-2">{m.name} <span className="text-sm font-normal text-muted-foreground">{m.params}</span></CardTitle>
               <CardDescription>{t(`base.${m.base}.note`)}</CardDescription>
               <CardAction>
                 <Button variant="outline" size="sm" onClick={() => go({ name: "chat", model: m.id })}><MessageSquare data-icon="inline-start" /> {t("models.chat")}</Button>
@@ -139,7 +150,8 @@ export function ModelsPage() {
             </CardHeader>
           </Card>
         ))}
-      </div>
+        </div>
+      </section>
     </Page>
   )
 }
@@ -155,7 +167,7 @@ function Corrections({ m }: { m: LibraryModel }) {
   // the server names versions <root>_v<N>, N = next free; mirror it for the label
   const root = (m.version ?? 1) > 1 ? m.id.replace(/_v\d+$/, "") : m.id
   const next = 1 + Math.max(1, ...(lib?.custom ?? []).filter((x) => x.id === root || x.id.startsWith(`${root}_v`)).map((x) => x.version ?? 1))
-  const jobRunning = lib?.custom.some((x) => x.status === "training" || x.status === "queued")
+  const jobRunning = lib?.custom.some((x) => x.status === "training")
 
   async function remove(n: number) {
     try { await corrections.remove(m.id, n); refresh() } catch (e) { toast.error(msg(e)) }
@@ -180,7 +192,7 @@ function Corrections({ m }: { m: LibraryModel }) {
         <CardTitle>{m.corrections === 1 ? t("corr.titleOne") : t("corr.title", { n: m.corrections })}</CardTitle>
         <CardDescription>{t("corr.lede")}</CardDescription>
         <CardAction>
-          <Button onClick={retrain} disabled={busy || jobRunning || m.status !== "ready"}>
+          <Button size="sm" onClick={retrain} disabled={busy || jobRunning || m.status !== "ready"}>
             {busy ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <RefreshCw data-icon="inline-start" />} {t("corr.retrain", { n: next })}
           </Button>
         </CardAction>
@@ -222,7 +234,7 @@ function Corrections({ m }: { m: LibraryModel }) {
 /** The live card while it trains; after a failure, the same milestones show where it stopped; once ready, the run's record (folded). */
 function TrainingCard({ m }: { m: LibraryModel }) {
   const { t } = useI18n()
-  const status = useTrainStatus(m.id, !m.sample)
+  const { status } = useTrainStatus(m.id, !m.sample)
   const [open, setOpen] = useState(false)
   const failed = m.status === "failed", ready = m.status === "ready"
   if ((failed || ready) && !status?.events?.length) return null   // a run from before milestones were recorded
@@ -244,11 +256,16 @@ function TrainingCard({ m }: { m: LibraryModel }) {
 }
 
 export function ModelPage({ id, tab }: { id: string; tab?: string }) {
-  const { t, lang } = useI18n()
+  const { t, date } = useI18n()
   const { lib, find } = useLibrary()
   const m = find(id)
   if (!lib) return <Page><Skeleton className="h-40" /></Page>
-  if (!m) return <Page><Alert variant="destructive"><AlertCircle /><AlertTitle>404</AlertTitle><AlertDescription>{id}</AlertDescription></Alert></Page>
+  if (!m)
+    return (
+      <Page>
+        <Card><Empty icon={SearchX} text={t("models.notFoundBody")} action={<Button asChild><a href={href({ name: "models" })}>{t("models.backToModels")}</a></Button>} /></Card>
+      </Page>
+    )
   const ready = m.status === "ready"
   const ref = refOf(m)
 
@@ -267,15 +284,14 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
                   {t("models.versionOf", { n: m.version!, name: find(m.parent)?.name ?? m.parent })}
                 </a>
               ),
-              <span className="font-mono text-xs">{BASES[m.base].label}</span>,
+              <span>{BASES[m.base].label}</span>,
               m.steps && <span>{t("models.steps", { n: m.steps })}</span>,
-              m.created_at && <span>{when(m.created_at, lang)}</span>,
+              m.created_at && <span>{date(m.created_at)}</span>,
             ].filter(Boolean).map((x, i) => <span key={i} className="inline-flex items-center gap-3">{i > 0 && <span aria-hidden>·</span>}{x}</span>)}
           </span>
         }
         actions={<>
           <ShareButton id={id} disabled={!ready || !m.metrics} />
-          <Button variant="outline" disabled={!ready} onClick={() => go({ name: "model", id, tab: "deploy" })}><Rocket data-icon="inline-start" /> {t("models.deploy")}</Button>
           <Button disabled={!ready} onClick={() => go({ name: "chat", model: id })}><MessageSquare data-icon="inline-start" /> {t("models.chat")}</Button>
         </>}
       />
@@ -291,14 +307,8 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
           <TabsTrigger value="results" disabled={!ready}>{t("models.results")}</TabsTrigger>
           <TabsTrigger value="deploy" disabled={!ready}>{t("models.deploy")}</TabsTrigger>
         </TabsList>
-        <TabsContent value="overview" className="grid gap-4">
-          {m.metrics && (
-            <div className="grid grid-cols-3 gap-2 sm:gap-4">
-              <Stat label={t("ev.standard")} value={pct(m.metrics.standard)} tone="standard" />
-              <Stat label={m.name} value={pct(m.metrics.yours)} tone="yours" highlight />
-              <Stat label={t("ev.difference")} value={`${signed(Math.round((m.metrics.yours - m.metrics.standard) * 100))} ${t("ev.pts")}`} />
-            </div>
-          )}
+        <TabsContent value="overview" className="grid gap-6">
+          {m.metrics && <ScoreStats standard={m.metrics.standard} yours={m.metrics.yours} />}
           <Corrections m={m} />
           {ready && <TrainingCard key={m.id} m={m} />}
           <Card>
@@ -319,14 +329,6 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
               </Table>
             </CardContent>
           </Card>
-          {ready && m.hf_repo && (
-            <Card>
-              <CardHeader><CardTitle>{t("dep.use")}</CardTitle><CardDescription>Python</CardDescription></CardHeader>
-              <CardContent dir="ltr">
-                <CodeBlock code={`from typical_ai import Typical\n\nm = Typical.from_pretrained("${m.hf_repo}")\nm.choice(case, "${m.decisions?.find((d) => d.type === "choice")?.question ?? "Which team?"}", ${JSON.stringify(m.decisions?.find((d) => d.type === "choice")?.labels ?? ["a", "b"])})`} />
-              </CardContent>
-            </Card>
-          )}
         </TabsContent>
         <TabsContent value="results" className="grid gap-6">{ready && <Results model={ref} />}</TabsContent>
         <TabsContent value="deploy" className="grid gap-6">{ready && <DeployPanel model={ref} />}</TabsContent>
