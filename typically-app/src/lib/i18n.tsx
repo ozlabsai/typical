@@ -348,7 +348,7 @@ const he: Record<Key, string> = {
   "ev.copySummary": "העתקת סיכום", "ev.summaryCopied": "הסיכום הועתק",
   "ev.standard": "המודל הרגיל",
   "ev.agrees": "מסכים עם ההחלטות {who}", "ev.whoYour": "שלכם", "ev.whoNorthwind": "של Northwind",
-  "ev.difference": "הפרש", "ev.pts": "נקודות", "ev.fixed": "{a} תשובות השתפרו, {b} נפגעו",
+  "ev.difference": "הפרש", "ev.pts": "נק׳", "ev.fixed": "{a} תשובות השתפרו, {b} נפגעו",
   "ev.byDecision": "לפי שאלה", "ev.abstained": "המודל הרגיל ענה \"אף אחת לא מתאימה\" {n} פעמים. בכל פעם ספרנו את הניחוש הטוב ביותר שלו.",
   "ev.question": "שאלה", "ev.standardCol": "רגיל","ev.change": "שינוי",
   "ev.disagree": "איפה הם חלוקים",
