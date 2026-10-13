@@ -337,6 +337,11 @@ def test_teach_endpoint_prepares_the_examples_inside_the_job(tmp_path, monkeypat
     settle()
     st = tj.read_status("acme_co")
     assert st["phase"] == "failed" and st["code"] == "failed_build" and "no rows left" in st["message"] and len(ran) == 1
+    monkeypatch.setattr(server, "build_from_plan", lambda *a: (_ for _ in ()).throw(OSError("/srv/data/uploads/x.jsonl at 10.0.0.7")))
+    assert c.post("/api/typically/teach", json=body).status_code == 200
+    settle()
+    st = tj.read_status("acme_co")
+    assert st["code"] == "failed_build" and "/srv" not in st["message"] and "10.0.0.7" not in st["message"]   # logged, not shown
 
 
 def test_failed_enrichment_calls_are_not_progress_and_are_counted():

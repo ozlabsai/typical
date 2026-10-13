@@ -130,8 +130,8 @@ def load_records(source: dict) -> list[dict]:
             # ponytail: datasets are often sorted by label; a 10k-row shuffle buffer keeps the first `limit` rows representative
             # literal "\\n" in dumped text fields (common on the Hub) becomes a real line break
             rows = [{k: _cell(v).replace("\\n", "\n").strip() for k, v in r.items()} for r in islice(ds.shuffle(seed=0, buffer_size=10_000), limit)]
-        except Exception as e:   # datasets raises a zoo of types; the message is what the user needs
-            raise ValueError(f"could not load Hugging Face dataset {source.get('dataset')!r}: {str(e)[:300]}")
+        except Exception as e:   # datasets raises a zoo of types; the message is what the user needs (e.g. the configs), minus server paths
+            raise ValueError(f"could not load Hugging Face dataset {source.get('dataset')!r}: {re.sub(r'(/[^/\s]+){2,}', '<path>', str(e))[:300]}")
         if not rows:
             raise ValueError("the dataset split has no rows")
         return rows

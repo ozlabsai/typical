@@ -71,17 +71,23 @@ def corrections_file(mid: str):   # chat's "Wrong?" store (typically_corrections
     return S.TYPICALLY / "corrections" / (f"{mid}.{uid}.jsonl" if uid else f"{mid}.jsonl")
 
 
-def _entry(mid: str, name: str, base: str, steps, created_at, status: dict, decisions: list, sample: bool = False, job: dict | None = None) -> dict:
+def _keyed() -> set[str]:
+    """Model ids with an API key the caller can see: keys.json is read once per request, not once per model."""
+    return {k["model_id"] for k in D._read_keys().values() if auth.can_see(k.get("owner"))}
+
+
+def _entry(mid: str, name: str, base: str, steps, created_at, status: dict, decisions: list, keyed: set[str], sample: bool = False,
+           job: dict | None = None) -> dict:
     run, job, cf = D.run_of(mid), job or {}, corrections_file(mid)
     hf = S.TYPICALLY / "results" / run / "hf_repo.txt"
     return {"id": mid, "name": name, "kind": "custom", "base": base, "steps": steps, "created_at": created_at, "run": run, "sample": sample,
             "version": job.get("version", 1), "parent": job.get("parent"), "corrections": len(cf.read_text().splitlines()) if cf.exists() else 0,
             **status, "decisions": decisions, "metrics": _metrics(run),
-            "has_key": any(k["model_id"] == mid and auth.can_see(k.get("owner")) for k in D._read_keys().values()),
+            "has_key": mid in keyed,
             "hf_repo": hf.read_text().strip() if hf.exists() else None}
 
 
-def _job_entry(d) -> dict | None:
+def _job_entry(d, keyed: set[str]) -> dict | None:
     st, plan = _json(d / "status.json"), _json(d / "plan.json")
     if st is None and plan is None:   # test / junk dirs
         return None
@@ -96,15 +102,20 @@ def _job_entry(d) -> dict | None:
     decisions = [{k: x[k] for k in ("column", "question", "type", "labels")} for x in (plan or {}).get("decisions", []) if x.get("include")]
     created = (st or {}).get("started_at") or datetime.fromtimestamp(d.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
     return _entry(d.name, job.get("name") or d.name, job.get("base") or (st or {}).get("base") or "small",
-                  job.get("steps") or (st or {}).get("steps"), created, status, decisions, job=job)
+                  job.get("steps") or (st or {}).get("steps"), created, status, decisions, keyed, job=job)
+
+
+def _sample(keyed: set[str]) -> dict:
+    return _entry(NORTHWIND["id"], NORTHWIND["name"], NORTHWIND["base"], NORTHWIND["steps"], None, {"status": "ready"}, NORTHWIND_DECISIONS,
+                  keyed, sample=True)
 
 
 def _custom() -> list[dict]:
+    keyed = _keyed()
     jobs = sorted((p for p in (S.TYPICALLY / "jobs").glob("*") if p.is_dir() and typically_job.SLUG_RE.fullmatch(p.name) and p.name not in D.ALIASES
                    and auth.visible(p.name)), key=lambda p: p.name)
-    entries = sorted(filter(None, map(_job_entry, jobs)), key=lambda e: e["created_at"], reverse=True)
-    sample = _entry(NORTHWIND["id"], NORTHWIND["name"], NORTHWIND["base"], NORTHWIND["steps"], None, {"status": "ready"}, NORTHWIND_DECISIONS, sample=True)
-    return entries + [sample]   # newest first, the sample last
+    entries = sorted(filter(None, (_job_entry(d, keyed) for d in jobs)), key=lambda e: e["created_at"], reverse=True)
+    return entries + [_sample(keyed)]   # newest first, the sample last
 
 
 @router.get("/api/typically/models/library")
@@ -118,10 +129,10 @@ def library_entry(model_id: str):
     if model_id in BASES:
         return next(b for b in library()["base"] if b["id"] == model_id) | {"examples": [NORTHWIND_CASE]}
     if model_id == "northwind":
-        return next(e for e in _custom() if e["sample"]) | {
+        return _sample(_keyed()) | {
             "examples": [NORTHWIND_CASE, *_states(S.REPO_ROOT / "data_co_a" / "eval" / "a_oneliner.jsonl", 2)]}
     if (not typically_job.SLUG_RE.fullmatch(model_id) or not auth.visible(model_id) or not (d := S.TYPICALLY / "jobs" / model_id).is_dir()
-            or (e := _job_entry(d)) is None):
+            or (e := _job_entry(d, _keyed())) is None):
         raise HTTPException(404, "no such model")
     return e | {"examples": _states(d / "eval" / "import_oneliner.jsonl", 3)}
 

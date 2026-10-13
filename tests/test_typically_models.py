@@ -167,3 +167,14 @@ def test_parse_llm_and_fallback(env, monkeypatch):
     assert c.post("/api/typically/parse_question", json={"text": "priority"}).json()["labels"] == ["P3", "P2", "P1"]
     monkeypatch.setattr(tm, "_llm_question", lambda *a: 1 / 0)
     assert c.post("/api/typically/parse_question", json={"text": "Should we refund?"}).json()["source"] == "heuristic"
+
+
+def test_library_reads_keys_once_and_decide_bodies_are_bounded(env, monkeypatch):
+    c, _ = env
+    reads, real = [], tm.D._read_keys
+    monkeypatch.setattr(tm.D, "_read_keys", lambda: reads.append(1) or real())
+    lib = c.get("/api/typically/models/library").json()["custom"]
+    assert len(lib) >= 3 and len(reads) == 1 and next(m for m in lib if m["id"] == "old_done")["has_key"] is True
+    q = {"type": "noul", "question": "q?"}
+    assert c.post("/api/decide", json={"state": "x", "queries": [q] * 21}).status_code == 422
+    assert c.post("/api/decide", json={"state": "x" * 20_001, "queries": [q]}).status_code == 422

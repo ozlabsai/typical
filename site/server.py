@@ -82,7 +82,8 @@ app.middleware("http")(auth.middleware)
 _cache: dict[str, tuple[int, Typical]] = {}
 _backbones: dict[tuple, object] = {}
 # ponytail: one lock, one GPU -- concurrent forward passes on MPS from FastAPI's threadpool crash
-# Metal (MTLCommandBufferStatusCommitted assertion); serialize instead of queueing.
+# Metal (MTLCommandBufferStatusCommitted assertion); serialize instead of queueing. A base's first load downloads it from the Hub
+# (and its Qwen backbone, GBs) under this lock, stalling every request meanwhile; upgrade: prefetch with snapshot_download before taking it.
 _lock = threading.Lock()
 
 
@@ -136,14 +137,14 @@ def base_of(tuned: str) -> str:
 
 class Query(BaseModel):
     type: str  # "choice" | "noul" | "score"
-    question: str
-    labels: list[str] = []
+    question: str = Field(max_length=2000)
+    labels: list[str] = Field([], max_length=100)
 
 
-class DecideRequest(BaseModel):
+class DecideRequest(BaseModel):   # also the public /v1/models/{id}/decide body: bounded like /ask
     model: str = "typical-small"
-    state: str
-    queries: list[Query]
+    state: str = Field(max_length=20_000)
+    queries: list[Query] = Field(max_length=20)
 
 
 def _run(m: Typical, state: str, queries: list[Query]) -> dict:
@@ -164,9 +165,9 @@ def decide(req: DecideRequest):
 
 
 class CompareRequest(BaseModel):
-    state: str
-    decisions: list[Query]
-    models: list[str]
+    state: str = Field(max_length=20_000)
+    decisions: list[Query] = Field(max_length=20)
+    models: list[str] = Field(max_length=3)
 
 
 @app.post("/api/typically/compare")
@@ -290,7 +291,9 @@ def start_job(slug: str, base: str = "small", steps: int = 400, prepare=None) ->
                                                "stopped", events=[typically_job.event("failed")])
                     return
                 except Exception as e:   # HTTPException (bad plan / data) or anything else: the card says why, nothing was rented
-                    why = e.detail if isinstance(e, HTTPException) else f"{type(e).__name__}: {e}"
+                    if not isinstance(e, HTTPException):
+                        log.exception("preparing %s failed", slug)   # raw text in the server log only
+                    why = e.detail if isinstance(e, HTTPException) else "something went wrong on the server"
                     typically_job.write_status(slug, "failed", f"Preparing your examples failed: {why}", "failed_build",
                                                events=[typically_job.event("failed")])
                     return
@@ -383,7 +386,7 @@ def results(project: str):
         job = _reveals.get(run)
         if job and job.get("error"):
             _reveals.pop(run)
-            raise HTTPException(500, f"scoring failed: {job['error']}")
+            raise HTTPException(500, "scoring this model failed; reload to try again")   # the cause is in the server log
         if job is None:
             rows = [json.loads(line) for line in eval_file.open()]
             job = _reveals[run] = {"done": 0, "total": len({r["state"] for r in rows})}
@@ -404,6 +407,7 @@ def _reveal_work(run: str, rows: list[dict], company: str, cache: Path) -> None:
         res = {**reveal(rows, run_models, company, tuned), "base": base}
         cache.write_text(json.dumps(res))
     except BaseException as e:   # surfaced on the next poll instead of a poll that never finishes
+        log.exception("scoring %s failed", run)
         job["error"] = f"{type(e).__name__}: {e}"
         return
     with _reveal_lock:
