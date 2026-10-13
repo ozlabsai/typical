@@ -28,6 +28,31 @@ def catch(ranked):
     return sum(y for _, y in top) / yes if yes else None
 
 
+def _key(r) -> str:
+    """An eval row's decision key: its task without the company / import prefix."""
+    return re.sub(r"^(co_[a-z0-9]+|import)_", "", r["task"])
+
+
+def majority(golds: list) -> dict:
+    """Always giving the most common answer: {"majority": that answer (first seen on ties), "baseline": its agreement}."""
+    (answer, n), = Counter(golds).most_common(1)
+    return {"majority": answer, "baseline": n / len(golds)}
+
+
+def pooled(golds: dict) -> float | None:
+    """The overall agreement of always giving each decision's most common answer, over all answers (like the overall score)."""
+    total = sum(map(len, golds.values()))
+    return sum(Counter(g).most_common(1)[0][1] for g in golds.values()) / total if total else None
+
+
+def baselines(rows) -> tuple[dict, float | None]:
+    """Eval rows alone (no model) -> ({decision key: majority(...)}, pooled baseline): what reveal() reports, for reveals from before it did."""
+    golds = defaultdict(list)
+    for r in rows:
+        golds[_key(r)].append(r["candidates"][r["label"]])
+    return {k: majority(g) for k, g in golds.items()}, pooled(golds)
+
+
 def reveal(rows, run_models, company="", tuned=""):
     """rows: eval rows (one-liner questions per held-out case). run_models(state, rows) -> [standard_results, yours_results],
     each a list parallel to rows of {"probs", "p_null", "argmax"}. Decisions are keyed by task suffix. Per decision, besides each
@@ -44,7 +69,7 @@ def reveal(rows, run_models, company="", tuned=""):
     abstained, fixed, broken = dict.fromkeys(sides, 0), 0, 0
     for state, group in cases.items():
         for r, *res in zip(group, *run_models(state, group)):
-            key, gold = re.sub(r"^(co_[a-z0-9]+|import)_", "", r["task"]), r["candidates"][r["label"]]
+            key, gold = _key(r), r["candidates"][r["label"]]
             decisions[key] = {"key": key, "question": r["query"], "type": r["meta"]["qtype"], "labels": r["candidates"]}
             v = dict(zip(sides, res))
             ok = {s: v[s]["argmax"] == gold for s in sides}
@@ -67,11 +92,10 @@ def reveal(rows, run_models, company="", tuned=""):
     disagreements = won[:30 - n_lost] + lost[:n_lost]
 
     def extra(k, d):
-        (majority, n), = Counter(golds[k]).most_common(1)   # first seen on ties
-        out = {"majority": majority, "baseline": n / len(golds[k])}
+        out = majority(golds[k])
         return {**out, "catch": {s: catch(ranked[s][k]) for s in sides}} if d["type"] == "noul" else out
     return {"company": company, "tuned": tuned, "n_cases": len(cases), "n_answers": len(flat(hits["standard"])),
-            "score": {s: acc(flat(hits[s])) for s in sides},
+            "score": {s: acc(flat(hits[s])) for s in sides}, "baseline": pooled(golds),
             "decisions": [{**d, **{s: acc(hits[s][k]) for s in sides}, **extra(k, d)} for k, d in decisions.items()],
             "catch_top": CATCH_TOP,
             "fixed": fixed, "broken": broken, "abstained": abstained, "disagreements": disagreements,

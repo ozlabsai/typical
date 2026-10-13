@@ -52,8 +52,10 @@ def card(model_id: str) -> dict | None:
         return None
     name = M.NORTHWIND["name"] if model_id == "northwind" else (M._json(job / "job.json") or {}).get("name") or model_id
     rev = M._json(S.TYPICALLY / "results" / run / "reveal.json") or {}
-    return {"name": name, "standard": metrics["standard"], "yours": metrics["yours"], "n_cases": metrics["n_cases"],
-            "decisions": [{"question": d["question"], "standard": d["standard"], "yours": d["yours"]} for d in rev.get("decisions", [])]}
+    per, pooled = D.baselines_of(model_id, rev or None)
+    return {"name": name, "standard": metrics["standard"], "yours": metrics["yours"], "n_cases": metrics["n_cases"], "baseline": pooled,
+            "decisions": [{"question": d["question"], "standard": d["standard"], "yours": d["yours"],
+                           "baseline": per.get(d.get("key"), {}).get("baseline")} for d in rev.get("decisions", [])]}
 
 
 # ---------------------------------------------------------------- owner endpoints
@@ -138,7 +140,7 @@ PAGE = """<!doctype html>
 <title>{title}</title>
 <meta name="robots" content="noindex">
 <meta name="description" content="{desc}">
-<meta property="og:type" content="website"><meta property="og:site_name" content="typically">
+<meta property="og:type" content="website"><meta property="og:site_name" content="Decision Factory">
 <meta property="og:title" content="{title}"><meta property="og:description" content="{desc}">
 <meta property="og:url" content="{url}"><meta property="og:image" content="{url}/og.png">
 <meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
@@ -164,7 +166,7 @@ h1{{font-size:32px;line-height:1.15;letter-spacing:-.01em;margin:0 0 28px;font-w
 .panel{{background:#fff;border:1px solid #e3e0db;border-radius:14px;padding:8px 20px}}
 .row{{padding:14px 0;border-top:1px solid #ece9e4}} .row:first-child{{border-top:0}}
 .q{{font-weight:500;margin:0 0 8px}}
-.bar{{display:grid;grid-template-columns:72px 1fr 44px;align-items:center;gap:10px;font-size:13px;color:{mid}}}
+.bar{{display:grid;grid-template-columns:132px 1fr 44px;align-items:center;gap:10px;font-size:13px;color:{mid}}}
 .track{{height:6px;border-radius:99px;background:#ece9e4;overflow:hidden}}
 .fill{{height:100%;border-radius:99px}}
 .bar span:last-child{{font-family:'Geist Mono',ui-monospace,monospace;text-align:end;color:{ink}}}
@@ -173,17 +175,17 @@ h1{{font-size:32px;line-height:1.15;letter-spacing:-.01em;margin:0 0 28px;font-w
 footer{{margin-top:40px;font-size:13px;color:{mid}}} footer a{{color:inherit}}
 </style></head>
 <body><main>
-<p class="eyebrow"><b>typically</b> &middot; a decision model fine-tuned on its own past decisions</p>
+<p class="eyebrow"><b>Decision Factory</b> &middot; a model trained on one team's past decisions</p>
 <h1 dir="auto">{name}</h1>
 <div class="score" aria-label="{aria}">
-<div><small>Standard</small><span class="num std">{standard}</span></div>
+<div><small>Standard model</small><span class="num std">{standard}</span></div>
 <span class="arrow" aria-hidden="true">&rarr;</span>
-<div><small>Fine-tuned</small><span class="num yours">{yours}</span></div>
+<div><small>Custom model</small><span class="num yours">{yours}</span></div>
 </div>
-<p class="note">Agreement with the team's own decisions on {n} held-out cases neither model saw while learning.</p>
+<p class="note">Agreement: how often each model gave the same answer as the team, on {n} test cases neither model trained on.{always}</p>
 {bars}
-<a class="cta" href="/app/">Train your own on your decisions</a>
-<footer>Made with typically, built on <a href="/">Typical</a> open decision models.</footer>
+<a class="cta" href="/app/">Train a model on your own decisions</a>
+<footer>Made with Decision Factory, built on <a href="/">Typical</a> open decision models.</footer>
 </main></body></html>"""
 
 
@@ -200,12 +202,14 @@ def share_page(share_id: str, request: Request):
         return HTMLResponse("<!doctype html><title>Not found</title><meta name=robots content=noindex>"
                             "<p style='font-family:system-ui;padding:40px'>This link was turned off or never existed.</p>", status_code=404)
     e = html.escape
-    rows = "".join(f'<div class="row"><p class="q" dir="auto">{e(d["question"])}</p>{_bar("Standard", d["standard"], STANDARD)}'
-                   f'{_bar("Fine-tuned", d["yours"], GREEN)}</div>' for d in c["decisions"])
-    title = f'{c["name"]}: {_pct(c["yours"])} vs {_pct(c["standard"])} for the standard model'
-    return PAGE.format(title=e(title), name=e(c["name"]), url=e(_link(request, share_id)), n=c["n_cases"],
-                       desc=e(f'Fine-tuned with typically and measured on {c["n_cases"]} held-out cases.'),
-                       aria=e(f'Standard {_pct(c["standard"])}, fine-tuned {_pct(c["yours"])}'),
+    rows = "".join(f'<div class="row"><p class="q" dir="auto">{e(d["question"])}</p>'
+                   + (_bar("Most common answer", d["baseline"], MID) if d.get("baseline") is not None else "")
+                   + f'{_bar("Standard model", d["standard"], STANDARD)}{_bar("Custom model", d["yours"], GREEN)}</div>' for d in c["decisions"])
+    title = f'{c["name"]}: {_pct(c["yours"])} agreement (standard model: {_pct(c["standard"])})'
+    always = "" if c.get("baseline") is None else f' Always giving the most common answer would agree {_pct(c["baseline"])} of the time.'
+    return PAGE.format(title=e(title), name=e(c["name"]), url=e(_link(request, share_id)), n=c["n_cases"], always=e(always),
+                       desc=e(f'Trained with Decision Factory. Agreement measured on {c["n_cases"]} test cases.'),
+                       aria=e(f'Agreement: standard model {_pct(c["standard"])}, custom model {_pct(c["yours"])}'),
                        standard=_pct(c["standard"]), yours=_pct(c["yours"]), bars=f'<div class="panel">{rows}</div>' if rows else "",
                        paper=PAPER, ink=INK, mid=MID, green=GREEN, standard_color=STANDARD)
 
@@ -235,20 +239,21 @@ def og_png(c: dict) -> bytes:
     W, H, pad = 1200, 630, 72
     img = Image.new("RGB", (W, H), DARK)
     d = ImageDraw.Draw(img)
-    d.text((pad, pad - 8), "typically", font=_font(30, 700), fill=PAPER)
-    d.text((pad + d.textlength("typically ", font=_font(30, 700)), pad - 8), "· fine-tuned decision model", font=_font(30, 400), fill=MID)
+    d.text((pad, pad - 8), "Decision Factory", font=_font(30, 700), fill=PAPER)
+    d.text((pad + d.textlength("Decision Factory ", font=_font(30, 700)), pad - 8), "· custom decision model", font=_font(30, 400), fill=MID)
     name_font = _font(60, 700, c["name"])
     d.text((pad, 150), _visual(_fit(d, c["name"], name_font, W - 2 * pad)), font=name_font, fill=PAPER)
 
     big, label = _font(150, 600), _font(30, 500)
-    d.text((pad, 268), "Standard", font=label, fill=MID)
+    d.text((pad, 268), "Standard model", font=label, fill=MID)
     d.text((pad, 300), _pct(c["standard"]), font=big, fill=STANDARD_ON_DARK)
     x2 = pad + max(d.textlength("100%", font=big), 300) + 40
     d.text((x2 - 10, 360), "→", font=_font(70, 400), fill=MID)
     x2 += 100
-    d.text((x2, 268), "Fine-tuned", font=label, fill=MID)
+    d.text((x2, 268), "Custom model", font=label, fill=MID)
     d.text((x2, 300), _pct(c["yours"]), font=big, fill=GREEN_ON_DARK)
-    d.text((pad, H - pad - 34), f"Agreement with the team's own decisions on {c['n_cases']} held-out cases", font=_font(30, 400), fill=MID)
+    always = "" if c.get("baseline") is None else f" · most common answer: {_pct(c['baseline'])}"
+    d.text((pad, H - pad - 34), f"Agreement on {c['n_cases']} test cases{always}", font=_font(30, 400), fill=MID)
     d.rectangle((0, H - 10, W, H), fill=GREEN_ON_DARK)
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)

@@ -150,8 +150,8 @@ def test_push_is_private_by_default_and_uploads_weights_card_and_manifest(env, t
     cls, api = hub
     trained(tmp_path, "co_f")
     (tmp_path / "results" / "co_f" / "reveal.json").write_text(json.dumps({
-        "n_cases": 200, "score": {"standard": 0.57, "yours": 0.78},
-        "decisions": [{"question": "Which team should handle this ticket?", "standard": 0.6, "yours": 0.86}]}))
+        "n_cases": 200, "score": {"standard": 0.57, "yours": 0.78}, "baseline": 0.4,
+        "decisions": [{"key": "team", "question": "Which team should handle this ticket?", "standard": 0.6, "yours": 0.86, "majority": "Claims", "baseline": 0.5}]}))
     r = push(env)
     assert r.status_code == 200 and r.json() == {"url": "https://huggingface.co/me/northwind-triage", "files": ["best.pt", "README.md", "MANIFEST.json"]}
     cls.assert_called_once_with(token=TOKEN)   # the server's token, never one from the request
@@ -160,7 +160,7 @@ def test_push_is_private_by_default_and_uploads_weights_card_and_manifest(env, t
     assert set(ops) == {"best.pt", "README.md", "MANIFEST.json"} and ops["best.pt"] == str(tmp_path / "results/co_f/best.pt")
     card = ops["README.md"].decode()
     assert card.startswith("---\nlicense: apache-2.0\nbase_model: OzLabs/typical-small\nlibrary_name: pytorch\ntags:\n  - typical\n  - decision-model\n---")
-    assert "Which team should handle this ticket?" in card and "| 60% | 86% |" in card and "200 held-out cases" in card
+    assert "Which team should handle this ticket?" in card and "| 50% | 60% | 86% |" in card and "200 test cases" in card and "40% for always giving" in card and "(noul" not in card and "(yes/no)" in card
     assert "Typical.from_pretrained('me/northwind-triage')" in card
     m = json.loads(ops["MANIFEST.json"])
     assert m == {"base_repo": "OzLabs/typical-small", "base_sha": "basesha123", "run": "co_f", "step": 350,
@@ -194,7 +194,7 @@ def test_push_card_skips_results_scored_against_another_base(env, tmp_path, hub)
     card = lambda: next(o for o in api.create_commit.call_args.kwargs["operations"] if o.path_in_repo == "README.md").path_or_fileobj.decode()
     for base, shown in (("typical-small", False), ("typical-medium", True)):
         (tmp_path / "results" / "co_acme" / "reveal.json").write_text(json.dumps({**reveal, "base": base}))
-        assert push(env, run="co_acme").status_code == 200 and ("Held-out results" in card()) is shown
+        assert push(env, run="co_acme").status_code == 200 and ("Results on test cases" in card()) is shown
 
 
 def test_compare_base_is_the_base_the_tuned_model_started_from(env, tmp_path, monkeypatch):
@@ -359,3 +359,11 @@ def test_hosted_push_is_admin_only_private_and_server_named(env, tmp_path, hub, 
     r = admin.post("/api/typically/push", json=body)
     assert r.status_code == 200 and r.json()["url"] == "https://huggingface.co/OzLabs/long"
     api.create_repo.assert_called_once_with("OzLabs/long", private=True, exist_ok=True)   # the client's repo and private=False are ignored
+
+
+def test_baselines_are_per_decision_and_pooled_over_answers():
+    from typically_reveal import baselines
+    rows = [{"task": "import_a", "candidates": ["x", "y"], "label": label} for label in (0, 0, 1)]
+    rows.append({"task": "import_b", "candidates": ["p", "q"], "label": 1})
+    per, pooled = baselines(rows)
+    assert per == {"a": {"majority": "x", "baseline": 2 / 3}, "b": {"majority": "q", "baseline": 1.0}} and pooled == 3 / 4

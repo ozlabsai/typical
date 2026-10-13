@@ -38,8 +38,9 @@ def model(root, slug, owner=None, name=None, scored=False):
         res.mkdir(parents=True)
         torch.save({"args": {}}, res / "best.pt")
         (res / "reveal.json").write_text(json.dumps({
-            "score": {"standard": 0.55, "yours": 0.8}, "n_cases": 40,
-            "decisions": [{"key": "team", "question": "Which team?", "type": "choice", "labels": ["A", "B"], "standard": 0.5, "yours": 0.85}],
+            "score": {"standard": 0.55, "yours": 0.8}, "n_cases": 40, "baseline": 0.6,
+            "decisions": [{"key": "team", "question": "Which team?", "type": "choice", "labels": ["A", "B"], "standard": 0.5, "yours": 0.85,
+                           "majority": "A", "baseline": 0.6}],
             "disagreements": [{"case": SECRET_CASE, "key": "team"}]}))
 
 
@@ -218,7 +219,7 @@ def test_share_card(env):
     page = anon.get(f"/s/{s['id']}")
     assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
     body = page.text
-    assert "55%" in body and "80%" in body and "85%" in body and "40 held-out cases" in body and "Which team?" in body
+    assert "55%" in body and "80%" in body and "85%" in body and "40 test cases" in body and "Which team?" in body and "most common answer would agree 60%" in body and "Agreement" in body and "typically" not in body
     assert f'<meta property="og:image" content="{s["url"]}/og.png">' in body and 'property="og:title"' in body
     assert "<script>alert" not in body and "&lt;script&gt;" in body   # the model name is escaped
     assert SECRET_CASE not in body and "4111" not in body and auth.uid_of(ALICE) not in body   # aggregates only

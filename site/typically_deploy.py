@@ -22,6 +22,7 @@ import server as S
 import typically_auth as auth
 import typically_job
 import typically_llm
+from typically_reveal import baselines
 
 router = APIRouter()
 ALIASES = {"northwind": "co_f"}   # the demo model id -> its run
@@ -238,25 +239,51 @@ class PushRequest(BaseModel):
     private: bool = True   # forced when hosted
 
 
+def baselines_of(model_id: str, rev: dict | None) -> tuple[dict, float | None]:
+    """{decision key: {"majority", "baseline"}} and the pooled baseline (always giving each decision's most common answer):
+    from reveal.json, else from the model's eval file (reveals from before reveal() recorded them); ({}, None) without either."""
+    if rev and rev.get("baseline") is not None and all("baseline" in d for d in rev["decisions"]):
+        return {d["key"]: {"majority": d["majority"], "baseline": d["baseline"]} for d in rev["decisions"]}, rev["baseline"]
+    f = (S.REPO_ROOT / "data_co_a/eval/a_oneliner.jsonl" if model_id == "northwind"
+         else S.TYPICALLY / "jobs" / model_id / "eval" / "import_oneliner.jsonl")
+    try:
+        with f.open() as fh:
+            return baselines(json.loads(line) for line in fh)
+    except (OSError, ValueError, KeyError, IndexError):   # display-only: a missing or odd eval file shows no baseline, never a 500
+        return {}, None
+
+
+ANSWERS = {"noul": lambda q: "yes/no", "choice": lambda q: "pick one: " + ", ".join(q["labels"]), "score": lambda q: "scale: " + ", ".join(q["labels"])}
+
+
 def _card(base: str, repo: str, model_id: str, step: int, reveal: dict | None) -> str:
     qs = _questions(model_id)
-    decides = "\n".join(f"- {q['question']} ({q['type']}: {', '.join(q['labels'])})" for q in qs) or "- (see the usage snippet)"
+    decides = "\n".join(f"- {q['question']} ({ANSWERS[q['type']](q)})" for q in qs) or "- (see the usage snippet)"
     results = ""
     if reveal:
-        rows = "\n".join(f"| {d['question']} | {d['standard']:.0%} | {d['yours']:.0%} |" for d in reveal["decisions"])
-        results = (f"\n## Held-out results\n\n{reveal['n_cases']} held-out cases the model never trained on "
-                   f"(overall {reveal['score']['standard']:.0%} for the standard model, {reveal['score']['yours']:.0%} for this one).\n\n"
-                   f"| Decision | Standard {base} | This model |\n|---|---|---|\n{rows}\n")
+        per, pooled = baselines_of(model_id, reveal)
+        always = lambda b: "n/a" if b is None else f"{b:.0%}"
+        rows = "\n".join(f"| {d['question']} | {always(per.get(d.get('key'), {}).get('baseline'))} | {d['standard']:.0%} | {d['yours']:.0%} |"
+                         for d in reveal["decisions"])
+        results = (f"\n## Results on test cases\n\nAgreement: how often a model gives the answer the team actually gave, on {reveal['n_cases']} "
+                   f"test cases kept out of training. Overall: {reveal['score']['standard']:.0%} for the standard model, "
+                   f"{reveal['score']['yours']:.0%} for this one" + ("." if pooled is None else
+                   f", and {pooled:.0%} for always giving each question's most common answer.") + "\n\n"
+                   f"| Question | Most common answer | Standard (OzLabs/typical-{base}) | This model |\n|---|---|---|---|\n{rows}\n")
     return (f"---\nlicense: {LICENSE}\nbase_model: OzLabs/typical-{base}\nlibrary_name: pytorch\ntags:\n  - typical\n  - decision-model\n---\n\n"
-            f"# {repo.split('/')[1]}\n\nA Typical decision model fine-tuned from [OzLabs/typical-{base}](https://huggingface.co/OzLabs/typical-{base}) "
-            f"(step {step}). It decides:\n\n{decides}\n{results}\n## Usage\n\n```python\n{_sdk(repo, model_id)}\n```\n")
+            f"# {repo.split('/')[1]}\n\nA decision model fine-tuned from [OzLabs/typical-{base}](https://huggingface.co/OzLabs/typical-{base}) "
+            f"with Decision Factory (best checkpoint: training step {step}). It answers:\n\n{decides}\n{results}\n## Usage\n\n```python\n{_sdk(repo, model_id)}\n```\n")
+
+
+def _display_name(model_id: str) -> str:
+    """The model's name as typed in the app (job.json); "" when it has none."""
+    job = S.TYPICALLY / "jobs" / model_id / "job.json"
+    return (json.loads(job.read_text()).get("name") if job.exists() else None) or ("Northwind triage" if model_id == "northwind" else "")
 
 
 def _repo_name(model_id: str) -> str:
-    """The model's display name (job.json, as typed in the app) as a repo name: "Northwind triage" -> northwind-triage."""
-    job = S.TYPICALLY / "jobs" / model_id / "job.json"
-    name = (json.loads(job.read_text()).get("name") if job.exists() else None) or ("Northwind triage" if model_id == "northwind" else "")
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:96] or model_id.replace("_", "-")   # a non-latin name: the id
+    """The model's display name as a repo name: "Northwind triage" -> northwind-triage."""
+    return re.sub(r"[^a-z0-9]+", "-", _display_name(model_id).lower()).strip("-")[:96] or model_id.replace("_", "-")   # a non-latin name: the id
 
 
 def _storage_full(e: Exception) -> bool:
@@ -301,7 +328,7 @@ def push(req: PushRequest):
             raise FileExistsError(repo)
         api.create_repo(repo, private=private, exist_ok=True)
         created = not existed
-        api.create_commit(repo, commit_message=f"Typical fine-tune {req.run}", operations=[
+        api.create_commit(repo, commit_message=f"Upload {_display_name(model_id_of(req.run)) or req.run} from Decision Factory", operations=[
             CommitOperationAdd("best.pt", str(best)),
             CommitOperationAdd("README.md", _card(base, repo, model_id_of(req.run), ckpt["step"], reveal).encode()),
             CommitOperationAdd("MANIFEST.json", json.dumps(manifest, indent=2).encode())])
