@@ -140,7 +140,7 @@ export function Results({ model }: { model: ModelRef }) {
                       )}
                       {/* only where it changes the reading: a model that does not beat always giving the most common answer */}
                       {d.majority != null && d.baseline != null && d.baseline >= Math.min(d.standard, d.yours) && (
-                        <p className="mt-1 text-xs text-muted-foreground">{t("ev.baseline", { a: say(t, d.type, d.majority), p: pct(d.baseline) })}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{t("ev.baseline", { a: `\u2068${say(t, d.type, d.majority)}\u2069`, p: pct(d.baseline) })}</p>
                       )}
                     </TableCell>
                     <TableCell className="hidden md:table-cell"><Meter value={d.standard} tone="standard" /></TableCell>

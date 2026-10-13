@@ -180,7 +180,7 @@ footer{{margin-top:40px;font-size:13px;color:{mid}}} footer a{{color:inherit}}
 <div class="score" aria-label="{aria}">
 <div><small>Standard model</small><span class="num std">{standard}</span></div>
 <span class="arrow" aria-hidden="true">&rarr;</span>
-<div><small>Custom model</small><span class="num yours">{yours}</span></div>
+<div><small>Trained model</small><span class="num yours">{yours}</span></div>
 </div>
 <p class="note">Agreement: how often each model gave the same answer as the team, on {n} test cases neither model trained on.{always}</p>
 {bars}
@@ -204,12 +204,12 @@ def share_page(share_id: str, request: Request):
     e = html.escape
     rows = "".join(f'<div class="row"><p class="q" dir="auto">{e(d["question"])}</p>'
                    + (_bar("Most common answer", d["baseline"], MID) if d.get("baseline") is not None else "")
-                   + f'{_bar("Standard model", d["standard"], STANDARD)}{_bar("Custom model", d["yours"], GREEN)}</div>' for d in c["decisions"])
+                   + f'{_bar("Standard model", d["standard"], STANDARD)}{_bar("Trained model", d["yours"], GREEN)}</div>' for d in c["decisions"])
     title = f'{c["name"]}: {_pct(c["yours"])} agreement (standard model: {_pct(c["standard"])})'
     always = "" if c.get("baseline") is None else f' Always giving the most common answer would agree {_pct(c["baseline"])} of the time.'
-    return PAGE.format(title=e(title), name=e(c["name"]), url=e(_link(request, share_id)), n=c["n_cases"], always=e(always),
-                       desc=e(f'Trained with Decision Factory. Agreement measured on {c["n_cases"]} test cases.'),
-                       aria=e(f'Agreement: standard model {_pct(c["standard"])}, custom model {_pct(c["yours"])}'),
+    return PAGE.format(title=e(title), name=e(c["name"]), url=e(_link(request, share_id)), n=f"{c['n_cases']:,}", always=e(always),
+                       desc=e(f'Trained with Decision Factory. Agreement measured on {c["n_cases"]:,} test cases.'),
+                       aria=e(f'Agreement: standard model {_pct(c["standard"])}, trained model {_pct(c["yours"])}'),
                        standard=_pct(c["standard"]), yours=_pct(c["yours"]), bars=f'<div class="panel">{rows}</div>' if rows else "",
                        paper=PAPER, ink=INK, mid=MID, green=GREEN, standard_color=STANDARD)
 
@@ -240,7 +240,7 @@ def og_png(c: dict) -> bytes:
     img = Image.new("RGB", (W, H), DARK)
     d = ImageDraw.Draw(img)
     d.text((pad, pad - 8), "Decision Factory", font=_font(30, 700), fill=PAPER)
-    d.text((pad + d.textlength("Decision Factory ", font=_font(30, 700)), pad - 8), "· custom decision model", font=_font(30, 400), fill=MID)
+    d.text((pad + d.textlength("Decision Factory ", font=_font(30, 700)), pad - 8), "· a model trained on one team's past decisions", font=_font(30, 400), fill=MID)
     name_font = _font(60, 700, c["name"])
     d.text((pad, 150), _visual(_fit(d, c["name"], name_font, W - 2 * pad)), font=name_font, fill=PAPER)
 
@@ -250,10 +250,10 @@ def og_png(c: dict) -> bytes:
     x2 = pad + max(d.textlength("100%", font=big), 300) + 40
     d.text((x2 - 10, 360), "→", font=_font(70, 400), fill=MID)
     x2 += 100
-    d.text((x2, 268), "Custom model", font=label, fill=MID)
+    d.text((x2, 268), "Trained model", font=label, fill=MID)
     d.text((x2, 300), _pct(c["yours"]), font=big, fill=GREEN_ON_DARK)
     always = "" if c.get("baseline") is None else f" · most common answer: {_pct(c['baseline'])}"
-    d.text((pad, H - pad - 34), f"Agreement on {c['n_cases']} test cases{always}", font=_font(30, 400), fill=MID)
+    d.text((pad, H - pad - 34), f"Agreement on {c['n_cases']:,} test cases{always}", font=_font(30, 400), fill=MID)
     d.rectangle((0, H - 10, W, H), fill=GREEN_ON_DARK)
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
