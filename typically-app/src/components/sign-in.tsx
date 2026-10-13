@@ -44,7 +44,7 @@ export function SignIn({ done }: { done: (u: User) => void }) {
           <span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground">
             <span className="size-2.5 rounded-full bg-primary-foreground" />
           </span>
-          <span className="text-lg font-semibold tracking-tight">typically</span>
+          <span className="text-lg font-semibold tracking-tight">{t("brand.name")}</span>
         </div>
         <Card>
           <CardHeader>

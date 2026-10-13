@@ -240,7 +240,7 @@ function ModelPicker({ model }: { model?: LibraryModel }) {
         )}
         <SelectGroup>
           <SelectLabel>{t("app.base")}</SelectLabel>
-          {(lib?.base ?? []).map((m) => <SelectItem key={m.id} value={m.id}>{m.name} <span className="text-muted-foreground">{m.params}</span></SelectItem>)}
+          {(lib?.base ?? []).map((m) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
         </SelectGroup>
       </SelectContent>
     </Select>

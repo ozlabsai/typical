@@ -38,7 +38,7 @@ export function Elapsed({ from, className }: { from: string; className?: string 
 /** Nothing more will change: finished, and the GPU is confirmed off (or there never was one, it could not be confirmed, or a
  *  status from before milestones existed). Pollers stop here, not at done / failed: the shutdown lands a few seconds later. */
 export const settled = (st: TrainStatus) => (st.phase === "done" || st.phase === "failed")
-  && (!st.pod_id || st.code === "failed" || !st.events || st.events.some((e) => e.key === "gpu_off"))
+  && (!st.pod_id || st.code === "failed" || !st.events || st.events.some((e) => e.key === "gpu_off" || e.key === "gpu_off_unconfirmed"))
 
 /** Poll GET /train/{slug} from mount while `active`, until the job is settled (the model page and the Train step).
  *  `run` restarts it for a new run under the same slug. `lost`: the last poll failed (shown as "retrying", never as a failure). */
@@ -99,7 +99,7 @@ function milestones(st: TrainStatus) {
     return later.map((x) => at.get(x)?.t).find(Boolean)
   }
   const state = (k: Step): State => {
-    if (k === "gpu_off") return at.has(k) ? "done" : over && !settled(st) ? "current" : "pending"
+    if (k === "gpu_off") return at.has(k) ? "done" : at.has("gpu_off_unconfirmed") ? "failed" : over && !settled(st) ? "current" : "pending"
     if (failedAt) return k === failedAt ? "failed" : order.indexOf(k) < order.indexOf(failedAt) ? "done" : "pending"
     if (st.phase === "done") return "done"
     if (k === last) return "current"
@@ -122,7 +122,8 @@ function useLabel() {
       case "upload": return e?.n ? t("ev.upload", { n: num(e.n) }) : t("ev.uploadPlain")
       case "model_load": return e?.detail ? t("ev.model_load", { n: num(e.detail) }) : t("ev.model_loadPlain")
       case "testing": return e?.detail ? t("ev.testing", { n: num(e.detail) }) : t("ev.testingPlain")
-      case "gpu_off": return t(state === "done" ? "ev.gpu_off" : "ev.gpu_offing")
+      case "gpu_off": return t(state === "done" ? "ev.gpu_off" : state === "failed" ? "ev.gpu_offUnconfirmed" : "ev.gpu_offing")
+      case "gpu_off_unconfirmed": return t("ev.gpu_offUnconfirmed")
       case "env": case "model_download": case "train": case "fetch": case "done": case "failed": return t(`ev.${k}`)
       default: return k
     }

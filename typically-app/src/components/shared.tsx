@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 export const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 const CODES = ["queued", "preparing", "gpu_starting", "uploading", "baseline", "training", "evaluating", "downloading", "done",
-  "failed_provider", "failed_infra", "failed_timeout", "failed_training", "failed_build", "failed_no_gpu", "stopped"] as const
+  "failed_provider", "failed_infra", "failed_timeout", "failed_training", "failed_build", "failed_no_gpu", "failed_restart", "stopped", "failed"] as const
 const DETAILED = ["failed_infra", "failed_timeout", "failed_training", "failed_build"] // generic copy; the server's message carries the cause
 
 /** A training job's status line: the translated copy for its `code`, else the server's message (code "failed": shutdown unconfirmed). */

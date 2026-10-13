@@ -46,8 +46,8 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
                   <span className="size-2.5 rounded-full bg-primary-foreground" />
                 </span>
                 <span className="grid leading-tight group-data-[collapsible=icon]:hidden">
-                  <span className="font-semibold">typically</span>
-                  <span className="text-xs text-muted-foreground">by Typical</span>
+                  <span className="font-semibold">{t("brand.name")}</span>
+                  <span className="text-xs text-muted-foreground">{t("brand.credit")}</span>
                 </span>
               </a>
             </SidebarMenuButton>

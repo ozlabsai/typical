@@ -19,7 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { corrections, library, type CorrectionItem, type LibraryModel } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
 import { refOf, useLibrary } from "@/lib/library"
-import { BASES, pct, say, snippet } from "@/lib/project"
+import { BASES, pct, presetOf, say, snippet } from "@/lib/project"
 import { go, href } from "@/lib/router"
 import { DeployPanel } from "@/steps/deploy"
 import { Results, ScoreStats } from "@/steps/evaluate"
@@ -142,7 +142,7 @@ export function ModelsPage() {
         {(lib?.base ?? []).map((m) => (
           <Card key={m.id} size="sm">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">{m.name} <span className="text-sm font-normal text-muted-foreground">{m.params}</span></CardTitle>
+              <CardTitle className="flex items-center gap-2">{m.name}</CardTitle>
               <CardDescription>{t(`base.${m.base}.note`)}</CardDescription>
               <CardAction>
                 <Button variant="outline" size="sm" onClick={() => go({ name: "chat", model: m.id })}><MessageSquare data-icon="inline-start" /> {t("models.chat")}</Button>
@@ -285,7 +285,7 @@ export function ModelPage({ id, tab }: { id: string; tab?: string }) {
                 </a>
               ),
               <span>{BASES[m.base].label}</span>,
-              m.steps && <span>{t("models.steps", { n: m.steps })}</span>,
+              presetOf(m.steps) && <span>{t("models.steps", { preset: t(`preset.${presetOf(m.steps)!}`) })}</span>,
               m.created_at && <span>{date(m.created_at)}</span>,
             ].filter(Boolean).map((x, i) => <span key={i} className="inline-flex items-center gap-3">{i > 0 && <span aria-hidden>·</span>}{x}</span>)}
           </span>

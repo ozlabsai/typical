@@ -97,7 +97,7 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
     : tab === "sheets" ? (/docs\.google\.com\/spreadsheets\/d\//.test(sheet) ? { kind: "sheets", url: sheet.trim() } : null)
     : sampleName === "northwind" ? { kind: "sample" } : { kind: "sample", name: sampleName }
   const label = dataset ? dataset.name : tab === "upload" ? (file && sheetName ? `${file.name} (${sheetName})` : file?.name) : tab === "mail" ? mail?.name
-    : tab === "hf" ? `Hugging Face: ${hf.dataset}` : tab === "sheets" ? "Google Sheet" : sampleName === "enron" ? "Enron email sample" : sampleName === "enron-decisions" ? "Enron decisions" : "Northwind sample"
+    : tab === "hf" ? `Hugging Face: ${hf.dataset}` : tab === "sheets" ? t("src.sheet") : sampleName === "enron" ? t("sample.enronTitle") : sampleName === "enron-decisions" ? t("sample.decisionsTitle") : t("src.northwind")
 
   /** A table goes to Upload, a mailbox to Email, whichever tab it was dropped on. */
   async function pick(f?: File) {
@@ -181,7 +181,7 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
                       <RadioGroupItem value={b} id={`base-${b}`} className="mt-0.5" />
                       <div className="grid gap-1">
                         <span className="flex items-center gap-2 font-medium">
-                          {BASES[b].label} <span className="text-xs text-muted-foreground">{BASES[b].size}</span>
+                          {BASES[b].label}
                           {BASES[b].beta && <Badge variant="secondary">{t("base.beta")}</Badge>}
                         </span>
                         <span className="text-sm text-muted-foreground">{t(`base.${b}.note`)}</span>

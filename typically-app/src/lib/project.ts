@@ -44,10 +44,12 @@ export type Preset = "quick" | "balanced" | "thorough"
 export const PRESETS: Record<Preset, { steps: number }> = { quick: { steps: 200 }, balanced: { steps: 400 }, thorough: { steps: 800 } }
 // minutes = fixed (GPU boot, setup, download, testing) + train * steps / 400; measured on small 7-14 min, medium ~25 min
 export const BASES: Record<Base, { label: string; size: string; fixed: number; train: number; beta?: boolean }> = {
-  small: { label: "typical-small", size: "1.7B", fixed: 4, train: 6 },
-  medium: { label: "typical-medium", size: "4B", fixed: 6, train: 19, beta: true },
+  small: { label: "Typical Small", size: "1.7B", fixed: 4, train: 6 },
+  medium: { label: "Typical Medium", size: "4B", fixed: 6, train: 19, beta: true },
 }
 export const minutes = (b: Base, steps = PRESETS.balanced.steps) => BASES[b].fixed + Math.round((BASES[b].train * steps) / 400)
+/** The preset a step count came from ("balanced" for 400); undefined for a custom count. */
+export const presetOf = (steps?: number) => (Object.keys(PRESETS) as Preset[]).find((p) => PRESETS[p].steps === steps)
 
 export interface Enrich { balance: boolean; dedupe_soft: boolean; policy: Record<string, string>; synthetic: boolean; languages: string[] }
 export interface Settings { preset: Preset; holdout: number; seed: number }
