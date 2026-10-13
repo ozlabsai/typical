@@ -38,7 +38,7 @@ if _env_file.exists():
 import torch
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -451,5 +451,9 @@ app.include_router(typically_corrections.router)
 import typically_share  # noqa: E402
 app.include_router(typically_share.router)
 app.include_router(auth.router)
+
+@app.get("/", include_in_schema=False)
+def root():   # hosted Decision Factory: the domain is the app; locally "/" stays the research site
+    return RedirectResponse("/app/") if auth.enabled() else FileResponse(REPO_ROOT / "site" / "index.html")
 
 app.mount("/", StaticFiles(directory=REPO_ROOT / "site", html=True), name="site")

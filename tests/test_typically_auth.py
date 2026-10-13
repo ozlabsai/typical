@@ -280,3 +280,8 @@ def test_removing_an_invite_revokes_its_api_keys(env, monkeypatch):
     with pytest.raises(D.HTTPException) as e:
         D._authorize("alice_m", f"Bearer {key}")
     assert e.value.status_code == 401
+
+
+def test_hosted_root_redirects_to_the_app(env):
+    r = TestClient(server.app, base_url="http://localhost").get("/", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/app/"
