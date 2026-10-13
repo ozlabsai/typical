@@ -145,7 +145,7 @@ export function Results({ model }: { model: ModelRef }) {
                     </TableCell>
                     <TableCell className="hidden md:table-cell"><Meter value={d.standard} tone="standard" /></TableCell>
                     <TableCell className="hidden md:table-cell"><Meter value={d.yours} tone="yours" /></TableCell>
-                    <TableCell className={cn("pe-6 text-end align-top font-mono tabular md:align-middle", delta > 0 ? "text-yours" : "text-muted-foreground")}>
+                    <TableCell className={cn("pe-6 text-end align-top font-mono tabular md:align-middle", delta > 0 ? "text-yours" : delta < 0 ? "text-destructive" : "text-muted-foreground")}>
                       {signed(delta)}
                     </TableCell>
                   </TableRow>
