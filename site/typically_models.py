@@ -242,6 +242,7 @@ def _as_scale(q: dict) -> dict:
 
 @router.post("/api/typically/parse_question")
 def parse_question(req: ParseRequest):
+    auth.throttle("parse_question")
     if tllm.available():
         try:
             return {**_as_scale(_llm_question(req.text, req.lang)), "source": "llm"}

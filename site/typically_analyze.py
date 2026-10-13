@@ -85,6 +85,7 @@ def trim(prof: dict) -> dict:
 
 @router.post("/api/typically/analyze")
 def analyze(req: AnalyzeRequest):
+    auth.throttle("analyze")
     src = req.source.model_dump(exclude_none=True)
     sheets, token, mail, warnings = None, None, None, []
     if src["kind"] == "mail" and len(src.get("data_base64") or "") > MAX_MAIL_B64:

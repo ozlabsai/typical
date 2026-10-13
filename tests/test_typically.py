@@ -337,3 +337,41 @@ def test_teach_endpoint_prepares_the_examples_inside_the_job(tmp_path, monkeypat
     settle()
     st = tj.read_status("acme_co")
     assert st["phase"] == "failed" and st["code"] == "failed_build" and "no rows left" in st["message"] and len(ran) == 1
+
+
+def test_failed_enrichment_calls_are_not_progress_and_are_counted():
+    recs, seen = company(), []
+
+    def llm(system, prompt, schema, max_tokens):
+        raise RuntimeError("down")
+    _, st = build_from_plan(recs, company_plan(recs), {**ENRICH, "languages": ["es"]}, SETTINGS, random.Random(0), llm, lambda *a: seen.append(a))
+    assert seen and all(d == 0 for _, d, _ in seen) and st["llm_failed"] == st["llm_calls"] > 0 and st["translated"]["train"] == 0
+    _, st = build(recs, company_plan(recs), FakeLLM(fixed=None), languages=["es"])
+    assert st["llm_failed"] == 0 and st["llm_calls"] > 0
+
+
+def test_teach_fails_the_build_when_every_enrichment_call_failed_and_caps_languages(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "site"))
+    import server
+    import typically_analyze
+    import typically_job as tj
+    import typically_llm
+    from fastapi.testclient import TestClient
+    recs = company()
+    for m in (server, tj):
+        monkeypatch.setattr(m, "TYPICALLY", tmp_path)
+    monkeypatch.setattr(typically_analyze, "_records", {"a" * 32: recs})
+    monkeypatch.setattr(typically_llm, "available", lambda: True)
+    monkeypatch.setattr(typically_llm, "complete_json", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    ran = []
+    monkeypatch.setattr(tj, "run", lambda *a, **k: ran.append(a))
+    body = {"records_token": "a" * 32, "plan": company_plan(recs), "name": "Acme Co", "enrich": {"languages": ["es"]}}
+    c = TestClient(server.app)
+    assert c.post("/api/typically/teach", json={**body, "enrich": {"languages": ["es", "de", "fr", "it"]}}).status_code == 422   # max 3
+    assert c.post("/api/typically/teach", json=body).status_code == 200
+    for _ in range(200):
+        if not server._jobs:
+            break
+        time.sleep(0.02)
+    st = tj.read_status("acme_co")
+    assert (st["phase"], st["code"]) == ("failed", "failed_build") and "AI enrichment failed" in st["message"] and ran == []

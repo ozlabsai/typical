@@ -7,7 +7,8 @@ Off unless TYPICALLY_AUTH=1, so local dev is unchanged (no user, everything visi
 - every /api/* request needs a session, except /api/auth/* and /api/health. /v1/models/{id}/decide (its own bearer keys), the
   public share cards (/s/*), the static site and the /app bundle (it renders the sign-in screen itself) stay open.
 - ownership: job.json / upload meta carry "owner"; can_see() is the one rule (own + shared + admin sees all).
-- quotas: admit() is called by server.start_job for every training run (/teach and /retrain).
+- quotas: admit() is called by server.start_job for every training run (/teach and /retrain); throttle() rate-limits the endpoints that
+  call the operator's LLM key on every request (/analyze, /parse_question).
 """
 import base64
 import contextvars
@@ -15,7 +16,9 @@ import hashlib
 import hmac
 import json
 import os
+import threading
 import time
+from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -220,3 +223,25 @@ def admit(slug: str, running: dict[str, str | None]) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a") as f:
         f.write(json.dumps({"uid": u.uid, "slug": slug, "at": now}) + "\n")
+
+
+# per user: (calls, window seconds) of the endpoints that call the operator's LLM key on every request
+LIMITS = {"analyze": (30, 3600), "parse_question": (120, 3600)}
+_hits: dict[tuple[str, str], deque] = defaultdict(deque)
+_hits_lock = threading.Lock()
+
+
+def throttle(what: str) -> None:
+    """429 once the signed-in user made LIMITS[what] calls within its window; no-op with auth off (local dev).
+    ponytail: in-process sliding window, reset on restart, one server process only; a shared store (Redis) if it ever runs several."""
+    if (u := current()) is None:
+        return
+    n, window = LIMITS[what]
+    now = time.monotonic()
+    with _hits_lock:
+        hits = _hits[(u.uid, what)]
+        while hits and now - hits[0] > window:
+            hits.popleft()
+        if len(hits) >= n:
+            raise HTTPException(429, f"too many requests; you can do this {n} times an hour, try again in a few minutes")
+        hits.append(now)

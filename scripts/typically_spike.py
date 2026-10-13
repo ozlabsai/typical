@@ -537,14 +537,14 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None, progress=Non
             split[name] += rows
     if any(not v for v in split.values()):
         raise ValueError("not enough usable rows: a split came out empty; add more rows or lower the held-out share")
-    syn, tr, ev, cost, collisions = [], [], {}, 0.0, 0
+    syn, tr, ev, cost, collisions, failed, tasks = [], [], {}, 0.0, 0, 0, []
     langs = enrich.get("languages") or []
     if (enrich.get("synthetic") or langs) and llm is None:
         warnings.append("Synthetic cases and added languages are not available right now; they were skipped.")
     elif enrich.get("synthetic") or langs:
         if bad := [c for c in langs if not re.fullmatch(r"[a-z]{2,3}", str(c))]:
             raise ValueError(f"unknown language code {bad[0]!r}; use a two-letter code such as es or de")
-        seen, tasks = {r["state"] for v in split.values() for r in v}, []
+        seen = {r["state"] for v in split.values() for r in v}
 
         def emit_syn(d, lab, texts):
             for t in texts:
@@ -560,28 +560,32 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None, progress=Non
             tr_states = rng.sample(sorted(base["train"]), max(1, round(TRANSLATE_RATE * len(base["train"]))))
             tasks += _translate_tasks(tr_states, lang, lambda l, s, t: tr.extend(_copy(base["train"][s], t, l)))
             tasks += _translate_tasks(ev_states, lang, lambda l, s, t: ev.setdefault(l, []).extend(_copy(base["import_oneliner"][s], t, l)))
-        def call(task):   # no spend cap: the operator pays (llm_cost_usd is still reported)
+        def call(task):   # no spend cap: the operator pays (languages are capped at 3 by the server)
             prompt, out_chars, *_ = task
             try:
                 return llm("Return only the JSON requested.", prompt, TEXTS, max_tokens=min(16000, int(out_chars / 2) + 500))
             except Exception as e:   # experimental: one failed call skips its cases; never echo the message (may hold the key)
                 return e
         # calls run in parallel; results are applied in task order on this thread (apply mutates shared lists; reproducible)
-        total, done = Counter(), Counter()
+        total, done = Counter(), Counter()   # done: cases of the calls that worked (a failed call is not progress)
         for *_, kind, n in tasks:
             total[kind] += n
         pool = ThreadPoolExecutor(LLM_WORKERS)
         try:
             for (_, _, apply, kind, n), res in zip(tasks, pool.map(call, tasks)):
-                done[kind] += n
+                if not isinstance(res, Exception):
+                    out, usage = res
+                    cost += tllm.usd(usage["input_tokens"], usage["output_tokens"])
+                    try:
+                        apply(out["texts"])
+                        done[kind] += n
+                    except (ValueError, KeyError, TypeError) as e:   # a reply of the wrong shape: that call's cases are skipped
+                        res = e
+                if isinstance(res, Exception):
+                    failed += 1
+                    warnings.append(f"An AI enrichment call failed ({type(res).__name__}); its cases were skipped.")
                 if progress:
                     progress(kind, done[kind], total[kind])
-                if isinstance(res, Exception):
-                    warnings.append(f"An AI enrichment call failed ({type(res).__name__}); its cases were skipped.")
-                    continue
-                out, usage = res
-                cost += tllm.usd(usage["input_tokens"], usage["output_tokens"])
-                apply(out["texts"])
         finally:   # a Stop raised by progress() must not wait for the queued calls (the ≤ LLM_WORKERS in flight finish alone)
             pool.shutdown(wait=False, cancel_futures=True)
         # a synthetic / translated case must not share a normalised state with the other side: train side vs val + real eval + eval
@@ -600,7 +604,7 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None, progress=Non
     return split, {"rows": {k: len(v) for k, v in split.items()}, "labels": {"before": before, "after": label_dist(split["train"])},
                    "flips": sum(r["task"] == "import_rflip" for r in split["train"]), "soft_rows": soft, "dropped": dropped,
                    "synthetic": len(syn), "collisions": collisions, "translated": {"train": len(tr), "eval": {l: len(v) for l, v in ev.items()}},
-                   "llm_cost_usd": round(cost, 2), "warnings": warnings}
+                   "llm_cost_usd": round(cost, 2), "llm_calls": len(tasks), "llm_failed": failed, "warnings": warnings}
 
 
 def write(out, split):

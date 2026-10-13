@@ -255,3 +255,15 @@ def test_review_fixes(env, monkeypatch):
     monkeypatch.setattr(D.torch, "load", lambda *a, **k: {"args": {"backbone": tj.RELEASED_ARGS["small"]["backbone"]}, "step": 1})
     r = client(ALICE).post("/api/typically/push", json={"run": "co_alice_m", "repo": "OzLabs/typical-small"})
     assert r.status_code == 409 and "already exists" in r.json()["detail"]
+
+
+def test_llm_endpoints_are_rate_limited_per_user(env, monkeypatch):
+    monkeypatch.setitem(auth.LIMITS, "parse_question", (2, 3600))
+    auth._hits.clear()
+    a, b = client(ALICE), client(BOB)
+    ask = lambda c: c.post("/api/typically/parse_question", json={"text": "Should we escalate?"}).status_code
+    assert [ask(a), ask(a), ask(a)] == [200, 200, 429] and ask(b) == 200   # per user
+    monkeypatch.setitem(auth.LIMITS, "analyze", (1, 3600))
+    sample = {"source": {"kind": "sample"}}
+    assert a.post("/api/typically/analyze", json=sample).status_code == 200 and a.post("/api/typically/analyze", json=sample).status_code == 429
+    auth._hits.clear()

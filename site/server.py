@@ -200,8 +200,8 @@ class Enrich(BaseModel):
     balance: bool = True
     dedupe_soft: bool = True
     policy: dict[str, str] = {}
-    synthetic: bool = False   # experimental: ignored (with a warning) when the server has no LLM key
-    languages: list[str] = []   # experimental: ignored (with a warning) when the server has no LLM key
+    synthetic: bool = False   # experimental, needs the server's LLM key (/teach fails the build without it, or when every call failed)
+    languages: list[str] = Field([], max_length=3)   # experimental, as synthetic; capped: each language is ~30% more LLM calls on the operator's key
 
 
 class Settings(BaseModel):
@@ -339,7 +339,10 @@ def teach(req: BuildPlanRequest):
     def prepare():
         _save_meta(req, TYPICALLY / "jobs" / slug)   # first: the model page has its name and decisions while the examples are prepared
         stats = _build_plan(req, slug, records, progress)
-        typically_job.add_events(slug, typically_job.event("prepare", n=stats["rows"]["train"]))
+        if (req.enrich.synthetic or req.enrich.languages) and (not typically_llm.available() or stats["llm_failed"] == stats["llm_calls"] > 0):
+            raise HTTPException(502, "AI enrichment failed for every case, so training did not start; turn it off or try again")
+        typically_job.add_events(slug, typically_job.event("prepare", n=stats["rows"]["train"], synthetic=stats["synthetic"],
+                                                           translated=stats["translated"]["train"], failed=stats["llm_failed"]))
     return {**start_job(slug, req.base, req.settings.steps, prepare), "job": slug}
 
 
