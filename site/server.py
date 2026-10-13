@@ -320,7 +320,8 @@ def train_slug(slug: str, base: str | None = None, steps: int | None = None) -> 
 
 @app.post("/api/typically/train/{slug}/stop")
 def stop(slug: str):
-    """Ask a running job to stop: it raises at its next pod call (≤ ~20 s) and deletes the GPU in its finally, as on any failure."""
+    """Ask a running job to stop: it raises at its next GPU-provider call (seconds; up to a few minutes mid upload / download) or
+    AI enrichment call, and deletes the GPU in its finally, as on any failure."""
     if not typically_job.SLUG_RE.fullmatch(slug) or not auth.visible(slug) or slug not in _jobs:
         raise HTTPException(404, "no running job with that name")
     typically_job.stop(slug)

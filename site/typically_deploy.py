@@ -1,7 +1,7 @@
 """Deploy step of typically (.context/typically/FLOW.md): API keys, the protected decide endpoint, code snippets, push to Hugging Face.
 
 Included from site/server.py; reuses its `_run` / `get_model` / `_lock` / `TYPICALLY` (read at call time, so the tests can patch them).
-ponytail: v1 serves from this machine; keys live in a local file and the rate limit in memory -- a real deploy needs a database + a gateway.
+ponytail: keys live in <data>/keys.json and the rate limit in memory: one server process only (deploy/README.md); several need a database + a gateway.
 """
 import hashlib
 import json
@@ -181,7 +181,7 @@ def snippets(model_id: str, request: Request):
     url = f"{str(request.base_url).rstrip('/')}/v1/models/{model_id}/decide"
     qs = _questions(model_id) or [{"question": "Your question?", "type": "choice", "labels": ["a", "b"]}]
     body = json.dumps({"state": _example_case(model_id), "queries": qs}, indent=2, ensure_ascii=False)
-    repo = f.read_text().strip() if (f := _hf_repo_file(run)).exists() else "<hf-user>/<model-name>"
+    repo = f.read_text().strip() if (f := _hf_repo_file(run)).exists() else f"./{run}.pt"   # not pushed: the file "Download weights" saves
     shell_body = body.replace("'", "'\\''")   # close the quote, an escaped quote, reopen
     return {
         "curl": (f"curl -s {url} \\\n  -H \"Authorization: Bearer $TYPICAL_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n"

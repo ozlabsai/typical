@@ -3,7 +3,7 @@
 
     records = load_records({"kind": "sample"})            # csv | xlsx | hf | sheets | sample (name: northwind | enron | enron-decisions) -> [dict[str, str]]
     prof = profile(records)                               # facts about the data, no opinions
-    plan, source, warnings = llm_plan(prof, sample_rows(prof, records), key, records)   # or heuristic_plan(prof, records)
+    plan, source, warnings = llm_plan(prof, sample_rows(prof, records), records)   # or heuristic_plan(prof, records)
     render_case(record, plan), answers(record, plan)      # what the model will see / be taught
 
 Every plan, LLM or heuristic, goes through validate_plan: mapping keys must be values that are really in the data.

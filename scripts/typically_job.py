@@ -177,7 +177,7 @@ def gpu_stats(log: str) -> dict | None:
 def _run(argv: list[str], timeout: int, out: Path | None = None) -> str:
     """The one subprocess seam (tests replace it). Returns stdout; with `out` the stdout is also saved there."""
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=REPO)   # cwd: git ls-files snapshots the repo, not the server's cwd
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{argv[0]} {argv[1] if len(argv) > 1 else ''} timed out after {timeout:.0f}s")
     if out:
