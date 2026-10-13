@@ -6,7 +6,7 @@ import { StatusDot } from "@/components/app-sidebar"
 import { ShareButton } from "@/components/share-dialog"
 import { Page, PageHeader, SectionHeader } from "@/components/layout"
 import { msg, StatusCopy } from "@/components/shared"
-import { StatusLine, StopButton, TrainingProgress, useTrainStatus } from "@/components/training-progress"
+import { settled, StatusLine, StopButton, TrainingProgress, useTrainStatus } from "@/components/training-progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -246,7 +246,8 @@ function TrainingCard({ m }: { m: LibraryModel }) {
         {!ready && !failed && <CardAction><StopButton slug={m.id} /></CardAction>}
         {ready && <CardAction><Button variant="ghost" size="sm" aria-expanded={open} onClick={() => setOpen(!open)}>{t(open ? "models.hideRun" : "models.showRun")}</Button></CardAction>}
       </CardHeader>
-      {(!ready || open) && (
+      {/* ready but the GPU not yet off: stay open so "Shutting the GPU down" is seen to finish */}
+      {(!ready || open || (status && !settled(status))) && (
         <CardContent>
           {status ? <TrainingProgress status={status} /> : <Progress value={(m.progress ?? 0) * 100} className="h-1.5" aria-label={t("tr.progress")} />}
         </CardContent>

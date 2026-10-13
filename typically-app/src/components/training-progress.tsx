@@ -217,14 +217,13 @@ function GpuPanel({ status }: { status: TrainStatus }) {
   const items = [
     [t("gpu.busy"), `${g.util}%`],
     [t("gpu.memory"), t("gpu.gb", { used: gb(g.mem_used), total: gb(g.mem_total) })],
-    ...(g.tok_s ? [[t("gpu.speed"), g.tok_s.toLocaleString()]] : []),
   ]
   return (
     <section className="grid gap-2 rounded-lg border bg-muted/30 p-3" aria-label={t("gpu.title")}>
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
         <Cpu className="size-4" /> {t("gpu.title")}{name && <> · <bdi className="font-mono">{name}</bdi></>}
       </p>
-      <dl className="grid grid-cols-3 gap-2">
+      <dl className="grid grid-cols-2 gap-2">
         {items.map(([k, v]) => (
           <div key={k} className="grid gap-0.5">
             <dt className="text-xs text-muted-foreground">{k}</dt>
