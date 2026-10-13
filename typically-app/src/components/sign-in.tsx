@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { AlertCircle, Languages, Loader2 } from "lucide-react"
 
 import { msg } from "@/components/shared"
@@ -13,7 +13,11 @@ import { useI18n } from "@/lib/i18n"
 /** Invite-code sign-in (TYPICALLY_AUTH=1). */
 export function SignIn({ done }: { done: (u: User) => void }) {
   const { t, lang, setLang } = useI18n()
-  const [code, setCode] = useState("")
+  // an invite link (#/?invite=<code>) prefills the code; the code leaves the address bar once read
+  const [code, setCode] = useState(() => new URLSearchParams(window.location.hash.split("?")[1]).get("invite") ?? "")
+  useEffect(() => {
+    if (window.location.hash.includes("invite=")) history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/`)
+  }, [])
   const [name, setName] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)

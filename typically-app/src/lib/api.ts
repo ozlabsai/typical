@@ -220,3 +220,14 @@ export const shares = {
   create: (id: string) => call<{ share: Share }>(share(id), {}).then((r) => r.share),
   revoke: (id: string) => call<{ revoked: number }>(share(id), undefined, "DELETE"),
 }
+
+/** Invite codes the signed-in user made (sign-in on only). limit/left: null for admins (unlimited). */
+export interface Invite { code: string; created: string }
+export interface Invites { invites: Invite[]; limit: number | null; left: number | null }
+export const inviteLink = (code: string) => `${window.location.origin}/app/#/?invite=${encodeURIComponent(code)}`
+
+export const invites = {
+  list: () => call<Invites>("invites", undefined, undefined, "/api/auth/"),
+  create: () => call<Invites>("invites", {}, undefined, "/api/auth/"),
+  revoke: (code: string) => call<Invites>(`invites/${encodeURIComponent(code)}`, undefined, "DELETE", "/api/auth/"),
+}

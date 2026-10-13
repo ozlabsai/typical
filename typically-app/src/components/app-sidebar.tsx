@@ -1,5 +1,5 @@
-import { useEffect } from "react"
-import { Boxes, Database, Languages, LogOut, MessageSquare, Moon, Plus, Search, Sun, UserRound } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Boxes, Database, Languages, LogOut, MessageSquare, Moon, Plus, Search, Sun, UserPlus, UserRound } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import {
@@ -7,6 +7,7 @@ import {
   SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarMenuSkeleton, useSidebar,
 } from "@/components/ui/sidebar"
 import { SHORTCUT } from "@/components/command-palette"
+import { InviteDialog } from "@/components/invite-dialog"
 import { Badge } from "@/components/ui/badge"
 import type { LibraryModel } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
@@ -32,10 +33,14 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
   const dark = resolvedTheme === "dark"
   const activeId = route.name === "model" ? route.id : undefined
   const { setOpenMobile } = useSidebar()
+  const [inviting, setInviting] = useState(false)
   const at = href(route)
   useEffect(() => setOpenMobile(false), [at, setOpenMobile]) // phones: a tapped link must not leave the sheet over the page
 
   return (
+    <>
+    {/* outside the Sidebar: on phones it is a sheet, and closing the sheet would unmount the dialog with it */}
+    <InviteDialog open={inviting} onOpenChange={setInviting} />
     <Sidebar side="left" collapsible="icon">  {/* "left" = inline-start: sidebar.tsx uses logical start/end, so this mirrors in RTL */}
       <SidebarHeader>
         <SidebarMenu>
@@ -137,6 +142,11 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
               </div>
             </SidebarMenuItem>
             <SidebarMenuItem>
+              <SidebarMenuButton tooltip={t("invite.button")} onClick={() => (setOpenMobile(false), setInviting(true))}>
+                <UserPlus /> <span>{t("invite.button")}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
               <SidebarMenuButton tooltip={t("auth.signOut")} onClick={() => void signOut()}>
                 <LogOut className="rtl:-scale-x-100" /> <span>{t("auth.signOut")}</span>
               </SidebarMenuButton>
@@ -145,5 +155,6 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
+    </>
   )
 }
