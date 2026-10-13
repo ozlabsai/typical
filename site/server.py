@@ -4,12 +4,10 @@
 
 Run: uv run uvicorn --app-dir site server:app --port 8787
 
-Bind to 127.0.0.1 only (the uvicorn default) unless TYPICALLY_AUTH=1: /api/typically/train rents GPUs. With TYPICALLY_AUTH=1
+Bind to 127.0.0.1 only (the uvicorn default) unless TYPICALLY_AUTH=1: /api/typically/teach rents GPUs. With TYPICALLY_AUTH=1
 (site/typically_auth.py: invite sign-in, ownership, quotas) it can be hosted for a small invited audience; see deploy/README.md.
 """
 import contextvars
-import csv
-import io
 import json
 import logging
 import os
@@ -19,7 +17,6 @@ import shutil
 import sys
 import threading
 import time
-from collections import Counter
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -53,7 +50,7 @@ import typically_job
 import typically_llm
 import typically_plan
 from typically_reveal import company, queries, reveal, score
-from typically_spike import build_from_plan, build_import, write
+from typically_spike import build_from_plan, write
 
 TYPICALLY = typically_job.TYPICALLY   # TYPICALLY_DATA, else .context/typically
 REPOS = {"typical-small": "OzLabs/typical-small", "typical-medium": "OzLabs/typical-medium"}
@@ -190,56 +187,8 @@ def compare(req: CompareRequest):
         return {"models": {n: {**_run(get_model(m), req.state, req.decisions), "model": m} for n, m in ran.items()}, "base": base}
 
 
-@app.get("/api/typically/models")
-def models():
-    return {"base": ["typical-small"], "tuned": [n for n in tuned_models() if auth.visible(auth.model_of(n))]}
-
-
-class CsvRequest(BaseModel):
-    csv_text: str
-
-
-class Decision(BaseModel):
-    column: str
-    question: str
-    type: Literal["choice", "noul", "score"]
-
-
-class BuildRequest(CsvRequest):
-    base: Literal["small", "medium"] = "small"
-    steps: Literal[200, 400, 800] = 400
-    text_col: str
-    decisions: list[Decision]
-    name: str = Field(max_length=80)
-
-
-def read_csv(csv_text: str) -> tuple[list[str], list[dict]]:
-    reader = csv.DictReader(io.StringIO(csv_text))
-    records = [{k: (v or "") for k, v in r.items() if k is not None} for r in reader]
-    if not reader.fieldnames or not records:
-        raise HTTPException(400, "the file has no rows")
-    return reader.fieldnames, records
-
-
-@app.post("/api/typically/preview")
-def preview(req: CsvRequest):
-    columns, records = read_csv(req.csv_text)
-    uniques = {c: sorted({r[c].strip() for r in records}) for c in columns}
-    # values: the short lists only (decision columns) -- the UI detects each column's type from them
-    return {"columns": columns, "rows": records[:5], "n": len(records),
-            "uniques": {c: len(u) for c, u in uniques.items()},
-            "values": {c: u for c, u in uniques.items() if len(u) <= 20}}
-
-
-def _dist(rows: list[dict]) -> dict:
-    d: dict[str, Counter] = {}
-    for r in rows:
-        d.setdefault(r["task"].removeprefix("import_"), Counter())[r["candidates"][r["label"]]] += 1
-    return {k: dict(v) for k, v in d.items()}
-
-
 _jobs_lock = threading.Lock()
-_jobs = typically_job.RUNNING   # slug -> owner of every job running in this process; /build refuses these slugs (the job snapshots the
+_jobs = typically_job.RUNNING   # slug -> owner of every job running in this process; /teach refuses these slugs (the job snapshots the
 # dataset when it starts). ponytail: in-process; a second server process would not see them
 
 
@@ -261,18 +210,13 @@ class Settings(BaseModel):
     seed: int = 0
 
 
-class BuildPlanRequest(BaseModel):   # /build v2: a confirmed DatasetPlan over a table kept server-side (/analyze's records_token)
+class BuildPlanRequest(BaseModel):   # /teach: a confirmed DatasetPlan over a table kept server-side (/analyze's records_token)
     records_token: str
     plan: dict
     name: str = Field(max_length=80)
     base: Literal["small", "medium"] = "small"
     enrich: Enrich = Enrich()
     settings: Settings = Settings()
-
-
-def _train_command(slug: str, steps: int, base: str) -> str:
-    # same flag builder the pod runs (typically_job.train_flags); here fed from the release table, there from runs/base/best.pt's own args
-    return "uv run --no-sync python pcdm/train.py " + " ".join(typically_job.train_flags(slug, steps, f"co_{slug}", typically_job.RELEASED_ARGS[base], base))
 
 
 def _check_name(slug: str) -> None:
@@ -282,15 +226,6 @@ def _check_name(slug: str) -> None:
         raise HTTPException(409, "that model is being taught right now; wait for it to finish before rebuilding its data")
     if slug and (TYPICALLY / "jobs" / slug).exists() and not auth.visible(slug):
         raise HTTPException(409, "that name is taken; pick another")
-
-
-@app.post("/api/typically/build")
-def build(req: BuildPlanRequest | BuildRequest):
-    slug = _slug(req.name)
-    _check_name(slug)
-    if auth.enabled() and isinstance(req, BuildRequest):
-        raise HTTPException(400, "this server takes the app's import (records_token + plan) only")
-    return _build_plan(req, slug) if isinstance(req, BuildPlanRequest) else _build_csv(req, slug)
 
 
 def _plan_records(req: BuildPlanRequest, slug: str) -> list[dict]:
@@ -309,12 +244,13 @@ def _plan_records(req: BuildPlanRequest, slug: str) -> list[dict]:
 def _save_meta(req: BuildPlanRequest, out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
     for name, body in (("plan", req.plan), ("enrich", req.enrich.model_dump()), ("settings", req.settings.model_dump()),
-                       ("job", {"name": req.name, "base": req.base, "steps": req.settings.steps, "records_token": req.records_token, **auth.stamp()})):   # /train defaults from job.json; the token links the model to its dataset
+                       ("job", {"name": req.name, "base": req.base, "steps": req.settings.steps, "records_token": req.records_token, **auth.stamp()})):   # retrain defaults from job.json; the token links the model to its dataset
         (out / f"{name}.json").write_text(json.dumps(body, indent=1))
 
 
-def _build_plan(req: BuildPlanRequest, slug: str, records: list[dict] | None = None, progress=None) -> dict:
-    records, plan = records or _plan_records(req, slug), req.plan
+def _build_plan(req: BuildPlanRequest, slug: str, records: list[dict], progress=None) -> dict:
+    """The dataset of jobs/<slug>/ from the plan (AI enrichment included); returns build_from_plan's stats."""
+    plan = req.plan
     llm = typically_llm.complete_json if typically_llm.available() and (req.enrich.synthetic or req.enrich.languages) else None   # the operator's key only
     try:
         split, stats = build_from_plan(records, plan, req.enrich.model_dump(), req.settings.model_dump(), random.Random(req.settings.seed), llm, progress)
@@ -326,24 +262,7 @@ def _build_plan(req: BuildPlanRequest, slug: str, records: list[dict] | None = N
     shutil.rmtree(out / "eval", ignore_errors=True)   # a rebuild must not keep the previous build's eval files (e.g. an old language)
     write(out, split)
     _save_meta(req, out)
-    return {"job": slug, "data_dir": f"data_co_{slug}", "splits": stats["rows"], "balance": stats["labels"],
-            "command": _train_command(slug, req.settings.steps, req.base), "plan_saved": str(out / "plan.json"), "stats": stats}
-
-
-def _build_csv(req: BuildRequest, slug: str) -> dict:
-    """v1 body: one text column + decisions straight from a csv (kept for older clients)."""
-    columns, records = read_csv(req.csv_text)
-    if not typically_job.SLUG_RE.fullmatch(slug) or not req.decisions or req.text_col not in columns or any(d.column not in columns for d in req.decisions):
-        raise HTTPException(400, "need a name, a text column and at least one decision column from the file")
-    decisions = [d.model_dump() for d in req.decisions]
-    try:
-        raw = build_import(records, req.text_col, decisions, random.Random(0), balance=False)
-        split = build_import(records, req.text_col, decisions, random.Random(0))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    write(TYPICALLY / "jobs" / slug, split)
-    return {"job": slug, "data_dir": f"data_co_{slug}", "splits": {k: len(v) for k, v in split.items()},   # data_co_<slug>: the dir name train.py keys its bucket map on
-            "balance": {"before": _dist(raw["train"]), "after": _dist(split["train"])}, "command": _train_command(slug, req.steps, req.base)}
+    return stats
 
 
 def start_job(slug: str, base: str = "small", steps: int = 400, prepare=None) -> dict:
@@ -388,23 +307,12 @@ def start_job(slug: str, base: str = "small", steps: int = 400, prepare=None) ->
     return status
 
 
-class TrainRequest(BaseModel):
-    name: str
-    base: Literal["small", "medium"] | None = None   # None: what /build saved in jobs/<slug>/job.json, else small
-    steps: Literal[200, 400, 800] | None = None   # Quick / Balanced / Thorough; None: as base
-
-
 def train_slug(slug: str, base: str | None = None, steps: int | None = None) -> dict:
-    """Start training a built dataset (jobs/<slug>/); base/steps default to its job.json. /train and /retrain both go through here."""
+    """Start training a built dataset (jobs/<slug>/); base/steps default to its job.json. /retrain goes through here."""
     if not typically_job.SLUG_RE.fullmatch(slug) or not (TYPICALLY / "jobs" / slug / "train.jsonl").exists() or not auth.visible(slug):
         raise HTTPException(404, "no dataset with that name; import and build it first")
     saved = json.loads(f.read_text()) if (f := TYPICALLY / "jobs" / slug / "job.json").exists() else {}
     return start_job(slug, base or saved.get("base", "small"), steps or saved.get("steps", 400))
-
-
-@app.post("/api/typically/train")
-def train(req: TrainRequest):
-    return train_slug(_slug(req.name), req.base, req.steps)
 
 
 @app.post("/api/typically/train/{slug}/stop")
@@ -418,8 +326,8 @@ def stop(slug: str):
 
 @app.post("/api/typically/teach")
 def teach(req: BuildPlanRequest):
-    """/build + /train in one call that returns at once: the job's first milestone builds the dataset (AI enrichment included),
-    with progress on the same live card. /build and /train stay for older clients."""
+    """Build the dataset + train in one call that returns at once: the job's first milestone builds the dataset (AI enrichment
+    included), with progress on the same live card. Every new model goes through here (and so through auth.admit)."""
     slug = _slug(req.name)
     _check_name(slug)
     records = _plan_records(req, slug)
@@ -430,24 +338,9 @@ def teach(req: BuildPlanRequest):
 
     def prepare():
         _save_meta(req, TYPICALLY / "jobs" / slug)   # first: the model page has its name and decisions while the examples are prepared
-        built = _build_plan(req, slug, records, progress)
-        typically_job.add_events(slug, typically_job.event("prepare", n=built["splits"]["train"]))
+        stats = _build_plan(req, slug, records, progress)
+        typically_job.add_events(slug, typically_job.event("prepare", n=stats["rows"]["train"]))
     return {**start_job(slug, req.base, req.settings.steps, prepare), "job": slug}
-
-
-def _held_out(path: Path) -> tuple[float, int, dict]:
-    """eval_wf.py output -> (overall acc pooled over eval sets, rows, {decision: (acc, rows)})."""
-    ev = [s for k, s in json.loads(path.read_text())["eval"].items() if k == "import_oneliner"]   # not the translated import_<lang> sets
-    rows = sum(s["n"] for s in ev)
-    return (sum(s["raw"]["acc"] * s["n"] for s in ev) / rows, rows,
-            {f.removeprefix("import_"): (m["acc"], m["n"]) for s in ev for f, m in s["by_family"].items()})
-
-
-def agreement(slug: str) -> dict:
-    res = TYPICALLY / "results" / f"co_{slug}"
-    (b_acc, _, b_dec), (y_acc, n, y_dec) = _held_out(res / "base_eval_co.json"), _held_out(res / "eval_co.json")
-    return {"n": n, "overall": {"base": b_acc, "yours": y_acc},
-            "decisions": {t: {"base": b_dec[t][0], "yours": a, "n": k} for t, (a, k) in y_dec.items() if t in b_dec}}
 
 
 @app.get("/api/typically/train/{slug}")
@@ -457,7 +350,7 @@ def train_status(slug: str):
         raise HTTPException(404, "no such job")
     if st["phase"] not in ("queued", "starting_gpu", "uploading"):   # the curves stay on the card once training is over
         st["series"] = typically_job.log_series(typically_job.job_dir(slug) / "pod.log")
-    return {**st, "run": f"co_{slug}", "agreement": agreement(slug)} if st["phase"] == "done" else st
+    return {**st, "run": f"co_{slug}"} if st["phase"] == "done" else st
 
 
 _reveal_lock = threading.Lock()

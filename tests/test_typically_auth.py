@@ -58,7 +58,14 @@ def env(tmp_path, monkeypatch):
     model(tmp_path, "alice_two", ALICE)
     model(tmp_path, "bob_m", BOB, scored=True)
     model(tmp_path, "legacy")   # from before auth: no owner, admins only
+    monkeypatch.setattr(server, "_plan_records", lambda req, slug: [])   # /teach's dataset build is stubbed: the gating is under test
+    monkeypatch.setattr(server, "_build_plan", lambda req, slug, records, progress=None: {
+        "rows": {"train": 1}, "synthetic": 0, "translated": {"train": 0, "eval": {}}, "llm_calls": 0, "llm_failed": 0, "warnings": []})
     return tmp_path
+
+
+def teach(c, name):
+    return c.post("/api/typically/teach", json={"records_token": "0" * 32, "plan": {}, "name": name})
 
 
 def client(code=None, name=None):
@@ -130,14 +137,11 @@ def test_ownership(env):
                  "snippets/bob_m", "models/bob_m/share"):
         assert a.get(f"/api/typically/{path}").status_code == 404, path
     assert b.get("/api/typically/models/library/bob_m").status_code == 200 and b.get("/api/typically/download/co_bob_m").status_code == 200
-    assert a.get("/api/typically/models").json()["tuned"] == ["local:co_alice_m"]
     assert a.post("/api/typically/keys", json={"model_id": "bob_m"}).status_code == 404
     assert a.delete("/api/typically/models/library/bob_m").status_code == 404
     assert a.post("/api/typically/ask", json={"model": "bob_m", "case": "x", "questions": [{"question": "q?", "type": "noul"}]}).status_code == 404
     assert a.post("/api/typically/compare", json={"state": "x", "decisions": [], "models": ["local:co_bob_m"]}).status_code == 404
-    assert a.post("/api/typically/train", json={"name": "bob_m"}).status_code == 404
-    plan = {"records_token": "a" * 32, "plan": {}, "name": "Bob M"}
-    assert a.post("/api/typically/build", json=plan).status_code == 409   # someone else's name
+    assert teach(a, "Bob M").status_code == 409   # someone else's name
     # corrections: own models, and the shared sample keeps one list per user
     fix = {"case": "a ticket", "question": "Escalate?", "type": "noul", "answer": "yes"}
     assert a.post("/api/typically/models/northwind/corrections", json=fix).json()["count"] == 1
@@ -161,7 +165,7 @@ def test_datasets_are_per_user(env):
 @pytest.fixture
 def gate(monkeypatch):
     g = threading.Event()
-    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps: g.wait(5))
+    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps, **k: g.wait(5))
     yield g
     g.set()
     wait_idle()
@@ -176,7 +180,7 @@ def wait_idle():
 
 def test_quotas(env, gate, monkeypatch):
     a, b, admin = client(ALICE), client(BOB), client(ADMIN)
-    train = lambda c, name: c.post("/api/typically/train", json={"name": name})
+    train = teach
     assert train(a, "alice_m").status_code == 200
     r = train(a, "alice_two")
     assert r.status_code == 429 and "already have a model training" in r.json()["detail"]   # one active job per user
@@ -236,8 +240,8 @@ def test_review_fixes(env, monkeypatch):
     assert bob.post("/api/decide", json={"model": "local:co_alice_m", "state": "x", "queries": []}).status_code == 404
     assert "models" not in client().get("/api/health").json()
     for name in ("Northwind", "f"):
-        assert bob.post("/api/typically/build", json={"records_token": "0" * 32, "plan": {}, "name": name}).status_code == 409, name
-    assert bob.post("/api/typically/build", json={"records_token": "0" * 32, "plan": {}, "name": "x" * 81}).status_code == 422
+        assert teach(bob, name).status_code == 409, name
+    assert teach(bob, "x" * 81).status_code == 422
     with pytest.raises(ValueError, match="not a Hugging Face dataset id"):
         tp.load_records({"kind": "hf", "dataset": str(env)})
 

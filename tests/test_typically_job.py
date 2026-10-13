@@ -324,42 +324,40 @@ def test_traceback_in_log_alone_does_not_fail_a_zero_exit(env, monkeypatch):
     assert tj.read_status(SLUG)["phase"] == "done" and tj.read_status(SLUG)["code"] == "done"
 
 
-def test_train_endpoint_409_and_404(env, monkeypatch):
-    c = TestClient(server.app)
-    assert c.post("/api/typically/train", json={"name": "nope"}).status_code == 404
-    assert c.post("/api/typically/train", json={"name": "x" * 60}).status_code == 404   # slug over 40 chars
-    gate = threading.Event()
-    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps: gate.wait(5))
-    r = c.post("/api/typically/train", json={"name": "Acme"})
-    assert r.status_code == 200 and r.json()["phase"] == "queued"
-    assert c.post("/api/typically/train", json={"name": "Acme"}).status_code == 409
-    build = {"csv_text": "t,l\nx,y\n", "text_col": "t", "decisions": [{"column": "l", "question": "q", "type": "choice"}]}
-    assert c.post("/api/typically/build", json={**build, "name": "Acme"}).status_code == 409   # its job is active
-    assert c.post("/api/typically/build", json={**build, "name": "other"}).status_code != 409
-    gate.set()
-    for _ in range(100):   # the lock is released when the job thread ends
+def teach(c, name, **kw):
+    """/teach with the dataset build stubbed (tests/test_typically.py covers the real one): the job gating is under test."""
+    return c.post("/api/typically/teach", json={"records_token": "a" * 32, "plan": {}, "name": name, **kw})
+
+
+@pytest.fixture
+def stub_build(monkeypatch):
+    monkeypatch.setattr(server, "_plan_records", lambda req, slug: [])
+    monkeypatch.setattr(server, "_build_plan", lambda req, slug, records, progress=None: {
+        "rows": {"train": 1}, "synthetic": 0, "translated": {"train": 0, "eval": {}}, "llm_calls": 0, "llm_failed": 0, "warnings": []})
+
+
+def idle():
+    for _ in range(250):   # the slug is released when the job thread ends (env patches time.sleep away)
         if not server._jobs:
-            break
-        time.sleep(0.02)
-    assert c.post("/api/typically/train", json={"name": "Acme"}).status_code == 200
-    gate.set()
+            return
+        threading.Event().wait(0.02)
 
 
-def test_status_agreement(env, tmp_path):
-    ev = lambda acc_a, acc_b: {"eval": {"import_oneliner": {"n": 30, "raw": {"acc": (acc_a * 20 + acc_b * 10) / 30},
-                                                            "by_family": {"import_team": {"acc": acc_a, "n": 20}, "import_esc": {"acc": acc_b, "n": 10}}}}}
-    res = tmp_path / "typ/results/co_acme"
-    res.mkdir(parents=True)
-    (res / "base_eval_co.json").write_text(json.dumps(ev(0.5, 0.7)))
-    (res / "eval_co.json").write_text(json.dumps(ev(0.9, 0.8)))
+def test_teach_endpoint_409_while_active(env, monkeypatch, stub_build):
     c = TestClient(server.app)
-    tj.write_status(SLUG, "training", "x")
-    assert "agreement" not in c.get(f"/api/typically/train/{SLUG}").json()
-    tj.write_status(SLUG, "done", "ok")
-    a = c.get(f"/api/typically/train/{SLUG}").json()["agreement"]
-    assert a["n"] == 30 and a["decisions"]["team"] == {"base": 0.5, "yours": 0.9, "n": 20}
-    assert a["overall"] == {"base": pytest.approx(0.5667, abs=1e-3), "yours": pytest.approx(0.8667, abs=1e-3)}
+    gate = threading.Event()
+    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps, **k: gate.wait(5))
+    r = teach(c, "Acme")
+    assert r.status_code == 200 and r.json()["phase"] == "queued"
+    assert teach(c, "Acme").status_code == 409   # its job is active
+    assert teach(c, "other").status_code == 200
+    gate.set()
+    idle()
+    assert teach(c, "Acme").status_code == 200
+    idle()
     assert c.get("/api/typically/train/none").status_code == 404
+    for gone in ("train", "build", "preview", "models"):   # v1 endpoints: no client calls them; every new model goes through /teach
+        assert c.post(f"/api/typically/{gone}", json={}).status_code in (404, 405), gone
 
 
 def test_cors_is_local_only():
@@ -429,23 +427,15 @@ def test_train_flags_come_from_the_base_checkpoint_args():
     assert other["--tap_layer"] == "99"
 
 
-def test_train_and_build_endpoints_take_base_and_steps(env, monkeypatch):
+def test_teach_takes_base_and_steps(env, monkeypatch, stub_build):
     seen = []
-    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps: seen.append((base, steps)))
-    monkeypatch.setattr(server, "write", lambda *a: None)   # the command string is what is under test, not the files
+    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps, **k: seen.append((base, steps)))
     c = TestClient(server.app)
-    assert c.post("/api/typically/train", json={"name": "Acme", "base": "medium", "steps": 800}).status_code == 200
-    for _ in range(100):
-        if not server._jobs:
-            break
-        time.sleep(0.02)
+    assert teach(c, "Acme", base="medium", settings={"steps": 800}).status_code == 200
+    idle()
     assert seen == [("medium", 800)]
-    assert c.post("/api/typically/train", json={"name": "Acme", "steps": 123}).status_code == 422
-    assert c.post("/api/typically/train", json={"name": "Acme", "base": "huge"}).status_code == 422
-    build = {"csv_text": "t,l\nx,y\nx2,y\nx3,z\n", "text_col": "t", "decisions": [{"column": "l", "question": "q", "type": "choice"}], "name": "b1"}
-    cmd = c.post("/api/typically/build", json={**build, "base": "medium", "steps": 200}).json()["command"]
-    assert "--backbone Qwen/Qwen3.5-4B-Base" in cmd and "--steps 200" in cmd and "--nc_render letters_nonull" in cmd
-    assert "--backbone Qwen/Qwen3-1.7B-Base" in c.post("/api/typically/build", json=build).json()["command"]
+    assert teach(c, "Acme", settings={"steps": 123}).status_code == 422
+    assert teach(c, "Acme", base="huge").status_code == 422
 
 
 def test_status_code_field(env):
@@ -713,8 +703,5 @@ def test_a_stale_stop_never_aborts_the_next_run(env, monkeypatch):
     monkeypatch.setattr(tj, "run", lambda slug, log, base, steps: seen.append(slug in tj._STOP))
     tj.stop(SLUG)   # pressed as the previous run ended
     server.start_job(SLUG)
-    for _ in range(100):
-        if not server._jobs:
-            break
-        time.sleep(0.02)
+    idle()
     assert seen == [False]

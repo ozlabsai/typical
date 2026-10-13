@@ -44,7 +44,7 @@ STEPS = (200, 400, 800)   # Quick / Balanced / Thorough
 # scale: deadline + stale multiplier. mem: the memory profile of each release's own recipe (medium = 4B: grad-checkpointing, smaller micro-batch).
 BASES = {"small": {"scale": 1, "mem": ["--grad_accum", "8"]}, "medium": {"scale": 2, "mem": ["--grad_ckpt", "--grad_accum", "16"]}}
 # The released checkpoints' ckpt["args"] the fine-tune must match. The pod reads the real ones from runs/base/best.pt (train_flags);
-# this table only feeds the command the UI displays -- ponytail: verified against both releases 2026-09-30, re-check when a release changes.
+# the server uses this table to name a checkpoint's base (by backbone) -- ponytail: verified against both releases 2026-09-30, re-check when a release changes.
 RELEASED_ARGS = {
     "small": {"backbone": "Qwen/Qwen3-1.7B-Base", "tap_layer": 20, "nc_render": "semif", "lora_r": 16, "lora_layers": 8,
               "nc_head": "n3", "null": "factored", "noul_head": "bern", "score_head": "choice"},

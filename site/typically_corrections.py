@@ -1,6 +1,6 @@
 """The corrections loop: "Wrong?" in chat stores the right answer for a case; /retrain teaches a new version on the original data plus
 those corrections. Store: .context/typically/corrections/<model id>.jsonl, one correction per line, oldest first (n = line index).
-Reads server.TYPICALLY / _job_lock / train_slug at call time, so it is included at the end of server.py."""
+Reads server.TYPICALLY / train_slug at call time, so it is included at the end of server.py."""
 import json
 import random
 import shutil
@@ -88,7 +88,7 @@ def _job(model_id: str) -> dict:
 
 
 def _northwind(out):
-    """The sample's dataset, built the way /build v2 builds an analyzed table (heuristic plan, default enrich and settings),
+    """The sample's dataset, built the way /teach builds an analyzed table (heuristic plan, default enrich and settings),
     asked with the questions chat uses for Northwind."""
     records = tp.load_records({"kind": "sample"})
     plan = tp.heuristic_plan(tp.profile(records), records)

@@ -1,6 +1,6 @@
 """POST /api/typically/analyze: read a table (csv / xlsx / Hugging Face / Google Sheets / sample / an earlier upload, or a mailbox
 turned into one by typically_mail), profile it and
-return the DatasetPlan (.context/typically/FLOW.md). Parsed records are kept server-side under `records_token` so /build does not
+return the DatasetPlan (.context/typically/FLOW.md). Parsed records are kept server-side under `records_token` so /teach does not
 need the file again: in memory and in .context/typically/uploads/<token>.jsonl (see load_upload), described by <token>.meta.json.
 GET/DELETE /api/typically/datasets: those uploads, and the models built from them (jobs/<slug>/job.json "records_token")."""
 import base64

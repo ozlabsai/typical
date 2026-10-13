@@ -254,29 +254,35 @@ def test_build_from_plan_bad_language():
         build(company(), company_plan(company()), llm, languages=["../x"])
 
 
-def test_build_endpoint_v2(tmp_path, monkeypatch):
+def test_teach_writes_the_dataset_and_its_meta(tmp_path, monkeypatch):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "site"))   # as tests/test_typically_job.py
     import server
     import typically_analyze
+    import typically_job as tj
     from fastapi.testclient import TestClient
     recs = company()
-    monkeypatch.setattr(server, "TYPICALLY", tmp_path)
+    for m in (server, tj):
+        monkeypatch.setattr(m, "TYPICALLY", tmp_path)
     monkeypatch.setattr(typically_analyze, "_records", {"a" * 32: recs})
+    monkeypatch.setattr(tj, "run", lambda *a, **k: None)
     body = {"records_token": "a" * 32, "plan": company_plan(recs), "name": "Acme Co", "base": "medium", "enrich": {"policy": {"sev": "High means an outage."}},
             "settings": {"steps": 200, "holdout": 25, "seed": 3}}
     c = TestClient(server.app)
-    r = c.post("/api/typically/build", json=body)
+    r = c.post("/api/typically/teach", json=body)
     assert r.status_code == 200, r.text
-    out, res = tmp_path / "jobs" / "acme_co", r.json()
-    assert res["job"] == "acme_co" and res["stats"]["rows"] == res["splits"] and "--steps 200" in res["command"] and "Qwen3.5-4B" in res["command"]
-    assert len((out / "train.jsonl").read_text().splitlines()) == res["splits"]["train"] and (out / "eval" / "import_oneliner.jsonl").exists()
+    for _ in range(200):
+        if not server._jobs:
+            break
+        time.sleep(0.02)
+    out = tmp_path / "jobs" / "acme_co"
+    assert len((out / "train.jsonl").read_text().splitlines()) == tj.read_status("acme_co")["events"][0]["n"] and (out / "eval" / "import_oneliner.jsonl").exists()
     assert json.loads((out / "job.json").read_text()) == {"name": "Acme Co", "base": "medium", "steps": 200, "records_token": "a" * 32}
     assert json.loads((out / "settings.json").read_text())["holdout"] == 25 and json.loads((out / "enrich.json").read_text())["policy"]
     assert json.loads((out / "plan.json").read_text())["decisions"]
     bad = copy.deepcopy(body)
     bad["plan"]["decisions"][0]["mapping"]["nope"] = "yes"
-    assert c.post("/api/typically/build", json=bad).status_code == 400
-    assert c.post("/api/typically/build", json={**body, "records_token": "b" * 32}).status_code == 404
+    assert c.post("/api/typically/teach", json=bad).status_code == 400
+    assert c.post("/api/typically/teach", json={**body, "records_token": "b" * 32}).status_code == 404
 
 
 def test_reveal_baseline_and_catch():

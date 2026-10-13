@@ -7,7 +7,7 @@ Off unless TYPICALLY_AUTH=1, so local dev is unchanged (no user, everything visi
 - every /api/* request needs a session, except /api/auth/* and /api/health. /v1/models/{id}/decide (its own bearer keys), the
   public share cards (/s/*), the static site and the /app bundle (it renders the sign-in screen itself) stay open.
 - ownership: job.json / upload meta carry "owner"; can_see() is the one rule (own + shared + admin sees all).
-- quotas: admit() is called by server.start_job for every training run (/train and /retrain).
+- quotas: admit() is called by server.start_job for every training run (/teach and /retrain).
 """
 import base64
 import contextvars
