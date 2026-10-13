@@ -21,3 +21,9 @@ data_*
 runs/*/*.pt
 *.pt
 *.npz
+# the Northwind sample model + its held-out cases (git-ignored, ~32 MB): deploy/serve.sh seeds them into /data, so Chat / Results /
+# Download work on a fresh host. Exceptions last: they re-include these files under the excluded dirs above
+!.context/typically/results/co_f/best.pt
+!.context/typically/results/co_f/reveal.json
+!.context/typically/results/co_f/eval_co.json
+!data_co_a/eval/a_oneliner.jsonl

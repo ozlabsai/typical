@@ -1,13 +1,15 @@
 #!/bin/bash
 # One RunPod GPU pod hosting typically for invited users, reachable through a Cloudflare quick tunnel (deploy/README.md).
 #   deploy/runpod.sh up      build the app, create the pod, copy the repo + deploy/hosted.env, start it, print the public URL
+#                            (any failure or timeout after the pod exists deletes it again and exits non-zero)
 #   deploy/runpod.sh url     print the public URL again
 #   deploy/runpod.sh logs    tail the server log
-#   deploy/runpod.sh down    copy the data dir back to .context/typically-hosted-<time>.tgz, then delete the pod
+#   deploy/runpod.sh down    stop the server (its shutdown deletes its training pods), copy the data dir back to
+#                            .context/typically-hosted-<time>.tgz, sweep any <prefix>* training pod left, then delete the pod
 # Needs locally: runpodctl (configured), ssh/scp, git, node/npm, python3. Secrets live in deploy/hosted.env and are never printed
 # or passed on a command line: the file is scp'd (0600) to the pod.
-# IDLE GUARD: the pod bills by the hour whether anyone uses it or not. Run `down` when the stunt is over; the training pods it
-# rents are deleted by the job runner itself (and swept at server start), but this host pod is only ever deleted by `down`.
+# IDLE GUARD: the pod bills by the hour whether anyone uses it or not. Run `down` when the invite period is over; the training pods
+# it rents are deleted by the job runner itself (and swept every 5 minutes and by `down`), but this host pod is only ever deleted by `down`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=typically-host
@@ -17,6 +19,12 @@ KEY="$HOME/.runpod/ssh/RunPod-Key-Go"
 STATE=deploy/.pod   # the pod id of the running host
 ENV_FILE=deploy/hosted.env
 SSH_OPTS=(-i "$KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=20)
+# the hosted server's training pod prefix (deploy/serve.sh's default unless hosted.env overrides it)
+PREFIX=$(grep -E '^TYPICALLY_POD_PREFIX=.' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)
+PREFIX=${PREFIX:-typically-hosted-job-}
+# the Northwind sample (git-ignored, ~32 MB): shipped so Chat / Results / Download work on a fresh host; deploy/serve.sh seeds it
+SAMPLE=(.context/typically/results/co_f/best.pt .context/typically/results/co_f/reveal.json .context/typically/results/co_f/eval_co.json
+        data_co_a/eval/a_oneliner.jsonl)
 
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 pod_id() { [ -f "$STATE" ] && cat "$STATE" || { echo "no host pod recorded in $STATE" >&2; exit 1; }; }
@@ -34,6 +42,7 @@ up() {
   # what the job runner ships, plus the built app; .context/, .venv/, node_modules/, deploy/hosted.env are git-ignored
   git ls-files -co --exclude-standard | grep -v -E '^(figures|paper|blog|docs|vendor)/' | while read -r f; do [ ! -f "$f" ] || echo "$f"; done > "$tar.list"
   find site/app -type f >> "$tar.list"
+  for f in "${SAMPLE[@]}"; do [ -f "$f" ] && echo "$f" || echo "warning: $f missing; the Northwind sample will not work on the host" >&2; done >> "$tar.list"
   COPYFILE_DISABLE=1 tar --no-xattrs -czf "$tar" -T "$tar.list"   # no macOS xattrs: GNU tar on the pod warns once per file
   echo "repo tarball: $(du -h "$tar" | cut -f1)"
 
@@ -47,6 +56,11 @@ up() {
     echo "no $gpu available: ${out:0:200}"
   done
   [ -f "$STATE" ] || { echo "no GPU available; try again later" >&2; exit 1; }
+  # from here on, any failure (or Ctrl-C) deletes the pod: a half-started host must not keep billing
+  trap 'exit 130' INT TERM
+  trap 'rc=$?; rm -rf "$tmp"; echo "up failed; deleting pod $(cat "$STATE")" >&2
+        runpodctl pod delete "$(cat "$STATE")" && rm -f "$STATE" || echo "could not delete pod $(cat "$STATE"); delete it by hand" >&2
+        exit $(( rc ? rc : 1 ))' EXIT
 
   for _ in $(seq 60); do   # ssh up (about 1-3 minutes)
     read -r ip port < <(addr) || true
@@ -64,15 +78,26 @@ up() {
   for _ in $(seq 90); do
     # the tunnel opens before the server: wait for the server itself, through the tunnel
     if u=$(on_pod "cat /workspace/public_url 2>/dev/null") && [ -n "$u" ] && curl -fsS -m 10 -o /dev/null "$u/api/health" 2>/dev/null; then
+      trap - EXIT INT TERM
       echo "public URL: $u/app/   (share links: $u/s/...)"; return
     fi
     sleep 10
   done
-  echo "no URL yet; check: deploy/runpod.sh logs" >&2
+  echo "the server did not come up in 15 minutes; its log:" >&2
+  on_pod "tail -n 40 /workspace/serve.log" >&2 || true
+  exit 1   # the EXIT trap deletes the pod
+}
+
+sweep() {   # delete every <PREFIX>* training pod on the account (the hosted server's; a local server uses another prefix)
+  runpodctl pod list -o json | python3 -c 'import json,sys; [print(p["id"]) for p in json.load(sys.stdin) if (p.get("name") or "").startswith(sys.argv[1])]' "$PREFIX" |
+    while read -r p; do runpodctl pod delete "$p" && echo "training pod $p deleted"; done
 }
 
 down() {
   id=$(pod_id)
+  # SIGTERM first: the server's shutdown hook stops its jobs, deletes their GPUs and marks the runs failed (up to ~90 s).
+  # [u]vicorn: the pattern must not match this ssh command's own shell
+  on_pod "pkill -TERM -f '[u]vicorn --app-dir site' && for _ in \$(seq 120); do pgrep -f '[u]vicorn --app-dir site' >/dev/null || break; sleep 1; done" || true
   backup=".context/typically-hosted-$(date +%Y%m%d-%H%M%S).tgz"
   mkdir -p .context
   # the users' models and uploads live only on the pod: keep a copy before it is gone
@@ -83,6 +108,7 @@ down() {
     read -r -p "could not copy the data back; delete the pod anyway? [y/N] " ok
     [ "$ok" = y ] || exit 1
   fi
+  sweep   # whatever the shutdown could not confirm (or a server that was already dead)
   runpodctl pod delete "$id"
   rm -f "$STATE"
   echo "pod $id deleted"

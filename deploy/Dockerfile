@@ -2,6 +2,8 @@
 #   docker build -f deploy/Dockerfile -t typically .                       # CPU torch (small image; slow model answers)
 #   docker build -f deploy/Dockerfile --build-arg TORCH=cu130 -t typically .   # CUDA torch (run with --gpus all)
 # Run: docker run -p 8787:8787 --env-file deploy/hosted.env -v typically-data:/data typically   (then put TLS in front: deploy/README.md)
+# Stop with `docker stop -t 120`: the server's shutdown deletes its training GPUs (up to ~90 s); the default 10 s could cut it off.
+# The Northwind sample (.context/typically/results/co_f + data_co_a/eval/a_oneliner.jsonl) comes along if it is in the build context.
 
 FROM node:22-slim AS app
 WORKDIR /src/typically-app

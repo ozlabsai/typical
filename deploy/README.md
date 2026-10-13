@@ -9,8 +9,12 @@ What sign-in on (`TYPICALLY_AUTH=1`, `site/typically_auth.py`) changes:
 - Every `/api/*` call needs a session, except `/api/auth/*` and `/api/health`. `/v1/models/{id}/decide` keeps its own
   API keys. `/s/*` share pages, the static site and the `/app` bundle stay public (the app shows the sign-in screen itself).
 - Models, uploads, corrections, API keys and share links belong to whoever made them. Admins see everything.
-- Quotas: `TYPICALLY_DAILY_RUNS` (3) training runs per user per rolling 24 h (admins exempt), one training job per user
-  at a time, `TYPICALLY_MAX_JOBS` (2) jobs on the whole server. They apply to "Teach it" and to retrain.
+- Quotas: `TYPICALLY_DAILY_RUNS` (3) training runs per user per rolling 24 h (admins exempt; failed runs count too), one
+  training job per user at a time, `TYPICALLY_MAX_JOBS` (2) jobs on the whole server. They apply to "Teach it" and to retrain.
+- Rate limits on the endpoints that call the LLM key on every request: 30 table analyses and 120 chat question parses per user
+  per hour (`typically_auth.LIMITS`; in memory, reset on restart).
+- Hugging Face push is admin-only, always private, and the repo name is chosen by the server (it uses the operator's token).
+  Everyone else keeps "Download weights".
 - No CORS: the app and the API are served from the same origin.
 
 ## Settings
@@ -27,7 +31,7 @@ What sign-in on (`TYPICALLY_AUTH=1`, `site/typically_auth.py`) changes:
 | `TYPICALLY_POD_PREFIX` | training pod name prefix; `serve.sh` uses `typically-hosted-job-` so a hosted server and a local one on the same RunPod account never sweep each other's pods |
 | `RUNPOD_API_KEY` | training pods (runpodctl 2.x reads it from the env). `serve.sh` creates the `~/.runpod/ssh/RunPod-Key-Go` key pair the job runner hands each training pod |
 | `HF_TOKEN` | the training data / base checkpoints on Hugging Face (read by `scripts/typically_job.py`, copied to each training pod as a 0600 file) |
-| `OPENROUTER_API_KEY` | optional: "Read by Claude" plans and question parsing |
+| `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` | optional (Anthropic wins if both): AI reading of uploads, question parsing in chat, and the Enrich step's extra examples and translations. No spend cap (see Costs); without a key the built-in rules are used and those two Enrich options are off |
 
 Invite codes are the only credential, and there is no login rate limit, so make them long and random:
 `python3 -c "import secrets; print(secrets.token_urlsafe(12))"`. A user's id is a hash of their code, so a given code always
@@ -56,7 +60,12 @@ docker run -p 8787:8787 --env-file deploy/hosted.env -v typically-data:/data typ
 
 The container listens on 0.0.0.0:8787 with sign-in on. Put TLS in front of it (a Cloudflare tunnel, Caddy, your platform's
 proxy), and set `FORWARDED_ALLOW_IPS` to the proxy's address so share links and the cookie see `https`. Run one container:
-job tracking and quotas live in the server process.
+job tracking and quotas live in the server process. Stop it with `docker stop -t 120`: on shutdown the server deletes the
+training GPUs of runs in flight (those runs fail; they do not resume), which can take up to ~90 s.
+
+The Northwind sample model is git-ignored; the build copies it from `.context/typically/results/co_f/` and
+`data_co_a/eval/a_oneliner.jsonl` when they are in the build context, and `deploy/serve.sh` seeds it into `/data`. Without
+them the sample still lists, but its chat, results and download do not work.
 
 ## RunPod: one GPU pod behind a Cloudflare tunnel
 
@@ -65,10 +74,14 @@ cp deploy/hosted.env.example deploy/hosted.env    # fill it in; it is git-ignore
 deploy/runpod.sh up      # builds the app, creates the pod (L4, else A5000, 3090, A40, A6000; secure cloud), prints the https URL
 deploy/runpod.sh url     # the URL again
 deploy/runpod.sh logs    # the server log
-deploy/runpod.sh down    # copies the data back to .context/typically-hosted-<time>.tgz, then deletes the pod
+deploy/runpod.sh down    # stops the server, copies the data back to .context/typically-hosted-<time>.tgz, deletes its training pods, then the pod
 ```
 
-`up` copies the repo (what `git ls-files` lists, minus figures/paper/blog/docs/vendor, plus the built app) and
+If anything fails after the pod is created, or the server is not healthy within 15 minutes, `up` prints the server log,
+deletes the pod and exits non-zero.
+
+`up` copies the repo (what `git ls-files` lists, minus figures/paper/blog/docs/vendor, plus the built app and the Northwind
+sample model, see Docker above) and
 `hosted.env` (scp, 0600, never on a command line) to the pod and runs `deploy/start.sh` there: it installs the env, runpodctl
 and cloudflared, opens a quick tunnel, and starts `deploy/serve.sh` on 127.0.0.1 (no port is open on the pod; only the tunnel
 reaches it). The pod has the runpodctl key, so its "Teach it" rents H100 training pods exactly like the local server does.
@@ -78,8 +91,9 @@ Cloudflare account (`cloudflared tunnel create typically`, route a hostname to i
 `--url`, and set `TYPICALLY_PUBLIC_URL` to that hostname. If RunPod restarts the pod, run `deploy/start.sh` again over ssh.
 
 **Idle guard.** The host pod bills by the hour whether anyone uses it or not, and nothing deletes it but `down`. Put a
-calendar reminder on the stunt's end date, and check `runpodctl pod list` afterwards. Training pods are deleted by the
-job runner when each run ends (and orphans are swept when the server starts).
+calendar reminder on the date the invite period ends, and check `runpodctl pod list` afterwards. Training pods are deleted by
+the job runner when each run ends, by the server's shutdown, and by a sweep every 5 minutes (a pod whose run has not reported
+for 15 minutes); `down` deletes any `typically-hosted-job-*` pod left.
 
 ## Invites, admins, secret
 
@@ -92,7 +106,9 @@ job runner when each run ends (and orphans are swept when the server starts).
 ## Costs (check current RunPod prices)
 
 - Host pod: an L4, RTX A5000, RTX 3090, A40 or RTX A6000 on secure cloud, roughly $0.30-0.50 an hour, about $8-12 a day while it is up.
-- Training: one H100 per run, about $2.50-3 an hour. A small-base run takes roughly 25-45 minutes (about $1-2), a
-  medium-base run about twice that. Worst case per day = invited users x `TYPICALLY_DAILY_RUNS` runs, and at most
-  `TYPICALLY_MAX_JOBS` H100s at once.
+- Training: one H100 per run (about $2.70 an hour). Measured: a small-base run takes about 10 minutes (8-14, one outlier at
+  28), about $0.60; a medium-base run about 25 minutes, about $1.50. Thorough (800 steps) roughly doubles the training part.
+  Worst case per day = invited users x `TYPICALLY_DAILY_RUNS` runs, and at most `TYPICALLY_MAX_JOBS` H100s at once.
+- AI enrichment (Enrich's extra examples and translations, at most 3 languages per run) runs on the operator's LLM key with
+  no spend cap: on a large table with several languages one run can cost tens of dollars.
 - Cloudflare quick tunnels are free.

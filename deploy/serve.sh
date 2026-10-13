@@ -9,6 +9,12 @@ export TYPICALLY_DATA="${TYPICALLY_DATA:-/workspace/typically-data}"
 # its training pods get their own name prefix, so this server's orphan sweep never deletes a local dev server's pods (same account)
 export TYPICALLY_POD_PREFIX="${TYPICALLY_POD_PREFIX:-typically-hosted-job-}"
 mkdir -p "$TYPICALLY_DATA"
+# the Northwind sample model (deploy/runpod.sh and the Dockerfile ship it in .context/; git-ignored): seeded into the data dir once,
+# so Chat / Results / Download work on a fresh host. touch: the server trusts reveal.json only if it is no older than best.pt
+SAMPLE=.context/typically/results/co_f
+if [ -f "$SAMPLE/best.pt" ] && [ ! -f "$TYPICALLY_DATA/results/co_f/best.pt" ]; then
+  mkdir -p "$TYPICALLY_DATA/results/co_f" && cp "$SAMPLE"/* "$TYPICALLY_DATA/results/co_f/" && touch "$TYPICALLY_DATA/results/co_f/"*.json
+fi
 # the training runner rents GPUs with runpodctl (2.x reads RUNPOD_API_KEY from the env) and reaches them with this key pair:
 # typically_job.py hands each pod the public half as PUBLIC_KEY, so it never needs registering on the account
 KEY="$HOME/.runpod/ssh/RunPod-Key-Go"
