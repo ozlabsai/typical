@@ -215,13 +215,18 @@ def create_invite():
 
 @router.delete("/api/auth/invites/{code}")
 def revoke_invite(code: str):
-    """Owner or admin. The code leaves invites(), so its holder is signed out and their API keys stop on the next request."""
+    """Owner or admin. The code leaves invites(), so its holder is signed out and their API keys stop on the next request;
+    every invite that holder made (and so on down the chain) is revoked with it."""
     u = _inviter()
     with _issued_lock:
         issued = _issued()
         keep = [i for i in issued if not (hmac.compare_digest(i["code"].encode(), code.encode()) and (u.admin or i["by"] == u.uid))]
         if len(keep) == len(issued):
             raise HTTPException(404, "We can't find that invite.")
+        gone = {uid_of(code)}   # the revoked holder's own invites go too, and theirs in turn: a removed person leaves no way back in
+        while cut := [i for i in keep if i["by"] in gone]:
+            gone |= {uid_of(i["code"]) for i in cut}
+            keep = [i for i in keep if i["by"] not in gone]
         _write_issued(keep)
     return _mine(u)
 

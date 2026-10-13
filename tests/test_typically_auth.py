@@ -314,3 +314,16 @@ def test_invites_users_make(env, monkeypatch):
     assert (env / "issued_invites.json").stat().st_mode & 0o077 == 0
     monkeypatch.setenv("TYPICALLY_AUTH", "0")
     assert client().get("/api/auth/invites").status_code == 404 and client().post("/api/auth/invites").status_code == 404
+
+
+def test_revoking_someone_revokes_the_invites_they_made(env):
+    admin = client(ADMIN)
+    code = admin.post("/api/auth/invites").json()["code"]
+    alice = client(code)
+    sub = alice.post("/api/auth/invites").json()["code"]
+    bob = client(sub)
+    subsub = bob.post("/api/auth/invites").json()["code"]
+    assert admin.delete(f"/api/auth/invites/{code}").status_code == 200
+    for c in (code, sub, subsub):
+        assert c not in auth.invites()
+    assert bob.get("/api/auth/me").status_code == 401
