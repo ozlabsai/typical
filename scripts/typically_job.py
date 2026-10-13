@@ -4,7 +4,8 @@ uv run --no-project python scripts/typically_job.py <slug> [small|medium] [steps
 Progress for the UI: .context/typically/jobs/<slug>/status.json; full log: jobs/<slug>/job.log (never contains the HF token).
 The pod (named typically-job-<slug>-<job_id>, job_id in status.json) is deleted in a `finally` on every path; a single deadline (75 min small,
 150 min medium) caps every subprocess call. RunPod API calls (create / get / list) ride out a flaky API with backoff, then fail as
-"failed_provider"; deletion retries until confirmed. `--reconcile` (also run at server start and before every job) deletes orphaned typically-job-* pods.
+"failed_provider"; deletion retries until confirmed. `--reconcile` (also run by the server at start, every RECONCILE_S and before every job)
+deletes orphaned <POD_PREFIX>* pods and fails the status of a job whose process died. The server's shutdown hook calls shutdown().
 `--train-flags <company> <steps> <run>` (run on the pod by scripts/typically_spike_pod.sh) prints the pcdm/train.py flags.
 Needs: runpodctl configured (`runpodctl config --apiKey "$RUNPOD_API_KEY"` also creates the ~/.runpod/ssh key this uses), and HF_TOKEN
 (env, else the `hf auth login` cache). Data dir: TYPICALLY_DATA, else .context/typically.
@@ -14,10 +15,12 @@ import math
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -31,9 +34,12 @@ NOT_SHIPPED = ("site/", "figures/", "paper/", "blog/", "docs/", "vendor/")   # p
 POLL_S, READY_S, DEADLINE_S, STALE_S = 20, 300, 75 * 60, 90 * 60   # DEADLINE_S / STALE_S are the small base's; x BASES[base]["scale"]
 WAIT_CAP_S = 3 * READY_S   # readiness wait incl. time lost to a failing RunPod API (which does not count against READY_S of boot)
 RETRY_S = (5, 15, 30)   # backoff between the attempts of one RunPod API call (4 attempts)
-PROVIDER_DOWN = "The GPU provider isn't responding; nothing is running or billing."
-NO_GPU = re.compile(r"instance|availab|capacity", re.I)   # ponytail: runpodctl's no-capacity text is not documented; this is a guess
+PROVIDER_DOWN = "The GPU provider isn't responding."
+# RunPod's no-capacity errors ("There are no longer any instances available with the requested specifications", "There are no instances
+# currently available", "This machine does not have the resources to deploy your pod"); never a bare "unavailable" (HTTP 503 is a flaky API)
+NO_GPU = re.compile(r"no (longer any )?instances?( currently)? available|does not have the resources", re.I)
 HEARTBEAT = timedelta(minutes=15)   # an active job not owned by this process is orphaned only after this long without a status write
+RECONCILE_S = 300   # the server's periodic reconcile
 STEPS = (200, 400, 800)   # Quick / Balanced / Thorough
 # scale: deadline + stale multiplier. mem: the memory profile of each release's own recipe (medium = 4B: grad-checkpointing, smaller micro-batch).
 BASES = {"small": {"scale": 1, "mem": ["--grad_accum", "8"]}, "medium": {"scale": 2, "mem": ["--grad_ckpt", "--grad_accum", "16"]}}
@@ -51,7 +57,8 @@ SLUG_RE = re.compile(r"^[a-z0-9_]{1,40}$")
 # a hosted server (deploy/serve.sh) uses "typically-hosted-job-": its reconcile then never sees a local server's pods on the same account
 POD_PREFIX = os.environ.get("TYPICALLY_POD_PREFIX") or "typically-job-"
 _STOP: set[str] = set()   # slugs the user pressed Stop on; checked before every pod call and between AI enrichment calls
-STOPPED = "You stopped this run. The GPU was shut down; nothing is running or billing."
+RUNNING: dict[str, str | None] = {}   # slug -> owner of every job (preparing or on a GPU) in THIS process; the server's _jobs
+UNCONFIRMED = " We could not confirm the GPU machine was shut down; it is removed automatically within a few minutes."
 
 
 class Stopped(BaseException):   # BaseException: no retry / poll handler may swallow it
@@ -67,7 +74,7 @@ def check_stop(slug: str) -> None:
         raise Stopped()
 
 
-_ACTIVE: set[str] = set()   # job_ids running in THIS process; ponytail: reconcile assumes one process owns all typically-job-* pods
+_ACTIVE: dict[str, "Job"] = {}   # job_id -> Job running in THIS process; ponytail: reconcile assumes one process owns all <POD_PREFIX>* pods
 REMOTE = "/workspace/pcdm"
 JOB_SH = """trap 'echo $? > /workspace/job.exit' EXIT   # the poller reads the chain's exit code, not log text
 set -e
@@ -125,23 +132,30 @@ def merge_events(events: list[dict], new) -> list[dict]:
     return list(out.values())
 
 
+def _save(slug: str, st: dict) -> None:
+    """Atomic: a reader never sees half a file. The tmp name is per thread (the job, the reconcile and the shutdown may all write)."""
+    p = job_dir(slug) / "status.json"
+    tmp = p.with_name(f"status.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(st))
+    os.replace(tmp, p)
+
+
 def write_status(slug: str, phase: str, message: str, code: str | None = None, events=(), reset: bool | None = None, **extra) -> dict:
-    """reset (default: phase == "queued") starts a new run's status; else started_at, pod_id, events and gpu carry over."""
+    """reset (default: phase == "queued") starts a new run's status; else started_at, pod_id, job_id, events and gpu carry over."""
     assert phase in PHASES
     prev = {} if (phase == "queued" if reset is None else reset) else (read_status(slug) or {})
     st = {"phase": phase, "started_at": prev.get("started_at", _now()), "updated_at": _now(), "message": message,
           "code": code or CODES.get(phase, phase), "pod_id": prev.get("pod_id"), "events": merge_events(prev.get("events", []), events),
-          **({"gpu": prev["gpu"]} if "gpu" in prev else {}), **extra}
+          **{k: prev[k] for k in ("gpu", "job_id", "base", "steps") if k in prev}, **extra}
     job_dir(slug).mkdir(parents=True, exist_ok=True)
-    (job_dir(slug) / "status.json").write_text(json.dumps(st))
+    _save(slug, st)
     return st
 
 
 def add_events(slug: str, *events: dict) -> None:
-    """Milestones without a phase change (dataset preparation progress, the GPU shut down after done/failed)."""
+    """Milestones without a phase change (dataset preparation progress, the GPU shut down after done). Counts as a heartbeat."""
     if st := read_status(slug):
-        st["events"] = merge_events(st.get("events", []), events)
-        (job_dir(slug) / "status.json").write_text(json.dumps(st))
+        _save(slug, {**st, "updated_at": _now(), "events": merge_events(st.get("events", []), events)})
 
 
 MARK = re.compile(r"^\[typically\] (\w+) (\S+) ?(.*)$", re.M)   # scripts/typically_spike_pod.sh mark(): key, pod time, detail
@@ -208,6 +222,8 @@ class Job:
         self.slug, self.log, self.tmp, self.id, self.base, self.steps = slug, log, tmp, secrets.token_hex(4), base, steps
         self.name = f"{POD_PREFIX}{slug}-{self.id}"   # unique per job: nothing else can ever match it
         self.dir, self.pod_id, self.host, self.lost, self.gpu = job_dir(slug), None, None, 0.0, None   # lost: seconds spent on failed API calls
+        self.gone, self._deleting = False, threading.Lock()   # delete() runs from the job's finally and from shutdown()
+        self.settled = False   # shutdown() wrote the outcome: this job writes no more status
         self.deadline = time.monotonic() + DEADLINE_S * BASES[base]["scale"]
         self.tar = tmp / "repo.tar.gz"
 
@@ -220,6 +236,8 @@ class Job:
         return _run(argv, min(cap, left), out)
 
     def to(self, phase: str, message: str, code: str | None = None, **extra):
+        if self.settled:
+            return
         self.log(f"[{phase}] {message}" + "".join(f" <{e['key']}>" for e in extra.get("events", ())))
         write_status(self.slug, phase, message, code, pod_id=self.pod_id, job_id=self.id, base=self.base, steps=self.steps, **extra)
 
@@ -287,14 +305,21 @@ class Job:
         raise RuntimeError("the GPU machine did not come up in 5 minutes")
 
     def delete(self) -> bool:
-        """Retried with backoff until RunPod confirms the pod is gone. Plain _run calls: works after the deadline. False = unconfirmed."""
+        """Retried with backoff until RunPod confirms the pod is gone. Plain _run calls: works after the deadline. False = unconfirmed.
+        The recorded pod id is deleted directly too: a pod list can lag behind a create."""
+        with self._deleting:
+            if not self.gone:
+                self.gone = self._delete()
+            return self.gone
+
+    def _delete(self) -> bool:
         for wait in (*RETRY_S, None):
             try:
                 ids = self.mine(_pods())
             except Exception as e:
                 self.log(f"pod list failed: {e}")
-                ids = [self.pod_id] if self.pod_id else []
-            for i in ids:
+                ids = []
+            for i in dict.fromkeys([*ids, *([self.pod_id] if self.pod_id else [])]):
                 try:
                     delete_pod(i)
                 except Exception as e:
@@ -375,9 +400,27 @@ class Job:
                         "Setting up and measuring the starting model.", None if steps else "baseline", events=new, progress=p, **gpu)
 
     def download(self):
+        """Into results/co_<slug>/.incoming/ first, then swapped in (best.pt last): a stopped or failed download never touches the
+        model already there (a retrain under the same name keeps serving the old one until the new one is whole)."""
         dest = TYPICALLY / "results" / f"co_{self.slug}"
-        dest.mkdir(parents=True, exist_ok=True)
-        get = lambda remote, name: self.call(["scp", *SSH_OPTS, "-P", self.host[1], f"root@{self.host[0]}:{REMOTE}/{remote}", str(dest / name)], 600)
+        stage = dest / ".incoming"   # inside dest: same filesystem for os.replace, and tuned_models' */best.pt never sees it
+        shutil.rmtree(stage, ignore_errors=True)
+        stage.mkdir(parents=True)
+        get = lambda remote, name: self.call(["scp", *SSH_OPTS, "-P", self.host[1], f"root@{self.host[0]}:{REMOTE}/{remote}", str(stage / name)], 600)
+        try:
+            self._fetch(get)
+            for name in ("eval_co.json", "base_eval_co.json", "reveal.json", "best.pt"):   # best.pt last: a half-done swap is never offered
+                if (stage / name).exists():
+                    os.replace(stage / name, dest / name)
+                elif name == "reveal.json":
+                    (dest / name).unlink(missing_ok=True)   # a retrain's stale one must not be served for the new best.pt
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+        if (reveal := dest / "reveal.json").exists():
+            os.utime(reveal)   # the server's cache counts only if reveal.json is no older than best.pt
+        self.log(f"downloaded to {dest}")
+
+    def _fetch(self, get):
         try:   # the UI shows what is coming back
             size = int(self.ssh(f"stat -c %s {REMOTE}/runs/co_{self.slug}/best.pt").strip() or 0)
             if size:
@@ -386,44 +429,73 @@ class Job:
             self.log(f"best.pt size unknown: {e}")
         get(f"runs/co_{self.slug}/eval_co.json", "eval_co.json")
         get("runs/base/eval_co.json", "base_eval_co.json")
-        reveal = dest / "reveal.json"   # scored on the pod (typically_reveal --job); optional: the server scores locally without it
-        reveal.unlink(missing_ok=True)   # a retrain's stale one must not be touched fresh below
-        try:
+        try:   # scored on the pod (typically_reveal --job); optional: the server scores locally without it
             get(f"runs/co_{self.slug}/reveal.json", "reveal.json")
         except RuntimeError as e:
             self.log(f"no reveal.json from the pod ({e}); the server will score it locally")
-        get(f"runs/co_{self.slug}/best.pt", "best.pt")   # best.pt last: a half-done run is never offered as a model
-        if reveal.exists():
-            os.utime(reveal)   # the server's cache counts only if reveal.json is no older than best.pt
-        self.log(f"downloaded to {dest}")
+        get(f"runs/co_{self.slug}/best.pt", "best.pt")
+
+    def finish(self, err: BaseException | None, gone: bool) -> None:
+        """The final status, written only once the pod's fate is known: "nothing is running or billing" is never claimed early."""
+        off = [event("gpu_off")] if gone and self.pod_id else [event("gpu_off_unconfirmed")] if not gone else []
+        if err is None:
+            add_events(self.slug, *off)
+            return
+        code, why = failure(err)
+        self.to("failed", f"{why} Nothing is running or billing." if gone else why + UNCONFIRMED, code if gone else "failed",
+                events=[event("failed"), *off])
+
+
+def failure(e: BaseException) -> tuple[str, str]:
+    """(code, plain message) of a failed run. Raw exception text (paths, IPs, runpodctl output) stays in job.log."""
+    if isinstance(e, NoGpu):
+        return "failed_no_gpu", "No GPU was available right now, so training did not start."
+    if isinstance(e, ProviderDown):
+        return "failed_provider", PROVIDER_DOWN
+    if isinstance(e, Stopped):
+        return "stopped", "You stopped this run."
+    if isinstance(e, (Deadline, TrainingFailed)):   # our own wording
+        return ("failed_timeout" if isinstance(e, Deadline) else "failed_training"), f"Training did not finish: {e}."
+    return "failed_infra", "Training did not finish: the GPU machine ran into a problem."
+
+
+def _age(st: dict) -> timedelta | None:
+    return datetime.now(timezone.utc) - datetime.fromisoformat(st["updated_at"]) if st.get("updated_at") else None
+
+
+def _orphaned(slug: str, st: dict) -> bool:
+    """An active status no job of this process owns and nobody has rewritten for HEARTBEAT: its process died. Another process may own
+    a live job (a second server on the same data dir once deleted one): only a silent heartbeat (the poller rewrites status.json every
+    POLL_S) marks it orphaned."""
+    return (st.get("phase") in ACTIVE and slug not in RUNNING and st.get("job_id") not in _ACTIVE
+            and (age := _age(st)) is not None and age > HEARTBEAT)
 
 
 def reconcile(log=print) -> list[str]:
-    """Delete typically-job-* pods this process is not actively running: no status file, not an active phase / not ours, or stale
-    (> 90 min small / 180 min medium). Never touches pods with other names. Returns the deleted pod ids."""
-    known = {}   # job_id / pod_id -> status, from every job dir (the latest job per slug wins: status.json is overwritten)
+    """Delete <POD_PREFIX>* pods this process is not actively running: no status file, not an active phase / not ours, or stale
+    (> 90 min small / 180 min medium). Never touches pods with other names. Then fail the status of every orphaned job (its process
+    died: a server restart), so it does not say "training" forever. Returns the deleted pod ids."""
+    known, statuses = {}, {}   # job_id / pod_id -> (slug, status), from every job dir (the latest job per slug wins)
     for p in (TYPICALLY / "jobs").glob("*/status.json"):
         try:
             st = json.loads(p.read_text())
         except ValueError:
             continue
-        known.update({k: st for k in (st.get("job_id"), st.get("pod_id")) if k})
-    gone = []
+        statuses[p.parent.name] = st
+        known.update({k: (p.parent.name, st) for k in (st.get("job_id"), st.get("pod_id")) if k})
+    gone, left = [], set()   # left: slugs whose pod could not be deleted
     for pod in list_pods(log):
         name = pod.get("name") or ""
         if not name.startswith(POD_PREFIX):
             continue
-        st = known.get(pod["id"]) or known.get(name.rsplit("-", 1)[-1])
-        age = datetime.now(timezone.utc) - datetime.fromisoformat(st["updated_at"]) if st and st.get("updated_at") else None
+        slug, st = known.get(pod["id"]) or known.get(name.rsplit("-", 1)[-1]) or (None, None)
         if not st:
             why = "no status file"
         elif st.get("phase") not in ACTIVE:
             why = f"job is {st.get('phase')}"
-        elif st.get("job_id") not in _ACTIVE and age > HEARTBEAT:
-            # another process may own a live job (a second server on the same .context once deleted one): only a
-            # silent heartbeat (the poller rewrites status.json every POLL_S) marks it orphaned
-            why = f"no heartbeat for {int(age.total_seconds() // 60)} min"
-        elif age > timedelta(seconds=STALE_S * BASES.get(st.get("base"), BASES["small"])["scale"]):
+        elif _orphaned(slug, st):
+            why = f"no heartbeat for {int(_age(st).total_seconds() // 60)} min"
+        elif (_age(st) or timedelta(0)) > timedelta(seconds=STALE_S * BASES.get(st.get("base"), BASES["small"])["scale"]):
             why = "status older than its deadline + 15 min"
         else:
             continue
@@ -432,8 +504,50 @@ def reconcile(log=print) -> list[str]:
             delete_pod(pod["id"])
             gone.append(pod["id"])
         except Exception as e:
+            left.add(slug)
             log(f"reconcile: delete {pod['id']} failed: {e}")
+    for slug, st in statuses.items():
+        if _orphaned(slug, st):
+            log(f"reconcile: {slug} was {st['phase']} with no live job; marking it failed")
+            why = "The server restarted while this model was being taught, so the run stopped."
+            write_status(slug, "failed", why + UNCONFIRMED if slug in left else f"{why} Nothing is running or billing.",
+                         "failed" if slug in left else "failed_restart", events=[event("failed")], reset=False)
     return gone
+
+
+def reconcile_forever(log=print, every: float = RECONCILE_S) -> None:
+    """The server's daemon thread: reconcile now (a crashed server may have left a pod running), then every `every` seconds."""
+    while True:
+        try:
+            reconcile(log)
+        except Exception as e:   # no runpodctl / RunPod down: try again next round
+            log(f"reconcile failed: {type(e).__name__}: {e}")
+        time.sleep(every)
+
+
+def shutdown(timeout: float = 90, log=print) -> None:
+    """Server exit: job threads are daemons and die with the process (their `finally` never runs), so stop every job and delete
+    its pod here, waiting at most `timeout` seconds; then fail the status of every job of this process."""
+    for slug in list(RUNNING):
+        stop(slug)
+    jobs = list(_ACTIVE.values())
+    threads = [threading.Thread(target=j.delete, daemon=True) for j in jobs]
+    for t in threads:
+        t.start()
+    end = time.monotonic() + timeout
+    for t in threads:
+        t.join(max(0.0, end - time.monotonic()))
+    why = "The server restarted while this model was being taught, so the run stopped."
+    live = lambda slug: (read_status(slug) or {}).get("phase") in ACTIVE   # a job that just finished keeps its own outcome
+    for j in jobs:
+        log(f"shutdown: {j.slug} stopped; pod {'deleted' if j.gone else 'NOT confirmed deleted'} ({j.name}, {j.pod_id})")
+        if live(j.slug):
+            j.to("failed", f"{why} Nothing is running or billing." if j.gone else why + UNCONFIRMED, "failed_restart" if j.gone else "failed",
+                 events=[event("failed")])
+        j.settled = True
+    for slug in set(RUNNING) - {j.slug for j in jobs}:   # still preparing its examples: no pod was rented
+        if live(slug):
+            write_status(slug, "failed", f"{why} Nothing is running or billing.", "failed_restart", events=[event("failed")], reset=False)
 
 
 def run(slug: str, log=None, base: str = "small", steps: int = 400, prepared: bool = False) -> None:
@@ -444,8 +558,8 @@ def run(slug: str, log=None, base: str = "small", steps: int = 400, prepared: bo
     log = log or file_log(slug)
     with tempfile.TemporaryDirectory() as tmp:
         j = Job(slug, log, Path(tmp), base, steps)
-        _ACTIVE.add(j.id)
-        failed = ""
+        _ACTIVE[j.id] = j
+        err = None
         try:
             j.to("queued", "Waiting to start.", reset=not prepared)
             j.snapshot()
@@ -465,18 +579,12 @@ def run(slug: str, log=None, base: str = "small", steps: int = 400, prepared: bo
             j.to("done", "Your model is ready.", events=[event("done")], progress=1.0)
         except BaseException as e:   # incl. KeyboardInterrupt from the CLI; the pod must still go
             log(f"FAILED: {type(e).__name__}: {e}")
-            failed = PROVIDER_DOWN if isinstance(e, ProviderDown) else STOPPED if isinstance(e, Stopped) else f"Training did not finish: {e}"
-            j.to("failed", failed, "failed_timeout" if isinstance(e, Deadline) else "failed_training" if isinstance(e, TrainingFailed)
-                 else "failed_provider" if isinstance(e, ProviderDown) else "stopped" if isinstance(e, Stopped) else "failed_infra",
-                 events=[event("failed")])
+            err = e
         finally:
-            gone = j.delete()
-            if gone and j.pod_id:
-                add_events(slug, event("gpu_off"))
-            if not gone and (read_status(slug) or {}).get("phase") == "failed":   # the message must not claim nothing is billing
-                j.to("failed", failed.removesuffix("; nothing is running or billing.").rstrip(".") + ". We could not confirm the GPU machine was shut "
-                     "down; it is removed automatically the next time the server starts or a model is taught.")   # code "failed": the UI shows this text
-            _ACTIVE.discard(j.id)
+            try:
+                j.finish(err, j.delete())
+            finally:
+                _ACTIVE.pop(j.id, None)
 
 
 def train_flags(company: str, steps: int, run: str, base_args: dict, base: str = "small") -> list[str]:

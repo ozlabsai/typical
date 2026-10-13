@@ -11,6 +11,7 @@ import contextvars
 import csv
 import io
 import json
+import logging
 import os
 import re
 import random
@@ -19,6 +20,7 @@ import sys
 import threading
 import time
 from collections import Counter
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -56,17 +58,25 @@ from typically_spike import build_from_plan, build_import, write
 TYPICALLY = typically_job.TYPICALLY   # TYPICALLY_DATA, else .context/typically
 REPOS = {"typical-small": "OzLabs/typical-small", "typical-medium": "OzLabs/typical-medium"}
 
-app = FastAPI(**({"docs_url": None, "redoc_url": None, "openapi_url": None} if auth.enabled() else {}))   # hosted: no open API map
+log = logging.getLogger("uvicorn.error")   # raw errors go to the server log; users get a plain message + a stable code
+
+
+@asynccontextmanager
+async def lifespan(app):
+    """Rented pods never outlive the server: reconcile at start and every RECONCILE_S (orphans past the heartbeat window: pods deleted,
+    statuses failed); at shutdown stop every job of this process and delete its pod (bounded wait; uvicorn waits for this)."""
+    threading.Thread(target=typically_job.reconcile_forever, args=(log.info,), daemon=True).start()
+    yield
+    typically_job.shutdown(log=log.warning)
+
+
+app = FastAPI(lifespan=lifespan, **({"docs_url": None, "redoc_url": None, "openapi_url": None} if auth.enabled() else {}))   # hosted: no open API map
 if auth.enabled():
     auth._secret()   # fail at start, not at the first sign-in
 else:   # hosted = same-origin only: no CORS at all
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:8787", "http://127.0.0.1:8787"], allow_methods=["*"], allow_headers=["*"])
 app.middleware("http")(auth.middleware)
 
-
-@app.on_event("startup")
-def _reconcile_pods():   # a crashed server may have left a rented pod running; off-thread so startup is not blocked
-    threading.Thread(target=typically_job.reconcile, daemon=True).start()
 
 # Multi-LoRA: every model (the base too) keeps only its LoRA + head; checkpoints with the same architecture share ONE Backbone,
 # and Typical.activate() (called by get_model, under _lock) copies the wanted LoRA into it in place.
@@ -229,7 +239,7 @@ def _dist(rows: list[dict]) -> dict:
 
 
 _jobs_lock = threading.Lock()
-_jobs: dict[str, str | None] = {}   # slug -> owner of every job running in this process; /build refuses these slugs (the job snapshots the
+_jobs = typically_job.RUNNING   # slug -> owner of every job running in this process; /build refuses these slugs (the job snapshots the
 # dataset when it starts). ponytail: in-process; a second server process would not see them
 
 
@@ -343,6 +353,7 @@ def start_job(slug: str, base: str = "small", steps: int = 400, prepare=None) ->
     with _jobs_lock:
         auth.admit(slug, _jobs)
         _jobs[slug] = auth.stamp().get("owner")
+        typically_job._STOP.discard(slug)   # a Stop that raced the previous run's end must not abort this one
 
     def end():
         with _jobs_lock:

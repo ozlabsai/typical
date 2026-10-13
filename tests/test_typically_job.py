@@ -77,7 +77,10 @@ def env(tmp_path, monkeypatch):
     (jd / "eval").mkdir(parents=True)
     for f in ("train.jsonl", "val.jsonl", "eval/import_oneliner.jsonl"):
         (jd / f).write_text("{}\n")
-    monkeypatch.setattr(tj, "_ACTIVE", set())
+    monkeypatch.setattr(tj, "_ACTIVE", {})
+    monkeypatch.setattr(tj, "RUNNING", {})
+    monkeypatch.setattr(server, "_jobs", tj.RUNNING)   # the same registry, as in server.py
+    monkeypatch.setattr(tj, "_STOP", set())
     monkeypatch.setattr(tj.time, "sleep", lambda s: None)
     monkeypatch.setattr(tj, "POLL_S", 0)
     history = []
@@ -151,7 +154,7 @@ def test_a_missing_pod_reveal_does_not_fail_the_job_or_keep_a_stale_one(env, mon
 def test_names_are_unique_and_prefix_pods_are_never_touched(env, monkeypatch):
     # another live job of a similarly named slug: same "typically-job-acme" prefix, active in this process
     put_status("acme2", phase="training", job_id="cafe1234", pod_id="podX", updated_at=tj._now())
-    tj._ACTIVE.add("cafe1234")
+    tj._ACTIVE["cafe1234"] = None
     cli = use(monkeypatch, FakeCli(POLLS, pods=[{"id": "podX", "name": "typically-job-acme2-cafe1234"}]))
     tj.run(SLUG, lambda m: None)
     tj.run(SLUG, lambda m: None)
@@ -169,7 +172,7 @@ def test_unparseable_create_deletes_only_the_exact_name(env, monkeypatch):
                 return "not json"
             return super().__call__(argv, timeout, out)
     put_status("acme2", phase="training", job_id="cafe1234", updated_at=tj._now())
-    tj._ACTIVE.add("cafe1234")
+    tj._ACTIVE["cafe1234"] = None
     cli = use(monkeypatch, Cli(pods=[{"id": "podX", "name": "typically-job-acme2-cafe1234"}]))
     tj.run(SLUG, lambda m: None)
     assert tj.read_status(SLUG)["phase"] == "failed"
@@ -184,7 +187,7 @@ def test_reconcile_deletes_stale_and_unknown_but_not_other_pods(env, monkeypatch
     silent = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(timespec="seconds")
     put_status("orphan", phase="training", job_id="ffff6666", pod_id="p_orphan", updated_at=silent)   # another process, no heartbeat
     put_status("finished", phase="done", job_id="eeee5555", pod_id="p_done", updated_at=tj._now())
-    tj._ACTIVE.update({"aaaa1111", "bbbb2222", "eeee5555"})
+    tj._ACTIVE.update(dict.fromkeys(["aaaa1111", "bbbb2222", "eeee5555"]))
     pod = lambda i, n: {"id": i, "name": n}
     cli = use(monkeypatch, FakeCli(pods=[pod("p_stale", "typically-job-stale-aaaa1111"), pod("p_live", "typically-job-live-bbbb2222"),
                                          pod("p_other_live", "typically-job-other-cccc3333"), pod("p_orphan", "typically-job-orphan-ffff6666"),
@@ -193,8 +196,47 @@ def test_reconcile_deletes_stale_and_unknown_but_not_other_pods(env, monkeypatch
                                          pod("p_prefix", "typically-spike-1")]))
     logs = []
     assert set(tj.reconcile(logs.append)) == {"p_stale", "p_orphan", "p_done", "p_ghost"}
-    assert cli.deleted_ids() == {"p_stale", "p_orphan", "p_done", "p_ghost"} and len(logs) == 4
+    assert cli.deleted_ids() == {"p_stale", "p_orphan", "p_done", "p_ghost"} and len(logs) == 5
     assert {p["id"] for p in cli.pods} == {"p_live", "p_other_live", "p_other", "p_prefix"}   # a second server must not kill a live job
+    # the orphan's process is gone: its card must not say "training" forever; live jobs (ours or another process's) are untouched
+    st = tj.read_status("orphan")
+    assert (st["phase"], st["code"], st["job_id"]) == ("failed", "failed_restart", "ffff6666") and "Nothing is running" in st["message"]
+    assert [tj.read_status(s)["phase"] for s in ("stale", "live", "other")] == ["training"] * 3
+
+
+def test_reconcile_fails_an_orphaned_status_even_without_a_pod(env, monkeypatch):
+    silent = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(timespec="seconds")
+    put_status("prep", phase="queued", code="preparing", updated_at=silent)   # the server died while preparing: no pod ever existed
+    put_status("mine", phase="queued", code="preparing", updated_at=silent)
+    tj.RUNNING["mine"] = None   # still preparing in this process (a long enrichment): not an orphan
+    use(monkeypatch, FakeCli())
+    tj.reconcile(lambda m: None)
+    assert tj.read_status("prep")["code"] == "failed_restart" and tj.read_status("mine")["phase"] == "queued"
+
+
+def test_shutdown_deletes_the_pods_of_running_jobs_and_fails_their_status(env, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+
+    class Cli(FakeCli):   # the job hangs in a long call (an upload, a poll) while the server exits
+        def __call__(self, argv, timeout, out=None):
+            if argv[0] == "ssh" and "job.pid" in argv[-1] and "kill" in argv[-1]:
+                started.set()
+                release.wait(5)
+            return super().__call__(argv, timeout, out)
+    cli = use(monkeypatch, Cli([ALIVE] * 10))
+    tj.RUNNING.update({SLUG: None, "prepping": None})
+    tj.write_status("prepping", "queued", "Preparing", "preparing")
+    job = threading.Thread(target=tj.run, args=(SLUG, lambda m: None))
+    job.start()
+    assert started.wait(5)
+    tj.shutdown(timeout=5, log=lambda m: None)
+    st = tj.read_status(SLUG)
+    assert cli.deleted_ids() == {"pod1"} and cli.pods == []
+    assert (st["phase"], st["code"]) == ("failed", "failed_restart") and "Nothing is running" in st["message"]
+    assert tj.read_status("prepping")["code"] == "failed_restart"
+    release.set()   # had the process lived on, the job thread stops at its next call and keeps the outcome shutdown wrote
+    job.join(5)
+    assert tj.read_status(SLUG)["code"] == "failed_restart" and len(cli.deleted()) == 1
 
 
 def test_run_reconciles_before_creating_a_pod(env, monkeypatch):
@@ -258,6 +300,7 @@ def test_exception_mid_upload_deletes_pod(env, monkeypatch):
     cli = use(monkeypatch, FakeCli(POLLS, fail_on=lambda a: a[0] == "scp" and a[-2].endswith("repo.tar.gz")))
     tj.run(SLUG, lambda m: None)
     assert tj.read_status(SLUG)["phase"] == "failed" and env[-1] == "failed" and tj.read_status(SLUG)["code"] == "failed_infra"
+    assert "boom" not in tj.read_status(SLUG)["message"]   # raw error text (IPs, paths) stays in job.log
     assert not any(a[0] == "ssh" and "job.sh" in a[-1] for a in cli.calls)   # never launched
     assert len(cli.deleted()) == 1 and cli.pods == []
 
@@ -365,7 +408,7 @@ def test_reconcile_uses_the_bases_stale_limit(env, monkeypatch):
     age = lambda m: (datetime.now(timezone.utc) - timedelta(minutes=m)).isoformat(timespec="seconds")
     put_status("s", phase="training", job_id="aaaa1111", updated_at=age(100), base="small")
     put_status("m", phase="training", job_id="bbbb2222", updated_at=age(100), base="medium")   # 100 min < 180 min
-    tj._ACTIVE.update({"aaaa1111", "bbbb2222"})
+    tj._ACTIVE.update(dict.fromkeys(["aaaa1111", "bbbb2222"]))
     pod = lambda i, n: {"id": i, "name": n}
     cli = use(monkeypatch, FakeCli(pods=[pod("ps", "typically-job-s-aaaa1111"), pod("pm", "typically-job-m-bbbb2222")]))
     assert tj.reconcile(lambda m: None) == ["ps"] and cli.deleted_ids() == {"ps"}
@@ -441,7 +484,7 @@ def test_provider_down_while_booting_is_failed_provider_and_deletes(env, monkeyp
     cli = use(monkeypatch, FakeCli(POLLS, fail_on=failing(clock, "get")))
     tj.run(SLUG, lambda m: None)
     st = tj.read_status(SLUG)
-    assert (st["phase"], st["code"], st["message"]) == ("failed", "failed_provider", tj.PROVIDER_DOWN)
+    assert (st["phase"], st["code"], st["message"]) == ("failed", "failed_provider", tj.PROVIDER_DOWN + " Nothing is running or billing.")
     assert len(gets(cli)) == len(tj.RETRY_S) + 1 and cli.deleted_ids() == {"pod1"} and cli.pods == []
 
 
@@ -497,8 +540,21 @@ def test_no_gpu_is_not_retried_and_not_a_provider_failure(env, monkeypatch, cloc
     cli = use(monkeypatch, Cli())
     tj.run(SLUG, lambda m: None)
     st = tj.read_status(SLUG)
-    assert st["code"] == "failed_infra" and "no GPU" in st["message"]
+    assert st["code"] == "failed_no_gpu" and "No GPU" in st["message"] and "instances" not in st["message"]
     assert sum(a[:3] == ["runpodctl", "pod", "create"] for a in cli.calls) == 1
+
+
+def test_a_503_is_a_flaky_api_not_no_capacity(env, monkeypatch, clock):
+    class Cli(FakeCli):
+        def __call__(self, argv, timeout, out=None):
+            if argv[:3] == ["runpodctl", "pod", "create"]:
+                self.calls.append(argv)
+                raise RuntimeError('runpodctl pod failed (1): {"error":"503 Service Unavailable"}')
+            return super().__call__(argv, timeout, out)
+    cli = use(monkeypatch, Cli())
+    tj.run(SLUG, lambda m: None)
+    assert tj.read_status(SLUG)["code"] == "failed_provider"
+    assert sum(a[:3] == ["runpodctl", "pod", "create"] for a in cli.calls) == len(tj.RETRY_S) + 1
 
 
 def test_provider_down_at_create_is_failed_provider(env, monkeypatch, clock):
@@ -600,6 +656,65 @@ def test_stop_mid_training_deletes_the_pod_and_says_stopped(env, monkeypatch):
     cli = use(monkeypatch, Cli(POLLS))
     tj.run(SLUG, lambda m: None)
     st = tj.read_status(SLUG)
-    assert (st["phase"], st["code"], st["message"]) == ("failed", "stopped", tj.STOPPED)
+    assert (st["phase"], st["code"], st["message"]) == ("failed", "stopped", "You stopped this run. Nothing is running or billing.")
     assert cli.deleted_ids() == {"pod1"} and cli.pods == []
     tj._STOP.discard(SLUG)
+
+
+def test_failed_is_written_only_after_the_pod_is_deleted(env, monkeypatch):
+    cli = use(monkeypatch, FakeCli([ALIVE + "step 50 x\n", "EXIT 1\n"]))
+    seen, real = [], tj.write_status
+    monkeypatch.setattr(tj, "write_status", lambda *a, **k: seen.append((a[1], bool(cli.deleted()))) or real(*a, **k))
+    tj.run(SLUG, lambda m: None)
+    assert seen[-1] == ("failed", True) and all(d for p, d in seen if p == "failed")
+
+
+def test_delete_also_deletes_the_recorded_pod_the_list_does_not_show(env, monkeypatch):
+    class Cli(FakeCli):   # a lagging pod list: the pod exists but is never listed
+        def __call__(self, argv, timeout, out=None):
+            if argv[:3] == ["runpodctl", "pod", "list"]:
+                self.calls.append(argv)
+                return "[]"
+            return super().__call__(argv, timeout, out)
+    cli = use(monkeypatch, Cli())
+    j = tj.Job(SLUG, lambda m: None, Path("."))
+    j.pod_id = "pod7"
+    assert j.delete() and cli.deleted_ids() == {"pod7"}
+    assert j.delete() and len(cli.deleted()) == 1   # once gone, a second delete (shutdown + the job's finally) does nothing
+
+
+def test_done_with_an_unconfirmed_delete_says_so(env, monkeypatch, clock):
+    use(monkeypatch, FakeCli(POLLS, fail_on=failing(clock, "delete")))
+    tj.run(SLUG, lambda m: None)
+    st = tj.read_status(SLUG)
+    assert st["phase"] == "done" and st["events"][-1]["key"] == "gpu_off_unconfirmed"
+
+
+def test_a_failed_download_never_replaces_the_model_already_there(env, monkeypatch, tmp_path):
+    res = tmp_path / "typ/results/co_acme"
+    res.mkdir(parents=True)
+    for f in ("best.pt", "eval_co.json", "reveal.json"):
+        (res / f).write_text("old")
+    use(monkeypatch, FakeCli(POLLS, fail_on=lambda a: a[0] == "scp" and a[-1].endswith("best.pt")))   # e.g. Stop or a timeout mid-copy
+    tj.run(SLUG, lambda m: None)
+    assert tj.read_status(SLUG)["phase"] == "failed"
+    assert {p.name: p.read_text() for p in res.iterdir()} == {"best.pt": "old", "eval_co.json": "old", "reveal.json": "old"}   # no .incoming
+
+
+def test_status_writes_are_atomic(env):
+    for i in range(3):
+        tj.write_status(SLUG, "training", f"x{i}")
+        tj.add_events(SLUG, tj.event("env"))
+    assert [p.name for p in tj.job_dir(SLUG).iterdir() if "status" in p.name] == ["status.json"]   # tmp + os.replace, nothing left behind
+
+
+def test_a_stale_stop_never_aborts_the_next_run(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(tj, "run", lambda slug, log, base, steps: seen.append(slug in tj._STOP))
+    tj.stop(SLUG)   # pressed as the previous run ended
+    server.start_job(SLUG)
+    for _ in range(100):
+        if not server._jobs:
+            break
+        time.sleep(0.02)
+    assert seen == [False]
