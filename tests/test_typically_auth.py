@@ -285,3 +285,32 @@ def test_removing_an_invite_revokes_its_api_keys(env, monkeypatch):
 def test_hosted_root_redirects_to_the_app(env):
     r = TestClient(server.app, base_url="http://localhost").get("/", follow_redirects=False)
     assert r.status_code == 307 and r.headers["location"] == "/app/"
+
+
+def test_invites_users_make(env, monkeypatch):
+    a, admin = client(ALICE), client(ADMIN)
+    assert a.get("/api/auth/invites").json() == {"invites": [], "limit": 5, "left": 5}
+    codes = [a.post("/api/auth/invites").json()["code"] for _ in range(5)]
+    r = a.post("/api/auth/invites")
+    assert r.status_code == 429 and "5 invites" in r.json()["detail"]
+    assert a.get("/api/auth/invites").json()["left"] == 0 and len(set(codes)) == 5 and all(len(c) >= 32 for c in codes)
+    invitee = client(codes[0], "Carol")   # an issued code signs in, and its holder can invite too (up to their own 5)
+    mine = invitee.post("/api/auth/invites").json()
+    assert mine["left"] == 4 and client(mine["code"]).get("/api/auth/me").status_code == 200
+    import typically_deploy as D
+    key = invitee.post("/api/typically/keys", json={"model_id": "northwind"}).json()["key"]
+    D._authorize("northwind", f"Bearer {key}")   # valid while the invite stands
+    assert invitee.delete(f"/api/auth/invites/{codes[1]}").status_code == 404   # someone else's
+    assert client(BOB).delete(f"/api/auth/invites/{codes[0]}").status_code == 404
+    assert a.delete(f"/api/auth/invites/{codes[0]}").json()["left"] == 1   # revoking frees a slot ...
+    assert invitee.get("/api/auth/me").status_code == 401   # ... and signs that person out
+    with pytest.raises(D.HTTPException):
+        D._authorize("northwind", f"Bearer {key}")   # and stops their API keys
+    assert a.post("/api/auth/invites").status_code == 200
+    assert admin.delete(f"/api/auth/invites/{codes[1]}").status_code == 200   # an admin may revoke anyone's
+    for _ in range(7):
+        assert admin.post("/api/auth/invites").status_code == 200
+    assert admin.get("/api/auth/invites").json()["limit"] is None and admin.get("/api/auth/invites").json()["left"] is None
+    assert (env / "issued_invites.json").stat().st_mode & 0o077 == 0
+    monkeypatch.setenv("TYPICALLY_AUTH", "0")
+    assert client().get("/api/auth/invites").status_code == 404 and client().post("/api/auth/invites").status_code == 404

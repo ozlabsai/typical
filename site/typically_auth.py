@@ -2,7 +2,8 @@
 
 Off unless TYPICALLY_AUTH=1, so local dev is unchanged (no user, everything visible, no quotas). When on:
 - POST /api/auth/login {code, name?} sets a signed session cookie (HMAC-SHA256, TYPICALLY_SECRET); GET /api/auth/me; POST /api/auth/logout.
-  Invite codes: TYPICALLY_INVITES (comma-separated) + <data>/invites.json (a JSON list); TYPICALLY_ADMINS (codes) are admins.
+  Invite codes: TYPICALLY_INVITES (comma-separated) + <data>/invites.json (a JSON list, the operator's) + <data>/issued_invites.json
+  (made by users: GET / POST / DELETE /api/auth/invites, INVITE_LIMIT active each, admins unlimited); TYPICALLY_ADMINS (codes) are admins.
   Removing a code from the invites signs its sessions out (checked on every request).
 - every /api/* request needs a session, except /api/auth/* and /api/health. /v1/models/{id}/decide (its own bearer keys), the
   public share cards (/s/*), the static site and the /app bundle (it renders the sign-in screen itself) stay open.
@@ -16,10 +17,12 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -30,6 +33,7 @@ COOKIE, MAX_AGE = "typically_session", 30 * 86400
 SHARED = "*"   # owner of what every user sees: the base models and the Northwind sample
 SHARED_MODELS = {"typical-small", "typical-medium", "northwind"}
 OPEN_API = ("/api/auth/", "/api/health")
+INVITE_LIMIT = 5   # active invites a non-admin may have made
 
 
 @dataclass(frozen=True)
@@ -67,9 +71,15 @@ def _codes(var: str) -> set[str]:
     return {c.strip() for c in os.environ.get(var, "").split(",") if c.strip()}
 
 
+def _issued() -> list[dict]:
+    """[{code, by: uid, created}] of the invites users made (the operator's own stay in invites.json)."""
+    return json.loads(f.read_text()) if (f := _root() / "issued_invites.json").exists() else []
+
+
 def invites() -> set[str]:
     f = _root() / "invites.json"
-    return _codes("TYPICALLY_INVITES") | _codes("TYPICALLY_ADMINS") | (set(json.loads(f.read_text())) if f.exists() else set())
+    return (_codes("TYPICALLY_INVITES") | _codes("TYPICALLY_ADMINS") | (set(json.loads(f.read_text())) if f.exists() else set())
+            | {i["code"] for i in _issued()})
 
 
 def uid_of(code: str) -> str:
@@ -156,6 +166,64 @@ def me():
 def logout(response: Response):
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- invites users make
+
+_issued_lock = threading.Lock()   # ponytail: one server process; a file lock if it ever runs several
+
+
+def _write_issued(issued: list[dict]) -> None:   # caller holds _issued_lock
+    f = _root() / "issued_invites.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # they are credentials: 0600 from the first byte
+    with os.fdopen(fd, "w") as out:
+        out.write(json.dumps(issued, indent=1))
+    os.replace(tmp, f)
+
+
+def _inviter() -> User:
+    if not enabled():
+        raise HTTPException(404, "Not found")
+    if (u := current()) is None:
+        raise HTTPException(401, "Sign in first.")
+    return u
+
+
+def _mine(u: User) -> dict:
+    mine = [{"code": i["code"], "created": i["created"]} for i in _issued() if i["by"] == u.uid]
+    return {"invites": mine, "limit": None if u.admin else INVITE_LIMIT, "left": None if u.admin else max(0, INVITE_LIMIT - len(mine))}
+
+
+@router.get("/api/auth/invites")
+def my_invites():
+    return _mine(_inviter())
+
+
+@router.post("/api/auth/invites")
+def create_invite():
+    u = _inviter()
+    with _issued_lock:
+        issued = _issued()
+        if not u.admin and sum(i["by"] == u.uid for i in issued) >= INVITE_LIMIT:
+            raise HTTPException(429, f"You can have {INVITE_LIMIT} invites at a time. Revoke one to make a new one.")
+        code = secrets.token_urlsafe(24)
+        _write_issued(issued + [{"code": code, "by": u.uid, "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}])
+    return {"code": code, **_mine(u)}
+
+
+@router.delete("/api/auth/invites/{code}")
+def revoke_invite(code: str):
+    """Owner or admin. The code leaves invites(), so its holder is signed out and their API keys stop on the next request."""
+    u = _inviter()
+    with _issued_lock:
+        issued = _issued()
+        keep = [i for i in issued if not (hmac.compare_digest(i["code"].encode(), code.encode()) and (u.admin or i["by"] == u.uid))]
+        if len(keep) == len(issued):
+            raise HTTPException(404, "We can't find that invite.")
+        _write_issued(keep)
+    return _mine(u)
 
 
 # ---------------------------------------------------------------- ownership: the one rule

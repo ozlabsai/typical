@@ -127,6 +127,8 @@ about $590 a month if left on. Training pods are billed on RunPod as below.
 
 - **Add an invite:** append to `TYPICALLY_INVITES` and restart, or add it to `<data>/invites.json` on the pod (no restart:
   it is read on every request).
+- **Users invite too:** every signed-in user can make up to 5 active invite codes (admins: unlimited) from "Invite people" in
+  the app; they live in `<data>/issued_invites.json` ([{code, by, created}]). Revoking one there (owner or admin) frees the slot.
 - **Revoke an invite:** remove it. Its sessions stop working on their next request. Its models stay on disk (admins still see them).
 - **Rotate the secret:** change `TYPICALLY_SECRET` and restart. Everyone is signed out, and nobody loses models (ids come from
   the invite code, not the secret).
