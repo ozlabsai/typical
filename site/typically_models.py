@@ -128,17 +128,28 @@ def library_entry(model_id: str):
 
 @router.delete("/api/typically/models/library/{model_id}")
 def archive(model_id: str):
+    """Archive = gone for every client: its API keys and share links are revoked first, then the job dir, its results (best.pt, so
+    chat / decide / download / push 404) and its corrections move to jobs/.archive/<id>/. A new model under the same name starts clean."""
+    import typically_share   # imports this module
     if model_id in D.ALIASES or model_id in BASES:
         raise HTTPException(400, "the built-in models cannot be deleted")
     if not typically_job.SLUG_RE.fullmatch(model_id) or not auth.visible(model_id) or not (d := S.TYPICALLY / "jobs" / model_id).is_dir():
         raise HTTPException(404, "no such model")
-    if (_json(d / "status.json") or {}).get("phase") in typically_job.ACTIVE:
+    if (_json(d / "status.json") or {}).get("phase") in typically_job.ACTIVE or model_id in S._jobs:
         raise HTTPException(409, "this model is still training")
+    D.revoke_keys(model_id)
+    typically_share.revoke_all(model_id)
     dest = d.parent / ".archive" / model_id
     dest.parent.mkdir(exist_ok=True)
     if dest.exists():   # archived before under the same slug: keep both
         dest = dest.with_name(f"{model_id}_{int(time.time())}")
+    cf, run = corrections_file(model_id), D.run_of(model_id)
     shutil.move(d, dest)
+    if (res := S.TYPICALLY / "results" / run).exists():
+        shutil.move(res, dest / "results")
+    if cf.exists():
+        shutil.move(cf, dest / "corrections.jsonl")
+    S._cache.pop(f"local:{run}", None)   # its adapter is not kept in memory either
     return {"archived": model_id}
 
 

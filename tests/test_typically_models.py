@@ -85,9 +85,31 @@ def test_delete_archives(env):
     assert c.delete("/api/typically/models/library/new_run").status_code == 409   # active
     assert c.delete("/api/typically/models/library/northwind").status_code == 400
     assert c.delete("/api/typically/models/library/nope").status_code == 404
+    key = c.post("/api/typically/keys", json={"model_id": "old_done"}).json()["key"]
+    share = c.post("/api/typically/models/old_done/share").json()["share"]["id"]
+    c.post("/api/typically/models/old_done/corrections", json={"case": "x", "question": "q?", "type": "noul", "answer": "yes"})
     assert c.delete("/api/typically/models/library/old_done").status_code == 200
-    assert (tmp / "jobs" / ".archive" / "old_done" / "plan.json").exists() and not (tmp / "jobs" / "old_done").exists()
+    arc = tmp / "jobs" / ".archive" / "old_done"
+    assert (arc / "plan.json").exists() and not (tmp / "jobs" / "old_done").exists()
+    assert (arc / "results" / "best.pt").exists() and not (tmp / "results" / "co_old_done").exists() and (arc / "corrections.jsonl").exists()
     assert "old_done" not in [m["id"] for m in c.get("/api/typically/models/library").json()["custom"]]
+    assert json.loads((tmp / "keys.json").read_text()) == {} and c.get(f"/s/{share}").status_code == 404
+    assert c.get("/api/typically/download/co_old_done").status_code == 404
+    # the name is reused: the old key and link must not reach the new model
+    job(tmp, "old_done", {"phase": "done", "started_at": "2026-10-01T00:00:00+00:00"}, name="Old")
+    trained(tmp, "co_old_done", {"eval_co.json": 0.8, "base_eval_co.json": 0.5})
+    hdr = {"Authorization": f"Bearer {key}"}
+    assert c.post("/v1/models/old_done/decide", json={"state": "x", "queries": []}, headers=hdr).status_code == 401
+    assert c.get(f"/s/{share}").status_code == 404 and c.get("/api/typically/models/old_done/corrections").json()["count"] == 0
+
+
+def test_revoke_keys(env):
+    c, tmp = env
+    key = c.post("/api/typically/keys", json={"model_id": "old_done"}).json()["key"]
+    c.post("/api/typically/keys", json={"model_id": "bad"})
+    assert c.delete("/api/typically/keys/old_done").json() == {"revoked": 2}   # the fixture's key + this one; "bad" keeps its own
+    assert [r["model_id"] for r in json.loads((tmp / "keys.json").read_text()).values()] == ["bad"]
+    assert c.post("/v1/models/old_done/decide", json={"state": "x", "queries": []}, headers={"Authorization": f"Bearer {key}"}).status_code == 401
 
 
 class Fake:

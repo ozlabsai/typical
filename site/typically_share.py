@@ -110,6 +110,15 @@ def revoke_share(model_id: str):
     return {"revoked": len(mine)}
 
 
+def revoke_all(model_id: str) -> int:
+    """Every link of a model, any owner (archive)."""
+    with _lock:
+        shares = _read()
+        keep = {sid: s for sid, s in shares.items() if s["model_id"] != model_id}
+        _write(keep)
+    return len(shares) - len(keep)
+
+
 # ---------------------------------------------------------------- public: /s/{share_id}
 
 def _public(share_id: str) -> dict:

@@ -72,21 +72,41 @@ class KeyRequest(BaseModel):
     model_id: str
 
 
+def _write_keys(keys: dict) -> None:   # caller holds _keys_lock
+    f = _keys_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # 0600 from the first byte
+    with os.fdopen(fd, "w") as out:
+        out.write(json.dumps(keys))
+    os.replace(tmp, f)
+
+
 @router.post("/api/typically/keys")
 def create_key(req: KeyRequest):
     run_of(req.model_id)   # validates the id
     auth.check(req.model_id)
     key = "tpk_" + secrets.token_urlsafe(24)
     with _keys_lock:
-        keys = _read_keys() | {_hash(key): {"model_id": req.model_id, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **auth.stamp()}}
-        f = _keys_file()
-        f.parent.mkdir(parents=True, exist_ok=True)
-        tmp = f.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # 0600 from the first byte
-        with os.fdopen(fd, "w") as out:
-            out.write(json.dumps(keys))
-        os.replace(tmp, f)
+        _write_keys(_read_keys() | {_hash(key): {"model_id": req.model_id, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **auth.stamp()}})
     return {"key": key, "prefix": key[:8]}   # the key is shown once: nothing here can show it again
+
+
+def revoke_keys(model_id: str, mine_only: bool = False) -> int:
+    """Delete the model's keys (mine_only: those the caller may see, the has_key rule); returns how many."""
+    with _keys_lock:
+        keys = _read_keys()
+        keep = {h: r for h, r in keys.items() if r["model_id"] != model_id or (mine_only and not auth.can_see(r.get("owner")))}
+        _write_keys(keep)
+    return len(keys) - len(keep)
+
+
+@router.delete("/api/typically/keys/{model_id}")
+def delete_keys(model_id: str):
+    """Revoke every key of this model the caller can see (all of them for its owner or an admin). Keys are hashed: no list to show."""
+    run_of(model_id)
+    auth.check(model_id)
+    return {"revoked": revoke_keys(model_id, mine_only=True)}
 
 
 def _authorize(model_id: str, authorization: str | None) -> None:
@@ -94,7 +114,8 @@ def _authorize(model_id: str, authorization: str | None) -> None:
     h = _hash(key)
     with _keys_lock:
         rec = _read_keys().get(h) if scheme.lower() == "bearer" and key else None
-        if rec is None or rec["model_id"] != model_id:
+        revoked = rec and auth.enabled() and rec.get("owner") and rec["owner"] not in {auth.uid_of(c) for c in auth.invites()}   # invite removed
+        if rec is None or rec["model_id"] != model_id or revoked:
             raise HTTPException(401, "missing or invalid API key for this model", headers={"WWW-Authenticate": "Bearer"})
         now, hits = time.monotonic(), _hits[h]
         while hits and now - hits[0] > WINDOW_S:

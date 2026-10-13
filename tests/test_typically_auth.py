@@ -267,3 +267,13 @@ def test_llm_endpoints_are_rate_limited_per_user(env, monkeypatch):
     sample = {"source": {"kind": "sample"}}
     assert a.post("/api/typically/analyze", json=sample).status_code == 200 and a.post("/api/typically/analyze", json=sample).status_code == 429
     auth._hits.clear()
+
+
+def test_removing_an_invite_revokes_its_api_keys(env, monkeypatch):
+    import typically_deploy as D
+    key = client(ALICE).post("/api/typically/keys", json={"model_id": "alice_m"}).json()["key"]
+    D._authorize("alice_m", f"Bearer {key}")   # valid while Alice is invited
+    monkeypatch.setenv("TYPICALLY_INVITES", BOB)
+    with pytest.raises(D.HTTPException) as e:
+        D._authorize("alice_m", f"Bearer {key}")
+    assert e.value.status_code == 401
