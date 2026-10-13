@@ -174,7 +174,7 @@ def test_push_public_medium_and_the_token_is_never_stored(env, tmp_path, hub):
     assert push(env, run="co_acme", private=False).status_code == 200
     assert api.create_repo.call_args.kwargs["private"] is False
     card = next(o for o in api.create_commit.call_args.kwargs["operations"] if o.path_in_repo == "README.md").path_or_fileobj.decode()
-    assert "base_model: OzLabs/typical-medium" in card and "license: other" in card
+    assert "base_model: OzLabs/typical-medium" in card and "license: apache-2.0" in card and "not been verified" not in card
     assert not any(TOKEN in p.read_text(errors="ignore") for p in tmp_path.rglob("*") if p.is_file() and p.name != "best.pt")
 
 
@@ -183,7 +183,7 @@ def test_push_errors_never_echo_the_token(env, tmp_path, hub):
     trained(tmp_path, "co_f")
     api.create_commit.side_effect = RuntimeError(f"401 for Authorization: Bearer {TOKEN}")
     r = push(env)
-    assert r.status_code == 502 and TOKEN not in r.text and "***" in r.text
+    assert r.status_code == 502 and TOKEN not in r.text and r.json()["detail"]["code"] == "hf_failed" and "Authorization" not in r.text
     assert push(env, repo="no-slash").status_code == 400 and push(env, run="co_missing").status_code == 404
 
 
@@ -265,19 +265,19 @@ def test_push_without_a_server_token_is_503(env, tmp_path, hub, monkeypatch):
 def test_capabilities(env, hub, monkeypatch):
     _, api = hub
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    assert env.get("/api/typically/capabilities").json() == {"ai": True, "hf_namespace": "OzLabs", "languages": ["en", "he"]}
+    assert env.get("/api/typically/capabilities").json() == {"ai": True, "hf_namespace": "OzLabs", "can_push": True, "languages": ["en", "he"]}
     monkeypatch.delenv("ANTHROPIC_API_KEY")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")   # either key turns the AI features on
     assert env.get("/api/typically/capabilities").json()["ai"] is True
     monkeypatch.delenv("OPENROUTER_API_KEY")
     td._namespaces.clear()
     api.whoami.return_value = {"name": "me", "orgs": [{"name": "Other"}]}   # not in the org: the token owner's own name
-    assert env.get("/api/typically/capabilities").json() == {"ai": False, "hf_namespace": "me", "languages": ["en", "he"]}
+    assert env.get("/api/typically/capabilities").json() == {"ai": False, "hf_namespace": "me", "can_push": True, "languages": ["en", "he"]}
     env.get("/api/typically/capabilities")
     assert api.whoami.call_count == 2   # cached per token
     monkeypatch.delenv("HF_TOKEN")
     monkeypatch.setattr(td, "get_token", lambda: None)
-    assert env.get("/api/typically/capabilities").json()["hf_namespace"] is None
+    assert env.get("/api/typically/capabilities").json()["hf_namespace"] is None and not env.get("/api/typically/capabilities").json()["can_push"]
 
 
 def test_push_default_repo_is_the_display_name_slug(env, tmp_path, hub):
@@ -332,3 +332,30 @@ def test_org_storage_full_is_507_and_offers_the_users_namespace(env, tmp_path, h
     assert "storage" in d["message"] and "(me)" in d["message"] and TOKEN not in r.text
     api.delete_repo.assert_called_once_with("OzLabs/northwind-triage")   # the empty org repo it just made is gone
     assert push(env, repo="me/northwind-triage").status_code == 502   # the user's own space full: nothing better to offer
+
+
+def test_hosted_push_is_admin_only_private_and_server_named(env, tmp_path, hub, monkeypatch):
+    import typically_auth as auth
+    _, api = hub
+    monkeypatch.setenv("TYPICALLY_AUTH", "1")
+    monkeypatch.setenv("TYPICALLY_SECRET", "s")
+    monkeypatch.setenv("TYPICALLY_INVITES", "user-code")
+    monkeypatch.setenv("TYPICALLY_ADMINS", "admin-code")
+    slug = "a" * 40   # the longest name: its run is 43 characters
+    trained(tmp_path, f"co_{slug}")
+    (tmp_path / "jobs" / slug).mkdir(parents=True)
+    (tmp_path / "jobs" / slug / "job.json").write_text(json.dumps({"name": "Long", "owner": auth.uid_of("user-code")}))
+
+    def signed_in(code):
+        c = TestClient(server.app, base_url="http://localhost")
+        assert c.post("/api/auth/login", json={"code": code}).status_code == 200
+        return c
+    user, admin = signed_in("user-code"), signed_in("admin-code")
+    assert user.get("/api/typically/capabilities").json() | {"ai": None} == {"ai": None, "hf_namespace": None, "can_push": False, "languages": ["en", "he"]}
+    assert admin.get("/api/typically/capabilities").json()["can_push"] is True
+    body = {"run": f"co_{slug}", "repo": "attacker/public", "private": False}
+    assert user.post("/api/typically/push", json=body).status_code == 403 and not api.create_repo.called
+    assert user.get(f"/api/typically/download/co_{slug}").status_code == 200   # SLUG_RE is for slugs, not runs
+    r = admin.post("/api/typically/push", json=body)
+    assert r.status_code == 200 and r.json()["url"] == "https://huggingface.co/OzLabs/long"
+    api.create_repo.assert_called_once_with("OzLabs/long", private=True, exist_ok=True)   # the client's repo and private=False are ignored

@@ -412,8 +412,8 @@ def _reveal_work(run: str, rows: list[dict], company: str, cache: Path) -> None:
 
 @app.get("/api/typically/download/{run}")
 def download(run: str):
-    f = TYPICALLY / "results" / run / "best.pt"
-    if not typically_job.SLUG_RE.fullmatch(run) or not f.exists() or not auth.visible(auth.model_of(run)):
+    mid = typically_deploy.model_of_run(run)   # 404 unless co_<slug> / co_f
+    if not (f := TYPICALLY / "results" / run / "best.pt").exists() or not auth.visible(mid):
         raise HTTPException(404, "no such model")
     return FileResponse(f, filename=f"{run}.pt")
 

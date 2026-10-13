@@ -26,7 +26,7 @@ import typically_llm
 router = APIRouter()
 ALIASES = {"northwind": "co_f"}   # the demo model id -> its run
 REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
-LICENSE = {"small": "apache-2.0", "medium": "other"}   # medium: the Qwen3.5-4B-Base licence is not verified (releases/typical-medium.md)
+LICENSE = "apache-2.0"   # both releases and their backbones (Qwen3-1.7B-Base, Qwen3.5-4B-Base): checked on the Hub 2026-10-13
 RATE, WINDOW_S = 60, 60
 
 # the Northwind demo, same as SAMPLE in typically-app/src/lib/project.ts (keep in sync)
@@ -48,6 +48,14 @@ def run_of(model_id: str) -> str:
 
 def model_id_of(run: str) -> str:
     return next((k for k, v in ALIASES.items() if v == run), run.removeprefix("co_"))
+
+
+def model_of_run(run: str) -> str:
+    """A run ("co_<slug>", "co_f") -> its model id; 404 for anything else. Not SLUG_RE on the run: a 40-char slug makes a 43-char run."""
+    mid = model_id_of(run)
+    if run_of(mid) != run:
+        raise HTTPException(404, "no such model")
+    return mid
 
 
 # -- API keys: only sha256(key) is stored
@@ -210,17 +218,24 @@ def _namespace(api: HfApi, token: str | None) -> str | None:
     return _namespaces[token]
 
 
+def _may_push() -> bool:
+    """Hosted: admins only (the push uses the operator's token, into the operator's namespace)."""
+    return not auth.enabled() or bool((u := auth.current()) and u.admin)
+
+
 @router.get("/api/typically/capabilities")
 def capabilities():
+    """can_push: this user may push to Hugging Face here (a working server token, and an admin when hosted); hf_namespace is null otherwise."""
     token = _hf_token()
-    return {"ai": typically_llm.available(), "hf_namespace": _namespace(HfApi(token=token), token), "languages": ["en", "he"]}
+    ns = _namespace(HfApi(token=token), token) if _may_push() else None
+    return {"ai": typically_llm.available(), "hf_namespace": ns, "can_push": ns is not None, "languages": ["en", "he"]}
 
 
 # -- push to Hugging Face
 class PushRequest(BaseModel):
     run: str
-    repo: str | None = None   # default: <hf_namespace>/<the model's display name, slugged with ->
-    private: bool = True
+    repo: str | None = None   # default: <hf_namespace>/<the model's display name, slugged with ->; ignored when hosted
+    private: bool = True   # forced when hosted
 
 
 def _card(base: str, repo: str, model_id: str, step: int, reveal: dict | None) -> str:
@@ -232,10 +247,9 @@ def _card(base: str, repo: str, model_id: str, step: int, reveal: dict | None) -
         results = (f"\n## Held-out results\n\n{reveal['n_cases']} held-out cases the model never trained on "
                    f"(overall {reveal['score']['standard']:.0%} for the standard model, {reveal['score']['yours']:.0%} for this one).\n\n"
                    f"| Decision | Standard {base} | This model |\n|---|---|---|\n{rows}\n")
-    return (f"---\nlicense: {LICENSE[base]}\nbase_model: OzLabs/typical-{base}\nlibrary_name: pytorch\ntags:\n  - typical\n  - decision-model\n---\n\n"
+    return (f"---\nlicense: {LICENSE}\nbase_model: OzLabs/typical-{base}\nlibrary_name: pytorch\ntags:\n  - typical\n  - decision-model\n---\n\n"
             f"# {repo.split('/')[1]}\n\nA Typical decision model fine-tuned from [OzLabs/typical-{base}](https://huggingface.co/OzLabs/typical-{base}) "
-            f"(step {step}). It decides:\n\n{decides}\n{results}\n## Usage\n\n```python\n{_sdk(repo, model_id)}\n```\n"
-            + ("\nThis model inherits the terms of `Qwen/Qwen3.5-4B-Base`, whose licence has not been verified.\n" if base == "medium" else ""))
+            f"(step {step}). It decides:\n\n{decides}\n{results}\n## Usage\n\n```python\n{_sdk(repo, model_id)}\n```\n")
 
 
 def _repo_name(model_id: str) -> str:
@@ -251,9 +265,14 @@ def _storage_full(e: Exception) -> bool:
 
 @router.post("/api/typically/push")
 def push(req: PushRequest):
-    if not typically_job.SLUG_RE.fullmatch(req.run) or (req.repo is not None and not REPO_RE.fullmatch(req.repo)):
-        raise HTTPException(400, "need a valid run and a repo like user/name")
-    auth.check(model_id_of(req.run))
+    """Hosted (TYPICALLY_AUTH=1): admins only, always private, the repo name chosen here (users never publish into the operator's org)."""
+    if not _may_push():
+        raise HTTPException(403, "only an admin can push to Hugging Face on this server")
+    hosted = auth.enabled()
+    repo_asked, private = (None, True) if hosted else (req.repo, req.private)
+    if repo_asked is not None and not REPO_RE.fullmatch(repo_asked):
+        raise HTTPException(400, "need a repo like user/name")
+    auth.check(model_of_run(req.run))
     res = S.TYPICALLY / "results" / req.run
     best = res / "best.pt"
     if not best.exists():
@@ -269,7 +288,7 @@ def push(req: PushRequest):
     if not token:
         raise HTTPException(503, "Hugging Face push is not set up on this server")
     api = HfApi(token=token)
-    repo = req.repo or (f"{ns}/{_repo_name(model_id_of(req.run))}" if (ns := _namespace(api, token)) else None)
+    repo = repo_asked or (f"{ns}/{_repo_name(model_id_of(req.run))}" if (ns := _namespace(api, token)) else None)
     if not repo:
         raise HTTPException(502, "could not work out the Hugging Face namespace; is the server token valid?")
     prev = f.read_text().strip() if (f := _hf_repo_file(req.run)).exists() else None
@@ -280,7 +299,7 @@ def push(req: PushRequest):
         existed = api.repo_exists(repo)
         if existed and repo != prev:   # only ever overwrite this model's own earlier push (a model named "Typical Small" must not replace the release)
             raise FileExistsError(repo)
-        api.create_repo(repo, private=req.private, exist_ok=True)
+        api.create_repo(repo, private=private, exist_ok=True)
         created = not existed
         api.create_commit(repo, commit_message=f"Typical fine-tune {req.run}", operations=[
             CommitOperationAdd("best.pt", str(best)),
@@ -296,13 +315,14 @@ def push(req: PushRequest):
             except Exception:
                 pass   # ponytail: best effort; the push error below is what the user needs
         if _storage_full(e) and repo.split("/")[0] == ORG:
-            try:
-                user = api.whoami()["name"]
+            try:   # hosted: the repo is chosen here, so there is no other namespace to offer
+                user = None if hosted else api.whoami()["name"]
             except Exception:
                 user = None
             raise HTTPException(507, {"code": "org_storage_full", "repo": user and f"{user}/{repo.split('/')[1]}", "message":
                                       f"The {ORG} organization's private storage on Hugging Face is full."
                                       + (f" You can push to your own account ({user}) instead." if user else "")})
-        raise HTTPException(502, f"Hugging Face said: {type(e).__name__}: {str(e).replace(token, '***')[:300]}")
+        S.log.warning("push %s to %s failed: %s: %s", req.run, repo, type(e).__name__, str(e).replace(token, "***")[:500])   # never the token
+        raise HTTPException(502, {"code": "hf_failed", "message": "Hugging Face did not accept the upload; try again in a few minutes."})
     _hf_repo_file(req.run).write_text(repo)
     return {"url": f"https://huggingface.co/{repo}", "files": ["best.pt", "README.md", "MANIFEST.json"]}

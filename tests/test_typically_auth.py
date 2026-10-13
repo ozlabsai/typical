@@ -249,11 +249,13 @@ def test_review_fixes(env, monkeypatch):
         def __init__(self, token=None): pass
         def model_info(self, repo): return type("I", (), {"sha": "s"})()
         def repo_exists(self, repo): return True
+        def whoami(self): return {"name": "me", "orgs": [{"name": "OzLabs"}]}
         def create_repo(self, *a, **k): raise AssertionError("must not touch an existing repo")
     monkeypatch.setattr(D, "HfApi", Hub)
     monkeypatch.setattr(D, "_hf_token", lambda: "tok")
     monkeypatch.setattr(D.torch, "load", lambda *a, **k: {"args": {"backbone": tj.RELEASED_ARGS["small"]["backbone"]}, "step": 1})
-    r = client(ALICE).post("/api/typically/push", json={"run": "co_alice_m", "repo": "OzLabs/typical-small"})
+    assert client(ALICE).post("/api/typically/push", json={"run": "co_alice_m"}).status_code == 403   # hosted: admins only
+    r = client(ADMIN).post("/api/typically/push", json={"run": "co_alice_m"})
     assert r.status_code == 409 and "already exists" in r.json()["detail"]
 
 
