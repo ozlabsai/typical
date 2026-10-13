@@ -40,9 +40,9 @@ export function CustomizePage({ data }: { data?: string }) {
               <li key={s} className="flex items-center">
                 {i > 0 && <span aria-hidden className={cn("mx-1 h-px w-5 bg-border", i <= at && "bg-primary/50")} />}
                 <button type="button" disabled={!reachable(s, project)} onClick={() => setStep(s)} aria-current={s === step ? "step" : undefined}
-                  className={cn("flex items-center gap-1.5 rounded-md px-1.5 py-1 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50",
+                  className={cn("flex items-center gap-1.5 rounded-md px-1.5 py-1 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed",
                     s === step ? "font-medium" : "text-muted-foreground hover:text-foreground")}>
-                  <span className={cn("grid size-5 place-items-center rounded-full border text-[11px] tabular",
+                  <span className={cn("grid size-5 place-items-center rounded-full border text-xs tabular",
                     s === step && "border-primary bg-primary text-primary-foreground", done && "border-primary/40 bg-primary/10 text-primary")}>
                     {done ? <Check className="size-3" /> : i + 1}
                   </span>

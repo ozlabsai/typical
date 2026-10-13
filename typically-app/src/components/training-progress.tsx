@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Check, Circle, Cpu, Loader2, Square, X } from "lucide-react"
 import { toast } from "sonner"
 
@@ -7,8 +7,7 @@ import { TrainingCurve } from "@/components/training-curve"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { api, type JobEvent, type TrainStatus } from "@/lib/api"
-import { useI18n } from "@/lib/i18n"
-import type { LANGUAGES } from "@/lib/project"
+import { locale, useI18n, type Lang } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 // the job's milestones in order (scripts/typically_job.py + the pod script's `mark` lines); each starts at its event's time
@@ -21,14 +20,19 @@ const WITH_DETAIL = ["gpu_assigned", "upload", "model_download", "fetch"]   // t
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, Math.floor(s % 60))).padStart(2, "0")}`
 const secs = (a: string, b: string | number) => ((typeof b === "number" ? b : Date.parse(b)) - Date.parse(a)) / 1000
 
-function useNow(live: boolean) {
+function useNow() {
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
-    if (!live) return
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
-  }, [live])
+  }, [])
   return now
+}
+
+/** "m:ss" since `from`, ticking every second. A leaf: only this text re-renders, not the card, its charts or its log. */
+export function Elapsed({ from, className }: { from: string; className?: string }) {
+  const now = useNow()
+  return <span className={className}>{clock(secs(from, now))}</span>
 }
 
 /** Nothing more will change: finished, and the GPU is confirmed off (or there never was one, it could not be confirmed, or a
@@ -36,23 +40,29 @@ function useNow(live: boolean) {
 export const settled = (st: TrainStatus) => (st.phase === "done" || st.phase === "failed")
   && (!st.pod_id || st.code === "failed" || !st.events || st.events.some((e) => e.key === "gpu_off"))
 
-/** Poll GET /train/{slug} while `active` and the job runs (the model page; the Train step polls on its own). */
-export function useTrainStatus(slug: string, active: boolean) {
+/** Poll GET /train/{slug} from mount while `active`, until the job is settled (the model page and the Train step).
+ *  `run` restarts it for a new run under the same slug. `lost`: the last poll failed (shown as "retrying", never as a failure). */
+export function useTrainStatus(slug: string | undefined, active: boolean, run = 0) {
   const [st, setSt] = useState<TrainStatus | null>(null)
+  const [lost, setLost] = useState(false)
   useEffect(() => {
-    if (!active) return
+    if (!active || !slug) return
+    let alive = true
     const load = () => void api.trainStatus(slug).then((s) => {
+      if (!alive) return
       setSt(s)
+      setLost(false)
       if (settled(s)) clearInterval(t)
-    }).catch(() => {})
-    const t = setInterval(load, 5000)
+    }, () => alive && setLost(true))
+    const t = setInterval(load, 4000)
     load()
-    return () => clearInterval(t)
-  }, [slug, active])
-  return st
+    return () => { alive = false; clearInterval(t) }
+  }, [slug, active, run])
+  return { status: st, lost }
 }
 
-/** Stop a running job: it ends at its next GPU-provider call (≤ ~20 s), deletes the GPU, and the card turns "Stopped". */
+/** Stop a running job: it ends at its next GPU-provider call (seconds; up to a few minutes during an upload or download),
+ *  deletes the GPU, and the card turns "Stopped". */
 export function StopButton({ slug }: { slug: string }) {
   const { t } = useI18n()
   const [busy, setBusy] = useState(false)
@@ -100,10 +110,10 @@ function milestones(st: TrainStatus) {
 
 /** The label of a milestone (or any event in the activity log), with its data filled in. */
 function useLabel() {
-  const { t, lang } = useI18n()
-  const num = (n: number | string | undefined) => (n == null ? "" : Number(n).toLocaleString(lang === "he" ? "he-IL" : "en"))
+  const { t, lang, language } = useI18n()
+  const num = (n: number | string | undefined) => (n == null ? "" : Number(n).toLocaleString(locale(lang)))
   return (e: JobEvent | undefined, k: string, state: State = "done") => {
-    if (k.startsWith("translate_")) return t("ev.translate", { lang: t(`lang.${k.slice(10) as (typeof LANGUAGES)[number]}`), n: num(e?.n), of: num(e?.of) })
+    if (k.startsWith("translate_")) return t("ev.translate", { lang: language(k.slice(10)), n: num(e?.n), of: num(e?.of) })
     switch (k) {
       case "prepare": return e?.n ? t("ev.prepared", { n: num(e.n) }) : t("ev.prepare")
       case "synthetic": return t("ev.synthetic", { n: num(e?.n), of: num(e?.of) })
@@ -135,7 +145,6 @@ export function TrainingProgress({ status }: { status: TrainStatus }) {
   const { t, lang } = useI18n()
   const label = useLabel()
   const live = status.phase !== "done" && status.phase !== "failed"
-  const now = useNow(live)
   const { order, at, end, state } = milestones(status)
   const s = status.series
   const total = status.steps ?? 0
@@ -145,10 +154,10 @@ export function TrainingProgress({ status }: { status: TrainStatus }) {
 
   return (
     <div className="grid gap-6">
-      <ol className="grid gap-3">
+      <ol className="grid gap-4">
         {order.map((k) => {
           const e = at.get(k), st = state(k), stop = end(k)
-          const took = e && st === "done" && stop ? secs(e.t, stop) : e && st === "current" ? secs(e.t, now) : null
+          const took = e && st === "done" && stop ? secs(e.t, stop) : null
           return (
             <li key={k} className="flex gap-3">
               <span className="mt-0.5 shrink-0">
@@ -163,9 +172,8 @@ export function TrainingProgress({ status }: { status: TrainStatus }) {
                       <span className="text-muted-foreground"> · <bdi className="font-mono text-xs">{e.detail}</bdi></span>
                     )}
                   </p>
-                  {took != null && took >= 0 && k !== "gpu_off" && (
-                    <span className={cn("shrink-0 font-mono text-xs tabular", st === "current" ? "text-foreground" : "text-muted-foreground")}>{clock(took)}</span>
-                  )}
+                  {k !== "gpu_off" && (e && st === "current" ? <Elapsed from={e.t} className="shrink-0 font-mono text-xs tabular" />
+                    : took != null && took >= 0 && <span className="shrink-0 font-mono text-xs text-muted-foreground tabular">{clock(took)}</span>)}
                 </div>
                 {k === "prepare" && progressKeys.length > 0 && (
                   <ul className="grid gap-1.5">
@@ -213,7 +221,7 @@ function GpuPanel({ status }: { status: TrainStatus }) {
   return (
     <section className="grid gap-2 rounded-lg border bg-muted/30 p-3" aria-label={t("gpu.title")}>
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Cpu className="size-3.5" /> {t("gpu.title")}{name && <> · <bdi className="font-mono">{name}</bdi></>}
+        <Cpu className="size-4" /> {t("gpu.title")}{name && <> · <bdi className="font-mono">{name}</bdi></>}
       </p>
       <dl className="grid grid-cols-3 gap-2">
         {items.map(([k, v]) => (
@@ -227,12 +235,12 @@ function GpuPanel({ status }: { status: TrainStatus }) {
   )
 }
 
-function ActivityLog({ events, lang, label }: { events: JobEvent[]; lang: string; label: ReturnType<typeof useLabel> }) {
+function ActivityLog({ events, lang, label }: { events: JobEvent[]; lang: Lang; label: ReturnType<typeof useLabel> }) {
   const { t } = useI18n()
   const [all, setAll] = useState(false)
   const end = useRef<HTMLLIElement>(null)
   const shown = all ? events : events.slice(-LOG_TAIL)
-  const time = new Intl.DateTimeFormat(lang === "he" ? "he-IL" : "en", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+  const time = useMemo(() => new Intl.DateTimeFormat(locale(lang), { hour: "2-digit", minute: "2-digit", second: "2-digit" }), [lang])
   useEffect(() => { if (all) end.current?.scrollIntoView({ block: "nearest" }) }, [all, events.length])
   if (!events.length) return null
   return (

@@ -141,7 +141,7 @@ export function TrainingCurve({ status }: { status: TrainStatus }) {
   const hasAcc = agree[0].ys.some((v) => v != null)
 
   return (
-    <div className="grid gap-5">
+    <div className="grid gap-4">
       <div className="grid gap-2">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
           <p className="text-sm font-medium">{t("chart.title")}</p>

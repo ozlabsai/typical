@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react"
 import { AlertCircle, ArrowRight, Database, FileSpreadsheet, Loader2, Mail, Upload } from "lucide-react"
 
-import { msg, OptionCard, PageHead } from "@/components/shared"
+import { msg, OptionCard, PageHead, StepFooter } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, type Dataset, type Source } from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
-import { BASES, SAMPLE, slugify, type Analysis, type Base, type Project } from "@/lib/project"
+import { BASES, minutes, SAMPLE, type Analysis, type Base, type Project } from "@/lib/project"
 import { go as navigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
@@ -76,6 +76,8 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
   const [sheet, setSheet] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [ai, setAi] = useState(false) // with an AI key, a summary of the columns and a few masked rows go to the model that reads them
+  useEffect(() => void api.capabilities().then((c) => setAi(c.ai)).catch(() => setAi(false)), [])
 
   useEffect(() => {   // the page is keyed on `from`, so this runs once per dataset
     if (!from || from.startsWith("sample")) return
@@ -108,11 +110,15 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
     setBook(null)
     setSheetName(undefined)
     setTab(isMail ? "mail" : "upload")
-    if (isMail) {
-      setOwner("")
-      setAsked("")
-      setMail({ name: f.name, b64: await base64(f) })
-    } else setFile(xlsx ? { name: f.name, b64: await base64(f) } : { name: f.name, text: await f.text() })
+    try {   // a file that can't be read (moved, locked, permissions) is an error on screen, not an unhandled rejection
+      if (isMail) {
+        setOwner("")
+        setAsked("")
+        setMail({ name: f.name, b64: await base64(f) })
+      } else setFile(xlsx ? { name: f.name, b64: await base64(f) } : { name: f.name, text: await f.text() })
+    } catch (e) {
+      return setError(msg(e))
+    }
     if (!name) setName(f.name.replace(/\.(csv|xlsx|mbox|eml|zip)$/i, "").replace(/[_-]+/g, " "))
   }
 
@@ -159,16 +165,15 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
       <div className="grid gap-4">
         <Card>
           <CardHeader><CardTitle>{t("create.name")}</CardTitle><CardDescription>{t("create.nameHint")}</CardDescription></CardHeader>
-          <CardContent className="grid max-w-md gap-2">
+          <CardContent className="max-w-md">
             <Input dir="auto" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("create.namePlaceholder")} aria-label={t("create.name")} />
-            <p className="font-mono text-xs text-muted-foreground" dir="ltr">{t("create.id")}: {slugify(name) || "…"}</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader><CardTitle>{t("create.base")}</CardTitle><CardDescription>{t("create.baseHint")}</CardDescription></CardHeader>
           <CardContent>
-            <RadioGroup value={base} onValueChange={(v) => setBase(v as Base)} className="grid gap-3 sm:grid-cols-2">
+            <RadioGroup value={base} onValueChange={(v) => setBase(v as Base)} className="grid gap-4 sm:grid-cols-2">
               {(Object.keys(BASES) as Base[]).map((b) => (
                 <Label key={b} htmlFor={`base-${b}`} className="cursor-pointer font-normal">
                   <OptionCard selected={base === b} className="w-full">
@@ -176,11 +181,11 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
                       <RadioGroupItem value={b} id={`base-${b}`} className="mt-0.5" />
                       <div className="grid gap-1">
                         <span className="flex items-center gap-2 font-medium">
-                          {BASES[b].label} <span className="font-mono text-xs text-muted-foreground">{BASES[b].size}</span>
+                          {BASES[b].label} <span className="text-xs text-muted-foreground">{BASES[b].size}</span>
                           {BASES[b].beta && <Badge variant="secondary">{t("base.beta")}</Badge>}
                         </span>
                         <span className="text-sm text-muted-foreground">{t(`base.${b}.note`)}</span>
-                        <span className="text-xs text-muted-foreground tabular">{t("base.minutes", { n: BASES[b].minutes })}</span>
+                        <span className="text-xs text-muted-foreground tabular">{t("base.minutes", { n: minutes(b) })}</span>
                       </div>
                     </div>
                   </OptionCard>
@@ -204,7 +209,7 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
               </div>
             ) : (
             <Tabs value={tab} onValueChange={(v) => (setTab(v as Tab), setError(null))}>
-              <TabsList className="max-w-full justify-start overflow-x-auto overflow-y-hidden [scrollbar-width:none]">
+              <TabsList className="h-auto! max-w-full flex-wrap justify-start *:h-8! *:flex-none!">
                 <TabsTrigger value="upload">{t("tab.upload")}</TabsTrigger>
                 <TabsTrigger value="mail">{t("tab.mail")}</TabsTrigger>
                 <TabsTrigger value="hf">{t("tab.hf")}</TabsTrigger>
@@ -212,7 +217,7 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
                 <TabsTrigger value="sample">{t("tab.sample")}</TabsTrigger>
               </TabsList>
               <TabsContent value="upload" className="pt-3">
-                <DropZone picked={file?.name} icon={FileSpreadsheet} drop={t("upload.drop")} hint={t("upload.private")} onPick={pick}
+                <DropZone picked={file?.name} icon={FileSpreadsheet} drop={t("upload.drop")} hint={t(ai ? "upload.privateAi" : "upload.private")} onPick={pick}
                   accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
                 {book?.sheets && book.sheets.length > 1 && (
                   <div className="mt-3 grid gap-2 sm:grid-cols-[220px_1fr] sm:items-end sm:gap-4">
@@ -227,11 +232,11 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
                   </div>
                 )}
               </TabsContent>
-              <TabsContent value="mail" className="grid gap-3 pt-3">
+              <TabsContent value="mail" className="grid gap-4 pt-3">
                 <DropZone picked={mail?.name} icon={Mail} drop={t("mail.drop")} hint={t("mail.private")} onPick={pick}
                   accept=".mbox,.eml,.zip,message/rfc822,application/mbox,application/zip" />
                 {book?.mail && (
-                  <div className="grid gap-3 rounded-lg bg-muted/50 p-4">
+                  <div className="grid gap-4 rounded-lg bg-muted/50 p-4">
                     <p className="text-sm font-medium tabular">
                       {t("mail.stats", { owner: `⁨${book.mail.owner}⁩`, messages: book.mail.messages.toLocaleString(), threads: book.mail.threads.toLocaleString(), inbound: book.mail.inbound.toLocaleString() })}
                     </p>
@@ -240,13 +245,10 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
                       <Input id="mail-owner" dir="ltr" type="text" inputMode="email" value={owner} onChange={(e) => setOwner(e.target.value)} />
                       <p className="text-xs text-muted-foreground">{t("mail.ownerHint")}</p>
                     </div>
-                    {(book.warnings?.length ?? 0) > 0 && (
-                      <ul className="list-disc ps-4 text-xs text-muted-foreground">{book.warnings!.map((w) => <li key={w} dir="auto">{w}</li>)}</ul>
-                    )}
                   </div>
                 )}
               </TabsContent>
-              <TabsContent value="hf" className="grid gap-3 pt-3 sm:grid-cols-[1fr_140px]">
+              <TabsContent value="hf" className="grid gap-4 pt-3 sm:grid-cols-[1fr_140px]">
                 <div className="grid gap-2"><Label htmlFor="hf-ds">{t("hf.dataset")}</Label><Input id="hf-ds" dir="ltr" placeholder="owner/dataset" value={hf.dataset} onChange={(e) => setHf({ ...hf, dataset: e.target.value })} /></div>
                 <div className="grid gap-2"><Label htmlFor="hf-split">{t("hf.split")}</Label><Input id="hf-split" dir="ltr" value={hf.split} onChange={(e) => setHf({ ...hf, split: e.target.value })} /></div>
                 <p className="text-xs text-muted-foreground sm:col-span-2">{t("hf.hint")}</p>
@@ -257,7 +259,7 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
                 <p className="text-xs text-muted-foreground">{t("sheets.hint")}</p>
               </TabsContent>
               <TabsContent value="sample" className="pt-3">
-                <RadioGroup value={sampleName} onValueChange={(v) => setSampleName(v as SampleName)} className="grid gap-3 sm:grid-cols-2">
+                <RadioGroup value={sampleName} onValueChange={(v) => setSampleName(v as SampleName)} className="grid gap-4 md:grid-cols-3">
                   {(Object.keys(SAMPLES) as SampleName[]).map((s) => (
                     <Label key={s} htmlFor={`sample-${s}`} className="cursor-pointer font-normal">
                       <OptionCard selected={sampleName === s} className="h-full w-full">
@@ -277,14 +279,14 @@ export function CreateStep({ project, setProject, next, from }: { project: Proje
             )}
 
           </CardContent>
-          <CardFooter className="justify-between">
-            {error ? <p role="alert" className="flex items-center gap-2 text-sm text-destructive"><AlertCircle className="size-4" /> {error}</p> : <span />}
-            <Button onClick={go} disabled={!source || busy}>
-              {busy ? <><Loader2 data-icon="inline-start" className="animate-spin" /> {t("create.reading")}</> : <>{t("common.continue")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></>}
-            </Button>
-          </CardFooter>
         </Card>
       </div>
+      {error && <p role="alert" dir="auto" className="flex items-center gap-2 text-sm text-destructive"><AlertCircle className="size-4 shrink-0" /> {error}</p>}
+      <StepFooter>
+        <Button onClick={go} disabled={!source || busy}>
+          {busy ? <><Loader2 data-icon="inline-start" className="animate-spin" /> {t("create.reading")}</> : <>{t("common.continue")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></>}
+        </Button>
+      </StepFooter>
     </>
   )
 }
