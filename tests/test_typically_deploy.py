@@ -109,7 +109,7 @@ def test_northwind_snippets_are_prefilled(env):
         assert "Can the agent refund this without approval?" in s[kind]
     assert "tpk_" not in "".join(s.values())   # the key is never in a snippet
     assert "pip install typical-ai" in s["sdk"] and "from typical_ai import Typical" in s["sdk"] and "HF_TOKEN" in s["sdk"]
-    assert "Typical.from_pretrained('./co_f.pt')" in s["sdk"] and "m.noul(case, 'Should we escalate this to a manager?')" in s["sdk"]
+    assert "Typical.from_pretrained('./northwind-triage.pt')" in s["sdk"] and "m.noul(case, 'Should we escalate this to a manager?')" in s["sdk"]
     body = s["curl"].split("-d '", 1)[1].removesuffix("'")
     assert json.loads(body)["queries"][0]["labels"] == ["Claims", "Billing", "Dispatch", "Sales"]   # the curl payload is valid JSON
     assert json.loads(s["python"].split("json=", 1)[1].rsplit(",\n)", 1)[0])["state"].startswith("Customer: Cedar Foods")

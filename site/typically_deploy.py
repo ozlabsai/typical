@@ -182,7 +182,7 @@ def snippets(model_id: str, request: Request):
     url = f"{str(request.base_url).rstrip('/')}/v1/models/{model_id}/decide"
     qs = _questions(model_id) or [{"question": "Your question?", "type": "choice", "labels": ["a", "b"]}]
     body = json.dumps({"state": _example_case(model_id), "queries": qs}, indent=2, ensure_ascii=False)
-    repo = f.read_text().strip() if (f := _hf_repo_file(run)).exists() else f"./{run}.pt"   # not pushed: the file "Download weights" saves
+    repo = f.read_text().strip() if (f := _hf_repo_file(run)).exists() else f"./{download_name(run)}"   # not pushed: the file "Download model files" saves
     shell_body = body.replace("'", "'\\''")   # close the quote, an escaped quote, reopen
     return {
         "curl": (f"curl -s {url} \\\n  -H \"Authorization: Bearer $TYPICAL_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n"
@@ -279,6 +279,11 @@ def _display_name(model_id: str) -> str:
     """The model's name as typed in the app (job.json); "" when it has none."""
     job = S.TYPICALLY / "jobs" / model_id / "job.json"
     return (json.loads(job.read_text()).get("name") if job.exists() else None) or ("Northwind triage" if model_id == "northwind" else "")
+
+
+def download_name(run: str) -> str:
+    """The downloaded model file is named after the model ("Northwind triage" -> northwind-triage.pt), not the internal run id."""
+    return f"{_repo_name(model_of_run(run))}.pt"
 
 
 def _repo_name(model_id: str) -> str:

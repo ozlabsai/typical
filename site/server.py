@@ -420,7 +420,7 @@ def download(run: str):
     mid = typically_deploy.model_of_run(run)   # 404 unless co_<slug> / co_f
     if not (f := TYPICALLY / "results" / run / "best.pt").exists() or not auth.visible(mid):
         raise HTTPException(404, "We can't find that model. It may have been archived.")
-    return FileResponse(f, filename=f"{run}.pt")
+    return FileResponse(f, filename=typically_deploy.download_name(run))
 
 
 @app.get("/api/health")
