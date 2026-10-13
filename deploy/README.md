@@ -95,6 +95,34 @@ calendar reminder on the date the invite period ends, and check `runpodctl pod l
 the job runner when each run ends, by the server's shutdown, and by a sweep every 5 minutes (a pod whose run has not reported
 for 15 minutes). `down` deletes any `typically-hosted-job-*` pod left.
 
+## GCP: one L4 VM behind a named Cloudflare tunnel (decisions.ozlabs.ai)
+
+The live deployment. `deploy/gcp.sh` (project `ozla-476923` unless `GCP_PROJECT` is set) runs the Docker image above with CUDA torch
+on a `g2-standard-4` VM (1x L4, on-demand, 150 GB pd-balanced boot disk, Deep Learning VM image with driver 580). The VM sits in its
+own VPC whose only ingress rule is ssh from Google's IAP range: the app listens on 127.0.0.1 and only the `cloudflared` container
+on the same host reaches it. Data lives on the boot disk (`/var/lib/decision-factory/data`, mounted as `/data`); secrets in
+`/etc/decision-factory/` (root, 0600).
+
+One-time, on a Mac whose `cloudflared` is logged in to the ozlabs.ai zone:
+
+```bash
+cloudflared tunnel create decision-factory          # writes ~/.cloudflared/<tunnel-id>.json
+# --config: an empty file, or cloudflared routes to the tunnel named in ~/.cloudflared/config.yml instead of the one given
+: > /tmp/empty.yml && cloudflared tunnel --config /tmp/empty.yml route dns <tunnel-id> decisions.ozlabs.ai
+deploy/gcp.sh create     # VPC + IAP-only firewall + Artifact Registry repo + the VM (first L4 zone in stock, europe-west4 first)
+deploy/gcp.sh build      # Cloud Build (amd64, cu130), pushes europe-west4-docker.pkg.dev/<project>/decision-factory/typically
+cp deploy/hosted.env.example deploy/hosted.env   # fill it in; TYPICALLY_PUBLIC_URL=https://decisions.ozlabs.ai
+deploy/gcp.sh deploy ~/.cloudflared/<tunnel-id>.json && rm deploy/hosted.env   # the VM keeps the only copy
+```
+
+Then: `deploy/gcp.sh build && deploy/gcp.sh deploy` to redeploy (the env and tunnel credentials on the VM are kept),
+`deploy/gcp.sh logs`, `deploy/gcp.sh stop` / `start` (a stopped VM bills only its disk), `deploy/gcp.sh down` to tear it all down
+(copies the data back to `.context/` first). Add an invite without a restart: `deploy/gcp.sh ssh`, then edit
+`/var/lib/decision-factory/data/invites.json` (a JSON list).
+
+Cost (europe-west1 list prices): about $0.78 an hour for the VM with its L4, plus the disk (about $15 a month) and the external IP;
+about $590 a month if left on. Training pods are billed on RunPod as below.
+
 ## Invites, admins, secret
 
 - **Add an invite:** append to `TYPICALLY_INVITES` and restart, or add it to `<data>/invites.json` on the pod (no restart:

@@ -19,8 +19,10 @@ ARG TORCH=cpu
 ARG TORCH_VERSION=2.14.0
 ARG TARGETARCH=amd64
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-# git: the job runner snapshots the repo with `git ls-files`; ssh/scp + runpodctl: it rents and drives the training pods
-RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client curl ca-certificates && rm -rf /var/lib/apt/lists/* \
+# git: the job runner snapshots the repo with `git ls-files`; ssh/scp + runpodctl: it rents and drives the training pods.
+# gcc (CUDA builds): torch's Triton kernels compile their launcher with the system C compiler on first use (else every answer is a 500)
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client curl ca-certificates \
+      $([ "$TORCH" = cpu ] || echo gcc libc6-dev) && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL -o /usr/local/bin/runpodctl "https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-linux-${TARGETARCH}" \
  && chmod +x /usr/local/bin/runpodctl
 WORKDIR /app
