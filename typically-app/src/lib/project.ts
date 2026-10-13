@@ -1,7 +1,7 @@
-import type { DecisionType, Query } from "@/lib/api"
+import type { DecisionType } from "@/lib/api"
 import type { T } from "@/lib/i18n"
 
-// ---- DatasetPlan: the agent's reading of the data (.context/typically/FLOW.md), confirmed by the user
+// ---- DatasetPlan: the agent's reading of the data, confirmed by the user
 
 export interface CasePart { column: string; role: "fact" | "body"; sentence?: string | null; confidence: number; reason: string }
 export interface PlanDecision {
@@ -42,10 +42,12 @@ export interface Analysis {
 export type Base = "small" | "medium"
 export type Preset = "quick" | "balanced" | "thorough"
 export const PRESETS: Record<Preset, { steps: number }> = { quick: { steps: 200 }, balanced: { steps: 400 }, thorough: { steps: 800 } }
-export const BASES: Record<Base, { label: string; size: string; minutes: number; beta?: boolean }> = {
-  small: { label: "typical-small", size: "1.7B", minutes: 10 },
-  medium: { label: "typical-medium", size: "4B", minutes: 25, beta: true },
+// minutes = fixed (GPU boot, setup, download, testing) + train * steps / 400; measured on small 7-14 min, medium ~25 min
+export const BASES: Record<Base, { label: string; size: string; fixed: number; train: number; beta?: boolean }> = {
+  small: { label: "typical-small", size: "1.7B", fixed: 4, train: 6 },
+  medium: { label: "typical-medium", size: "4B", fixed: 6, train: 19, beta: true },
 }
+export const minutes = (b: Base, steps = PRESETS.balanced.steps) => BASES[b].fixed + Math.round((BASES[b].train * steps) / 400)
 
 export interface Enrich { balance: boolean; dedupe_soft: boolean; policy: Record<string, string>; synthetic: boolean; languages: string[] }
 export interface Settings { preset: Preset; holdout: number; seed: number }
@@ -65,10 +67,8 @@ export interface Project {
 }
 
 export const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40)
-export const modelId = (p: Project) => (p.sample ? "northwind" : p.slug ?? slugify(p.name))
 
 export const included = (p: Project) => p.plan.decisions.filter((d) => d.include)
-export const queries = (p: Project): Query[] => included(p).map(({ type, question, labels }) => ({ type, question, labels }))
 
 const observed = (p: Project, d: PlanDecision) => p.analysis.profile.columns?.[d.column]?.values ?? []
 const target = (d: PlanDecision, v: ObservedValue) => d.mapping[v.value] ?? (d.labels.includes(v.value) ? v.value : null)
@@ -95,6 +95,8 @@ export function merges(p: Project, d: PlanDecision) {
 
 export const say = (t: T, type: DecisionType, label: string) => (type === "noul" ? t(label === "yes" ? "ans.yes" : "ans.no") : label)
 export const pct = (x: number) => `${Math.round(x * 100)}%`
+/** The change in points between two shares, from the rounded percentages shown next to it (58% -> 78% reads +20, never +21). */
+export const gain = (to: number, from: number) => Math.round(to * 100) - Math.round(from * 100)
 /** +12 / -3 / 0; the LRM keeps the sign on the left of the digits in RTL text ("+12", not "12+"). */
 export const signed = (n: number) => `\u200e${n > 0 ? "+" : ""}${n}`
 

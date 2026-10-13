@@ -1,5 +1,5 @@
 import { useEffect } from "react"
-import { Boxes, Database, Languages, LogOut, MessageSquare, Moon, Plus, Search, SlidersHorizontal, Sun, UserRound } from "lucide-react"
+import { Boxes, Database, Languages, LogOut, MessageSquare, Moon, Plus, Search, Sun, UserRound } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import {
@@ -7,6 +7,7 @@ import {
   SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarMenuSkeleton, useSidebar,
 } from "@/components/ui/sidebar"
 import { SHORTCUT } from "@/components/command-palette"
+import { Badge } from "@/components/ui/badge"
 import type { LibraryModel } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { useI18n } from "@/lib/i18n"
@@ -17,15 +18,15 @@ import { cn } from "@/lib/utils"
 export function StatusDot({ status, className }: { status: LibraryModel["status"]; className?: string }) {
   return (
     <span aria-hidden className={cn("relative inline-flex size-2 shrink-0 rounded-full",
-      status === "ready" ? "bg-emerald-500" : status === "failed" ? "bg-destructive" : "bg-amber-500", className)}>
-      {(status === "training" || status === "queued") && <span className="absolute inset-0 animate-ping rounded-full bg-amber-500/60" />}
+      status === "ready" ? "bg-success" : status === "failed" ? "bg-destructive" : "bg-warning", className)}>
+      {status === "training" && <span className="absolute inset-0 animate-ping rounded-full bg-warning/60" />}
     </span>
   )
 }
 
 export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => void }) {
   const { t, lang, setLang } = useI18n()
-  const { lib } = useLibrary()
+  const { lib, error } = useLibrary()
   const { user, signOut } = useAuth()
   const { resolvedTheme, setTheme } = useTheme()
   const dark = resolvedTheme === "dark"
@@ -54,7 +55,7 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
           <SidebarMenuItem>
             <SidebarMenuButton onClick={() => (setOpenMobile(false), onSearch())} tooltip={`${t("app.search")} (${SHORTCUT})`} className="text-muted-foreground">
               <Search /> <span>{t("app.search")}</span>
-              <kbd dir="ltr" className="ms-auto rounded border bg-muted px-1.5 font-mono text-[10px] leading-4 group-data-[collapsible=icon]:hidden">{SHORTCUT}</kbd>
+              <kbd dir="ltr" className="ms-auto rounded-md border bg-muted px-1.5 font-mono text-xs group-data-[collapsible=icon]:hidden">{SHORTCUT}</kbd>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -70,8 +71,8 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={route.name === "new"} tooltip={t("app.customize")}>
-                  <a href={href({ name: "new" })}><SlidersHorizontal /> <span>{t("app.customize")}</span></a>
+                <SidebarMenuButton asChild isActive={route.name === "new"} tooltip={t("app.new")}>
+                  <a href={href({ name: "new" })}><Plus /> <span>{t("app.new")}</span></a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
@@ -93,7 +94,7 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
           <SidebarGroupAction asChild title={t("app.new")}><a href={href({ name: "new" })}><Plus /></a></SidebarGroupAction>
           <SidebarGroupContent>
             <SidebarMenu>
-              {!lib && [0, 1, 2].map((i) => <SidebarMenuItem key={i}><SidebarMenuSkeleton /></SidebarMenuItem>)}
+              {!lib && !error && [0, 1, 2].map((i) => <SidebarMenuItem key={i}><SidebarMenuSkeleton /></SidebarMenuItem>)}
               {lib?.custom.map((m) => (
                 <SidebarMenuItem key={m.id}>
                   <SidebarMenuButton asChild isActive={activeId === m.id}>
@@ -101,12 +102,12 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
                       <StatusDot status={m.status} />
                       {/* a version's name ends in " vN": the badge carries it, so the list reads "Northwind triage [v2]" */}
                       <span dir="auto" className="truncate">{(m.version ?? 1) > 1 ? m.name.replace(new RegExp(` v${m.version}$`), "") : m.name}</span>
-                      {(m.version ?? 1) > 1 && <span className="shrink-0 rounded-sm border px-1 font-mono text-[10px] leading-4 text-muted-foreground">v{m.version}</span>}
+                      {(m.version ?? 1) > 1 && <Badge variant="outline" className="font-normal text-muted-foreground">v{m.version}</Badge>}
                     </a>
                   </SidebarMenuButton>
                   {m.status === "training" && typeof m.progress === "number"
                     ? <SidebarMenuBadge className="tabular">{Math.round(m.progress * 100)}%</SidebarMenuBadge>
-                    : m.sample ? <SidebarMenuBadge className="text-muted-foreground">{t("app.sample")}</SidebarMenuBadge> : null}
+                    : m.sample ? <SidebarMenuBadge><Badge variant="secondary">{t("app.sample")}</Badge></SidebarMenuBadge> : null}
                 </SidebarMenuItem>
               ))}
               {lib && !lib.custom.length && <p className="px-2 py-1 text-xs text-muted-foreground">{t("app.noModels")}</p>}
@@ -132,7 +133,7 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
               <div className="flex h-8 min-w-0 items-center gap-2 px-2 text-sm group-data-[collapsible=icon]:hidden" title={t("auth.signedInAs", { name: user.name })}>
                 <UserRound className="size-4 shrink-0 text-muted-foreground" />
                 <span dir="auto" className="truncate font-medium">{user.name}</span>
-                {user.admin && <span className="shrink-0 rounded-sm border px-1 text-[10px] leading-4 text-muted-foreground">{t("auth.admin")}</span>}
+                {user.admin && <Badge variant="outline" className="font-normal text-muted-foreground">{t("auth.admin")}</Badge>}
               </div>
             </SidebarMenuItem>
             <SidebarMenuItem>

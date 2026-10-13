@@ -2,41 +2,6 @@
 
 export type DecisionType = "choice" | "noul" | "score"
 
-export interface Query {
-  type: DecisionType
-  question: string
-  labels?: string[] // choice/score need >= 2; noul is fixed no/yes
-}
-
-export interface Decision {
-  column: string
-  question: string
-  type: DecisionType
-}
-
-export interface Models {
-  base: string[]
-  tuned: string[] // "local:<slug>"
-}
-
-export interface Preview {
-  columns: string[]
-  rows: Record<string, string>[] // first 5
-  n: number
-  uniques: Record<string, number>
-  values: Record<string, string[]> // only columns with <= 20 unique values
-}
-
-export type Dist = Record<string, Record<string, number>> // decision -> label -> count
-
-export interface Build {
-  job: string
-  data_dir: string
-  splits: Record<string, number>
-  balance: { before: Dist; after: Dist }
-  command: string
-}
-
 export interface Result {
   probs: Record<string, number>
   p_null: number
@@ -44,25 +9,8 @@ export interface Result {
   expected?: number // score only
 }
 
-export interface Run {
-  results: Result[]
-  ms: number
-  device: string
-}
-
-export interface Compare {
-  models: Record<string, Run & { model: string }>
-  base: string | null   // the released model "base" resolved to
-}
-
 export const PHASES = ["queued", "starting_gpu", "uploading", "training", "evaluating", "downloading", "done", "failed"] as const
 export type Phase = (typeof PHASES)[number]
-
-export interface Agreement {
-  n: number
-  overall: { base: number; yours: number }
-  decisions: Record<string, { base: number; yours: number; n: number }>
-}
 
 /** Training curves aligned on `step` (null where that step logged no value); step_time = recent seconds per step.
  *  best_on: error on the company's own validation examples (best.pt is picked on it); acc: agreement with them (0-1). */
@@ -82,7 +30,6 @@ export interface TrainStatus {
   pod_id: string | null
   job_id?: string
   steps?: number
-  agreement?: Agreement // present when phase === "done"
   series?: Series // present from training on: parsed from the pod log
   events?: JobEvent[]
   gpu?: GpuStats
@@ -127,30 +74,22 @@ export interface BuildV2 {
   settings: { steps: number; holdout: number; seed: number }
 }
 
-export interface Snippets { curl: string; python: string; javascript: string; sdk: string }
+export interface Snippets { curl: string; python: string; javascript: string; sdk?: string }
+export interface Capabilities { ai: boolean; hf_namespace: string | null; languages: string[]; can_push?: boolean }
+let caps: Promise<Capabilities> | undefined
 
 export const api = {
-  models: () => call<Models>("models"),
-  preview: (csv_text: string) => call<Preview>("preview", { csv_text }),
-  build: (req: { csv_text: string; text_col: string; decisions: Decision[]; name: string }) => call<Build>("build", req),
-  compare: (req: { state: string; decisions: Query[]; models: string[] }) => call<Compare>("compare", req),
-  train: (name: string) => call<TrainStatus>("train", { name }),
   trainStatus: (slug: string) => call<TrainStatus>(`train/${encodeURIComponent(slug)}`),
   stopTraining: (slug: string) => call<{ stopping: string }>(`train/${encodeURIComponent(slug)}/stop`, {}),
   analyze: (source: Source, lang: "en" | "he") => call<import("@/lib/project").Analysis>("analyze", { source, lang }),
-  capabilities: () => call<{ ai: boolean; hf_namespace: string | null; languages: string[] }>("capabilities"),
-  buildPlan: (req: BuildV2) => call<Build>("build", req),
-  trainV2: (req: { name: string; base: "small" | "medium"; steps: number }) => call<TrainStatus>("train", req),
+  /** Fetched once per page load (a failure is retried on the next call). can_push: may this user push to Hugging Face. */
+  capabilities: () => (caps ??= call<Capabilities>("capabilities").catch((e) => { caps = undefined; throw e })),
   teach: (req: BuildV2) => call<TrainStatus & { job: string }>("teach", req), // build + train in one job; returns at once
   createKey: (model_id: string) => call<{ key: string; prefix: string }>("keys", { model_id }),
   snippets: (model_id: string) => call<Snippets>(`snippets/${encodeURIComponent(model_id)}`),
   push: (req: { run: string; repo?: string; private: boolean }) => call<{ url: string; files: string[] }>("push", req),
   datasets: () => call<{ datasets: Dataset[] }>("datasets").then((r) => r.datasets),
-  deleteDataset: async (token: string) => {
-    const r = await fetch(`/api/typically/datasets/${encodeURIComponent(token)}`, { method: "DELETE" })
-    checkAuth(r)
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `${r.status} ${r.statusText}`)
-  },
+  deleteDataset: (token: string) => call<unknown>(`datasets/${encodeURIComponent(token)}`, undefined, "DELETE"),
 }
 
 export interface Dataset {
@@ -213,7 +152,7 @@ export interface LibraryModel {
   kind: "base" | "custom"
   base: "small" | "medium"
   params?: string
-  status: "ready" | "training" | "failed" | "queued"
+  status: "ready" | "training" | "failed"
   progress?: number
   message?: string
   code?: string // the job's status code (code.* copy); "failed" = shutdown unconfirmed, show `message`

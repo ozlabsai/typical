@@ -11,7 +11,7 @@ export type Route =
 
 export function parse(hash: string): Route {
   const [path, query = ""] = hash.replace(/^#\/?/, "").split("?")
-  const [a, b, c] = path.split("/").map(decodeURIComponent)
+  const [a, b, c] = path.split("/").map((x) => { try { return decodeURIComponent(x) } catch { return x } })   // #/models/100% must not throw
   const q = new URLSearchParams(query)
   if (a === "models" && b) return { name: "model", id: b, tab: c }
   if (a === "models") return { name: "models" }

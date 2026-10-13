@@ -29,11 +29,11 @@ export function PageHeader({ title, description, actions, badge }: { title: Reac
   )
 }
 
-export function SectionHeader({ title, description, actions }: { title: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode }) {
+export function SectionHeader({ title, description, actions }: { title?: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="grid min-w-0 gap-1">
-        <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+        {title && <h2 className="text-base font-semibold tracking-tight">{title}</h2>}
         {description && <p className="max-w-2xl text-sm text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
@@ -44,7 +44,7 @@ export function SectionHeader({ title, description, actions }: { title: React.Re
 export function Stat({ label, value, tone, note, highlight }: { label: React.ReactNode; value: React.ReactNode; tone?: "standard" | "yours"; note?: React.ReactNode; highlight?: boolean }) {
   return (
     <div className={cn("grid min-w-0 content-start gap-1 rounded-xl border bg-card p-3 sm:p-4", highlight && "border-primary/40")}>
-      <span className="truncate text-xs text-muted-foreground"><bdi>{label}</bdi></span>
+      <span className="line-clamp-2 text-xs text-muted-foreground"><bdi>{label}</bdi></span>
       <span className={cn("font-mono text-xl font-semibold tabular sm:text-2xl", tone === "standard" && "text-standard", tone === "yours" && "text-yours")}>{value}</span>
       {note && <span className="hidden text-xs text-muted-foreground sm:block">{note}</span>}
     </div>

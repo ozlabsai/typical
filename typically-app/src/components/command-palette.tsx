@@ -1,5 +1,5 @@
 import { useEffect } from "react"
-import { Boxes, Database, Languages, MessageSquare, Moon, Plus, SlidersHorizontal, Sun } from "lucide-react"
+import { Boxes, Database, Languages, MessageSquare, Moon, Plus, Sun } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import { StatusDot } from "@/components/app-sidebar"
@@ -32,14 +32,15 @@ export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (o: 
   const nav = (r: Route) => run(() => go(r))
   const pages = [
     { label: t("app.chat"), icon: MessageSquare, route: { name: "chat" } },
-    { label: t("app.customize"), icon: SlidersHorizontal, route: { name: "new" } },
+    { label: t("app.new"), icon: Plus, route: { name: "new" } },
     { label: t("app.models"), icon: Boxes, route: { name: "models" } },
     { label: t("app.data"), icon: Database, route: { name: "data" } },
   ] as const
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen} title={t("cmd.title")} description={t("cmd.description")}>
-      <Command>
+      {/* substring, not fuzzy: "north" must not match "theme" or "language" */}
+      <Command filter={(value, search, keywords) => ([value, ...(keywords ?? [])].join(" ").toLowerCase().includes(search.trim().toLowerCase()) ? 1 : 0)}>
       <CommandInput placeholder={t("cmd.placeholder")} />
       <CommandList className="max-h-96" label={t("cmd.description")}>
         <CommandEmpty>{t("cmd.empty")}</CommandEmpty>
@@ -76,7 +77,6 @@ export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (o: 
         )}
         <CommandSeparator />
         <CommandGroup heading={t("cmd.actions")}>
-          <CommandItem value="action new model" keywords={[t("app.new")]} onSelect={nav({ name: "new" })}><Plus /> {t("app.new")}</CommandItem>
           <CommandItem value="action language" keywords={["language", "שפה", "hebrew", "english", t("nav.langLabel")]} onSelect={run(() => setLang(lang === "en" ? "he" : "en"))}>
             <Languages /> {t("nav.langLabel")}
           </CommandItem>

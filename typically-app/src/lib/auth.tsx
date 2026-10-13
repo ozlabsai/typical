@@ -14,10 +14,18 @@ export function AuthGate({ children, signIn }: { children: React.ReactNode; sign
     window.addEventListener(SIGNED_OUT, out)
     return () => window.removeEventListener(SIGNED_OUT, out)
   }, [])
-  const signOut = useCallback(async () => { await session.logout().catch(() => {}); setState("out") }, [])
+  const signOut = useCallback(async () => {
+    await session.logout().catch(() => {})
+    Object.keys(localStorage).filter((k) => k.startsWith(CHAT_STORE)).forEach((k) => localStorage.removeItem(k))   // pasted cases stay with their owner
+    setState("out")
+  }, [])
   if (state === "loading") return null
   if (state === "out") return <>{signIn((user) => setState({ user }))}</>
   return <Ctx.Provider value={{ user: state.user, signOut }}>{children}</Ctx.Provider>
 }
 
 export const useAuth = () => useContext(Ctx)
+
+/** Chat history in localStorage, one key per signed-in user ("typically.chat" when sign-in is off). */
+export const CHAT_STORE = "typically.chat"
+export const chatStore = (user: User | null) => (user ? `${CHAT_STORE}.${user.id}` : CHAT_STORE)
