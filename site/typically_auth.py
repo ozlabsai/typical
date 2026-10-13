@@ -111,7 +111,7 @@ async def middleware(request: Request, call_next):
     user = read_cookie(request.cookies.get(COOKIE))
     path = request.url.path
     if user is None and path.startswith("/api/") and not path.startswith(OPEN_API):
-        return JSONResponse({"detail": "sign in first"}, status_code=401)
+        return JSONResponse({"detail": "Sign in first."}, status_code=401)
     token = _user.set(user)   # the endpoint's threadpool copies this context
     try:
         return await call_next(request)
@@ -131,11 +131,11 @@ class Login(BaseModel):
 @router.post("/api/auth/login")
 def login(req: Login, request: Request, response: Response):
     if not enabled():
-        raise HTTPException(400, "sign-in is off on this server")
+        raise HTTPException(400, "Sign-in is off on this server.")
     code = req.code.strip()
     # ponytail: no attempt limiter; invite codes must be long random strings (deploy/README.md), which makes guessing hopeless
     if not any(hmac.compare_digest(code.encode(), c.encode()) for c in invites()):
-        raise HTTPException(401, "that invite code is not valid")
+        raise HTTPException(401, "That invite code is not valid.")
     uid = uid_of(code)
     name = " ".join((req.name or "").split()) or f"Guest {uid[:4]}"
     local = request.url.hostname in ("localhost", "127.0.0.1") and request.headers.get("x-forwarded-proto", request.url.scheme) != "https"
@@ -148,7 +148,7 @@ def me():
     if not enabled():
         return {"auth": False, "user": None}
     if (u := current()) is None:
-        raise HTTPException(401, "sign in first")
+        raise HTTPException(401, "Sign in first.")
     return {"auth": True, "user": _public(u)}
 
 
@@ -189,7 +189,7 @@ def visible(model_id: str) -> bool:
 def check(model_id: str) -> None:
     """404 (not 403: someone else's model does not exist for you) unless the caller may use this model."""
     if not visible(model_id):
-        raise HTTPException(404, "no such model")
+        raise HTTPException(404, "We can't find that model. It may have been archived.")
 
 
 def model_of(name: str) -> str:
@@ -209,17 +209,17 @@ def admit(slug: str, running: dict[str, str | None]) -> None:
     """Raise unless one more training run may start; record it. `running`: slug -> owner of every job in this process
     (server._jobs, held under its lock). ponytail: in-process counts, like the job runner itself; one server process only."""
     if slug in running:
-        raise HTTPException(409, "that model is being taught right now; wait for it to finish")
+        raise HTTPException(409, "This model is training right now. Wait for it to finish.")
     if len(running) >= _int("TYPICALLY_MAX_JOBS", 2):
-        raise HTTPException(429, "all training machines are busy right now; try again in a few minutes")
+        raise HTTPException(429, "Every training GPU on this server is busy. Try again in a few minutes.")
     if (u := current()) is None:
         return
     if u.uid in running.values():
-        raise HTTPException(429, "you already have a model training; wait for it to finish before starting another")
+        raise HTTPException(429, "You already have a model training. Wait for it to finish before starting another.")
     log, now, limit = _root() / "usage.jsonl", time.time(), _int("TYPICALLY_DAILY_RUNS", 3)
     runs = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
     if not u.admin and sum(r["uid"] == u.uid and now - r["at"] < 86400 for r in runs) >= limit:
-        raise HTTPException(429, f"you have used today's {limit} training runs; you can train again tomorrow")
+        raise HTTPException(429, f"You've used today's {limit} training runs. You can train again tomorrow.")
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a") as f:
         f.write(json.dumps({"uid": u.uid, "slug": slug, "at": now}) + "\n")
@@ -243,5 +243,5 @@ def throttle(what: str) -> None:
         while hits and now - hits[0] > window:
             hits.popleft()
         if len(hits) >= n:
-            raise HTTPException(429, f"too many requests; you can do this {n} times an hour, try again in a few minutes")
+            raise HTTPException(429, f"Too many requests. You can do this {n} times an hour. Try again in a few minutes.")
         hits.append(now)

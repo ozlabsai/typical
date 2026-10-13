@@ -177,7 +177,7 @@ def test_llm_plan_retries_then_falls_back():
     c, (plan, source, _) = run_llm(bad, llm_json())
     assert source == "llm" and len(c.calls) == 2 and "invented" in c.calls[1]["messages"][-1]["content"]
     c, (plan, source, warnings) = run_llm(bad, bad)
-    assert source == "heuristic" and "validation" in warnings[0] and len(c.calls) == 2 and plan["decisions"]
+    assert source == "heuristic" and "checks" in warnings[0] and len(c.calls) == 2 and plan["decisions"]
     err = anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com"))
     c, (plan, source, warnings) = run_llm(err)
     assert source == "heuristic" and "APIConnectionError" in warnings[0]

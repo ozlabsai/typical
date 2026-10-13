@@ -20,8 +20,8 @@ import typically_plan as tp
 router = APIRouter()
 
 BASES = {
-    "typical-small": {"base": "small", "params": "1.7B", "description": "Fast and light. The default base model: a good fit for most routing and triage decisions."},
-    "typical-medium": {"base": "medium", "params": "4B", "description": "Higher accuracy on harder cases, a little slower. The base for demanding decisions."},
+    "typical-small": {"name": "Typical Small", "base": "small", "params": "1.7B", "description": "Faster. The standard model to start from."},
+    "typical-medium": {"name": "Typical Medium", "base": "medium", "params": "4B", "description": "Slower, and stronger on hard cases."},
 }
 # the Northwind sample: mirrors SAMPLE in typically-app/src/lib/project.ts (questions + tryCase), co_f's trained decisions
 NORTHWIND = {"id": "northwind", "name": "Northwind triage", "base": "small", "steps": 400}
@@ -120,7 +120,7 @@ def _custom() -> list[dict]:
 
 @router.get("/api/typically/models/library")
 def library():
-    base = [{"id": i, "name": i, "kind": "base", "status": "ready", **b} for i, b in BASES.items()]
+    base = [{"id": i, "kind": "base", "status": "ready", **b} for i, b in BASES.items()]
     return {"base": base, "custom": _custom()}
 
 
@@ -133,7 +133,7 @@ def library_entry(model_id: str):
             "examples": [NORTHWIND_CASE, *_states(S.REPO_ROOT / "data_co_a" / "eval" / "a_oneliner.jsonl", 2)]}
     if (not typically_job.SLUG_RE.fullmatch(model_id) or not auth.visible(model_id) or not (d := S.TYPICALLY / "jobs" / model_id).is_dir()
             or (e := _job_entry(d, _keyed())) is None):
-        raise HTTPException(404, "no such model")
+        raise HTTPException(404, "We can't find that model. It may have been archived.")
     return e | {"examples": _states(d / "eval" / "import_oneliner.jsonl", 3)}
 
 
@@ -143,11 +143,11 @@ def archive(model_id: str):
     chat / decide / download / push 404) and its corrections move to jobs/.archive/<id>/. A new model under the same name starts clean."""
     import typically_share   # imports this module
     if model_id in D.ALIASES or model_id in BASES:
-        raise HTTPException(400, "the built-in models cannot be deleted")
+        raise HTTPException(400, "Standard models can't be archived.")
     if not typically_job.SLUG_RE.fullmatch(model_id) or not auth.visible(model_id) or not (d := S.TYPICALLY / "jobs" / model_id).is_dir():
-        raise HTTPException(404, "no such model")
+        raise HTTPException(404, "We can't find that model. It may have been archived.")
     if (_json(d / "status.json") or {}).get("phase") in typically_job.ACTIVE or model_id in S._jobs:
-        raise HTTPException(409, "this model is still training")
+        raise HTTPException(409, "This model is still training.")
     D.revoke_keys(model_id)
     typically_share.revoke_all(model_id)
     dest = d.parent / ".archive" / model_id
@@ -183,7 +183,7 @@ class AskRequest(BaseModel):
 def ask(req: AskRequest):
     for q in req.questions:   # before any model load; noul labels are fixed (no/yes) by S._run
         if q.type != "noul" and len(q.labels) < 2:
-            raise HTTPException(400, f"'{q.type}' question {q.question!r} needs >=2 labels")
+            raise HTTPException(400, f'The question "{q.question}" needs at least two answer options.')
     auth.check(req.model)
     model = req.model if req.model in BASES else f"local:{D.run_of(req.model)}"
     queries = [S.Query(type=q.type, question=q.question, labels=q.labels) for q in req.questions]

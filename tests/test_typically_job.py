@@ -200,7 +200,7 @@ def test_reconcile_deletes_stale_and_unknown_but_not_other_pods(env, monkeypatch
     assert {p["id"] for p in cli.pods} == {"p_live", "p_other_live", "p_other", "p_prefix"}   # a second server must not kill a live job
     # the orphan's process is gone: its card must not say "training" forever; live jobs (ours or another process's) are untouched
     st = tj.read_status("orphan")
-    assert (st["phase"], st["code"], st["job_id"]) == ("failed", "failed_restart", "ffff6666") and "Nothing is running" in st["message"]
+    assert (st["phase"], st["code"], st["job_id"]) == ("failed", "failed_restart", "ffff6666") and "Nothing is left running" in st["message"]
     assert [tj.read_status(s)["phase"] for s in ("stale", "live", "other")] == ["training"] * 3
 
 
@@ -232,7 +232,7 @@ def test_shutdown_deletes_the_pods_of_running_jobs_and_fails_their_status(env, m
     tj.shutdown(timeout=5, log=lambda m: None)
     st = tj.read_status(SLUG)
     assert cli.deleted_ids() == {"pod1"} and cli.pods == []
-    assert (st["phase"], st["code"]) == ("failed", "failed_restart") and "Nothing is running" in st["message"]
+    assert (st["phase"], st["code"]) == ("failed", "failed_restart") and "Nothing is left running" in st["message"]
     assert tj.read_status("prepping")["code"] == "failed_restart"
     release.set()   # had the process lived on, the job thread stops at its next call and keeps the outcome shutdown wrote
     job.join(5)
@@ -315,7 +315,7 @@ def test_nonzero_exit_fails_even_if_the_log_says_done(env, monkeypatch):
     cli = use(monkeypatch, FakeCli([ALIVE + "step 50 x\n", "EXIT 1\nTraceback (most recent call last)\nJOB_DONE\n"]))
     tj.run(SLUG, lambda m: None)
     st = tj.read_status(SLUG)
-    assert st["phase"] == "failed" and st["code"] == "failed_training" and "exit 1" in st["message"] and "traceback" in st["message"] and len(cli.deleted()) == 1
+    assert st["phase"] == "failed" and st["code"] == "failed_training" and "stopped with an error" in st["message"] and "exit" not in st["message"] and len(cli.deleted()) == 1
 
 
 def test_traceback_in_log_alone_does_not_fail_a_zero_exit(env, monkeypatch):
@@ -474,7 +474,7 @@ def test_provider_down_while_booting_is_failed_provider_and_deletes(env, monkeyp
     cli = use(monkeypatch, FakeCli(POLLS, fail_on=failing(clock, "get")))
     tj.run(SLUG, lambda m: None)
     st = tj.read_status(SLUG)
-    assert (st["phase"], st["code"], st["message"]) == ("failed", "failed_provider", tj.PROVIDER_DOWN + " Nothing is running or billing.")
+    assert (st["phase"], st["code"], st["message"]) == ("failed", "failed_provider", tj.PROVIDER_DOWN + " Nothing is left running.")
     assert len(gets(cli)) == len(tj.RETRY_S) + 1 and cli.deleted_ids() == {"pod1"} and cli.pods == []
 
 
@@ -567,7 +567,7 @@ def test_unconfirmed_delete_does_not_claim_nothing_is_billing(env, monkeypatch, 
     logs = []
     tj.run(SLUG, logs.append)
     st = tj.read_status(SLUG)
-    assert st["phase"] == "failed" and st["code"] == "failed" and "billing" not in st["message"] and "could not confirm" in st["message"]
+    assert st["phase"] == "failed" and st["code"] == "failed" and "billing" not in st["message"] and "couldn't confirm" in st["message"]
     assert cli.pods and any("WARNING" in m for m in logs)
 
 
@@ -646,7 +646,7 @@ def test_stop_mid_training_deletes_the_pod_and_says_stopped(env, monkeypatch):
     cli = use(monkeypatch, Cli(POLLS))
     tj.run(SLUG, lambda m: None)
     st = tj.read_status(SLUG)
-    assert (st["phase"], st["code"], st["message"]) == ("failed", "stopped", "You stopped this run. Nothing is running or billing.")
+    assert (st["phase"], st["code"], st["message"]) == ("failed", "stopped", "You stopped this training run. Nothing is left running.")
     assert cli.deleted_ids() == {"pod1"} and cli.pods == []
     tj._STOP.discard(SLUG)
 

@@ -57,16 +57,16 @@ class AnalyzeRequest(BaseModel):
 
 def _upload_file(token: str, must_exist: bool = True) -> Path:
     if not re.fullmatch(r"[0-9a-f]{32}", token):
-        raise HTTPException(400, "bad records_token")
+        raise HTTPException(400, "Your uploaded data has expired. Load it again in the first step.")
     f = UPLOADS / f"{token}.jsonl"
     if must_exist and not f.exists():
-        raise HTTPException(404, "unknown records_token; analyze the data again")
+        raise HTTPException(404, "Your uploaded data has expired. Load it again in the first step.")
     return f
 
 
 def _check_owner(token: str) -> None:
     if auth.enabled() and not auth.can_see(_meta(token).get("owner")):
-        raise HTTPException(404, "unknown records_token; analyze the data again")
+        raise HTTPException(404, "Your uploaded data has expired. Load it again in the first step.")
 
 
 def load_upload(token: str) -> list[dict]:
@@ -89,7 +89,7 @@ def analyze(req: AnalyzeRequest):
     src = req.source.model_dump(exclude_none=True)
     sheets, token, mail, warnings = None, None, None, []
     if src["kind"] == "mail" and len(src.get("data_base64") or "") > MAX_MAIL_B64:
-        raise HTTPException(413, f"that mailbox is over {MAX_MAIL_MB} MB; export one folder or a shorter date range and try again")
+        raise HTTPException(413, f"That mailbox is over {MAX_MAIL_MB} MB. Export one folder or a shorter date range and try again.")
     try:
         if src["kind"] == "upload":   # start again from a table we already have: no new upload
             token = src.get("token") or ""
@@ -98,7 +98,7 @@ def analyze(req: AnalyzeRequest):
             try:
                 data = base64.b64decode(src.get("data_base64") or "", validate=True)
             except binascii.Error:
-                raise ValueError("could not read that file")
+                raise ValueError("We couldn't read that file.")
             records, mail, warnings = tmail.read_mail(data, src.get("owner"), req.lang)
         else:
             sheets, records = tp.read_xlsx(src.get("data_base64") or "", src.get("sheet")) if src["kind"] == "xlsx" else (None, tp.load_records(src))
@@ -195,7 +195,7 @@ def delete_dataset(token: str):
     _meta(token)   # 400 / 404
     _check_owner(token)
     if names := [m["name"] for m in _models_by_token().get(token, [])]:
-        raise HTTPException(409, "models were trained from this data: " + ", ".join(names))
+        raise HTTPException(409, "Models were trained from this data: " + ", ".join(names))
     for f in (UPLOADS / f"{token}.jsonl", UPLOADS / f"{token}.meta.json"):
         f.unlink(missing_ok=True)
     _records.pop(token, None)

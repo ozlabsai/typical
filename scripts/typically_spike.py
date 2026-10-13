@@ -365,17 +365,17 @@ def build_import(records, text_col, decisions, rng, balance=True, flips=0.10):
         col, typ = d["column"], d["type"]
         vals = [r[col].strip() for r in records]
         if "" in vals:
-            raise ValueError(f"column {col!r} has empty cells")
+            raise ValueError(f'The "{col}" column has empty cells.')
         if typ == "noul":
             bad = {v for v in vals if v.lower() not in YESNO}
             if bad:
-                raise ValueError(f"column {col!r} is not yes/no: {sorted(bad)[:3]}")
+                raise ValueError(f'The "{col}" column isn\'t yes or no (found: {", ".join(map(str, sorted(bad)[:3]))}).')
             vals, cands = [YESNO[v.lower()] for v in vals], ["no", "yes"]
         else:
             ints = typ == "score" and all(v.lstrip("-").isdigit() for v in vals)   # "10" must sort after "2"
             cands = sorted(set(vals), key=int if ints else str)
         if len(cands) < 2:
-            raise ValueError(f"column {col!r} needs at least 2 different values")
+            raise ValueError(f'The "{col}" column needs at least two different answers.')
         for name, idx in part.items():
             rows = [row(records[i][text_col], d["question"], cands, vals[i], typ, f"import_{col}") for i in idx]
             if balance and name == "train" and rows:
@@ -497,7 +497,7 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None, progress=Non
     ponytail: split is by case hash only; a time split (newest held out) for a timestamp column is not implemented."""
     decisions = [d for d in plan["decisions"] if d["include"]]
     if not decisions:
-        raise ValueError("the plan has no included decision")
+        raise ValueError("Choose at least one question to learn.")
     seed, holdout = settings.get("seed", 0), settings.get("holdout", 20)
     fact_cols = [q["column"] for q in plan["case"]["parts"] if q["role"] == "fact"]
     part, facts, warnings = {"train": [], "val": [], "import_oneliner": []}, {}, []
@@ -536,14 +536,14 @@ def build_from_plan(records, plan, enrich, settings, rng, llm=None, progress=Non
                 rows += import_flips(rows, d["type"], d["labels"], conds, FLIP_RATE, frng)
             split[name] += rows
     if any(not v for v in split.values()):
-        raise ValueError("not enough usable rows: a split came out empty; add more rows or lower the held-out share")
+        raise ValueError("There aren't enough usable cases to keep some aside for testing. Add more cases or lower the share kept back for testing.")
     syn, tr, ev, cost, collisions, failed, tasks = [], [], {}, 0.0, 0, 0, []
     langs = enrich.get("languages") or []
     if (enrich.get("synthetic") or langs) and llm is None:
         warnings.append("Synthetic cases and added languages are not available right now; they were skipped.")
     elif enrich.get("synthetic") or langs:
         if bad := [c for c in langs if not re.fullmatch(r"[a-z]{2,3}", str(c))]:
-            raise ValueError(f"unknown language code {bad[0]!r}; use a two-letter code such as es or de")
+            raise ValueError(f'Unknown language code "{bad[0]}". Use a two-letter code such as es or de.')
         seen = {r["state"] for v in split.values() for r in v}
 
         def emit_syn(d, lab, texts):

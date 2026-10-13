@@ -35,7 +35,7 @@ class Correction(BaseModel):
 
 def _check(model_id: str):
     if not typically_job.SLUG_RE.fullmatch(model_id) or not (model_id == "northwind" or (S.TYPICALLY / "jobs" / model_id).is_dir()):
-        raise HTTPException(404, "no such model")
+        raise HTTPException(404, "We can't find that model. It may have been archived.")
     auth.check(model_id)
 
 
@@ -54,7 +54,7 @@ def add(model_id: str, c: Correction):
     _check(model_id)
     labels = ["no", "yes"] if c.type == "noul" else c.labels
     if len(labels) < 2 or c.answer not in labels:
-        raise HTTPException(400, "the answer must be one of the question's options")
+        raise HTTPException(400, "The answer must be one of the question's options.")
     with _lock:   # the same (case, question) again replaces the old correction: the latest answer wins
         items = [x for x in read(model_id) if (x["case"], x["question"]) != (c.case, c.question)]
         items.append({**c.model_dump(), "labels": labels, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
@@ -75,7 +75,7 @@ def remove(model_id: str, n: int):
     with _lock:
         items = read(model_id)
         if not 0 <= n < len(items):
-            raise HTTPException(404, "no such correction")
+            raise HTTPException(404, "We can't find that correction.")
         del items[n]
         _write(model_id, items)
     return {"count": len(items)}
@@ -112,10 +112,10 @@ def retrain(model_id: str, req: RetrainRequest = RetrainRequest()):
     _check(model_id)   # quotas / busy GPUs: S.train_slug -> start_job refuses, and the half-built version is removed below
     corrections = read(model_id)
     if not corrections:
-        raise HTTPException(400, "no corrections to learn from yet")
+        raise HTTPException(400, "There are no corrections to train on yet.")
     parent = S.TYPICALLY / "jobs" / model_id
     if model_id != "northwind" and not (parent / "train.jsonl").exists():
-        raise HTTPException(400, "this model's training data is missing")
+        raise HTTPException(400, "This model's training data is missing.")
     root = model_id
     while up := _job(root).get("parent"):
         root = up
@@ -124,7 +124,7 @@ def retrain(model_id: str, req: RetrainRequest = RetrainRequest()):
         n += 1
     slug = f"{root}_v{n}"
     if not typically_job.SLUG_RE.fullmatch(slug):
-        raise HTTPException(400, "the model name is too long for another version")
+        raise HTTPException(400, "The model name is too long to add another version number.")
     meta = M.NORTHWIND if model_id == "northwind" else _job(model_id)
     root_name = M.NORTHWIND["name"] if root == "northwind" else _job(root).get("name") or root
 
@@ -142,7 +142,7 @@ def retrain(model_id: str, req: RetrainRequest = RetrainRequest()):
         held = {tp.norm(json.loads(line)["state"]) for f in [out / "val.jsonl", *(out / "eval").glob("*.jsonl")] for line in f.open()}
         used = [c for c in corrections if tp.norm(c["case"]) not in held]
         if not used:
-            raise HTTPException(400, "every correction is on a held-out test case; correct some new cases first")
+            raise HTTPException(400, "All your corrections are on test cases, which stay fixed so results stay comparable. Correct some new cases first.")
         with open(out / "train.jsonl", "a") as f:
             for c in used:
                 r = row(c["case"], c["question"], c["labels"], c["answer"], c["type"], "import_correction", correction=True)

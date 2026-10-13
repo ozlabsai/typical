@@ -110,7 +110,7 @@ def get_model(name: str) -> Typical:
         best = TYPICALLY / "results" / name.removeprefix("local:") / "best.pt"
         source, stamp = str(best), best.stat().st_mtime_ns
     else:
-        raise HTTPException(400, f"unknown model {name!r}")
+        raise HTTPException(400, f"We can't find the model {name}.")
     if _cache.get(name, (None,))[0] != stamp:   # new, or retrained since it was loaded: the old entry is dropped
         model = Typical.from_pretrained(source, device="auto", backbones=_backbones)
         _warm(model)
@@ -130,7 +130,7 @@ def _base_of(path: str, mtime_ns: int) -> str:
 def base_of(tuned: str) -> str:
     """The released model a tuned model ("local:<run>") was fine-tuned from, e.g. "typical-medium": the baseline to compare it against."""
     if tuned not in tuned_models():
-        raise HTTPException(400, f"unknown model {tuned!r}")
+        raise HTTPException(400, f"We can't find the model {tuned}.")
     best = TYPICALLY / "results" / tuned.removeprefix("local:") / "best.pt"
     return _base_of(str(best), best.stat().st_mtime_ns)
 
@@ -222,23 +222,23 @@ class BuildPlanRequest(BaseModel):   # /teach: a confirmed DatasetPlan over a ta
 
 def _check_name(slug: str) -> None:
     if slug in auth.SHARED_MODELS or f"co_{slug}" in typically_deploy.ALIASES.values():   # "Northwind" / "f" would write over the shared sample
-        raise HTTPException(409, "that name is reserved; pick another")
+        raise HTTPException(409, "That name is reserved. Pick another.")
     if slug in _jobs:   # ponytail: check-then-write race is a few ms wide; a per-slug lock if builds ever run concurrently
-        raise HTTPException(409, "that model is being taught right now; wait for it to finish before rebuilding its data")
+        raise HTTPException(409, "This model is training right now. Wait for it to finish before changing its data.")
     if slug and (TYPICALLY / "jobs" / slug).exists() and not auth.visible(slug):
-        raise HTTPException(409, "that name is taken; pick another")
+        raise HTTPException(409, "That name is taken. Pick another.")
 
 
 def _plan_records(req: BuildPlanRequest, slug: str) -> list[dict]:
     """The fast checks of a plan build (name, upload, plan vs data), before any enrichment call."""
     if not typically_job.SLUG_RE.fullmatch(slug):
-        raise HTTPException(400, "need a model name (letters and digits, up to 40 characters)")
+        raise HTTPException(400, "Give the model a name: letters and digits, up to 40 characters.")
     records = typically_analyze.load_upload(req.records_token)
     try:
         if errs := typically_plan.validate_plan(req.plan, typically_plan.profile(records)):
-            raise HTTPException(400, "the plan does not match the data: " + "; ".join(errs[:5]))
+            raise HTTPException(400, "These settings don't match your data (" + "; ".join(errs[:5]) + "). Check the questions in the Understand step.")
     except (KeyError, TypeError, AttributeError) as e:
-        raise HTTPException(400, f"the plan is malformed: {e!r}")
+        raise HTTPException(400, "Something went wrong reading these settings. Go back to the Understand step and try again.")
     return records
 
 
@@ -258,7 +258,7 @@ def _build_plan(req: BuildPlanRequest, slug: str, records: list[dict], progress=
     except ValueError as e:
         raise HTTPException(400, str(e))
     except (KeyError, TypeError, AttributeError) as e:
-        raise HTTPException(400, f"the plan is malformed: {e!r}")
+        raise HTTPException(400, "Something went wrong reading these settings. Go back to the Understand step and try again.")
     out = TYPICALLY / "jobs" / slug
     shutil.rmtree(out / "eval", ignore_errors=True)   # a rebuild must not keep the previous build's eval files (e.g. an old language)
     write(out, split)
@@ -287,21 +287,21 @@ def start_job(slug: str, base: str = "small", steps: int = 400, prepare=None) ->
                     prepare()
                     typically_job.check_stop(slug)   # stopped while preparing: never rent the GPU
                 except typically_job.Stopped:
-                    typically_job.write_status(slug, "failed", "You stopped this run before it reached a GPU; nothing is running or billing.",
+                    typically_job.write_status(slug, "failed", "You stopped this training run before it reached a GPU. Nothing is left running.",
                                                "stopped", events=[typically_job.event("failed")])
                     return
                 except Exception as e:   # HTTPException (bad plan / data) or anything else: the card says why, nothing was rented
                     if not isinstance(e, HTTPException):
                         log.exception("preparing %s failed", slug)   # raw text in the server log only
-                    why = e.detail if isinstance(e, HTTPException) else "something went wrong on the server"
-                    typically_job.write_status(slug, "failed", f"Preparing your examples failed: {why}", "failed_build",
+                    why = e.detail if isinstance(e, HTTPException) else "Something went wrong on the server."
+                    typically_job.write_status(slug, "failed", why, "failed_build",
                                                events=[typically_job.event("failed")])
                     return
             typically_job.run(slug, typically_job.file_log(slug), base, steps, **({"prepared": True} if prepare else {}))
         finally:
             end()
     try:   # the thread keeps the request's context (auth.stamp() in prepare's job.json)
-        status = typically_job.write_status(slug, "queued", "Preparing your examples." if prepare else "Waiting to start.",
+        status = typically_job.write_status(slug, "queued", "Preparing your cases." if prepare else "Waiting to start.",
                                             "preparing" if prepare else None, events=[typically_job.event("prepare")] if prepare else ())
         threading.Thread(target=contextvars.copy_context().run, args=(work,), daemon=True).start()
     except BaseException:
@@ -313,7 +313,7 @@ def start_job(slug: str, base: str = "small", steps: int = 400, prepare=None) ->
 def train_slug(slug: str, base: str | None = None, steps: int | None = None) -> dict:
     """Start training a built dataset (jobs/<slug>/); base/steps default to its job.json. /retrain goes through here."""
     if not typically_job.SLUG_RE.fullmatch(slug) or not (TYPICALLY / "jobs" / slug / "train.jsonl").exists() or not auth.visible(slug):
-        raise HTTPException(404, "no dataset with that name; import and build it first")
+        raise HTTPException(404, "We can't find the data for this model. Start a new model from your data.")
     saved = json.loads(f.read_text()) if (f := TYPICALLY / "jobs" / slug / "job.json").exists() else {}
     return start_job(slug, base or saved.get("base", "small"), steps or saved.get("steps", 400))
 
@@ -323,7 +323,7 @@ def stop(slug: str):
     """Ask a running job to stop: it raises at its next GPU-provider call (seconds; up to a few minutes mid upload / download) or
     AI enrichment call, and deletes the GPU in its finally, as on any failure."""
     if not typically_job.SLUG_RE.fullmatch(slug) or not auth.visible(slug) or slug not in _jobs:
-        raise HTTPException(404, "no running job with that name")
+        raise HTTPException(404, "This model isn't training right now.")
     typically_job.stop(slug)
     return {"stopping": slug}
 
@@ -344,7 +344,7 @@ def teach(req: BuildPlanRequest):
         _save_meta(req, TYPICALLY / "jobs" / slug)   # first: the model page has its name and decisions while the examples are prepared
         stats = _build_plan(req, slug, records, progress)
         if (req.enrich.synthetic or req.enrich.languages) and (not typically_llm.available() or stats["llm_failed"] == stats["llm_calls"] > 0):
-            raise HTTPException(502, "AI enrichment failed for every case, so training did not start; turn it off or try again")
+            raise HTTPException(502, "AI enrichment failed for every case, so training didn't start. Turn it off or try again.")
         typically_job.add_events(slug, typically_job.event("prepare", n=stats["rows"]["train"], synthetic=stats["synthetic"],
                                                            translated=stats["translated"]["train"], failed=stats["llm_failed"]))
     return {**start_job(slug, req.base, req.settings.steps, prepare), "job": slug}
@@ -354,7 +354,7 @@ def teach(req: BuildPlanRequest):
 def train_status(slug: str):
     st = typically_job.read_status(slug) if typically_job.SLUG_RE.fullmatch(slug) and auth.visible(slug) else None
     if st is None:
-        raise HTTPException(404, "no such job")
+        raise HTTPException(404, "We can't find that training run.")
     if st["phase"] not in ("queued", "starting_gpu", "uploading"):   # the curves stay on the card once training is over
         st["series"] = typically_job.log_series(typically_job.job_dir(slug) / "pod.log")
     return {**st, "run": f"co_{slug}"} if st["phase"] == "done" else st
@@ -370,7 +370,7 @@ def _reveal_target(project: str) -> tuple[str, Path, str]:
     if project == "northwind":
         return "co_f", REPO_ROOT / "data_co_a/eval/a_oneliner.jsonl", "Northwind Freight"
     if not typically_job.SLUG_RE.fullmatch(project) or not auth.visible(project):
-        raise HTTPException(404, "no such project")
+        raise HTTPException(404, "We can't find that model.")
     return f"co_{project}", TYPICALLY / "jobs" / project / "eval" / "import_oneliner.jsonl", company(project)
 
 
@@ -380,14 +380,14 @@ def results(project: str):
     best = TYPICALLY / "results" / run / "best.pt"
     cache = best.with_name("reveal.json")
     if not best.exists() or not eval_file.exists():
-        raise HTTPException(404, "that model is not trained yet")
+        raise HTTPException(404, "That model isn't trained yet.")
     with _reveal_lock:
         if cache.exists() and cache.stat().st_mtime >= best.stat().st_mtime and (c := json.loads(cache.read_text())).get("base", "typical-small") == base_of(f"local:{run}"):   # caches from before "base" was recorded are small's
             return c
         job = _reveals.get(run)
         if job and job.get("error"):
             _reveals.pop(run)
-            raise HTTPException(500, "scoring this model failed; reload to try again")   # the cause is in the server log
+            raise HTTPException(500, "We couldn't score this model. Reload the page to try again.")   # the cause is in the server log
         if job is None:
             rows = [json.loads(line) for line in eval_file.open()]
             job = _reveals[run] = {"done": 0, "total": len({r["state"] for r in rows})}
@@ -419,7 +419,7 @@ def _reveal_work(run: str, rows: list[dict], company: str, cache: Path) -> None:
 def download(run: str):
     mid = typically_deploy.model_of_run(run)   # 404 unless co_<slug> / co_f
     if not (f := TYPICALLY / "results" / run / "best.pt").exists() or not auth.visible(mid):
-        raise HTTPException(404, "no such model")
+        raise HTTPException(404, "We can't find that model. It may have been archived.")
     return FileResponse(f, filename=f"{run}.pt")
 
 
@@ -436,7 +436,7 @@ def spa(path: str = ""):   # the product app (typically-app/, built to site/app/
     if f.is_file() and f.is_relative_to(root):
         return FileResponse(f)
     if not (root / "index.html").exists():
-        raise HTTPException(404, "the app is not built; run `npm run build` in typically-app/")
+        raise HTTPException(404, "The app isn't built. Run `npm run build` in typically-app/.")
     return FileResponse(root / "index.html")
 
 

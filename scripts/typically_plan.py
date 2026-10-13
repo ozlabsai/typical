@@ -46,7 +46,7 @@ _GID = re.compile(r"[#&?]gid=(\d+)")
 def sheets_export_url(url: str) -> str:
     m = _SHEET.search(url)
     if not m:
-        raise ValueError("that does not look like a Google Sheets link (docs.google.com/spreadsheets/d/...)")
+        raise ValueError("That doesn't look like a Google Sheets link (docs.google.com/spreadsheets/d/...).")
     g = _GID.search(url)
     return f"https://docs.google.com/spreadsheets/d/{m[1]}/export?format=csv&gid={g[1] if g else 0}"
 
@@ -55,7 +55,7 @@ def _parse_csv(text: str) -> list[dict]:
     reader = csv.DictReader(io.StringIO(text.lstrip("﻿")))
     rows = [{k.strip(): (v or "").strip() for k, v in r.items() if k and k.strip()} for r in islice(reader, MAX_ROWS)]
     if not rows:
-        raise ValueError("the file has no rows")
+        raise ValueError("The file has no rows.")
     return rows
 
 
@@ -81,17 +81,17 @@ def read_xlsx(data_base64: str, sheet: str | None = None) -> tuple[list[str], li
     try:
         wb = openpyxl.load_workbook(io.BytesIO(base64.b64decode(data_base64 or "", validate=True)), read_only=True, data_only=True)
     except (InvalidFileException, BadZipFile, KeyError, ValueError):
-        raise ValueError("could not read that Excel file; save it as .xlsx (or CSV) and try again")
+        raise ValueError("We couldn't read that Excel file. Save it as .xlsx (or CSV) and try again.")
     try:
         if sheet and sheet not in wb.sheetnames:
-            raise ValueError(f"the workbook has no sheet {sheet!r}")
+            raise ValueError(f'The workbook has no sheet called "{sheet}".')
         rows = (r for r in wb[sheet or wb.sheetnames[0]].iter_rows(values_only=True) if any(c not in (None, "") for c in r))
         header = [_xcell(c) for c in next(rows, ())]
         records = [{h: _xcell(v) for h, v in zip(header, r) if h} for r in islice(rows, MAX_ROWS)]
     finally:
         wb.close()
     if not records:
-        raise ValueError("the sheet has no rows")
+        raise ValueError("The sheet has no rows.")
     return wb.sheetnames, records
 
 
@@ -113,16 +113,16 @@ def load_records(source: dict) -> list[dict]:
             with urllib.request.urlopen(sheets_export_url(source.get("url") or ""), timeout=30) as r:
                 body, ctype = r.read(50_000_000).decode("utf-8", "replace"), r.headers.get("content-type", "")
         except urllib.error.URLError as e:
-            raise ValueError(f"could not open the sheet ({e}); is it shared as 'Anyone with the link can view'?")
+            raise ValueError(f"We couldn't open the sheet ({e}). Is it shared as 'Anyone with the link can view'?")
         if "csv" not in ctype:   # a private sheet answers with the Google sign-in page
-            raise ValueError("the sheet is not public: share it as 'Anyone with the link can view' and try again")
+            raise ValueError("The sheet isn't public. Share it as 'Anyone with the link can view' and try again.")
         return _parse_csv(body)
     if kind == "hf":
         from datasets import load_dataset   # heavy import, only when needed
         limit = min(int(source.get("limit") or 5000), MAX_ROWS)
         name = str(source.get("dataset") or "")
         if not re.fullmatch(r"[\w.-]+(/[\w.-]+)?", name) or Path(name).exists():   # a Hub id, never a directory on this server
-            raise ValueError(f"{name!r} is not a Hugging Face dataset id like owner/name")
+            raise ValueError(f'"{name}" isn\'t a Hugging Face dataset id like owner/name.')
         hosted = os.environ.get("TYPICALLY_AUTH") == "1"   # invited users must not read the operator's private datasets
         try:   # public datasets only, unless a local server has an HF_TOKEN
             ds = load_dataset(name, source.get("config") or None, split=source.get("split") or "train",
@@ -131,9 +131,9 @@ def load_records(source: dict) -> list[dict]:
             # literal "\\n" in dumped text fields (common on the Hub) becomes a real line break
             rows = [{k: _cell(v).replace("\\n", "\n").strip() for k, v in r.items()} for r in islice(ds.shuffle(seed=0, buffer_size=10_000), limit)]
         except Exception as e:   # datasets raises a zoo of types; the message is what the user needs (e.g. the configs), minus server paths
-            raise ValueError(f"could not load Hugging Face dataset {source.get('dataset')!r}: {re.sub(r'(/[^/\s]+){2,}', '<path>', str(e))[:300]}")
+            raise ValueError(f"We couldn't load the Hugging Face dataset {source.get('dataset')}: {re.sub(r'(/[^/\s]+){2,}', '<path>', str(e))[:300]}")
         if not rows:
-            raise ValueError("the dataset split has no rows")
+            raise ValueError("That part of the dataset has no rows.")
         return rows
     raise ValueError(f"unknown source kind {kind!r}")
 
@@ -329,54 +329,54 @@ TEXT = {
     "en": {
         "q_noul": "Should we {h}?", "q_score": "What {h} level?", "q_choice": "Which {h}?",
         "r_yesno": "Answers look like yes/no ({vals}).",
-        "r_scale": "Answers form a scale ({why}); ordered {lo} to {hi}.",
+        "r_scale": "Answers form a scale ({why}), ordered {lo} to {hi}.",
         "r_choice": "{n} different answers, none that look like yes/no or a scale.",
         "why_words": "low-to-high words", "why_whole": "small whole-number scale",
         "why_sev": "{p} numbers: 1 is the most severe", "why_more": "{p} numbers: higher is more",
-        "x_constant": "Every row has the same value.", "x_timestamp": "A date or time; the decision is not made from it.",
+        "x_constant": "Every row has the same value.", "x_timestamp": "A date or time. The decision isn't made from it.",
         "x_near_unique": "Almost every row has a different value.", "x_pii": "Looks like personal data ({kinds}).",
         "x_after_decision": "Reads like something written after the decision was made.",
-        "x_leakage": "Predicts a decision almost perfectly on its own.", "x_other": "The plan did not use this column.",
+        "x_leakage": "Predicts a decision almost perfectly on its own.", "x_other": "Not used.",
         "p_body": "Free text: the case itself.", "p_fact": "Short column kept as context.", "p_longest": "The longest column, used as the case.",
-        "unmapped": "Answer {v!r} was not mapped; it is ignored until you map it.",
-        "i_dup": "{n} rows repeat another case.", "a_dup": "merge into soft answers",
-        "i_conflict": "The same case has different answers; expect about {pct}% at best.", "a_conflict": "review or merge into soft answers",
+        "unmapped": "We don't know which option \"{v}\" belongs to, so we skip those cases until you assign it.",
+        "i_dup": "{n} rows repeat another case.", "a_dup": "merge them and learn how often each answer was given",
+        "i_conflict": "The same case has different answers, so no model can agree more than about {pct}% of the time.", "a_conflict": "review, or merge them and learn how often each answer was given",
         "i_rare": "Rare answers: {vals}.", "a_rare": "balance rare answers",
-        "i_empty": "{n} rows have no answer here; they are not used for this decision.", "a_empty": "skip those rows",
+        "i_empty": "{n} rows have no answer here. They aren't used for this question.", "a_empty": "skip those rows",
         "i_leak": "Predicts '{c}' {pct}% of the time by itself.", "a_leak": "remove from the case",
         "i_textleak": "The text often contains the answer to '{c}' word for word.", "a_textleak": "review",
         "i_pii": "Contains {kinds}.", "a_pii": "review or remove",
-        "i_long": "{n} cases are longer than {t} tokens; the end is cut.", "a_long": "truncate",
-        "w_nodecision": "No column looks like a decision (2-20 different answers); add one in the next step.",
-        "w_big": "The data profile is too large for AI analysis; used the built-in rules instead.",
-        "w_fail": "AI analysis failed ({err}); used the built-in rules instead.",
-        "w_invalid": "The AI plan did not pass validation ({err}); used the built-in rules instead.",
+        "i_long": "{n} cases are too long to read in full (over {t} tokens). Only the first part of each case is used.", "a_long": "use the first part",
+        "w_nodecision": "We couldn't find a column of past decisions (a column with 2 to 20 different answers). Add one in the next step.",
+        "w_big": "Your data is too large for AI reading, so we used the built-in rules. Check the questions below.",
+        "w_fail": "AI reading wasn't available ({err}), so we used the built-in rules. Check the questions below.",
+        "w_invalid": "The AI reading didn't pass our checks ({err}), so we used the built-in rules. Check the questions below.",
     },
     "he": {
         "q_noul": "האם {h}?", "q_score": "מה רמת ה{h}?", "q_choice": "איזה {h} מתאים?",
         "r_yesno": "התשובות נראות כמו כן/לא ({vals}).",
-        "r_scale": "התשובות יוצרות סולם ({why}); מסודרות מ-{lo} עד {hi}.",
+        "r_scale": "התשובות יוצרות סולם ({why}), מסודרות מ-{lo} עד {hi}.",
         "r_choice": "{n} תשובות שונות, אף אחת מהן לא נראית כמו כן/לא או כסולם.",
         "why_words": "מילים מנמוך לגבוה", "why_whole": "סולם קטן של מספרים שלמים",
         "why_sev": "מספרי {p}: 1 הוא החמור ביותר", "why_more": "מספרי {p}: גבוה יותר פירושו יותר",
-        "x_constant": "לכל השורות אותו ערך.", "x_timestamp": "תאריך או שעה; ההחלטה לא מתקבלת על סמך זה.",
+        "x_constant": "לכל השורות אותו ערך.", "x_timestamp": "תאריך או שעה. ההחלטה לא מתקבלת על סמך זה.",
         "x_near_unique": "כמעט לכל שורה ערך שונה.", "x_pii": "נראה כמו מידע אישי ({kinds}).",
         "x_after_decision": "נראה כמו משהו שנכתב אחרי שההחלטה התקבלה.",
-        "x_leakage": "מנבא החלטה כמעט בדיוק גם לבדו.", "x_other": "התוכנית לא השתמשה בעמודה הזו.",
+        "x_leakage": "מנבא החלטה כמעט בדיוק גם לבדו.", "x_other": "לא בשימוש.",
         "p_body": "טקסט חופשי: המקרה עצמו.", "p_fact": "עמודה קצרה שנשמרה כהקשר.", "p_longest": "העמודה הארוכה ביותר, משמשת כמקרה.",
-        "unmapped": "התשובה {v!r} לא מופתה; היא תתעלם עד שתמפו אותה.",
-        "i_dup": "{n} שורות חוזרות על מקרה אחר.", "a_dup": "לאחד לתשובות רכות",
-        "i_conflict": "לאותו מקרה יש תשובות שונות; צפו לדיוק של כ-{pct}% לכל היותר.", "a_conflict": "לבדוק או לאחד לתשובות רכות",
+        "unmapped": "לא ידוע לאיזו אפשרות שייכת התשובה \"{v}\", ולכן המקרים האלה לא נכללים עד שתשייכו אותה.",
+        "i_dup": "{n} שורות חוזרות על מקרה אחר.", "a_dup": "לאחד וללמוד באיזו תדירות ניתנה כל תשובה",
+        "i_conflict": "לאותו מקרה יש תשובות שונות, כך שאף מודל לא יכול להסכים ביותר מכ-{pct}% מהמקרים.", "a_conflict": "לבדוק, או לאחד וללמוד באיזו תדירות ניתנה כל תשובה",
         "i_rare": "תשובות נדירות: {vals}.", "a_rare": "לאזן תשובות נדירות",
-        "i_empty": "ל-{n} שורות אין כאן תשובה; הן לא משמשות להחלטה הזו.", "a_empty": "לדלג על השורות האלה",
+        "i_empty": "ל-{n} שורות אין כאן תשובה. הן לא משמשות לשאלה הזו.", "a_empty": "לדלג על השורות האלה",
         "i_leak": "מנבא את '{c}' ב-{pct}% מהמקרים גם לבדו.", "a_leak": "להסיר מהמקרה",
         "i_textleak": "הטקסט מכיל לעיתים קרובות את התשובה ל-'{c}' מילה במילה.", "a_textleak": "לבדוק",
         "i_pii": "מכיל {kinds}.", "a_pii": "לבדוק או להסיר",
-        "i_long": "{n} מקרים ארוכים מ-{t} טוקנים; הסוף נחתך.", "a_long": "לחתוך",
-        "w_nodecision": "אף עמודה לא נראית כהחלטה (2-20 תשובות שונות); הוסיפו אחת בשלב הבא.",
-        "w_big": "פרופיל הנתונים גדול מדי לניתוח בבינה מלאכותית; נעשה שימוש בכללים המובנים.",
-        "w_fail": "הניתוח בבינה מלאכותית נכשל ({err}); נעשה שימוש בכללים המובנים.",
-        "w_invalid": "התוכנית של הבינה המלאכותית לא עברה בדיקה ({err}); נעשה שימוש בכללים המובנים.",
+        "i_long": "{n} מקרים ארוכים מכדי לקרוא אותם במלואם (יותר מ-{t} טוקנים). רק החלק הראשון של כל מקרה נקרא.", "a_long": "להשתמש בחלק הראשון",
+        "w_nodecision": "לא מצאנו עמודה של החלטות קודמות (עמודה עם 2 עד 20 תשובות שונות). הוסיפו אחת בשלב הבא.",
+        "w_big": "הנתונים גדולים מדי לקריאה בעזרת AI, ולכן השתמשנו בכללים המובנים. בדקו את השאלות למטה.",
+        "w_fail": "קריאה בעזרת AI לא הייתה זמינה ({err}), ולכן השתמשנו בכללים המובנים. בדקו את השאלות למטה.",
+        "w_invalid": "הקריאה בעזרת AI לא עברה את הבדיקות שלנו ({err}), ולכן השתמשנו בכללים המובנים. בדקו את השאלות למטה.",
     },
 }
 
@@ -449,7 +449,7 @@ def heuristic_plan(prof: dict, records: list[dict] | None = None, lang: str = "e
     if not any(q["role"] == "body" for q in parts):
         facts = sorted((q for q in parts if q["role"] == "fact"), key=lambda q: -cols[q["column"]]["median_len"])
         if not facts:
-            raise ValueError("no free-text column found to describe each case")
+            raise ValueError("We couldn't find a text column that describes each case.")
         facts[0].update(role="body", reason=msg(lang, "p_longest"))
     return _finish({"case": {"parts": parts, "max_tokens": MAX_CASE_TOKENS, "overflow": "truncate"},
                     "decisions": decisions, "excluded": excluded}, prof, records, lang)

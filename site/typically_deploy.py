@@ -42,7 +42,7 @@ NORTHWIND_CASE = ("Customer: Cedar Foods (enterprise plan, US). Tickets from thi
 
 def run_of(model_id: str) -> str:
     if not typically_job.SLUG_RE.fullmatch(model_id):
-        raise HTTPException(404, "no such model")
+        raise HTTPException(404, "We can't find that model. It may have been archived.")
     return ALIASES.get(model_id, f"co_{model_id}")
 
 
@@ -54,7 +54,7 @@ def model_of_run(run: str) -> str:
     """A run ("co_<slug>", "co_f") -> its model id; 404 for anything else. Not SLUG_RE on the run: a 40-char slug makes a 43-char run."""
     mid = model_id_of(run)
     if run_of(mid) != run:
-        raise HTTPException(404, "no such model")
+        raise HTTPException(404, "We can't find that model. It may have been archived.")
     return mid
 
 
@@ -124,12 +124,12 @@ def _authorize(model_id: str, authorization: str | None) -> None:
         rec = _read_keys().get(h) if scheme.lower() == "bearer" and key else None
         revoked = rec and auth.enabled() and rec.get("owner") and rec["owner"] not in {auth.uid_of(c) for c in auth.invites()}   # invite removed
         if rec is None or rec["model_id"] != model_id or revoked:
-            raise HTTPException(401, "missing or invalid API key for this model", headers={"WWW-Authenticate": "Bearer"})
+            raise HTTPException(401, "Missing or invalid API key for this model.", headers={"WWW-Authenticate": "Bearer"})
         now, hits = time.monotonic(), _hits[h]
         while hits and now - hits[0] > WINDOW_S:
             hits.popleft()
         if len(hits) >= RATE:
-            raise HTTPException(429, f"rate limit: {RATE} requests per minute per key")
+            raise HTTPException(429, f"Rate limit: {RATE} requests per minute per key.")
         hits.append(now)
 
 
@@ -138,7 +138,7 @@ def decide(model_id: str, req: S.DecideRequest, authorization: str | None = Head
     _authorize(model_id, authorization)
     run = run_of(model_id)
     if not (S.TYPICALLY / "results" / run / "best.pt").exists():
-        raise HTTPException(404, "that model is not trained yet")
+        raise HTTPException(404, "That model isn't trained yet.")
     with S._lock:
         return {**S._run(S.get_model(f"local:{run}"), req.state, req.queries), "model": model_id}
 
@@ -267,30 +267,30 @@ def _storage_full(e: Exception) -> bool:
 def push(req: PushRequest):
     """Hosted (TYPICALLY_AUTH=1): admins only, always private, the repo name chosen here (users never publish into the operator's org)."""
     if not _may_push():
-        raise HTTPException(403, "only an admin can push to Hugging Face on this server")
+        raise HTTPException(403, "Only an admin can upload to Hugging Face on this server.")
     hosted = auth.enabled()
     repo_asked, private = (None, True) if hosted else (req.repo, req.private)
     if repo_asked is not None and not REPO_RE.fullmatch(repo_asked):
-        raise HTTPException(400, "need a repo like user/name")
+        raise HTTPException(400, "Enter a repository name like account/model-name.")
     auth.check(model_of_run(req.run))
     res = S.TYPICALLY / "results" / req.run
     best = res / "best.pt"
     if not best.exists():
-        raise HTTPException(404, "no such model")
+        raise HTTPException(404, "We can't find that model. It may have been archived.")
     ckpt = torch.load(best, map_location="cpu", weights_only=True)
     base = next((b for b, a in typically_job.RELEASED_ARGS.items() if a["backbone"] == ckpt["args"]["backbone"]), None)
     if base is None:
-        raise HTTPException(400, f"unknown backbone {ckpt['args']['backbone']!r}")
+        raise HTTPException(400, "This model can't be uploaded because its standard model wasn't recognized.")
     reveal = json.loads((res / "reveal.json").read_text()) if (res / "reveal.json").exists() else None
     if reveal and reveal.get("base", "typical-small") != f"typical-{base}":   # scored against another base: the card must not claim it
         reveal = None
     token = _hf_token()
     if not token:
-        raise HTTPException(503, "Hugging Face push is not set up on this server")
+        raise HTTPException(503, "Uploading to Hugging Face isn't set up on this server.")
     api = HfApi(token=token)
     repo = repo_asked or (f"{ns}/{_repo_name(model_id_of(req.run))}" if (ns := _namespace(api, token)) else None)
     if not repo:
-        raise HTTPException(502, "could not work out the Hugging Face namespace; is the server token valid?")
+        raise HTTPException(502, "Uploading to Hugging Face isn't working right now. Ask your administrator to check the Hugging Face token.")
     prev = f.read_text().strip() if (f := _hf_repo_file(req.run)).exists() else None
     created = False
     try:
@@ -307,7 +307,7 @@ def push(req: PushRequest):
             CommitOperationAdd("MANIFEST.json", json.dumps(manifest, indent=2).encode())])
     except Exception as e:   # hub errors can echo request headers: never hand the token back
         if isinstance(e, FileExistsError):
-            raise HTTPException(409, f"{repo} already exists on Hugging Face; pick another repo name")
+            raise HTTPException(409, f"{repo} already exists on Hugging Face. Pick another name.")
         if created:   # this call made the repo and the upload failed: do not leave an empty repo behind
             try:
                 if set(api.list_repo_files(repo)) <= {".gitattributes"}:
@@ -323,6 +323,6 @@ def push(req: PushRequest):
                                       f"The {ORG} organization's private storage on Hugging Face is full."
                                       + (f" You can push to your own account ({user}) instead." if user else "")})
         S.log.warning("push %s to %s failed: %s: %s", req.run, repo, type(e).__name__, str(e).replace(token, "***")[:500])   # never the token
-        raise HTTPException(502, {"code": "hf_failed", "message": "Hugging Face did not accept the upload; try again in a few minutes."})
+        raise HTTPException(502, {"code": "hf_failed", "message": "Hugging Face didn't accept the upload. Try again in a few minutes."})
     _hf_repo_file(req.run).write_text(repo)
     return {"url": f"https://huggingface.co/{repo}", "files": ["best.pt", "README.md", "MANIFEST.json"]}

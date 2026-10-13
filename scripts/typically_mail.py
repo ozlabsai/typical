@@ -169,10 +169,10 @@ def _raw(data: bytes):
         try:
             z = zipfile.ZipFile(io.BytesIO(data))
         except zipfile.BadZipFile:
-            raise ValueError("could not read that zip file")
+            raise ValueError("We couldn't read that zip file.")
         files = [i for i in z.infolist() if not i.is_dir() and "__MACOSX" not in i.filename and not PurePosixPath(i.filename).name.startswith(".")]
         if sum(i.file_size for i in files) > MAX_UNZIPPED:
-            raise ValueError("that zip unpacks to more than 1 GB; export one folder or a shorter date range")
+            raise ValueError("That zip unpacks to more than 1 GB. Export one folder or a shorter date range.")
         dirs = [PurePosixPath(i.filename).parent.parts for i in files]
         root = len(os.path.commonprefix(dirs)) if dirs else 0   # folders = the paths below the directory every file shares
         for i, d in zip(files, dirs):
@@ -275,7 +275,7 @@ def read_mail(data: bytes, owner: str | None = None, lang: str = "en") -> tuple[
     msgs, capped = messages(data)
     warnings = [say("cap", n=MAX_MESSAGES)] if capped else []
     if not msgs:
-        raise ValueError("no email messages found; upload an .mbox, an .eml, or a .zip of .eml files or a mail folder")
+        raise ValueError("We found no email messages. Upload an .mbox, an .eml, or a .zip of .eml files or a mail folder.")
     owners = owners_of(msgs, owner)
     names: dict[str, Counter] = defaultdict(Counter)
     for m in msgs:
@@ -285,7 +285,7 @@ def read_mail(data: bytes, owner: str | None = None, lang: str = "en") -> tuple[
     who = lambda a: names[a].most_common(1)[0][0] if names[a] else _pretty(a)
     threads, found = outcomes(msgs, owners)
     if not found:
-        raise ValueError("no messages to the mailbox owner found (only sent or bulk mail); is the owner right?")
+        raise ValueError("We found no messages to the mailbox owner, only sent or bulk mail. Is the owner right?")
     if len(found) > tp.MAX_ROWS:
         warnings.append(say("newest", n=tp.MAX_ROWS, m=len(found)))
         found = found[-tp.MAX_ROWS:]

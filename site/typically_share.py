@@ -87,7 +87,7 @@ def get_share(model_id: str, request: Request):
 def create_share(model_id: str, request: Request):
     _owned(model_id)
     if card(model_id) is None:
-        raise HTTPException(400, "this model has no results to share yet")
+        raise HTTPException(400, "This model has no results to share yet.")
     with _lock:
         shares = _read()
         if mine := _mine(shares, model_id):   # one link per model and owner: sharing again returns it
@@ -124,7 +124,7 @@ def revoke_all(model_id: str) -> int:
 def _public(share_id: str) -> dict:
     rec = _read().get(share_id) if SID_RE.fullmatch(share_id) else None
     if rec is None or (c := card(rec["model_id"])) is None:
-        raise HTTPException(404, "this link was turned off or never existed")
+        raise HTTPException(404, "This link was turned off or never existed.")
     return c
 
 

@@ -34,7 +34,7 @@ NOT_SHIPPED = ("site/", "figures/", "paper/", "blog/", "docs/", "vendor/")   # p
 POLL_S, READY_S, DEADLINE_S, STALE_S = 20, 300, 75 * 60, 90 * 60   # DEADLINE_S / STALE_S are the small base's; x BASES[base]["scale"]
 WAIT_CAP_S = 3 * READY_S   # readiness wait incl. time lost to a failing RunPod API (which does not count against READY_S of boot)
 RETRY_S = (5, 15, 30)   # backoff between the attempts of one RunPod API call (4 attempts)
-PROVIDER_DOWN = "The GPU provider isn't responding."
+PROVIDER_DOWN = "The GPU provider stopped responding."
 # RunPod's no-capacity errors ("There are no longer any instances available with the requested specifications", "There are no instances
 # currently available", "This machine does not have the resources to deploy your pod"); never a bare "unavailable" (HTTP 503 is a flaky API)
 NO_GPU = re.compile(r"no (longer any )?instances?( currently)? available|does not have the resources", re.I)
@@ -58,7 +58,7 @@ SLUG_RE = re.compile(r"^[a-z0-9_]{1,40}$")
 POD_PREFIX = os.environ.get("TYPICALLY_POD_PREFIX") or "typically-job-"
 _STOP: set[str] = set()   # slugs the user pressed Stop on; checked before every pod call and between AI enrichment calls
 RUNNING: dict[str, str | None] = {}   # slug -> owner of every job (preparing or on a GPU) in THIS process; the server's _jobs
-UNCONFIRMED = " We could not confirm the GPU machine was shut down; it is removed automatically within a few minutes."
+UNCONFIRMED = " We couldn't confirm the GPU shut down. It shuts down automatically within a few minutes."
 
 
 class Stopped(BaseException):   # BaseException: no retry / poll handler may swallow it
@@ -232,7 +232,7 @@ class Job:
         check_stop(self.slug)
         left = self.deadline - time.monotonic()
         if left <= 0:
-            raise Deadline(f"the job took longer than {DEADLINE_S * BASES[self.base]['scale'] / 60:.0f} minutes")
+            raise Deadline(f"it took longer than {DEADLINE_S * BASES[self.base]['scale'] / 60:.0f} minutes, the limit for this setting")
         return _run(argv, min(cap, left), out)
 
     def to(self, phase: str, message: str, code: str | None = None, **extra):
@@ -393,11 +393,11 @@ class Job:
             new = [e for e in pod_events(out) if e["key"] not in seen or e.get("detail") not in (None, seen[e["key"]].get("detail"))]
             gpu = {"gpu": g} if (g := gpu_stats(out)) else {}
             if "best step" in out or "testing" in seen or any(e["key"] == "testing" for e in new):
-                self.to("evaluating", "Training finished. Scoring your model on held-out examples.", events=new, progress=1.0, **gpu)
+                self.to("evaluating", "Training finished. Scoring your model on the test cases.", events=new, progress=1.0, **gpu)
             else:
                 p = min(max(steps, default=0) / self.steps, 1.0)
-                self.to("training", f"Learning from your examples ({p:.0%} done)." if steps else
-                        "Setting up and measuring the starting model.", None if steps else "baseline", events=new, progress=p, **gpu)
+                self.to("training", f"Learning from your cases ({p:.0%} done)." if steps else
+                        "Setting up and measuring the standard model.", None if steps else "baseline", events=new, progress=p, **gpu)
 
     def download(self):
         """Into results/co_<slug>/.incoming/ first, then swapped in (best.pt last): a stopped or failed download never touches the
@@ -442,21 +442,23 @@ class Job:
             add_events(self.slug, *off)
             return
         code, why = failure(err)
-        self.to("failed", f"{why} Nothing is running or billing." if gone else why + UNCONFIRMED, code if gone else "failed",
+        self.to("failed", f"{why} Nothing is left running." if gone else why + UNCONFIRMED, code if gone else "failed",
                 events=[event("failed"), *off])
 
 
 def failure(e: BaseException) -> tuple[str, str]:
     """(code, plain message) of a failed run. Raw exception text (paths, IPs, runpodctl output) stays in job.log."""
     if isinstance(e, NoGpu):
-        return "failed_no_gpu", "No GPU was available right now, so training did not start."
+        return "failed_no_gpu", "No GPU was free, so training didn't start."
     if isinstance(e, ProviderDown):
         return "failed_provider", PROVIDER_DOWN
     if isinstance(e, Stopped):
-        return "stopped", "You stopped this run."
-    if isinstance(e, (Deadline, TrainingFailed)):   # our own wording
-        return ("failed_timeout" if isinstance(e, Deadline) else "failed_training"), f"Training did not finish: {e}."
-    return "failed_infra", "Training did not finish: the GPU machine ran into a problem."
+        return "stopped", "You stopped this training run."
+    if isinstance(e, Deadline):   # our own wording
+        return "failed_timeout", f"Training did not finish: {e}."
+    if isinstance(e, TrainingFailed):   # its exit code / traceback hint stay in job.log
+        return "failed_training", "The training program stopped with an error. The details are in the server log."
+    return "failed_infra", "The GPU machine ran into a problem, so training stopped."
 
 
 def _age(st: dict) -> timedelta | None:
@@ -509,8 +511,8 @@ def reconcile(log=print) -> list[str]:
     for slug, st in statuses.items():
         if _orphaned(slug, st):
             log(f"reconcile: {slug} was {st['phase']} with no live job; marking it failed")
-            why = "The server restarted while this model was being taught, so the run stopped."
-            write_status(slug, "failed", why + UNCONFIRMED if slug in left else f"{why} Nothing is running or billing.",
+            why = "The server restarted during training, so this training run stopped."
+            write_status(slug, "failed", why + UNCONFIRMED if slug in left else f"{why} Nothing is left running.",
                          "failed" if slug in left else "failed_restart", events=[event("failed")], reset=False)
     return gone
 
@@ -537,17 +539,17 @@ def shutdown(timeout: float = 90, log=print) -> None:
     end = time.monotonic() + timeout
     for t in threads:
         t.join(max(0.0, end - time.monotonic()))
-    why = "The server restarted while this model was being taught, so the run stopped."
+    why = "The server restarted during training, so this training run stopped."
     live = lambda slug: (read_status(slug) or {}).get("phase") in ACTIVE   # a job that just finished keeps its own outcome
     for j in jobs:
         log(f"shutdown: {j.slug} stopped; pod {'deleted' if j.gone else 'NOT confirmed deleted'} ({j.name}, {j.pod_id})")
         if live(j.slug):
-            j.to("failed", f"{why} Nothing is running or billing." if j.gone else why + UNCONFIRMED, "failed_restart" if j.gone else "failed",
+            j.to("failed", f"{why} Nothing is left running." if j.gone else why + UNCONFIRMED, "failed_restart" if j.gone else "failed",
                  events=[event("failed")])
         j.settled = True
     for slug in set(RUNNING) - {j.slug for j in jobs}:   # still preparing its examples: no pod was rented
         if live(slug):
-            write_status(slug, "failed", f"{why} Nothing is running or billing.", "failed_restart", events=[event("failed")], reset=False)
+            write_status(slug, "failed", f"{why} Nothing is left running.", "failed_restart", events=[event("failed")], reset=False)
 
 
 def run(slug: str, log=None, base: str = "small", steps: int = 400, prepared: bool = False) -> None:
@@ -569,10 +571,10 @@ def run(slug: str, log=None, base: str = "small", steps: int = 400, prepared: bo
             j.to("starting_gpu", "Getting a GPU ready (about 3 minutes).", events=[event("gpu_assigned", j.gpu)])   # records the pod id
             j.wait_ssh()
             n = (j.dir / "train.jsonl").read_text().count("\n")
-            j.to("uploading", "Sending your examples to the GPU.", events=[event("upload", f"{j.tar.stat().st_size / 1e6:.1f} MB", n=n)])
+            j.to("uploading", "Sending your cases to the GPU.", events=[event("upload", f"{j.tar.stat().st_size / 1e6:.1f} MB", n=n)])
             j.upload()
             j.launch()
-            j.to("training", "Setting up and measuring the starting model.", "baseline", events=[event("env")], progress=0.0)
+            j.to("training", "Setting up and measuring the standard model.", "baseline", events=[event("env")], progress=0.0)
             j.poll()
             j.to("downloading", "Bringing your model back.", events=[event("fetch")])
             j.download()

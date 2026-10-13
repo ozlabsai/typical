@@ -242,7 +242,7 @@ def test_review_fixes(env, monkeypatch):
     for name in ("Northwind", "f"):
         assert teach(bob, name).status_code == 409, name
     assert teach(bob, "x" * 81).status_code == 422
-    with pytest.raises(ValueError, match="not a Hugging Face dataset id"):
+    with pytest.raises(ValueError, match="isn't a Hugging Face dataset id"):
         tp.load_records({"kind": "hf", "dataset": str(env)})
 
     class Hub:   # the repo exists and this model never pushed to it
