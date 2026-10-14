@@ -486,15 +486,9 @@ export function ChatPage({ modelId }: { modelId?: string }) {
                   {examples.slice(0, 3).map((ex, i) => (
                     <li key={i}>
                       <button type="button" data-example onClick={() => setCase(ex)}
-                        className="group grid w-full grid-cols-[1.75rem_minmax(0,1fr)] gap-x-2 gap-y-1.5 rounded-md px-2 py-3 text-start transition-colors hover:bg-card active:bg-muted">
+                        className="group grid w-full grid-cols-[1.75rem_minmax(0,1fr)] gap-x-2 rounded-md px-2 py-3 text-start transition-colors hover:bg-card active:bg-muted">
                         <span className="font-mono text-xs leading-5 text-muted-foreground tabular">{String(i + 1).padStart(2, "0")}</span>
                         <span dir="auto" className="truncate text-sm text-muted-foreground transition-colors group-hover:text-foreground">{snippet(ex)}</span>
-                        {questions.length > 0 && (
-                          <span className="col-start-2 flex min-w-0 flex-wrap gap-1">
-                            {questions.slice(0, 2).map((q, j) => <Badge key={j} variant="outline" className="max-w-full font-normal text-muted-foreground" dir="auto"><span className="truncate">{q.question}</span></Badge>)}
-                            {questions.length > 2 && <Badge variant="outline" dir="ltr" className="font-normal text-muted-foreground">+{questions.length - 2}</Badge>}
-                          </span>
-                        )}
                       </button>
                     </li>
                   ))}

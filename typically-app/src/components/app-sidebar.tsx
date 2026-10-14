@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Boxes, Database, Languages, LogOut, MessageSquare, Moon, Plus, Search, Sun, UserPlus, UserRound } from "lucide-react"
+import { Boxes, Database, Ellipsis, Languages, LogOut, MessageSquare, Moon, Plus, Search, Sun, UserPlus } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import {
@@ -10,7 +10,8 @@ import { SHORTCUT } from "@/components/command-palette"
 import { InviteDialog } from "@/components/invite-dialog"
 import { BrandMark } from "@/components/layout"
 import { Badge } from "@/components/ui/badge"
-import type { LibraryModel } from "@/lib/api"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { invites, type Invites, type LibraryModel } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { useI18n } from "@/lib/i18n"
 import { useLibrary } from "@/lib/library"
@@ -26,6 +27,33 @@ export function StatusDot({ status, className }: { status: LibraryModel["status"
   )
 }
 
+/** Invites as their own small card, not one more nav row: how many of your 5 are in use (admins: unlimited). */
+function InviteCard({ onOpen, refresh }: { onOpen: () => void; refresh: number }) {
+  const { t } = useI18n()
+  const [data, setData] = useState<Invites | null>(null)
+  useEffect(() => { invites.list().then(setData).catch(() => setData(null)) }, [refresh])
+  const used = data?.invites.length ?? 0, limit = data?.limit ?? null
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton tooltip={t("invite.button")} onClick={onOpen} className="hidden group-data-[collapsible=icon]:flex"><UserPlus /></SidebarMenuButton>
+      <button type="button" onClick={onOpen}
+        className="grid w-full gap-2 rounded-lg border bg-card px-3 py-2.5 text-start transition-colors hover:border-primary/40 hover:bg-background group-data-[collapsible=icon]:hidden">
+        <span className="flex items-center gap-2 text-sm font-medium"><UserPlus className="size-4 text-primary" /> {t("invite.button")}</span>
+        {limit === null ? (
+          <span className="text-xs text-muted-foreground">{data ? t("invite.unlimited") : "\u00a0"}</span>
+        ) : (
+          <span className="flex items-center gap-2">
+            <span aria-hidden className="flex gap-0.5">  {/* the brand's bars: one per invite */}
+              {Array.from({ length: limit }, (_, i) => <span key={i} className={cn("h-3 w-1.5 rounded-xs", i < used ? "bg-primary" : "bg-muted-foreground/25")} />)}
+            </span>
+            <span className="font-mono text-xs text-muted-foreground tabular">{t("invite.used", { used, limit })}</span>
+          </span>
+        )}
+      </button>
+    </SidebarMenuItem>
+  )
+}
+
 export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => void }) {
   const { t, lang, setLang } = useI18n()
   const { lib, error } = useLibrary()
@@ -35,13 +63,14 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
   const activeId = route.name === "model" ? route.id : undefined
   const { setOpenMobile } = useSidebar()
   const [inviting, setInviting] = useState(false)
+  const [invitesSeen, setInvitesSeen] = useState(0)   // bumped when the dialog closes: the card recounts
   const at = href(route)
   useEffect(() => setOpenMobile(false), [at, setOpenMobile]) // phones: a tapped link must not leave the sheet over the page
 
   return (
     <>
     {/* outside the Sidebar: on phones it is a sheet, and closing the sheet would unmount the dialog with it */}
-    <InviteDialog open={inviting} onOpenChange={setInviting} />
+    <InviteDialog open={inviting} onOpenChange={(o) => { setInviting(o); if (!o) setInvitesSeen((n) => n + 1) }} />
     <Sidebar side="left" collapsible="icon">  {/* "left" = inline-start: sidebar.tsx uses logical start/end, so this mirrors in RTL */}
       <SidebarHeader>
         <SidebarMenu>
@@ -122,35 +151,42 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
 
       <SidebarFooter>
         <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton tooltip={t("nav.langLabel")} onClick={() => setLang(lang === "en" ? "he" : "en")}>
-              <Languages /> <span>{t("nav.lang")}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton tooltip={t(dark ? "nav.theme.light" : "nav.theme.dark")} onClick={() => setTheme(dark ? "light" : "dark")}>
-              {dark ? <Sun /> : <Moon />} <span>{t(dark ? "nav.theme.light" : "nav.theme.dark")}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          {user && <>
+          {user ? <>
+            <InviteCard onOpen={() => (setOpenMobile(false), setInviting(true))} refresh={invitesSeen} />
             <SidebarMenuItem>
-              <div className="flex h-8 min-w-0 items-center gap-2 px-2 text-sm group-data-[collapsible=icon]:hidden" title={t("auth.signedInAs", { name: user.name })}>
-                <UserRound className="size-4 shrink-0 text-muted-foreground" />
-                <span dir="auto" className="truncate font-medium">{user.name}</span>
-                {user.admin && <Badge variant="outline" className="font-normal text-muted-foreground">{t("auth.admin")}</Badge>}
-              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <SidebarMenuButton size="lg" tooltip={user.name} aria-label={t("nav.account")}>
+                    <span aria-hidden className="grid size-8 shrink-0 place-items-center rounded-full bg-foreground text-sm font-semibold text-background">
+                      {Array.from(user.name.trim())[0]?.toUpperCase() ?? "?"}
+                    </span>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span dir="auto" className="truncate font-medium">{user.name}</span>
+                      {user.admin && <Badge variant="outline" className="font-normal text-muted-foreground">{t("auth.admin")}</Badge>}
+                    </span>
+                    <Ellipsis className="ms-auto text-muted-foreground" />
+                  </SidebarMenuButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="top" align="start" className="w-(--radix-dropdown-menu-trigger-width) min-w-56">
+                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground" dir="auto">{t("auth.signedInAs", { name: user.name })}</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setLang(lang === "en" ? "he" : "en")}><Languages /> {t("nav.lang")}</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setTheme(dark ? "light" : "dark")}>{dark ? <Sun /> : <Moon />} {t(dark ? "nav.theme.light" : "nav.theme.dark")}</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => void signOut()}><LogOut className="rtl:-scale-x-100" /> {t("auth.signOut")}</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton tooltip={t("invite.button")} onClick={() => (setOpenMobile(false), setInviting(true))}>
-                <UserPlus /> <span>{t("invite.button")}</span>
+          </> : (
+            <SidebarMenuItem className="flex gap-1 group-data-[collapsible=icon]:flex-col">  {/* sign-in off (local): no account, two quiet controls */}
+              <SidebarMenuButton tooltip={t("nav.langLabel")} onClick={() => setLang(lang === "en" ? "he" : "en")} className="flex-1">
+                <Languages /> <span>{t("nav.lang")}</span>
+              </SidebarMenuButton>
+              <SidebarMenuButton tooltip={t(dark ? "nav.theme.light" : "nav.theme.dark")} aria-label={t(dark ? "nav.theme.light" : "nav.theme.dark")} onClick={() => setTheme(dark ? "light" : "dark")} className="w-8 shrink-0 justify-center">
+                {dark ? <Sun /> : <Moon />}
               </SidebarMenuButton>
             </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton tooltip={t("auth.signOut")} onClick={() => void signOut()}>
-                <LogOut className="rtl:-scale-x-100" /> <span>{t("auth.signOut")}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </>}
+          )}
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
