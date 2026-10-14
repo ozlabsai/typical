@@ -543,15 +543,23 @@ def forward_batches(backbone, model, cache, examples, bs, joint=False, readout="
 
 
 def eval_val_loss(backbone, model, cache, examples, bs, joint=False, readout="energy", vec_cache=None, shots=0,
-                   max_state=256):
-    total, n = 0.0, 0
+                   max_state=256, with_acc=False):
+    """Mean NLL; with_acc: (nll, argmax accuracy over the labelled rows -- metrics.py's "acc", null = last column)."""
+    total, n, hits, labelled = 0.0, 0, 0, 0
     for logits, cmask, target, p_null, ex_batch in forward_batches(backbone, model, cache, examples, bs,
                                                                      joint=joint, readout=readout, vec_cache=vec_cache,
                                                                      shots=shots, max_state=max_state):
         loss = decision_loss(logits, target, p_null, cmask)
         total += loss.item() * len(ex_batch)
         n += len(ex_batch)
-    return total / max(n, 1)
+        if with_acc:   # the same forward: nearly free
+            pred = probs_from_logits(logits, cmask, null=getattr(model, "null", "softmax")).argmax(-1).tolist()
+            K = logits.shape[-1] - 1
+            for p, ex in zip(pred, ex_batch):
+                if ex.get("label") is not None:
+                    labelled += 1
+                    hits += p == (K if ex["label"] == -1 else ex["label"])
+    return (total / max(n, 1), hits / labelled if labelled else None) if with_acc else total / max(n, 1)
 
 
 def fit_temperature(backbone, model, cache, val_examples, bs, joint=False, readout="energy", vec_cache=None,
@@ -678,11 +686,14 @@ def checkpoint_metric(backbone, model, cache, eval_sets, best_on, args, vec_cach
     tracks)."""
     if not best_on:
         return val_nll
-    per_set = {name: eval_val_loss(backbone, model, cache, eval_sets[name], args.eval_bs, joint=args.joint,
-                                    readout=args.readout, vec_cache=vec_cache, shots=args.shots)
-               for name in best_on}
+    both = {name: eval_val_loss(backbone, model, cache, eval_sets[name], args.eval_bs, joint=args.joint,
+                                 readout=args.readout, vec_cache=vec_cache, shots=args.shots, with_acc=True)
+            for name in best_on}
+    per_set = {k: v[0] for k, v in both.items()}
     metric = sum(per_set.values()) / len(per_set)
     print(f"step {step} best_on_nll {metric:.4f} (" + ", ".join(f"{k}={v:.4f}" for k, v in per_set.items()) + ")")
+    if accs := [a for _, a in both.values() if a is not None]:   # agreement with the labels (typically's live chart)
+        print(f"step {step} best_on_acc {sum(accs) / len(accs):.4f}")
     if wb:
         wb.log({"val/best_on_nll": metric, **{f"val/best_on/{k}": v for k, v in per_set.items()}}, step=step)
     return metric
@@ -992,6 +1003,7 @@ def parse_args():
     p.add_argument("--mix", choices=["full", "nlionly"], default="full")
     p.add_argument("--eval_every", type=int, default=None)
     p.add_argument("--val_every", type=int, default=None)
+    p.add_argument("--log_every", type=int, default=50, help="print the train loss line every N steps (typically jobs: 10)")
     p.add_argument("--ckpt_every", type=int, default=None)
     p.add_argument("--eval_bs", type=int, default=128)
     p.add_argument("--device", default="auto")
@@ -1025,6 +1037,7 @@ def parse_args():
                         "is correct (p_null=1.0, label=-1, meta.null_aug=True); the original row is kept as-is")
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--eval_limit", type=int, default=0, help="cap each eval set (smoke runs)")
+    p.add_argument("--no_final_eval", action="store_true", help="skip the closing eval of best.pt over every eval set (~10 min on an H100)")
     p.add_argument("--tap_layer", type=int, default=0, help="tower memory from layer T (0 = last layer)")
     p.add_argument("--zscore", action="store_true", help="per-dim standardise backbone features (stats from 512 train states)")
     p.add_argument("--grad_ckpt", action="store_true",
@@ -1279,6 +1292,7 @@ def main():
             fam = per_family_loss(logits, batch, examples)
             log.update({f"train/family_loss/{k}": v for k, v in fam.items()})
             log.update({f"train/bucket_loss/{b}": v for b, v in bucket_losses.items()})
+        if step % args.log_every == 0:
             bucket_note = f"bucket {','.join(bucket_losses)} " if bucket_losses else ""
             print(f"step {step} {bucket_note}loss {loss_value:.4f} step_time {step_time:.2f}s "
                   f"tok/s {log['train/tokens_per_s']:.0f} lr_tower {log['train/lr_tower']:.2e} "
@@ -1306,6 +1320,8 @@ def main():
             if args.ckpt_upload and args.hf_repo:
                 upload_ckpt(args, run_dir)
 
+    if args.no_final_eval:   # typically jobs: scripts/eval_wf.py scores best.pt on the company's own rows instead
+        return
     # final eval on the best-by-val checkpoint (as v0), not the last step
     if best_path.exists():
         ckpt = torch.load(best_path, map_location=device, weights_only=False)

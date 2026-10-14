@@ -43,3 +43,10 @@ evals/longcomp_scored*.jsonl
 
 # design exploration notes (local scratch; the accepted lane is documented in docs/site/DESIGN.md)
 designs/
+
+# typically-app build output (npm run build in typically-app/)
+site/app/
+
+# deploy/runpod.sh: secrets and the running host pod id
+deploy/hosted.env
+deploy/.pod

@@ -9,6 +9,14 @@ from encode import Backbone, FeatureCache
 TOKENIZER_NAME = "Qwen/Qwen3-0.6B-Base"  # cached locally; tiny model reuses its real vocab
 
 
+@pytest.fixture(autouse=True)
+def _no_paid_llm(monkeypatch):
+    """site/server.py loads the repo .env at import: no test may reach a paid LLM API (slow, flaky, costs money).
+    A test that needs the LLM path stubs typically_llm or sets a fake key itself."""
+    for k in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+
+
 @pytest.fixture(scope="session")
 def tiny_model_dir(tmp_path_factory):
     """A tiny random-weight Qwen3 model + the real Qwen3-0.6B-Base tokenizer, saved to

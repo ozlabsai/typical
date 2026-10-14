@@ -1,0 +1,34 @@
+{
+ "model": "northwind",
+ "case": "Customer: Cedar Foods (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $450, shipped 4 days ago.\n\nHi, two cases of glassware arrived cracked this morning. Photos attached. Can you sort out a replacement?",
+ "question": {
+  "question": "Which team should handle this ticket?",
+  "type": "choice",
+  "labels": [
+   "Claims",
+   "Billing",
+   "Dispatch",
+   "Sales"
+  ]
+ },
+ "result": {
+  "probs": {
+   "Claims": 0.6626,
+   "Billing": 0.0186,
+   "Dispatch": 0.1937,
+   "Sales": 0.1251
+  },
+  "p_null": 0.0023,
+  "argmax": "Claims"
+ },
+ "base": {
+  "probs": {
+   "Claims": 0.3393,
+   "Billing": 0.0149,
+   "Dispatch": 0.251,
+   "Sales": 0.3947
+  },
+  "p_null": 0.5588,
+  "argmax": "Sales"
+ }
+}
