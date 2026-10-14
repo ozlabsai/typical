@@ -77,6 +77,10 @@ def client(code=None, name=None):
     return c
 
 
+def invite(c, name="Carol Danvers", email="carol@example.com"):
+    return c.post("/api/auth/invites", json={"name": name, "email": email})
+
+
 def ids(c):
     return [m["id"] for m in c.get("/api/typically/models/library").json()["custom"]]
 
@@ -297,12 +301,12 @@ def test_hosted_app_lives_at_the_root(env):
 def test_invites_users_make(env, monkeypatch):
     a, admin = client(ALICE), client(ADMIN)
     assert a.get("/api/auth/invites").json() == {"invites": [], "limit": 5, "left": 5}
-    codes = [a.post("/api/auth/invites").json()["code"] for _ in range(5)]
-    r = a.post("/api/auth/invites")
+    codes = [invite(a).json()["code"] for _ in range(5)]
+    r = invite(a)
     assert r.status_code == 429 and "5 invites" in r.json()["detail"]
     assert a.get("/api/auth/invites").json()["left"] == 0 and len(set(codes)) == 5 and all(len(c) >= 32 for c in codes)
     invitee = client(codes[0], "Carol")   # an issued code signs in, and its holder can invite too (up to their own 5)
-    mine = invitee.post("/api/auth/invites").json()
+    mine = invite(invitee).json()
     assert mine["left"] == 4 and client(mine["code"]).get("/api/auth/me").status_code == 200
     import typically_deploy as D
     key = invitee.post("/api/typically/keys", json={"model_id": "northwind"}).json()["key"]
@@ -313,43 +317,83 @@ def test_invites_users_make(env, monkeypatch):
     assert invitee.get("/api/auth/me").status_code == 401   # ... and signs that person out
     with pytest.raises(D.HTTPException):
         D._authorize("northwind", f"Bearer {key}")   # and stops their API keys
-    assert a.post("/api/auth/invites").status_code == 200
+    assert invite(a).status_code == 200
     assert admin.delete(f"/api/auth/invites/{codes[1]}").status_code == 200   # an admin may revoke anyone's
     for _ in range(7):
-        assert admin.post("/api/auth/invites").status_code == 200
+        assert invite(admin).status_code == 200
     assert admin.get("/api/auth/invites").json()["limit"] is None and admin.get("/api/auth/invites").json()["left"] is None
     assert (env / "issued_invites.json").stat().st_mode & 0o077 == 0
     monkeypatch.setenv("TYPICALLY_AUTH", "0")
-    assert client().get("/api/auth/invites").status_code == 404 and client().post("/api/auth/invites").status_code == 404
+    assert client().get("/api/auth/invites").status_code == 404 and invite(client()).status_code == 404
 
 
 def test_revoking_someone_revokes_the_invites_they_made(env):
     admin = client(ADMIN)
-    code = admin.post("/api/auth/invites").json()["code"]
+    code = invite(admin).json()["code"]
     alice = client(code)
-    sub = alice.post("/api/auth/invites").json()["code"]
+    sub = invite(alice).json()["code"]
     bob = client(sub)
-    subsub = bob.post("/api/auth/invites").json()["code"]
+    subsub = invite(bob).json()["code"]
     assert admin.delete(f"/api/auth/invites/{code}").status_code == 200
     for c in (code, sub, subsub):
         assert c not in auth.invites()
     assert bob.get("/api/auth/me").status_code == 401
 
 
-def test_invite_for_and_ticket(env):
+def test_invite_name_email_and_ticket(env, monkeypatch):
     a, b, admin = client(ALICE, "Alice"), client(BOB), client(ADMIN)
-    assert a.post("/api/auth/invites", json={"for": "x" * 41}).status_code == 422   # capped at 40
-    r = a.post("/api/auth/invites", json={"for": "  Clarissa   Saputra "}).json()
+    for bad in ({}, {"name": "Carol"}, {"email": "c@example.com"}, {"name": "   ", "email": "c@example.com"}, {"name": "x" * 61, "email": "c@example.com"},
+                {"name": "Carol", "email": "not-an-email"}, {"name": "Carol", "email": "a@b"}, {"name": "Carol", "email": "x" * 250 + "@b.co"}):
+        assert a.post("/api/auth/invites", json=bad).status_code == 422, bad
+    assert a.post("/api/auth/invites").status_code == 422   # no body
+    r = invite(a, "  Clarissa   Saputra ", " clarissa@example.com ").json()
     mine = next(i for i in r["invites"] if i["code"] == r["code"])
-    assert mine["for"] == "Clarissa Saputra" and len(mine["no"]) == 4 and mine["no"] not in r["code"]
-    assert a.get("/api/auth/invites").json()["invites"][0]["for"] == "Clarissa Saputra"
-    assert a.post("/api/auth/invites").json()["invites"][1]["for"] is None   # no body: unnamed, as before
+    assert mine["name"] == "Clarissa Saputra" and mine["email"] == "clarissa@example.com" and mine["inviter"] == "Alice"
+    assert mine["joined"] is None and mine["last_seen"] is None and len(mine["no"]) == 4 and mine["no"] not in r["code"]
+
+    drawn = []   # every string the PNG draws: the email must never be one (tickets get posted)
+    from PIL import ImageDraw
+    real = ImageDraw.ImageDraw.text
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", lambda self, xy, text, *k, **kw: (drawn.append(text), real(self, xy, text, *k, **kw))[1])
     url = f"/api/auth/invites/{r['code']}/ticket.png"
     for c in (a, admin):
         png = c.get(url)
         assert png.status_code == 200 and png.headers["content-type"] == "image/png"
         assert Image.open(io.BytesIO(png.content)).size == (1200, 675)
+    text = "".join(drawn)   # drawn a letter at a time (letter-spaced)
+    assert "CLARISSA" in text and "ALICE" in text and "example" not in text.lower() and "@" not in text
     assert b.get(url).status_code == 404 and a.get("/api/auth/invites/nope/ticket.png").status_code == 404
     assert client().get(url).status_code == 401
-    hebrew = a.post("/api/auth/invites", json={"for": "נועה כהן"}).json()["code"]
+    hebrew = invite(a, "נועה כהן", "noa@example.co.il").json()["code"]
     assert a.get(f"/api/auth/invites/{hebrew}/ticket.png").status_code == 200
+
+    # first sign-in stamps joined (kept), every sign-in / app load moves last_seen; no name typed -> the inviter's
+    carol = client(r["code"])
+    assert carol.get("/api/auth/me").json()["user"]["name"] == "Clarissa Saputra"
+    seen = next(i for i in a.get("/api/auth/invites").json()["invites"] if i["code"] == r["code"])
+    assert seen["joined"] and seen["last_seen"] >= seen["joined"]
+    client(r["code"], "Clari")
+    listed = {i["code"]: i for i in a.get("/api/auth/invites").json()["invites"]}
+    assert listed[r["code"]]["joined"] == seen["joined"] and listed[hebrew]["joined"] is None   # never signed in: pending
+
+    # admins: ?all=1 is every invite with its inviter; a user gets 403 there and only their own without it
+    theirs = invite(b, "Dan", "dan@example.com").json()["code"]
+    assert b.get("/api/auth/invites?all=1").status_code == 403
+    assert {i["code"] for i in a.get("/api/auth/invites").json()["invites"]} == {r["code"], hebrew}
+    everyone = admin.get("/api/auth/invites?all=1").json()["invites"]
+    assert {r["code"], hebrew, theirs} <= {i["code"] for i in everyone}
+    assert next(i for i in everyone if i["code"] == theirs)["inviter"] == f"Guest {auth.uid_of(BOB)[:4]}"
+    assert admin.get("/api/auth/invites").json()["invites"] == []   # without all: the admin's own
+
+
+def test_old_invites_still_list(env):
+    """issued_invites.json from before name + email were required: "for" is read as the name, the rest shows as missing."""
+    (env / "issued_invites.json").write_text(json.dumps([
+        {"code": "old-code-with-for-0000000000000", "by": auth.uid_of(ALICE), "from": "Alice", "for": "Old Name", "created": "2026-10-01T00:00:00+00:00"},
+        {"code": "old-code-unnamed-00000000000000", "by": auth.uid_of(ALICE), "created": "2026-10-01T00:00:00+00:00"}]))
+    a = client(ALICE)
+    got = {i["code"]: i for i in a.get("/api/auth/invites").json()["invites"]}
+    assert got["old-code-with-for-0000000000000"]["name"] == "Old Name" and got["old-code-unnamed-00000000000000"]["name"] is None
+    assert all(i["email"] is None and i["joined"] is None for i in got.values())
+    assert a.get("/api/auth/invites/old-code-unnamed-00000000000000/ticket.png").status_code == 200
+    assert client("old-code-unnamed-00000000000000").get("/api/auth/me").status_code == 200

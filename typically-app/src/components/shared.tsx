@@ -43,12 +43,12 @@ export function Meter({ value, tone }: { value: number; tone: "standard" | "your
 export const copy = (t: T, text: string, done = t("common.copied")) =>
   navigator.clipboard.writeText(text).then(() => (toast.success(done), true), () => (toast.error(t("common.copyFailed")), false))
 
-export function CopyButton({ text, label }: { text: string; label?: string }) {
+export function CopyButton({ text, label, variant = "outline", size = "sm" }: { text: string; label?: string } & Pick<React.ComponentProps<typeof Button>, "variant" | "size">) {
   const { t } = useI18n()
   const [done, setDone] = useState(false)
   return (
-    <Button variant="outline" size="sm" onClick={() => copy(t, text).then((ok) => ok && (setDone(true), setTimeout(() => setDone(false), 1500)))}>
-      {done ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />} {label ?? t("common.copy")}
+    <Button variant={variant} size={size} onClick={() => copy(t, text).then((ok) => ok && (setDone(true), setTimeout(() => setDone(false), 1500)))}>
+      {done ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />} {done ? t("common.copied") : label ?? t("common.copy")}
     </Button>
   )
 }

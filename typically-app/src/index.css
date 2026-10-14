@@ -145,6 +145,8 @@
     font-feature-settings: "tnum" 0;
     }
   .tabular { font-variant-numeric: tabular-nums; }
+  /* Tailwind v4 dropped Preflight's pointer on buttons: give every enabled one (and role=button) its hand back */
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]) { cursor: pointer; }
   html {
     @apply font-sans;
     }
@@ -159,25 +161,65 @@
   .t-display { font-size: 1.5rem; line-height: 1.1; font-weight: 600; letter-spacing: -0.025em; }
   @media (min-width: 40rem) { .t-display { font-size: 1.875rem; } }
 
-  /* the invite ticket (invite-dialog.tsx), sized in cqw of its @container; site/typically_share.py ticket_png draws the same at 1cqw = 12px */
+  /* the invite ticket (invite-dialog.tsx), sized in cqw of its @container; site/typically_share.py ticket_png draws the same at
+     1cqw = 12px (TICKET_* there: keep the numbers in step). The sidebar's Invite button is the same ticket in miniature (.ticket-mini). */
+  .ticket, .ticket-mini, .ticket-glyph {
+    --perf-x: calc(100% - var(--stub)); --ink: #3b2414;
+    position: relative; isolation: isolate; color: var(--ink);
+    /* concave quarter-circle corners and the two notches where the stub tears off: every layer cuts one hole, intersected */
+    mask: radial-gradient(circle at 0 0, #0000 var(--cut), #000 calc(var(--cut) + 0.5px)),
+          radial-gradient(circle at 100% 0, #0000 var(--cut), #000 calc(var(--cut) + 0.5px)),
+          radial-gradient(circle at 0 100%, #0000 var(--cut), #000 calc(var(--cut) + 0.5px)),
+          radial-gradient(circle at 100% 100%, #0000 var(--cut), #000 calc(var(--cut) + 0.5px)),
+          radial-gradient(circle at var(--perf-x) 0, #0000 var(--notch), #000 calc(var(--notch) + 0.5px)),
+          radial-gradient(circle at var(--perf-x) 100%, #0000 var(--notch), #000 calc(var(--notch) + 0.5px));
+    mask-composite: intersect;
+  }
+  [dir="rtl"] :is(.ticket, .ticket-mini) { --perf-x: var(--stub); }   /* the stub sits inline-end */
+  :is(.ticket, .ticket-mini)::before, :is(.ticket, .ticket-mini)::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
+  :is(.ticket, .ticket-mini)::before { z-index: -2; transition: filter 150ms ease-out; }
+  [dir="rtl"] :is(.ticket, .ticket-mini)::before { scale: -1 1; }   /* the light mirrors with the stub */
+  :is(.ticket, .ticket-mini)::after {   /* coarse grain: SVG fractal noise, contrast pushed, no image download */
+    z-index: -1; opacity: 0.75; mix-blend-mode: overlay;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.55' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='2.4' intercept='-.7'/%3E%3CfeFuncG type='linear' slope='2.4' intercept='-.7'/%3E%3CfeFuncB type='linear' slope='2.4' intercept='-.7'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
   .ticket {
-    --stub: 24%; --perf-x: calc(100% - var(--stub)); --notch: max(10px, 2.2cqw); --ink: #2e180d;
-    position: relative; isolation: isolate; aspect-ratio: 2 / 1; display: grid; grid-template-columns: 1fr var(--stub);
-    border-radius: 2cqw; color: var(--ink); font-family: 'Geist Mono', 'Heebo', ui-monospace, monospace;
-    background: linear-gradient(135deg, #e2703a, #ee9a62 55%, #f5c49c);
-    /* the half-circle notches where the stub tears off: each half of the ticket masks its own edge */
-    mask: radial-gradient(circle at var(--perf-x) 0, #0000 var(--notch), #000 calc(var(--notch) + 0.5px)) top / 100% 51% no-repeat,
-          radial-gradient(circle at var(--perf-x) 100%, #0000 var(--notch), #000 calc(var(--notch) + 0.5px)) bottom / 100% 51% no-repeat;
+    --stub: 24%; --cut: 3.4cqw; --notch: 2.9cqw;
+    aspect-ratio: 7 / 4; display: grid; grid-template-columns: 1fr var(--stub);
+    font-family: 'Geist Mono', 'Heebo', ui-monospace, monospace; font-weight: 400;
   }
-  [dir="rtl"] .ticket { --perf-x: var(--stub); }   /* the stub sits inline-end: the grid mirrors itself, the mask needs telling */
-  .ticket::after {   /* grain: SVG fractal noise, no image download */
-    content: ""; position: absolute; inset: 0; z-index: -1; opacity: 0.4; mix-blend-mode: soft-light; pointer-events: none;
-    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  .ticket::before {   /* peach to the stub's orange; an orange sphere over a light behind it, so only a rim of light shows */
+    background: radial-gradient(circle at 46% 44%, #f9731d 19cqw, #f9731d00 27cqw),
+                radial-gradient(circle at 53% 38%, #fff3e6 15cqw, #fff3e600 29cqw),
+                linear-gradient(90deg, #f7b48a, #f6914f 45%, #f97316 76%, #ff6a13);
   }
-  .ticket-stub { margin-block: calc(var(--notch) + 1.2cqw); border-inline-start: max(2px, 0.4cqw) dotted rgb(46 24 13 / 0.45); }
-  .ticket-small { font-size: max(10px, 1.67cqw); font-weight: 500; letter-spacing: 0.02em; line-height: 1.3; text-transform: uppercase; }
-  .ticket-vertical { writing-mode: vertical-rl; rotate: 180deg; font-weight: 600; line-height: 1; white-space: nowrap; }
+  .ticket-small { font-size: max(7.5px, 2.1cqw); line-height: 1.55; letter-spacing: 0.1em; text-transform: uppercase; }
+  .ticket-stub { display: grid; place-items: center; overflow: hidden;
+    /* the perforation: faint dashes down its inline-start edge, between the notches */
+    background: repeating-linear-gradient(to bottom, rgb(59 36 20 / 0.28) 0 0.7cqw, #0000 0 1.3cqw) 0 50% / 0.2cqw calc(100% - 2 * var(--notch) - 2cqw) no-repeat; }
+  [dir="rtl"] .ticket-stub { background-position-x: 100%; }
+  .ticket-stub > * { grid-area: 1 / 1; }
+  .ticket-digits { font-size: 17cqw; font-weight: 600; line-height: 0.76; color: #fff3e6; opacity: 0.25; text-align: center; }
+  .ticket-vertical { writing-mode: vertical-rl; font-size: 6.6cqw; letter-spacing: 0.04em; line-height: 1; white-space: nowrap; text-transform: uppercase; opacity: 0.86; }
   .ticket-in { animation: ticket-in 500ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
   @keyframes ticket-in { from { opacity: 0; translate: 0 32px; rotate: -5deg; } 70% { translate: 0 -3px; rotate: 0.8deg; } }   /* settles flat: a resting tilt aliases the edges */
-  @media (prefers-reduced-motion: reduce) { .ticket-in { animation: none; } }
+
+  /* the sidebar's Invite button: a mini ticket, its count on the stub */
+  .ticket-mini { --stub: 3.25rem; --cut: 6px; --notch: 4.5px; display: flex; align-items: stretch; height: 2.5rem; width: 100%; }
+  .ticket-mini::before { background: radial-gradient(ellipse 34% 120% at 60% 10%, #fff3e6c0, #fff3e600), linear-gradient(90deg, #f7b48a, #f6914f 45%, #f97316 76%, #ff6a13); }
+  .ticket-mini::after { opacity: 0.45; }
+  .ticket-mini-stub { width: var(--stub); display: grid; place-items: center;
+    background: repeating-linear-gradient(to bottom, rgb(59 36 20 / 0.35) 0 3px, #0000 0 6px) 0 50% / 1px calc(100% - 2 * var(--notch) - 6px) no-repeat; }
+  [dir="rtl"] .ticket-mini-stub { background-position-x: 100%; }
+  .ticket-btn { display: block; width: 100%; border-radius: 6px; outline: none; transition: translate 150ms ease-out, scale 150ms ease-out, filter 150ms ease-out; }
+  .ticket-btn:hover { translate: 0 -1px; filter: drop-shadow(0 3px 8px rgb(249 115 22 / 0.45)); }
+  .ticket-btn:hover .ticket-mini::before { filter: brightness(1.07) saturate(1.08); }
+  .ticket-btn:active { translate: 0 0; scale: 0.98; }
+  .ticket-btn:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+  .ticket-glyph { --stub: 5px; --cut: 2.5px; --notch: 2px; display: block; width: 18px; height: 12px; flex-shrink: 0; background: linear-gradient(90deg, #f7b48a, #f97316 72%, #ff6a13); }
+  @media (prefers-reduced-motion: reduce) {
+    .ticket-in { animation: none; }
+    .ticket-btn, .ticket-mini::before { transition: none; }
+    .ticket-btn:hover, .ticket-btn:active { translate: none; scale: none; }
+  }
 }

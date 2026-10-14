@@ -10,7 +10,6 @@ import { SHORTCUT } from "@/components/command-palette"
 import { InviteDialog } from "@/components/invite-dialog"
 import { BrandMark } from "@/components/layout"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { invites, type Invites, type LibraryModel } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
@@ -28,23 +27,29 @@ export function StatusDot({ status, className }: { status: LibraryModel["status"
   )
 }
 
-/** Invites: one compact button with a thin copper-to-teal gradient border; the count at its end ("2/5", admins "∞"). */
+/** Invites: a mini ticket (the invite dialog's, in miniature: .ticket-mini in index.css), the count on its stub ("2/5", admins "∞"). */
 function InviteButton({ onOpen, refresh }: { onOpen: () => void; refresh: number }) {
   const { t } = useI18n()
   const [data, setData] = useState<Invites | null>(null)
   useEffect(() => { invites.list().then(setData).catch(() => setData(null)) }, [refresh])
   const used = data?.invites.length ?? 0, limit = data?.limit ?? null
   const spelled = !data ? "" : limit === null ? t("invite.unlimited") : t("invite.used", { used, limit })
+  const label = spelled ? `${t("invite.button")}, ${spelled}` : undefined
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton tooltip={t("invite.button")} onClick={onOpen} className="hidden group-data-[collapsible=icon]:flex"><UserPlus /></SidebarMenuButton>
-      <div className="flex w-full rounded-md bg-linear-to-r from-standard via-[#e07a3f] to-yours p-px group-data-[collapsible=icon]:hidden rtl:bg-linear-to-l">
-        <Button onClick={onOpen} aria-label={spelled ? `${t("invite.button")}, ${spelled}` : undefined}
-          className="h-9 w-full justify-start rounded-[calc(var(--radius-md)-1px)] bg-background text-foreground hover:bg-background">
-          <UserPlus data-icon="inline-start" /> {t("invite.button")}
-          {data && <span aria-hidden className="ms-auto font-mono text-xs text-muted-foreground tabular">{limit === null ? <span className="text-base leading-none">∞</span> : `${used}/${limit}`}</span>}
-        </Button>
-      </div>
+      <SidebarMenuButton tooltip={t("invite.button")} aria-label={label} onClick={onOpen} className="hidden group-data-[collapsible=icon]:flex">
+        <span aria-hidden className="ticket-glyph" />
+      </SidebarMenuButton>
+      <button type="button" onClick={onOpen} aria-label={label} className="ticket-btn group-data-[collapsible=icon]:hidden">
+        <span className="ticket-mini">
+          <span className="flex min-w-0 flex-1 items-center gap-2 ps-3 font-mono text-[11px] font-medium tracking-[0.12em] uppercase rtl:font-sans rtl:text-xs rtl:tracking-normal">
+            <UserPlus aria-hidden className="size-3.5 shrink-0" /> <span className="truncate">{t("invite.button")}</span>
+          </span>
+          <span aria-hidden className="ticket-mini-stub font-mono text-xs font-medium tabular">
+            {data && (limit === null ? <span className="text-base leading-none">∞</span> : `${used}/${limit}`)}
+          </span>
+        </span>
+      </button>
     </SidebarMenuItem>
   )
 }

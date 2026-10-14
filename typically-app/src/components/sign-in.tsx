@@ -20,7 +20,7 @@ export function SignIn({ done }: { done: (u: User) => void }) {
   useEffect(() => {
     if (window.location.hash.includes("invite=")) history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/`)
   }, [])
-  const [name, setName] = useState((link.get("for") ?? "").slice(0, 40))
+  const [name, setName] = useState((link.get("for") ?? "").slice(0, 60))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -64,7 +64,7 @@ export function SignIn({ done }: { done: (u: User) => void }) {
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="name">{t("auth.name")} <span className="font-normal text-muted-foreground">{t("auth.optional")}</span></Label>
-                <Input id="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} autoComplete="name" dir="auto"
+                <Input id="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} autoComplete="name" dir="auto"
                   placeholder={t("auth.namePlaceholder")} />
               </div>
               {error && <Alert variant="destructive"><AlertCircle /><AlertDescription>{error}</AlertDescription></Alert>}

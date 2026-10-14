@@ -266,76 +266,95 @@ def share_image(share_id: str):
 
 
 # ---------------------------------------------------------------- invite ticket (typically_auth: GET /api/auth/invites/{code}/ticket.png)
-# the app's DOM ticket (typically-app/src/components/invite-dialog.tsx, .ticket in index.css), drawn at 1 cqw = 12 px
-TICKET_STOPS, TICKET_INK, TICKET_BACKDROP = ("#e2703a", "#ee9a62", "#f5c49c"), (46, 24, 13), "#2a1d17"
+# the app's DOM ticket (typically-app/src/components/invite-dialog.tsx, .ticket in index.css), drawn at 1 cqw = 12 px: keep the numbers in step
+TICKET_INK, TICKET_BACKDROP = (59, 36, 20), "#2c1f17"
+TICKET_BASE = ((0, "#f7b48a"), (.45, "#f6914f"), (.76, "#f97316"), (1, "#ff6a13"))   # left to right: peach to the stub's orange
+TICKET_GLOWS = (("#f9731d", .46, .44, 19, 27),   # top first, like CSS layers: (color, x, y of the box, solid to cqw, gone at cqw):
+                ("#fff3e6", .53, .38, 15, 29))   # an orange sphere over the light behind it, so only a rim of light shows
 
 
-def two_lines(name: str) -> list[str]:
-    """Split at the space nearest the middle (the app's twoLines)."""
-    spaces = [i for i, ch in enumerate(name) if ch == " "]
-    if not spaces:
-        return [name]
-    cut = min(spaces, key=lambda i: abs(i - len(name) / 2))
-    return [name[:cut], name[cut + 1:]]
+def name_lines(name: str, widest: float = 62, largest: float = 6) -> tuple[list[str], float]:
+    """The name cut into 1-3 lines at spaces, and its size in cqw: the cut that sets it largest, fewer lines on a tie (the app's nameLines)."""
+    words = name.split()
+    n = len(words)
+    best = ([name], 0.0)
+    for cut in [()] + [(i,) for i in range(1, n)] + [(i, j) for i in range(1, n) for j in range(i + 1, n)]:
+        b = (0, *cut, n)
+        lines = [" ".join(words[b[k]:b[k + 1]]) for k in range(len(b) - 1)]
+        size = min(largest, widest / (0.62 * max(map(len, lines))))
+        if size > best[1] + 1e-9:
+            best = (lines, size)
+    return best
 
 
-def ticket_png(for_: str | None, inviter: str, no: str, host: str, created: str) -> bytes:
+def ticket_png(name: str | None, inviter: str, no: str, host: str, created: str) -> bytes:
     import numpy as np
-    W, H, pad, notch, stub = 1200, 600, 56, 26, 288
-    perf = W - stub
-    rgb = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in TICKET_STOPS], float)
-    t = (np.arange(W)[None, :] + np.arange(H)[:, None]) / (W + H)   # CSS linear-gradient(135deg) on this box
-    img = np.stack([np.interp(t, (0, .55, 1), rgb[:, k]) for k in range(3)], -1)
-    img *= 1 + (np.random.default_rng(int(no)).random((H, W, 1)) - .5) * .22   # grain
+    W, H, u = 1200, 686, 12   # 7:4; u = px per cqw
+    pad, cut, notch, perf, stub_x = 7 * u, 3.4 * u, 2.9 * u, 76 * u, 88 * u
+    rgb = lambda c: np.array([int(c[i:i + 2], 16) for i in (1, 3, 5)], float)
+    x, y = np.arange(W)[None, :], np.arange(H)[:, None]
+    img = np.stack([np.interp(x / W, [s for s, _ in TICKET_BASE], [rgb(c)[k] for _, c in TICKET_BASE]) for k in range(3)], -1) * np.ones((H, 1, 1))
+    for color, gx, gy, solid, gone in reversed(TICKET_GLOWS):
+        a = np.clip((gone * u - np.hypot(x - gx * W, y - gy * H)) / ((gone - solid) * u), 0, 1)[..., None]
+        img = img * (1 - a) + rgb(color) * a
+    grain = np.random.default_rng(int(no)).random((H // 2 + 1, W // 2 + 1)).repeat(2, 0).repeat(2, 1)[:H, :W, None]   # coarse: 2 px
+    img += (grain - .5) * 56
     base = Image.fromarray(img.clip(0, 255).astype("uint8")).convert("RGBA")
 
-    mask = Image.new("L", (W, H), 0)
+    S = 4   # the cut-outs drawn at 4x and scaled down: smooth edges
+    mask = Image.new("L", (W * S, H * S), 255)
     m = ImageDraw.Draw(mask)
-    m.rounded_rectangle((0, 0, W - 1, H - 1), 24, fill=255)
-    for y in (0, H):
-        m.ellipse((perf - notch, y - notch, perf + notch, y + notch), fill=0)
-    base.putalpha(mask)
+    for cx, cy, r in ((0, 0, cut), (W, 0, cut), (0, H, cut), (W, H, cut), (perf, 0, notch), (perf, H, notch)):   # concave corners + notches
+        m.ellipse(((cx - r) * S, (cy - r) * S, (cx + r) * S, (cy + r) * S), fill=0)
+    mask = mask.resize((W, H), Image.LANCZOS)
 
     ink = TICKET_INK + (255,)
     layer = Image.new("RGBA", (W, H))
     d = ImageDraw.Draw(layer)
-    for y in range(notch + 14, H - notch - 10, 12):   # perforation
-        d.ellipse((perf - 2.5, y - 2.5, perf + 2.5, y + 2.5), fill=TICKET_INK + (115,))
+    yy = notch + u
+    while yy < H - notch - u:   # the perforation: faint dashes
+        d.rectangle((perf - 1.2, yy, perf + 1.2, min(yy + .7 * u, H - notch - u)), fill=TICKET_INK + (70,))
+        yy += 1.3 * u
 
-    eyebrow, small = "DECISION FACTORY · AN INVITATION FROM ", _font(20, 500, mono=True)
-    d.text((pad, pad), eyebrow, font=small, fill=ink)
-    who = inviter.upper()
-    d.text((pad + d.textlength(eyebrow, font=small), pad), _visual(_fit(d, who, _font(20, 600, who, mono=True), perf - 2 * pad - 520)),
-           font=_font(20, 600, who, mono=True), fill=ink)
+    def width(text: str, f, ls: float) -> float:
+        return sum(d.textlength(ch, font=f) + ls * f.size for ch in text)
 
-    name = " ".join((for_ or "").split()).upper() or "ADMIT ONE BEARER"
-    lines, size = two_lines(name), 120
-    while size > 36 and max(d.textlength(ln, font=_font(size, 600, ln, mono=True)) for ln in lines) > perf - 2 * pad:
-        size -= 4
-    y = H / 2 - size * len(lines) * .98 / 2
-    for ln in lines:
-        f = _font(size, 600, ln, mono=True)
-        d.text((pad, y), _visual(_fit(d, ln, f, perf - 2 * pad)), font=f, fill=ink)
-        y += size * .98
+    def spaced(x0: float, y0: float, text: str, f, ls: float, fill=ink, draw=d) -> float:   # letter-spaced, left-middle anchored
+        for ch in _visual(text):
+            draw.text((x0, y0), ch, font=f, fill=fill, anchor="lm")
+            x0 += d.textlength(ch, font=f) + ls * f.size
+        return x0
+
+    small, line = round(2.1 * u), 3.25 * u   # eyebrow + bottom line: 2.1cqw, line-height 1.55, letter-spacing .1em
+    spaced(pad, pad + line / 2, "DECISION FACTORY PRESENTS", _font(small, 400, mono=True), .1)
+    after = spaced(pad, pad + line * 1.5, "AN INVITATION FROM ", _font(small, 400, mono=True), .1)
+    who, fw = inviter.upper(), _font(small, 400, inviter, mono=True)
+    while who and width(who, fw, .1) > perf - pad - after:
+        who = who[:-2] + "…"
+    spaced(after, pad + line * 1.5, who, fw, .1)
     when = datetime.fromisoformat(created).strftime("%d %b %Y").upper()
-    d.text((pad, H - pad - 20), f"{host.upper()} · {when}", font=small, fill=ink)
+    spaced(pad, H - pad - line / 2, f"{host.upper()} · {when}", _font(small, 400, mono=True), .1)
 
-    def vertical(text: str, size: int, alpha: int, x: int):   # reads bottom to top, like the DOM's writing-mode + rotate(180deg)
-        f = _font(size, 600, mono=True)
-        w = int(d.textlength(text, font=f))
-        strip = Image.new("RGBA", (w, size + 8))
-        ImageDraw.Draw(strip).text((0, 0), text, font=f, fill=TICKET_INK + (alpha,))
-        strip = strip.rotate(90, expand=True)
-        layer.alpha_composite(strip, (x, (H - strip.height) // 2))
+    lines, size = name_lines(" ".join((name or "").split()) or "You're invited")   # the fallback: invites from before names
+    px, mid = size * u, (pad + 2 * line + H - pad - line) / 2
+    for k, ln in enumerate(lines):
+        spaced(pad, mid + (k + .5 - len(lines) / 2) * px, ln.upper(), _font(round(px), 400, ln, mono=True), .02)
 
-    vertical("ADMIT ONE", 60, 255, perf + 40)
-    vertical(f"No. {no}", 92, 70, perf + 128)
+    big = _font(17 * u, 600, mono=True)   # the stub: the ticket number's digits stacked, giant and faded, under a vertical ADMIT ONE
+    for k, digit in enumerate(no):
+        d.text((stub_x, H / 2 + (k - 1.5) * .76 * 17 * u), digit, font=big, fill=(255, 243, 230, 64), anchor="mm")
+    f = _font(round(6.6 * u), 400, mono=True)
+    strip = Image.new("RGBA", (int(width("ADMIT ONE", f, .04)) + 4, int(f.size * 1.3)))
+    spaced(0, strip.height / 2, "ADMIT ONE", f, .04, TICKET_INK + (220,), ImageDraw.Draw(strip))
+    strip = strip.rotate(-90, expand=True)   # reads top to bottom, like writing-mode: vertical-rl
+    layer.alpha_composite(strip, (round(stub_x - strip.width / 2), round(H / 2 - strip.height / 2)))
+
     out = Image.alpha_composite(base, layer)
-    out.putalpha(mask)   # corners + notches cut through to the backdrop
-    # posted like the YC tickets: the ticket at 960x480 (drawn at 1200x600, downsampled) on a dark warm-brown 16:9 card
+    out.putalpha(mask)
+    # posted like the YC tickets: the ticket at 960 wide on a dark brown 16:9 card
     card = Image.new("RGBA", (1200, 675), TICKET_BACKDROP)
-    card.alpha_composite(out.resize((960, 480), Image.LANCZOS), (120, 97))
-    out = card.convert("RGB")
+    t = out.resize((960, 549), Image.LANCZOS)
+    card.alpha_composite(t, ((1200 - 960) // 2, (675 - 549) // 2))
     buf = io.BytesIO()
-    out.save(buf, "PNG", optimize=True)
+    card.convert("RGB").save(buf, "PNG", optimize=True)
     return buf.getvalue()

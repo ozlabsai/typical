@@ -3,8 +3,8 @@
 Off unless TYPICALLY_AUTH=1, so local dev is unchanged (no user, everything visible, no quotas). When on:
 - POST /api/auth/login {code, name?} sets a signed session cookie (HMAC-SHA256, TYPICALLY_SECRET); GET /api/auth/me; POST /api/auth/logout.
   Invite codes: TYPICALLY_INVITES (comma-separated) + <data>/invites.json (a JSON list, the operator's) + <data>/issued_invites.json
-  (made by users: GET / POST {for?} / DELETE /api/auth/invites, GET /api/auth/invites/{code}/ticket.png; INVITE_LIMIT active each,
-  admins unlimited); TYPICALLY_ADMINS (codes) are admins.
+  (made by users: GET [?all=1, admins] / POST {name, email} / DELETE /api/auth/invites, GET /api/auth/invites/{code}/ticket.png;
+  INVITE_LIMIT active each, admins unlimited; joined / last_seen are stamped on sign-in); TYPICALLY_ADMINS (codes) are admins.
   Removing a code from the invites signs its sessions out (checked on every request).
 - every /api/* request needs a session, except /api/auth/* and /api/health. /v1/models/{id}/decide (its own bearer keys), the
   public share cards (/s/*), the static site and the /app bundle (it renders the sign-in screen itself) stay open.
@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -25,9 +26,9 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 router = APIRouter()
 COOKIE, MAX_AGE = "typically_session", 30 * 86400
@@ -73,7 +74,8 @@ def _codes(var: str) -> set[str]:
 
 
 def _issued() -> list[dict]:
-    """[{code, by: uid, created}] of the invites users made (the operator's own stay in invites.json)."""
+    """[{code, by: uid, from: inviter's name, name, email, created, joined?, last_seen?}] of the invites users made (the operator's
+    own stay in invites.json). Entries from before name + email were required may carry "for" (the name) or neither."""
     return json.loads(f.read_text()) if (f := _root() / "issued_invites.json").exists() else []
 
 
@@ -136,7 +138,7 @@ def _public(u: User) -> dict:
 
 class Login(BaseModel):
     code: str = Field(min_length=1, max_length=200)
-    name: str | None = Field(None, max_length=40)
+    name: str | None = Field(None, max_length=60)
 
 
 @router.post("/api/auth/login")
@@ -148,7 +150,8 @@ def login(req: Login, request: Request, response: Response):
     if not any(hmac.compare_digest(code.encode(), c.encode()) for c in invites()):
         raise HTTPException(401, "That invite code is not valid.")
     uid = uid_of(code)
-    name = " ".join((req.name or "").split()) or f"Guest {uid[:4]}"
+    issued = _seen(uid)   # an invite a user made: its first sign-in stamps "joined"; no name typed -> the one the inviter gave
+    name = " ".join((req.name or "").split()) or (issued and _view(issued)["name"]) or f"Guest {uid[:4]}"
     local = request.url.hostname in ("localhost", "127.0.0.1") and request.headers.get("x-forwarded-proto", request.url.scheme) != "https"
     response.set_cookie(COOKIE, make_cookie(uid, name), max_age=MAX_AGE, httponly=True, secure=not local, samesite="lax", path="/")
     return {"auth": True, "user": _public(User(uid, name, uid in {uid_of(c) for c in _codes("TYPICALLY_ADMINS")}))}
@@ -160,6 +163,7 @@ def me():
         return {"auth": False, "user": None}
     if (u := current()) is None:
         raise HTTPException(401, "Sign in first.")
+    _seen(u.uid)   # the app calls /me once per load: that is "last seen"
     return {"auth": True, "user": _public(u)}
 
 
@@ -184,6 +188,23 @@ def _write_issued(issued: list[dict]) -> None:   # caller holds _issued_lock
     os.replace(tmp, f)
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _seen(uid: str) -> dict | None:
+    """Stamp the issued invite behind this user: joined (first sign-in, kept) and last_seen. None for the operator's codes."""
+    with _issued_lock:
+        issued = _issued()
+        if (i := next((i for i in issued if uid_of(i["code"]) == uid), None)) is None:
+            return None
+        now = _now()
+        i["joined"] = i.get("joined") or now
+        i["last_seen"] = now
+        _write_issued(issued)
+    return i
+
+
 def _inviter() -> User:
     if not enabled():
         raise HTTPException(404, "Not found")
@@ -197,31 +218,58 @@ def ticket_no(code: str) -> str:
     return f"{int(hashlib.sha256(f'ticket:{code}'.encode()).hexdigest()[:8], 16) % 10000:04d}"
 
 
-def _mine(u: User) -> dict:
-    mine = [{"code": i["code"], "created": i["created"], "for": i.get("for"), "no": ticket_no(i["code"])} for i in _issued() if i["by"] == u.uid]
-    return {"invites": mine, "limit": None if u.admin else INVITE_LIMIT, "left": None if u.admin else max(0, INVITE_LIMIT - len(mine))}
+def _view(i: dict) -> dict:
+    return {"code": i["code"], "no": ticket_no(i["code"]), "name": i.get("name") or i.get("for"), "email": i.get("email"),
+            "inviter": i.get("from"), "created": i["created"], "joined": i.get("joined"), "last_seen": i.get("last_seen")}
+
+
+def _mine(u: User, everyone: bool = False) -> dict:
+    issued = _issued()
+    mine = [i for i in issued if i["by"] == u.uid]
+    return {"invites": [_view(i) for i in (issued if everyone else mine)],
+            "limit": None if u.admin else INVITE_LIMIT, "left": None if u.admin else max(0, INVITE_LIMIT - len(mine))}
 
 
 @router.get("/api/auth/invites")
-def my_invites():
-    return _mine(_inviter())
+def my_invites(everyone: bool = Query(False, alias="all")):
+    """Yours; ?all=1 (admins only): everyone's, each with its inviter's name."""
+    u = _inviter()
+    if everyone and not u.admin:
+        raise HTTPException(403, "Only admins can see every invite.")
+    return _mine(u, everyone)
+
+
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")   # ponytail: a shape check; the invite link is what reaches them, not mail
 
 
 class NewInvite(BaseModel):
-    for_: str | None = Field(None, alias="for", max_length=40)   # who it's for: printed on the ticket, prefills their name
+    name: str = Field(max_length=60)    # printed on the ticket, prefills their name
+    email: str = Field(max_length=254)  # kept for the inviter and admins; never printed on the ticket nor put in the link
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        if not (v := " ".join(v.split())):
+            raise ValueError("Enter their name.")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        if not EMAIL.fullmatch(v := v.strip()):
+            raise ValueError("Enter a valid email address.")
+        return v
 
 
 @router.post("/api/auth/invites")
-def create_invite(req: NewInvite | None = None):
+def create_invite(req: NewInvite):
     u = _inviter()
-    who = " ".join(((req and req.for_) or "").split()) or None
     with _issued_lock:
         issued = _issued()
         if not u.admin and sum(i["by"] == u.uid for i in issued) >= INVITE_LIMIT:
             raise HTTPException(429, f"You can have {INVITE_LIMIT} invites at a time. Revoke one to make a new one.")
         code = secrets.token_urlsafe(24)
-        _write_issued(issued + [{"code": code, "by": u.uid, "from": u.name, "for": who,
-                                 "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}])
+        _write_issued(issued + [{"code": code, "by": u.uid, "from": u.name, "name": req.name, "email": req.email, "created": _now()}])
     return {"code": code, **_mine(u)}
 
 
@@ -245,13 +293,13 @@ def revoke_invite(code: str):
 
 @router.get("/api/auth/invites/{code}/ticket.png")
 def invite_ticket(code: str, request: Request):
-    """The invite as a printable ticket (owner or admin; 404 otherwise). Never prints the code."""
+    """The invite as a printable ticket (owner or admin; 404 otherwise). Never prints the code or the email: tickets get posted."""
     u = _inviter()
     i = next((i for i in _issued() if hmac.compare_digest(i["code"].encode(), code.encode()) and (u.admin or i["by"] == u.uid)), None)
     if i is None:
         raise HTTPException(404, "We can't find that invite.")
     import typically_share   # Pillow + fonts live there (the og card)
-    png = typically_share.ticket_png(i.get("for"), i.get("from") or u.name, ticket_no(i["code"]), request.url.netloc, i["created"])
+    png = typically_share.ticket_png(_view(i)["name"], i.get("from") or u.name, ticket_no(i["code"]), request.url.netloc, i["created"])
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
 

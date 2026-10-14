@@ -221,15 +221,19 @@ export const shares = {
   revoke: (id: string) => call<{ revoked: number }>(share(id), undefined, "DELETE"),
 }
 
-/** Invite codes the signed-in user made (sign-in on only). limit/left: null for admins (unlimited). */
-export interface Invite { code: string; created: string; for: string | null; no: string }  // no: the ticket's number, derived from the code
+/** Invite codes the signed-in user made (sign-in on only). limit/left: null for admins (unlimited).
+ *  name / email: null on invites from before they were required; joined: their first sign-in (null = pending). */
+export interface Invite {
+  code: string; no: string; name: string | null; email: string | null; inviter: string | null
+  created: string; joined: string | null; last_seen: string | null
+}
 export interface Invites { invites: Invite[]; limit: number | null; left: number | null }
-// the app's own path: / hosted, /app/ local; &for= prefills the invitee's name on the sign-in screen (the inviter typed it, so the link may carry it)
-export const inviteLink = (i: Invite) => `${new URL(".", window.location.href).href}#/?invite=${encodeURIComponent(i.code)}${i.for ? `&for=${encodeURIComponent(i.for)}` : ""}`
+// the app's own path: / hosted, /app/ local; &for= prefills the invitee's name on the sign-in screen (never the email: links get forwarded)
+export const inviteLink = (i: Invite) => `${new URL(".", window.location.href).href}#/?invite=${encodeURIComponent(i.code)}${i.name ? `&for=${encodeURIComponent(i.name)}` : ""}`
 export const ticketUrl = (code: string) => `/api/auth/invites/${encodeURIComponent(code)}/ticket.png`
 
 export const invites = {
-  list: () => call<Invites>("invites", undefined, undefined, "/api/auth/"),
-  create: (name?: string) => call<Invites & { code: string }>("invites", { for: name || null }, undefined, "/api/auth/"),
+  list: (all = false) => call<Invites>(all ? "invites?all=1" : "invites", undefined, undefined, "/api/auth/"),  // all: admins, everyone's
+  create: (name: string, email: string) => call<Invites & { code: string }>("invites", { name, email }, undefined, "/api/auth/"),
   revoke: (code: string) => call<Invites>(`invites/${encodeURIComponent(code)}`, undefined, "DELETE", "/api/auth/"),
 }
