@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowRight, ListChecks, Loader2, Plus, Sparkles, X } from "lucide-react"
+import { ArrowRight, Inbox, ListChecks, Loader2, Plus, X } from "lucide-react"
 
 import { OptionCard, PageHead, StepFooter } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
@@ -67,7 +67,7 @@ export function WhatStep({ intent, setIntent, next }: { intent: Intent; setInten
     <>
       <PageHead title={t("what.title")}>{t("what.lede")}</PageHead>
       <RadioGroup value={intent.mode} onValueChange={(v) => setIntent((i) => ({ ...i, mode: v as Intent["mode"] }))} className="grid gap-4 sm:grid-cols-2">
-        {([["auto", Sparkles], ["questions", ListChecks]] as const).map(([m, Icon]) => (
+        {([["auto", Inbox], ["questions", ListChecks]] as const).map(([m, Icon]) => (
           <Label key={m} htmlFor={`mode-${m}`} className="cursor-pointer font-normal">
             <OptionCard selected={intent.mode === m} className="h-full w-full p-5">
               <div className="flex items-start gap-3">

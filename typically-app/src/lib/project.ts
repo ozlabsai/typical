@@ -76,13 +76,11 @@ export interface Project {
   resultsKey?: string // "northwind" or the slug
 }
 
-// ponytail: EN + HE question words only; other languages keep the question's wording
-const ASKING = /^(which|what|who|whom|when|where|why|how|should|would|could|can|will|does|do|did|is|are|was|were|the|this|that|a|an|to|of|for|in|on|it|its|we|our|they|their|you|your|be|האם|מה|איזה|איזו|מי|למי|כמה|זה|הזה|הזו|את)$/i
-/** The name a model gets until the user types one: the topic, the first question, then the data's name; the first that makes a valid slug. */
+/** The name a model gets until the user types one: the topic, then the data's name; the first that makes a valid slug.
+ *  Not the question: word-stripped questions read badly ("Team handle ticket"); "Untitled model" until one of these exists. */
 export function suggestName(intent: Intent, hint = "") {
   const short = (s: string) => s.replace(/[?؟.!:]+$/, "").trim().split(/\s+/).slice(0, 4).join(" ").slice(0, 40)
-  const gist = (q = "") => q.split(/\s+/).filter((w) => !ASKING.test(w)).join(" ")   // "Which team should handle this ticket?" -> "team handle ticket"
-  const all = [intent.topic, intent.mode === "questions" ? gist(intent.questions[0]?.question) : "", hint].map(short).filter(Boolean)
+  const all = [intent.topic ?? "", hint].map(short).filter(Boolean)
   const name = all.find((s) => !nameError(s)) ?? all[0] ?? ""
   return name.charAt(0).toUpperCase() + name.slice(1)
 }
