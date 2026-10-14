@@ -397,3 +397,36 @@ def test_old_invites_still_list(env):
     assert all(i["email"] is None and i["joined"] is None for i in got.values())
     assert a.get("/api/auth/invites/old-code-unnamed-00000000000000/ticket.png").status_code == 200
     assert client("old-code-unnamed-00000000000000").get("/api/auth/me").status_code == 200
+
+
+def test_invite_link_preview(env):
+    """/i/{id}#{code}: a public page with og tags (the ticket as og:image) that forwards to sign-in; the code stays in the fragment."""
+    a = client(ALICE, "Alice")
+    r = invite(a, "Eve <script>alert(1)</script>", "eve@example.com").json()
+    i = next(i for i in r["invites"] if i["code"] == r["code"])
+    assert i["id"] and i["id"] != i["code"] and i["id"] not in i["code"] and len(i["id"]) >= 10
+    crawler = TestClient(server.app, base_url="http://typically.example", headers={"User-Agent": "Slackbot-LinkExpanding 1.0"})
+    page = crawler.get(f"/i/{i['id']}")
+    body = page.text
+    assert page.status_code == 200 and "script-src 'sha256-" in page.headers["content-security-policy"]
+    assert r["code"] not in body and "eve@example.com" not in body and "<script>alert" not in body and "&lt;script&gt;" in body
+    for tag in ('og:title" content="Alice invited Eve &lt;script&gt;', 'og:image" content="http://typically.example/i/',
+                'og:image:width" content="1200"', 'og:image:height" content="675"', 'twitter:card" content="summary_large_image"',
+                'name="robots" content="noindex"', "location.hash", "location.replace"):
+        assert tag in body, tag
+    png = crawler.get(f"/i/{i['id']}/ticket.png")
+    assert png.status_code == 200 and png.headers["content-type"] == "image/png" and "public" in png.headers["cache-control"]
+    assert Image.open(io.BytesIO(png.content)).size == (1200, 675)
+    assert crawler.get("/i/unknown-id-123").status_code == 404 and crawler.get(f"/i/{r['code']}").status_code == 404
+    a.delete(f"/api/auth/invites/{r['code']}")
+    assert crawler.get(f"/i/{i['id']}").status_code == 404 and crawler.get(f"/i/{i['id']}/ticket.png").status_code == 404
+
+
+def test_legacy_invites_get_an_id(env):
+    (env / "issued_invites.json").write_text(json.dumps([
+        {"code": "old-code-unnamed-00000000000000", "by": auth.uid_of(ALICE), "created": "2026-10-01T00:00:00+00:00"}]))
+    [old] = client(ALICE).get("/api/auth/invites").json()["invites"]
+    assert old["id"] and old["id"] != old["code"]
+    assert json.loads((env / "issued_invites.json").read_text())[0]["id"] == old["id"]   # stored: stable across reads
+    page = client().get(f"/i/{old['id']}")
+    assert page.status_code == 200 and "You&#x27;re invited to Decision Factory" in page.text and old["code"] not in page.text

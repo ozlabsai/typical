@@ -224,12 +224,13 @@ export const shares = {
 /** Invite codes the signed-in user made (sign-in on only). limit/left: null for admins (unlimited).
  *  name / email: null on invites from before they were required; joined: their first sign-in (null = pending). */
 export interface Invite {
-  code: string; no: string; name: string | null; email: string | null; inviter: string | null
+  id: string; code: string; no: string; name: string | null; email: string | null; inviter: string | null
   created: string; joined: string | null; last_seen: string | null
 }
 export interface Invites { invites: Invite[]; limit: number | null; left: number | null }
-// the app's own path: / hosted, /app/ local; &for= prefills the invitee's name on the sign-in screen (never the email: links get forwarded)
-export const inviteLink = (i: Invite) => `${new URL(".", window.location.href).href}#/?invite=${encodeURIComponent(i.code)}${i.name ? `&for=${encodeURIComponent(i.name)}` : ""}`
+// /i/{id} is a public preview page (the ticket as og:image) that forwards to sign-in with the code and the name prefilled. The code
+// rides in the #fragment, so it never reaches the server, its logs or link crawlers (typically_share.invite_page). Old /#/?invite= links still work.
+export const inviteLink = (i: Pick<Invite, "id" | "code">) => `${window.location.origin}/i/${i.id}#${i.code}`
 export const ticketUrl = (code: string) => `/api/auth/invites/${encodeURIComponent(code)}/ticket.png`
 
 export const invites = {

@@ -163,7 +163,7 @@
 
   /* the invite ticket (invite-dialog.tsx), sized in cqw of its @container; site/typically_share.py ticket_png draws the same at
      1cqw = 12px (TICKET_* there: keep the numbers in step). The sidebar's Invite button is the same ticket in miniature (.ticket-mini). */
-  .ticket, .ticket-mini, .ticket-glyph {
+  .ticket, .ticket-mini {
     --perf-x: calc(100% - var(--stub)); --ink: #3b2414;
     position: relative; isolation: isolate; color: var(--ink);
     /* concave quarter-circle corners and the two notches where the stub tears off: every layer cuts one hole, intersected */
@@ -176,10 +176,10 @@
     mask-composite: intersect;
   }
   [dir="rtl"] :is(.ticket, .ticket-mini) { --perf-x: var(--stub); }   /* the stub sits inline-end */
-  :is(.ticket, .ticket-mini)::before, :is(.ticket, .ticket-mini)::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
-  :is(.ticket, .ticket-mini)::before { z-index: -2; transition: filter 150ms ease-out; }
-  [dir="rtl"] :is(.ticket, .ticket-mini)::before { scale: -1 1; }   /* the light mirrors with the stub */
-  :is(.ticket, .ticket-mini)::after {   /* coarse grain: SVG fractal noise, contrast pushed, no image download */
+  .ticket::before, :is(.ticket, .ticket-mini-fill)::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
+  .ticket::before { z-index: -2; }
+  [dir="rtl"] :is(.ticket::before, .ticket-mini-fill) { scale: -1 1; }   /* the light mirrors with the stub */
+  :is(.ticket, .ticket-mini-fill)::after {   /* coarse grain: SVG fractal noise, contrast pushed, no image download */
     z-index: -1; opacity: 0.75; mix-blend-mode: overlay;
     background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.55' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='2.4' intercept='-.7'/%3E%3CfeFuncG type='linear' slope='2.4' intercept='-.7'/%3E%3CfeFuncB type='linear' slope='2.4' intercept='-.7'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
@@ -204,22 +204,41 @@
   .ticket-in { animation: ticket-in 500ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
   @keyframes ticket-in { from { opacity: 0; translate: 0 32px; rotate: -5deg; } 70% { translate: 0 -3px; rotate: 0.8deg; } }   /* settles flat: a resting tilt aliases the edges */
 
-  /* the sidebar's Invite button: a mini ticket, its count on the stub */
-  .ticket-mini { --stub: 3.25rem; --cut: 6px; --notch: 4.5px; display: flex; align-items: stretch; height: 2.5rem; width: 100%; }
-  .ticket-mini::before { background: radial-gradient(ellipse 34% 120% at 60% 10%, #fff3e6c0, #fff3e600), linear-gradient(90deg, #f7b48a, #f6914f 45%, #f97316 76%, #ff6a13); }
-  .ticket-mini::after { opacity: 0.45; }
-  .ticket-mini-stub { width: var(--stub); display: grid; place-items: center;
-    background: repeating-linear-gradient(to bottom, rgb(59 36 20 / 0.35) 0 3px, #0000 0 6px) 0 50% / 1px calc(100% - 2 * var(--notch) - 6px) no-repeat; }
+  /* the sidebar's Invite button: a quiet paper ticket at rest (a 1px hairline along the cut shape: the element is the hairline color,
+     its ::before the paper, inset 1px under the same holes grown by 1px), only the stub tinted orange. Hover / keyboard focus: the
+     orange grain surface (.ticket-mini-fill, clipped to the stub at rest) sweeps in from the stub. .ticket-glyph: the same, icon-sized. */
+  .ticket-mini { --stub: 3.25rem; --cut: 6px; --notch: 4.5px; --perf-in: calc(100% - var(--stub) + 1px);
+    --edge: color-mix(in oklab, var(--foreground) 15%, transparent); --stub-ink: #c2410c;
+    display: flex; align-items: stretch; height: 2.5rem; width: 100%; background: var(--edge); color: var(--muted-foreground);
+    transition: color 200ms ease-out; }
+  .dark .ticket-mini { --stub-ink: #f6914f; }
+  [dir="rtl"] .ticket-mini { --perf-in: calc(var(--stub) - 1px); }
+  .ticket-mini::before { content: ""; position: absolute; inset: 1px; z-index: -2; background: var(--card); pointer-events: none;
+    mask: radial-gradient(circle at -1px -1px, #0000 calc(var(--cut) + 1px), #000 calc(var(--cut) + 1.5px)),
+          radial-gradient(circle at calc(100% + 1px) -1px, #0000 calc(var(--cut) + 1px), #000 calc(var(--cut) + 1.5px)),
+          radial-gradient(circle at -1px calc(100% + 1px), #0000 calc(var(--cut) + 1px), #000 calc(var(--cut) + 1.5px)),
+          radial-gradient(circle at calc(100% + 1px) calc(100% + 1px), #0000 calc(var(--cut) + 1px), #000 calc(var(--cut) + 1.5px)),
+          radial-gradient(circle at var(--perf-in) -1px, #0000 calc(var(--notch) + 1px), #000 calc(var(--notch) + 1.5px)),
+          radial-gradient(circle at var(--perf-in) calc(100% + 1px), #0000 calc(var(--notch) + 1px), #000 calc(var(--notch) + 1.5px));
+    mask-composite: intersect; }
+  .ticket-mini-fill { position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: 0.16;
+    background: radial-gradient(ellipse 34% 120% at 60% 10%, #fff3e6c0, #fff3e600), linear-gradient(90deg, #f7b48a, #f6914f 45%, #f97316 76%, #ff6a13);
+    clip-path: inset(0 0 0 calc(100% - var(--stub))); transition: clip-path 200ms ease-out, opacity 200ms ease-out; }
+  .ticket-mini-fill::after { opacity: 0.45; }
+  .ticket-mini-stub { width: var(--stub); display: grid; place-items: center; color: var(--stub-ink); transition: color 200ms ease-out;
+    background: repeating-linear-gradient(to bottom, var(--edge) 0 3px, #0000 0 6px) 0 50% / 1px calc(100% - 2 * var(--notch) - 6px) no-repeat; }
   [dir="rtl"] .ticket-mini-stub { background-position-x: 100%; }
-  .ticket-btn { display: block; width: 100%; border-radius: 6px; outline: none; transition: translate 150ms ease-out, scale 150ms ease-out, filter 150ms ease-out; }
-  .ticket-btn:hover { translate: 0 -1px; filter: drop-shadow(0 3px 8px rgb(249 115 22 / 0.45)); }
-  .ticket-btn:hover .ticket-mini::before { filter: brightness(1.07) saturate(1.08); }
-  .ticket-btn:active { translate: 0 0; scale: 0.98; }
+  /* the trigger is the ticket's parent button: .ticket-btn (expanded) or the sidebar's icon button (collapsed) */
+  :is(:hover, :focus-visible) > .ticket-mini { color: var(--ink); }
+  :is(:hover, :focus-visible) > .ticket-mini > .ticket-mini-stub { color: var(--ink); --edge: rgb(59 36 20 / 0.35); }
+  :is(:hover, :focus-visible) > .ticket-mini > .ticket-mini-fill { clip-path: inset(0); opacity: 1; }
+  .ticket-btn { display: block; width: 100%; border-radius: 6px; outline: none; transition: scale 150ms ease-out; }
+  .ticket-btn:active { scale: 0.98; }
   .ticket-btn:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
-  .ticket-glyph { --stub: 5px; --cut: 2.5px; --notch: 2px; display: block; width: 18px; height: 12px; flex-shrink: 0; background: linear-gradient(90deg, #f7b48a, #f97316 72%, #ff6a13); }
+  .ticket-glyph { --stub: 5px; --cut: 2.5px; --notch: 2px; width: 18px; height: 12px; flex-shrink: 0; }
   @media (prefers-reduced-motion: reduce) {
     .ticket-in { animation: none; }
-    .ticket-btn, .ticket-mini::before { transition: none; }
-    .ticket-btn:hover, .ticket-btn:active { translate: none; scale: none; }
+    .ticket-btn, .ticket-mini, .ticket-mini-fill, .ticket-mini-stub { transition: none; }
+    .ticket-btn:active { scale: none; }
   }
 }

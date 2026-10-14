@@ -27,7 +27,8 @@ export function StatusDot({ status, className }: { status: LibraryModel["status"
   )
 }
 
-/** Invites: a mini ticket (the invite dialog's, in miniature: .ticket-mini in index.css), the count on its stub ("2/5", admins "∞"). */
+/** Invites: a mini ticket (the invite dialog's, in miniature: .ticket-mini in index.css), the count on its stub ("2/5", admins "∞").
+ *  Quiet paper at rest; on hover / focus its orange fill sweeps in from the stub. */
 function InviteButton({ onOpen, refresh }: { onOpen: () => void; refresh: number }) {
   const { t } = useI18n()
   const [data, setData] = useState<Invites | null>(null)
@@ -38,10 +39,11 @@ function InviteButton({ onOpen, refresh }: { onOpen: () => void; refresh: number
   return (
     <SidebarMenuItem>
       <SidebarMenuButton tooltip={t("invite.button")} aria-label={label} onClick={onOpen} className="hidden group-data-[collapsible=icon]:flex">
-        <span aria-hidden className="ticket-glyph" />
+        <span aria-hidden className="ticket-mini ticket-glyph"><span className="ticket-mini-fill" /></span>
       </SidebarMenuButton>
       <button type="button" onClick={onOpen} aria-label={label} className="ticket-btn group-data-[collapsible=icon]:hidden">
         <span className="ticket-mini">
+          <span aria-hidden className="ticket-mini-fill" />
           <span className="flex min-w-0 flex-1 items-center gap-2 ps-3 font-mono text-[11px] font-medium tracking-[0.12em] uppercase rtl:font-sans rtl:text-xs rtl:tracking-normal">
             <UserPlus aria-hidden className="size-3.5 shrink-0" /> <span className="truncate">{t("invite.button")}</span>
           </span>

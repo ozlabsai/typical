@@ -1,7 +1,10 @@
 """Opt-in public result cards. The owner creates / reads / revokes a link with POST / GET / DELETE /api/typically/models/{id}/share;
 anyone with it sees GET /s/{share_id} (a small server-rendered page with og:* tags) and /s/{share_id}/og.png (1200x630).
 Only aggregate numbers and the questions are rendered: never cases, rows or files.
+Invite links /i/{invite_id}#{code} get the same kind of page (the invite's ticket as og:image) that forwards to sign-in.
 Store: <data>/shares.json {share_id: {model_id, owner, created_at}}. Included at the end of server.py (reads server.TYPICALLY at call time)."""
+import base64
+import hashlib
 import html
 import io
 import json
@@ -60,8 +63,12 @@ def card(model_id: str) -> dict | None:
 
 # ---------------------------------------------------------------- owner endpoints
 
+def _origin(request: Request) -> str:
+    return (os.environ.get('TYPICALLY_PUBLIC_URL') or str(request.base_url)).rstrip('/')
+
+
 def _link(request: Request, sid: str) -> str:
-    return f"{(os.environ.get('TYPICALLY_PUBLIC_URL') or str(request.base_url)).rstrip('/')}/s/{sid}"
+    return f"{_origin(request)}/s/{sid}"
 
 
 def _mine(shares: dict, model_id: str) -> list[str]:
@@ -358,3 +365,61 @@ def ticket_png(name: str | None, inviter: str, no: str, host: str, created: str)
     buf = io.BytesIO()
     card.convert("RGB").save(buf, "PNG", optimize=True)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------- public: /i/{invite_id} (invite link previews)
+# The link is /i/{id}#{code}: the code rides in the fragment, so it never reaches this server, its logs or a crawler. The page is
+# og tags for the preview (the ticket, which never prints the code or email) and a script that forwards to sign-in with the code.
+
+INVITE_STYLE = "body{margin:0;padding:48px 20px;background:#f0eeeb;color:#292827;font:16px/1.5 system-ui,sans-serif}a{color:#2f5d50}"
+INVITE_SCRIPT = ("var c=location.hash.slice(1),n=document.querySelector('meta[name=invite-for]').content;"
+                 "location.replace(c?'/#/?invite='+encodeURIComponent(c)+(n?'&for='+encodeURIComponent(n):''):'/');")
+_csp_hash = lambda src: "'sha256-" + base64.b64encode(hashlib.sha256(src.encode()).digest()).decode() + "'"
+INVITE_CSP = (f"default-src 'none'; script-src {_csp_hash(INVITE_SCRIPT)}; style-src {_csp_hash(INVITE_STYLE)}; img-src 'self'; "
+              "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+INVITE_PAGE = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<meta name="robots" content="noindex"><meta name="referrer" content="no-referrer">
+<meta name="description" content="{desc}"><meta name="invite-for" content="{name}">
+<meta property="og:type" content="website"><meta property="og:site_name" content="Decision Factory">
+<meta property="og:title" content="{title}"><meta property="og:description" content="{desc}">
+<meta property="og:url" content="{url}"><meta property="og:image" content="{url}/ticket.png">
+<meta property="og:image:width" content="1200"><meta property="og:image:height" content="675">
+<meta property="og:image:alt" content="{alt}">
+<meta name="twitter:card" content="summary_large_image">
+<style>{style}</style>
+</head><body>
+<p>Opening your invite to Decision Factory&hellip; <a href="/">Continue</a></p>
+<noscript><p>This invite needs JavaScript. Turn it on and open the link again.</p></noscript>
+<script>{script}</script>
+</body></html>"""
+INVITE_DESC = "Decision Factory trains a model on your team's past decisions and shows how sure it is of every answer."
+
+
+def _invite(invite_id: str) -> dict:
+    if not SID_RE.fullmatch(invite_id) or (i := auth.by_id(invite_id)) is None:
+        raise HTTPException(404, "This invite was revoked or never existed.")
+    return i
+
+
+@router.get("/i/{invite_id}", response_class=HTMLResponse)
+def invite_page(invite_id: str, request: Request):
+    try:
+        i = _invite(invite_id)
+    except HTTPException:
+        return HTMLResponse("<!doctype html><title>Not found</title><meta name=robots content=noindex>"
+                            "<p style='font-family:system-ui;padding:40px'>This invite was revoked or never existed.</p>", status_code=404)
+    e, name, inviter = html.escape, i.get("name") or i.get("for") or "", i.get("from")
+    title = (f"{inviter} invited {name or 'you'} to Decision Factory" if inviter
+             else f"{name}, you're invited to Decision Factory" if name else "You're invited to Decision Factory")
+    page = INVITE_PAGE.format(title=e(title), desc=e(INVITE_DESC), name=e(name), url=e(f"{_origin(request)}/i/{invite_id}"),
+                              alt=e(f"An ADMIT ONE ticket for {name or 'you'}"), style=INVITE_STYLE, script=INVITE_SCRIPT)
+    return HTMLResponse(page, headers={"Content-Security-Policy": INVITE_CSP, "Cache-Control": "no-store"})
+
+
+@router.get("/i/{invite_id}/ticket.png")
+def invite_image(invite_id: str, request: Request):
+    png = auth.ticket(_invite(invite_id), request.url.netloc)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})

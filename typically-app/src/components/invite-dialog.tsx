@@ -159,7 +159,7 @@ export function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                 {user?.admin && (
                   <div role="group" aria-label={t("invite.everyone")} className="inline-flex rounded-md bg-muted p-0.5 text-xs">
                     {([false, true] as const).map((v) => (
-                      <button key={String(v)} type="button" aria-pressed={all === v} onClick={() => setAll(v)}
+                      <button key={String(v)} type="button" aria-pressed={all === v} onClick={() => setAll(v)} title={t(v ? "invite.allHint" : "invite.mineHint")}
                         className={cn("rounded-[5px] px-2.5 py-1 font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
                           all === v && "bg-background text-foreground shadow-xs")}>
                         {t(v ? "invite.all" : "invite.mine")}
@@ -171,26 +171,25 @@ export function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               {!data ? (
                 <div className="grid h-16 place-items-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
               ) : data.invites.length ? (
-                <ul className="divide-y">
+                <ul className="divide-y divide-border/70">
                   {data.invites.map((i) => (
-                    <li key={i.code} className="flex items-center gap-3 py-2.5">
+                    <li key={i.code} className="flex min-h-14 items-center gap-3 py-2">
                       <div className="grid min-w-0 flex-1 gap-0.5 leading-tight">
-                        <span className="truncate text-sm font-medium">{i.name ? <bdi>{i.name}</bdi> : "—"}</span>
-                        <span className="truncate text-xs text-muted-foreground">
-                          {i.email ? <bdi>{i.email}</bdi> : "—"}
-                          {all && <span className="sm:hidden"> · <bdi>{i.inviter ?? "—"}</bdi></span>}
-                        </span>
+                        {i.name
+                          ? <span className="truncate text-sm font-medium"><bdi>{i.name}</bdi></span>
+                          : <span className="truncate text-sm text-muted-foreground italic">{t("invite.unnamed")}</span>}
+                        {i.name && i.email && <span className="truncate text-xs text-muted-foreground"><bdi>{i.email}</bdi></span>}
+                        {all && <span className="truncate text-xs text-muted-foreground">{t("invite.from", { name: "" })}<bdi>{i.inviter ?? t("invite.someone")}</bdi></span>}
                       </div>
-                      {all && <span className="hidden w-28 truncate text-xs text-muted-foreground sm:block">{t("invite.by", { name: "" })}<bdi>{i.inviter ?? "—"}</bdi></span>}
-                      <div className="grid shrink-0 justify-items-end gap-1 sm:w-32">
+                      <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground tabular">
                         {i.joined
                           ? <Badge variant="outline" className="border-success/30 bg-success/10 font-normal text-success">{t("invite.joined", { date: day(i.joined) })}</Badge>
                           : <Badge variant="outline" className="font-normal text-muted-foreground">{t("invite.pending")}</Badge>}
-                        <span className="text-xs text-muted-foreground tabular">{t("invite.created", { date: day(i.created) })}</span>
+                        <span className="hidden sm:inline">{t("invite.created", { date: day(i.created) })}</span>
                       </div>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon-sm" aria-label={t("invite.actions", { name: i.name ?? "—" })}><Ellipsis /></Button>
+                          <Button variant="ghost" size="icon-sm" aria-label={t("invite.actions", { name: i.name ?? t("invite.unnamed") })}><Ellipsis /></Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onSelect={() => void copy(t, inviteLink(i))}><Copy /> {t("invite.copy")}</DropdownMenuItem>
