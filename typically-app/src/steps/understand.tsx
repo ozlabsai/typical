@@ -1,7 +1,6 @@
-import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, Bot, ChevronDown } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowUp, Bot, ChevronDown } from "lucide-react"
 
 import { SectionHeader } from "@/components/layout"
-import { PageHead, StepFooter } from "@/components/shared"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -90,24 +89,23 @@ function DecisionCard({ p, d, set }: { p: Project; d: PlanDecision; set: (patch:
   )
 }
 
-export function UnderstandStep({ project, update, back, next }: { project: Project; update: (p: Partial<Project>) => void; back: () => void; next: () => void }) {
+/** Everything the analysis decided, editable: under step 2's "Review details". `children`: the source's own controls (sheet, mailbox owner). */
+export function ReviewDetails({ project, update, children }: { project: Project; update: (p: Partial<Project>) => void; children?: React.ReactNode }) {
   const { t } = useI18n()
   const { plan, analysis } = project
   const setDecision = (i: number, patch: Partial<PlanDecision>) =>
     update({ plan: { ...plan, decisions: plan.decisions.map((d, j) => (j === i ? { ...d, ...patch, needs_review: false } : d)) } })
   const facts = plan.case.parts.filter((c) => c.role === "fact").map((c) => c.column)
   const body = plan.case.parts.filter((c) => c.role === "body").map((c) => c.column)
-  const usable = analysis.n_rows
   const chosen = plan.decisions.filter((d) => d.include).length
 
   return (
-    <>
-      <PageHead
-        title={t("und.title")}
-        action={<Badge variant="secondary"><Bot /> {t(analysis.plan_source === "llm" ? "und.byAi" : "und.byRules")}</Badge>}
-      >
-        {t("und.lede")}
-      </PageHead>
+    <div className="grid gap-6">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <Badge variant="secondary"><Bot /> {t(analysis.plan_source === "llm" ? "und.byAi" : "und.byRules")}</Badge>
+        <span dir="auto">{project.source}</span>
+      </div>
+      {children}
 
       {/* any source: an AI analysis that fell back to the rules, a file too big to read whole, no decision found */}
       {(analysis.warnings?.length ?? 0) > 0 && (
@@ -122,7 +120,7 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
           <CardTitle>{t("und.caseIs")}</CardTitle>
           <CardDescription>
             {[...facts, ...body].length ? <>{facts.length > 0 && <>{t("und.factsFrom")}<b className="font-medium text-foreground">{facts.join(", ")}</b>{body.length ? t("und.then") : ""}</>}{body.length > 0 && <>{t("und.textIn")}<b className="font-medium text-foreground">{body.join(", ")}</b></>}</> : t("und.noText")}
-            {" · "}<span className="tabular">{t("und.rows", { n: usable.toLocaleString() })}</span>
+            {" · "}<span className="tabular">{t("und.rows", { n: analysis.n_rows.toLocaleString() })}</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-3">
@@ -167,10 +165,6 @@ export function UnderstandStep({ project, update, back, next }: { project: Proje
           </CollapsibleContent>
         </Collapsible>
       )}
-
-      <StepFooter back={back}>
-        <Button onClick={next} disabled={!chosen || usable < 100}>{usable < 100 ? t("und.need100") : <>{t("common.continue")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></>}</Button>
-      </StepFooter>
-    </>
+    </div>
   )
 }

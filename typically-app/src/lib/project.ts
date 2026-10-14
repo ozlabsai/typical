@@ -1,5 +1,11 @@
-import type { DecisionType } from "@/lib/api"
+import type { AskQuestion, DecisionType, Source } from "@/lib/api"
 import type { T } from "@/lib/i18n"
+
+// ---- Intent: what the user wants decided (step 1), sent with /analyze
+
+export interface Intent { mode: "auto" | "questions"; topic: string; questions: AskQuestion[] }
+export const MAX_QUESTIONS = 10 // site/typically_analyze.py Intent
+export const NEW_INTENT: Intent = { mode: "auto", topic: "", questions: [] }
 
 // ---- DatasetPlan: the agent's reading of the data, confirmed by the user
 
@@ -37,6 +43,7 @@ export interface Analysis {
   sheets?: string[] // xlsx: every sheet in the workbook; `sheet` is the one read
   sheet?: string
   mail?: { owner: string; messages: number; threads: number; inbound: number } // mail: what was read
+  intent_matches?: { question: string; column: string | null }[] // questions mode: the column answering each question, null = not in the data
 }
 
 export type Base = "small" | "medium"
@@ -55,9 +62,10 @@ export interface Enrich { balance: boolean; dedupe_soft: boolean; policy: Record
 export interface Settings { preset: Preset; holdout: number; seed: number }
 
 export interface Project {
-  name: string
   base: Base
   source: string // "northwind_tickets.csv", "hf: bitext/...", ...
+  input: Source // what was read: read again for another sheet / mailbox owner
+  intent: Intent // what it was read for: step 1 changed since = read again
   sample: boolean
   analysis: Analysis
   plan: DatasetPlan
@@ -66,6 +74,22 @@ export interface Project {
   slug?: string
   run?: string // "co_f" -> model "local:co_f"
   resultsKey?: string // "northwind" or the slug
+}
+
+// ponytail: EN + HE question words only; other languages keep the question's wording
+const ASKING = /^(which|what|who|whom|when|where|why|how|should|would|could|can|will|does|do|did|is|are|was|were|the|this|that|a|an|to|of|for|in|on|it|its|we|our|they|their|you|your|be|האם|מה|איזה|איזו|מי|למי|כמה|זה|הזה|הזו|את)$/i
+/** The name a model gets until the user types one: the topic, the first question, then the data's name; the first that makes a valid slug. */
+export function suggestName(intent: Intent, hint = "") {
+  const short = (s: string) => s.replace(/[?؟.!:]+$/, "").trim().split(/\s+/).slice(0, 4).join(" ").slice(0, 40)
+  const gist = (q = "") => q.split(/\s+/).filter((w) => !ASKING.test(w)).join(" ")   // "Which team should handle this ticket?" -> "team handle ticket"
+  const all = [intent.topic, intent.mode === "questions" ? gist(intent.questions[0]?.question) : "", hint].map(short).filter(Boolean)
+  const name = all.find((s) => !nameError(s)) ?? all[0] ?? ""
+  return name.charAt(0).toUpperCase() + name.slice(1)
+}
+/** Why /teach would refuse this name (site/server.py _slug + typically_job.SLUG_RE); reserved / taken names are the server's to say. */
+export const nameError = (s: string): "nameEmpty" | "nameLatin" | null => {
+  const slug = s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")
+  return !s.trim() ? "nameEmpty" : !slug || slug.length > 40 ? "nameLatin" : null
 }
 
 export const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40)

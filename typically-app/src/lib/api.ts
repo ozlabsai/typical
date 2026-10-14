@@ -81,7 +81,7 @@ let caps: Promise<Capabilities> | undefined
 export const api = {
   trainStatus: (slug: string) => call<TrainStatus>(`train/${encodeURIComponent(slug)}`),
   stopTraining: (slug: string) => call<{ stopping: string }>(`train/${encodeURIComponent(slug)}/stop`, {}),
-  analyze: (source: Source, lang: "en" | "he") => call<import("@/lib/project").Analysis>("analyze", { source, lang }),
+  analyze: (source: Source, lang: "en" | "he", intent?: import("@/lib/project").Intent) => call<import("@/lib/project").Analysis>("analyze", { source, lang, intent }),
   /** Fetched once per page load (a failure is retried on the next call). can_push: may this user push to Hugging Face. */
   capabilities: () => (caps ??= call<Capabilities>("capabilities").catch((e) => { caps = undefined; throw e })),
   teach: (req: BuildV2) => call<TrainStatus & { job: string }>("teach", req), // build + train in one job; returns at once

@@ -1,10 +1,6 @@
 import { useEffect, useState } from "react"
-import { ArrowRight } from "lucide-react"
 
-import { PageHead, StepFooter } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -31,7 +27,8 @@ function Row({ id, title, children, checked, onChange, tags, disabled, more }: {
   )
 }
 
-export function EnrichStep({ project, update, back, next }: { project: Project; update: (p: Partial<Project>) => void; back: () => void; next: () => void }) {
+/** The optional extras of a training run, under step 3's "Advanced options". */
+export function EnrichOptions({ project, update }: { project: Project; update: (p: Partial<Project>) => void }) {
   const { t, language } = useI18n()
   const [ai, setAi] = useState(false)
   useEffect(() => void api.capabilities().then((c) => setAi(c.ai)).catch(() => setAi(false)), [])
@@ -40,59 +37,49 @@ export function EnrichStep({ project, update, back, next }: { project: Project; 
   const needsKey = !ai && <Badge variant="outline" className="font-normal">{t("enr.unavailable")}</Badge>
   const experimental = <Badge variant="secondary">{t("enr.experimental")}</Badge>
   const policyOn = Object.keys(e.policy).length > 0
-  // the held-out share is set aside, then a tenth of the rest is validation (scripts/typically_spike.py)
-  const train = Math.round(project.analysis.n_rows * (1 - project.settings.holdout / 100) * 0.9)
   const yours = project.plan.languages.filter((l) => l.share >= 0.005).map((l) => `${language(l.code)} ${Math.round(l.share * 100)}%`).join(", ")
 
   return (
-    <>
-      <PageHead title={t("enr.title")}>{t("enr.lede")}</PageHead>
-      <Card>
-        <CardContent className="divide-y py-0">
-          <Row id="rules" title={t("enr.rules")} checked tags={<Badge variant="outline" className="font-normal">{t("enr.always")}</Badge>}>
-            {t("enr.rulesBody")}
-          </Row>
-          <Row id="balance" title={t("enr.balance")} checked={e.balance} onChange={(v) => set({ balance: v })}>
-            {t("enr.balanceBody")}
-          </Row>
-          <Row id="dedupe" title={t("enr.dedupe")} checked={e.dedupe_soft} onChange={(v) => set({ dedupe_soft: v })}>
-            {t("enr.dedupeBody")}
-          </Row>
-          <Row id="policy" title={t("enr.policy")} checked={policyOn} onChange={(v) => set({ policy: v ? Object.fromEntries(included(project).map((d) => [d.column, ""])) : {} })}
-            more={policyOn && (
-              <div className="grid gap-4">
-                {included(project).map((d) => (
-                  <div key={d.column} className="grid gap-1.5">
-                    <Label htmlFor={`pol-${d.column}`} dir="auto" className="font-normal text-muted-foreground">{d.question}</Label>
-                    <Textarea id={`pol-${d.column}`} dir="auto" rows={2} value={e.policy[d.column] ?? ""} onChange={(ev) => set({ policy: { ...e.policy, [d.column]: ev.target.value } })} placeholder={t("enr.optional")} />
-                  </div>
-                ))}
+    <div className="divide-y">
+      <Row id="rules" title={t("enr.rules")} checked tags={<Badge variant="outline" className="font-normal">{t("enr.always")}</Badge>}>
+        {t("enr.rulesBody")}
+      </Row>
+      <Row id="balance" title={t("enr.balance")} checked={e.balance} onChange={(v) => set({ balance: v })}>
+        {t("enr.balanceBody")}
+      </Row>
+      <Row id="dedupe" title={t("enr.dedupe")} checked={e.dedupe_soft} onChange={(v) => set({ dedupe_soft: v })}>
+        {t("enr.dedupeBody")}
+      </Row>
+      <Row id="policy" title={t("enr.policy")} checked={policyOn} onChange={(v) => set({ policy: v ? Object.fromEntries(included(project).map((d) => [d.column, ""])) : {} })}
+        more={policyOn && (
+          <div className="grid gap-4">
+            {included(project).map((d) => (
+              <div key={d.column} className="grid gap-1.5">
+                <Label htmlFor={`pol-${d.column}`} dir="auto" className="font-normal text-muted-foreground">{d.question}</Label>
+                <Textarea id={`pol-${d.column}`} dir="auto" rows={2} value={e.policy[d.column] ?? ""} onChange={(ev) => set({ policy: { ...e.policy, [d.column]: ev.target.value } })} placeholder={t("enr.optional")} />
               </div>
-            )}>
-            {t("enr.policyBody")}
-          </Row>
-          <Row id="synthetic" title={t("enr.synthetic")} checked={e.synthetic} onChange={(v) => set({ synthetic: v })} disabled={!ai} tags={<>{experimental}{needsKey}</>}>
-            {t("enr.syntheticBody")}
-          </Row>
-          <Row id="langs" title={t("enr.langs")} checked={e.languages.length > 0} onChange={(v) => set({ languages: v ? ["es"] : [] })} disabled={!ai} tags={<>{experimental}{needsKey}</>}
-            more={e.languages.length > 0 && (
-              <div className="flex flex-wrap gap-4">
-                {LANGUAGES.map((code) => (
-                  <Label key={code} className="flex items-center gap-2 font-normal">
-                    <Checkbox checked={e.languages.includes(code)} onCheckedChange={(v) => set({ languages: v ? [...e.languages, code] : e.languages.filter((c) => c !== code) })} />
-                    {language(code)}
-                  </Label>
-                ))}
-              </div>
-            )}>
-            {t("enr.langsBody")}
-            {yours && <> {t("enr.yourData", { l: yours })}</>}
-          </Row>
-        </CardContent>
-      </Card>
-      <StepFooter back={back} note={t("enr.learnsFrom", { n: train.toLocaleString() })}>
-        <Button onClick={next}>{t("common.continue")} <ArrowRight data-icon="inline-end" className="rtl:rotate-180" /></Button>
-      </StepFooter>
-    </>
+            ))}
+          </div>
+        )}>
+        {t("enr.policyBody")}
+      </Row>
+      <Row id="synthetic" title={t("enr.synthetic")} checked={e.synthetic} onChange={(v) => set({ synthetic: v })} disabled={!ai} tags={<>{experimental}{needsKey}</>}>
+        {t("enr.syntheticBody")}
+      </Row>
+      <Row id="langs" title={t("enr.langs")} checked={e.languages.length > 0} onChange={(v) => set({ languages: v ? ["es"] : [] })} disabled={!ai} tags={<>{experimental}{needsKey}</>}
+        more={e.languages.length > 0 && (
+          <div className="flex flex-wrap gap-4">
+            {LANGUAGES.map((code) => (
+              <Label key={code} className="flex items-center gap-2 font-normal">
+                <Checkbox checked={e.languages.includes(code)} onCheckedChange={(v) => set({ languages: v ? [...e.languages, code] : e.languages.filter((c) => c !== code) })} />
+                {language(code)}
+              </Label>
+            ))}
+          </div>
+        )}>
+        {t("enr.langsBody")}
+        {yours && <> {t("enr.yourData", { l: yours })}</>}
+      </Row>
+    </div>
   )
 }
