@@ -8,8 +8,8 @@ import { cn } from "@/lib/utils"
  *   header        h-14, the single top bar; page-level actions render into it via <HeaderActions>
  *   page          max-w-5xl, px-4 md:px-6, py-8;  chat column max-w-3xl
  *   rhythm        gap-6 between sections · gap-4 inside grids · gap-2 between inline controls
- *   type          page title text-xl/semibold · section title text-base/semibold · body text-sm · meta text-xs
- *   numbers       stat values text-2xl font-mono tabular
+ *   type          page title .t-display · section label .eyebrow · section title text-base/semibold · body text-sm · meta text-xs
+ *   numbers       stat values: big sans figures in a ruled band (the research site's figband)
  *   radii         cards/surfaces rounded-xl · inner tiles rounded-lg · pills rounded-full
  */
 
@@ -21,7 +21,7 @@ export function PageHeader({ title, description, actions, badge }: { title: Reac
   return (
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div className="grid min-w-0 gap-1">
-        <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">{title}{badge}</h1>
+        <h1 className="t-display flex items-center gap-2">{title}{badge}</h1>
         {description && <div className="max-w-2xl text-sm text-muted-foreground">{description}</div>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
@@ -41,13 +41,27 @@ export function SectionHeader({ title, description, actions }: { title?: React.R
   )
 }
 
-export function Stat({ label, value, tone, note, highlight }: { label: React.ReactNode; value: React.ReactNode; tone?: "standard" | "yours"; note?: React.ReactNode; highlight?: boolean }) {
+export function Stat({ label, value, unit, tone, note }: { label: React.ReactNode; value: React.ReactNode; unit?: React.ReactNode; tone?: "standard" | "yours"; note?: React.ReactNode }) {
   return (
-    <div className={cn("grid min-w-0 content-start gap-1 rounded-xl border bg-card p-3 sm:p-4", highlight && "border-primary/40")}>
-      <span className="line-clamp-2 text-xs text-muted-foreground"><bdi>{label}</bdi></span>
-      <span className={cn("font-mono text-xl font-semibold tabular sm:text-2xl", tone === "standard" && "text-standard", tone === "yours" && "text-yours")}>{value}</span>
+    <div className="grid min-w-0 content-start gap-2 border-s px-3 first:border-s-0 first:ps-0 sm:px-6">
+      <span className="eyebrow line-clamp-2"><bdi>{label}</bdi></span>
+      <span className={cn("text-3xl leading-none font-medium tracking-[-0.04em] tabular whitespace-nowrap sm:text-5xl", tone === "standard" && "text-standard", tone === "yours" && "text-yours")}>
+        {value}{unit && <span className="ms-1.5 font-mono text-xs font-normal tracking-normal text-muted-foreground sm:text-sm">{unit}</span>}
+      </span>
       {note && <span className="hidden text-xs text-muted-foreground sm:block">{note}</span>}
     </div>
+  )
+}
+
+/** Typical's mark: a three-option distribution, one answer clearly ahead. Same drawing as public/favicon.svg. */
+export function BrandMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden className={cn("size-8 shrink-0", className)}>
+      <rect width="16" height="16" rx="3.5" fill="#292827" />
+      <rect x="3" y="9" width="2" height="3" fill="#f0eeeb" fillOpacity=".55" />
+      <rect x="7" y="4" width="2" height="8" fill="#8cc5b0" />
+      <rect x="11" y="7" width="2" height="5" fill="#f0eeeb" fillOpacity=".55" />
+    </svg>
   )
 }
 

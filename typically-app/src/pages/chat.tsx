@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, Check, FileText, Info, ListChecks, Loader2, Pencil, Sparkles, Trash2, Undo2, X } from "lucide-react"
+import { ArrowUp, Check, FileText, Info, ListChecks, Loader2, Pencil, Trash2, Undo2, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { StatusDot } from "@/components/app-sidebar"
-import { HeaderActions } from "@/components/layout"
+import { BrandMark, HeaderActions } from "@/components/layout"
 import { msg } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,6 +20,8 @@ import { useLibrary } from "@/lib/library"
 import { pct, say, snippet, TYPES } from "@/lib/project"
 import { go } from "@/lib/router"
 import { cn } from "@/lib/utils"
+// a real Northwind answer, from POST /api/typically/ask on its first example (never invented; re-run it if the sample changes)
+import demo from "@/lib/demo.json"
 
 interface Turn {
   id: string
@@ -74,6 +76,27 @@ function CaseCard({ text, onEdit, onRemove, className }: { text: string; onEdit?
 
 const optionsOf = (q: AskQuestion, r: Result) => (q.type === "noul" ? ["no", "yes"] : q.labels?.length ? q.labels : Object.keys(r.probs))
 const SHOWN = 6
+const STAGGER = 60 // ms between bars
+
+/** A share that counts up to its value with the bar beside it (400 ms ease-out); instant under prefers-reduced-motion. */
+function useTick(value: number, delay = 0) {
+  const still = typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches
+  const [v, setV] = useState(0)
+  useEffect(() => {
+    if (still) return
+    let raf = 0
+    const t0 = performance.now() + delay
+    const step = (now: number) => {
+      const k = Math.min(1, Math.max(0, (now - t0) / 400))
+      setV(value * (1 - (1 - k) ** 4))
+      if (k < 1) raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [value, delay, still])
+  return still ? value : v
+}
+const Tick = ({ value, delay }: { value: number; delay?: number }) => <>{pct(useTick(value, delay))}</>
 
 /** One model's answer. Options keep the question's order (so two models line up row for row); the top one is highlighted. */
 function Answer({ q, r, tone, label }: { q: AskQuestion; r: Result; tone: "standard" | "yours"; label?: string }) {
@@ -85,16 +108,18 @@ function Answer({ q, r, tone, label }: { q: AskQuestion; r: Result; tone: "stand
       {label && <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={cn("size-1.5 rounded-full", tone === "standard" ? "bg-standard" : "bg-yours")} /><span dir="auto">{label}</span></span>}
       <div className="flex h-7 items-baseline gap-2">
         <span dir="auto" className="truncate text-base font-semibold">{say(t, q.type, r.argmax)}</span>
-        <span className="font-mono text-sm text-muted-foreground tabular">{pct(r.probs[r.argmax])}</span>
+        <span className="font-mono text-sm text-muted-foreground tabular"><Tick value={r.probs[r.argmax]} /></span>
       </div>
       <div className="grid gap-1">
-        {options.filter((l) => top.has(l)).map((l) => (
+        {options.filter((l) => top.has(l)).map((l, i) => (
           <div key={l} className="grid grid-cols-[minmax(0,7rem)_1fr_2.75rem] items-center gap-2 text-sm">
             <span dir="auto" className={cn("truncate", l === r.argmax ? "font-medium" : "text-muted-foreground")}>{say(t, q.type, l)}</span>
             <div className="h-1 overflow-hidden rounded-full bg-muted">
-              <div className={cn("h-full rounded-full transition-[width] duration-200", l === r.argmax ? (tone === "standard" ? "bg-standard" : "bg-yours") : "bg-muted-foreground/30")} style={{ width: `${r.probs[l] * 100}%` }} />
+              {/* grows in from the start edge when the answer arrives (transform only) */}
+              <div className={cn("h-full origin-left animate-grow rounded-full motion-reduce:animate-none rtl:origin-right", l === r.argmax ? (tone === "standard" ? "bg-standard" : "bg-yours") : "bg-muted-foreground/30")}
+                style={{ width: `${r.probs[l] * 100}%`, animationDelay: `${i * STAGGER}ms` }} />
             </div>
-            <span className="text-end font-mono text-xs text-muted-foreground tabular">{pct(r.probs[l])}</span>
+            <span className="text-end font-mono text-xs text-muted-foreground tabular"><Tick value={r.probs[l]} delay={i * STAGGER} /></span>
           </div>
         ))}
         {r.p_null >= 0.15 && (
@@ -157,7 +182,7 @@ function TurnView({ turn, onFix, onUndo }: { turn: Turn; onFix?: (i: number, ans
       </div>
       <div className="grid gap-4">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="grid size-5 place-items-center rounded-full bg-primary/10"><span className="size-1.5 rounded-full bg-primary" /></span>
+          <BrandMark className="size-5" />
           <span dir="auto" className="font-medium text-foreground">{turn.modelName}</span>
         </div>
         {turn.error ? (
@@ -268,7 +293,7 @@ export function ChatPage({ modelId }: { modelId?: string }) {
 
   const ready = useMemo(() => [...(lib?.custom ?? []).filter((m) => m.status === "ready"), ...(lib?.base ?? [])], [lib])
   const asked = find(modelId)
-  const model: LibraryModel | undefined = asked ?? ready[0]
+  const model: LibraryModel | undefined = asked ?? ready.find((m) => m.sample) ?? ready[0]   // the sample first: its demo answer shows on the empty page
   const missing = Boolean(lib && modelId && !asked)   // ?model= names no model: say so instead of silently showing another
   const custom = model?.kind === "custom"
   const trained = (model?.decisions ?? []).map(({ question, type, labels }) => ({ question, type, labels }))
@@ -429,28 +454,51 @@ export function ChatPage({ modelId }: { modelId?: string }) {
       )}
 
       {!shown.length ? (
-        /* empty: everything centred, composer in the middle (ChatGPT / Gemini / Perplexity); top-anchored on phones,
-           where the column is taller than the screen and re-centring as examples load would shift it (CLS .23) */
-        <div className="flex flex-1 items-start overflow-y-auto md:items-center">
-          <div className="mx-auto grid w-full max-w-3xl gap-6 px-4 py-8 md:px-6">
-            <div className="grid justify-items-center gap-4 text-center">
-              <div className="grid size-10 place-items-center rounded-xl bg-primary/10"><Sparkles className="size-5 text-primary" /></div>
-              <h1 dir="auto" className="text-xl font-semibold tracking-tight">{model ? t("chat.emptyTitle", { name: model.name }) : t("chat.title")}</h1>
-              <p className="max-w-lg text-sm text-muted-foreground">{t("chat.emptyBody")}</p>
+        /* empty: one start-aligned column (title, a real answer, the composer, examples), centred vertically on wide screens
+           (my-auto: never clips the top once taller than the screen); top-anchored on phones, where re-centring as examples
+           load would shift it (CLS .23) */
+        <div className="flex flex-1 items-start overflow-y-auto">
+          <div className="mx-auto grid w-full max-w-3xl gap-6 px-4 py-8 md:my-auto md:px-6">
+            <div className="grid gap-2">
+              <h1 dir="auto" className="t-display">{model ? t("chat.emptyTitle", { name: model.name }) : t("chat.title")}</h1>
+              <p className="max-w-2xl text-sm text-muted-foreground">{t("chat.emptyBody")}</p>
             </div>
-            {missing && model && <p role="status" dir="auto" className="text-center text-sm text-muted-foreground">{t("chat.unknownModel", { id: modelId!, name: model.name })}</p>}
+            {missing && model && <p role="status" dir="auto" className="text-sm text-muted-foreground">{t("chat.unknownModel", { id: modelId!, name: model.name })}</p>}
+            {model?.id === demo.model && (
+              <figure className="grid gap-4 rounded-xl border bg-card p-4">
+                <figcaption className="eyebrow">{t("chat.demo", { name: model.name })}</figcaption>
+                <div className="grid gap-1">
+                  <p dir="auto" className="line-clamp-2 text-sm text-muted-foreground">{snippet(demo.case)}</p>
+                  <p dir="auto" className="text-sm font-medium">{demo.question.question}</p>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {/* phones: the model's own answer only, so the composer stays on the first screen */}
+                  <div className="hidden sm:grid"><Answer q={demo.question as AskQuestion} r={demo.base} tone="standard" label={t("ev.standardCol")} /></div>
+                  <Answer q={demo.question as AskQuestion} r={demo.result} tone="yours" label={model.name} />
+                </div>
+              </figure>
+            )}
             {composer}
             {examples.length > 0 && (
               <div className="grid gap-2">
-                <p className="text-xs font-medium text-muted-foreground">{t("chat.try")}</p>
-                <div className="grid gap-2 sm:grid-cols-3">
+                <p className="eyebrow">{t("chat.try")}</p>
+                <ol className="grid divide-y border-y">
                   {examples.slice(0, 3).map((ex, i) => (
-                    <button key={i} type="button" onClick={() => setCase(ex)}
-                      className="rounded-lg border bg-card p-3 text-start text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
-                      <span dir="auto" className="line-clamp-3">{snippet(ex)}</span>
-                    </button>
+                    <li key={i}>
+                      <button type="button" data-example onClick={() => setCase(ex)}
+                        className="group grid w-full grid-cols-[1.75rem_minmax(0,1fr)] gap-x-2 gap-y-1.5 rounded-md px-2 py-3 text-start transition-colors hover:bg-card active:bg-muted">
+                        <span className="font-mono text-xs leading-5 text-muted-foreground tabular">{String(i + 1).padStart(2, "0")}</span>
+                        <span dir="auto" className="truncate text-sm text-muted-foreground transition-colors group-hover:text-foreground">{snippet(ex)}</span>
+                        {questions.length > 0 && (
+                          <span className="col-start-2 flex min-w-0 flex-wrap gap-1">
+                            {questions.slice(0, 2).map((q, j) => <Badge key={j} variant="outline" className="max-w-full font-normal text-muted-foreground" dir="auto"><span className="truncate">{q.question}</span></Badge>)}
+                            {questions.length > 2 && <Badge variant="outline" dir="ltr" className="font-normal text-muted-foreground">+{questions.length - 2}</Badge>}
+                          </span>
+                        )}
+                      </button>
+                    </li>
                   ))}
-                </div>
+                </ol>
               </div>
             )}
           </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { AlertCircle, Languages, Loader2 } from "lucide-react"
 
+import { BrandMark } from "@/components/layout"
 import { msg } from "@/components/shared"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -37,7 +38,7 @@ export function SignIn({ done }: { done: (u: User) => void }) {
   }
 
   return (
-    <main className="grid min-h-svh place-items-center bg-muted/40 px-4 py-8">
+    <main className="grid min-h-svh place-items-center bg-background px-4 py-8">
       <div className="absolute end-4 top-4">
         <Button variant="ghost" size="sm" onClick={() => setLang(lang === "en" ? "he" : "en")} aria-label={t("nav.langLabel")}>
           <Languages data-icon="inline-start" /> {t("nav.lang")}
@@ -45,9 +46,7 @@ export function SignIn({ done }: { done: (u: User) => void }) {
       </div>
       <div className="grid w-full max-w-sm gap-6">
         <div className="flex items-center justify-center gap-2">
-          <span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground">
-            <span className="size-2.5 rounded-full bg-primary-foreground" />
-          </span>
+          <BrandMark />
           <span className="text-lg font-semibold tracking-tight">{t("brand.name")}</span>
         </div>
         <Card>

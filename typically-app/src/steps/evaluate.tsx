@@ -19,10 +19,10 @@ import { cn } from "@/lib/utils"
 export function ScoreStats({ standard, yours, notes }: { standard: number; yours: number; notes?: [React.ReactNode, React.ReactNode, React.ReactNode] }) {
   const { t } = useI18n()
   return (
-    <div className="grid grid-cols-3 gap-2 sm:gap-4">
+    <div className="grid grid-cols-3 border-t border-t-foreground border-b py-4 sm:py-5">
       <Stat label={t("ev.standard")} value={pct(standard)} tone="standard" note={notes?.[0]} />
-      <Stat label={t("ev.tuned")} value={pct(yours)} tone="yours" note={notes?.[1]} highlight />
-      <Stat label={t("ev.difference")} value={`${signed(gain(yours, standard))} ${t("ev.pts")}`} note={notes?.[2]} />
+      <Stat label={t("ev.tuned")} value={pct(yours)} tone="yours" note={notes?.[1]} />
+      <Stat label={t("ev.difference")} value={signed(gain(yours, standard))} unit={t("ev.pts")} note={notes?.[2]} />
     </div>
   )
 }

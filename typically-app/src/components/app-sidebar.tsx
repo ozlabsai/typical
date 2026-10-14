@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/sidebar"
 import { SHORTCUT } from "@/components/command-palette"
 import { InviteDialog } from "@/components/invite-dialog"
+import { BrandMark } from "@/components/layout"
 import { Badge } from "@/components/ui/badge"
 import type { LibraryModel } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
@@ -47,9 +48,7 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <a href={href({ name: "chat" })}>
-                <span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground">
-                  <span className="size-2.5 rounded-full bg-primary-foreground" />
-                </span>
+                <BrandMark className="size-8!" />  {/* the menu button sizes its svgs to 16px */}
                 <span className="grid leading-tight group-data-[collapsible=icon]:hidden">
                   <span className="font-semibold">{t("brand.name")}</span>
                   <span className="text-xs text-muted-foreground">{t("brand.credit")}</span>
@@ -95,7 +94,7 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
         </SidebarGroup>
 
         <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-          <SidebarGroupLabel>{t("app.yourModels")}</SidebarGroupLabel>
+          <SidebarGroupLabel className="eyebrow">{t("app.yourModels")}</SidebarGroupLabel>
           <SidebarGroupAction asChild title={t("app.new")}><a href={href({ name: "new" })}><Plus /></a></SidebarGroupAction>
           <SidebarGroupContent>
             <SidebarMenu>
