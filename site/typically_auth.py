@@ -5,10 +5,9 @@ Off unless TYPICALLY_AUTH=1, so local dev is unchanged (no user, everything visi
   Invite codes: TYPICALLY_INVITES (comma-separated) + <data>/invites.json (a JSON list, the operator's) + <data>/issued_invites.json
   (made by users: GET [?all=1, admins] / POST {name, email} / DELETE /api/auth/invites, GET /api/auth/invites/{code}/ticket.png;
   INVITE_LIMIT active each, admins unlimited; joined / last_seen are stamped on sign-in); TYPICALLY_ADMINS (codes) are admins.
-  Each issued invite also has a public, non-secret id: its link is /i/{id}#{code} (typically_share: the og preview page + ticket).
   Removing a code from the invites signs its sessions out (checked on every request).
 - every /api/* request needs a session, except /api/auth/* and /api/health. /v1/models/{id}/decide (its own bearer keys), the
-  public share cards (/s/*), the invite previews (/i/*), the static site and the /app bundle (it renders the sign-in screen itself) stay open.
+  public share cards (/s/*), the static site and the /app bundle (it renders the sign-in screen itself) stay open.
 - ownership: job.json / upload meta carry "owner"; can_see() is the one rule (own + shared + admin sees all).
 - quotas: admit() is called by server.start_job for every training run (/teach and /retrain); throttle() rate-limits the endpoints that
   call the operator's LLM key on every request (/analyze, /parse_question).
@@ -32,7 +31,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 router = APIRouter()
-_issued_lock = threading.RLock()   # issued_invites.json (re-entrant: _issued() backfills ids). ponytail: one process; a file lock if several
 COOKIE, MAX_AGE = "typically_session", 30 * 86400
 SHARED = "*"   # owner of what every user sees: the base models and the Northwind sample
 SHARED_MODELS = {"typical-small", "typical-medium", "northwind"}
@@ -76,23 +74,9 @@ def _codes(var: str) -> set[str]:
 
 
 def _issued() -> list[dict]:
-    """[{id, code, by: uid, from: inviter's name, name, email, created, joined?, last_seen?}] of the invites users made (the operator's
-    own stay in invites.json). Entries from before name + email were required may carry "for" (the name) or neither; entries from
-    before the public id get one here, on first read."""
-    with _issued_lock:
-        issued = json.loads(f.read_text()) if (f := _root() / "issued_invites.json").exists() else []
-        if missing := [i for i in issued if "id" not in i]:
-            for i in missing:
-                i["id"] = _new_id(issued)
-            _write_issued(issued)
-        return issued
-
-
-def _new_id(issued: list[dict]) -> str:
-    """The invite's public id (/i/{id}): random, unrelated to the code, safe in logs and link previews."""
-    while (iid := secrets.token_urlsafe(8)) in {i.get("id") for i in issued}:
-        pass
-    return iid
+    """[{code, by: uid, from: inviter's name, name, email, created, joined?, last_seen?}] of the invites users made (the operator's
+    own stay in invites.json). Entries from before name + email were required may carry "for" (the name) or neither."""
+    return json.loads(f.read_text()) if (f := _root() / "issued_invites.json").exists() else []
 
 
 def invites() -> set[str]:
@@ -191,6 +175,9 @@ def logout(response: Response):
 
 # ---------------------------------------------------------------- invites users make
 
+_issued_lock = threading.Lock()   # ponytail: one server process; a file lock if it ever runs several
+
+
 def _write_issued(issued: list[dict]) -> None:   # caller holds _issued_lock
     f = _root() / "issued_invites.json"
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -232,7 +219,7 @@ def ticket_no(code: str) -> str:
 
 
 def _view(i: dict) -> dict:
-    return {"id": i["id"], "code": i["code"], "no": ticket_no(i["code"]), "name": i.get("name") or i.get("for"), "email": i.get("email"),
+    return {"code": i["code"], "no": ticket_no(i["code"]), "name": i.get("name") or i.get("for"), "email": i.get("email"),
             "inviter": i.get("from"), "created": i["created"], "joined": i.get("joined"), "last_seen": i.get("last_seen")}
 
 
@@ -282,7 +269,7 @@ def create_invite(req: NewInvite):
         if not u.admin and sum(i["by"] == u.uid for i in issued) >= INVITE_LIMIT:
             raise HTTPException(429, f"You can have {INVITE_LIMIT} invites at a time. Revoke one to make a new one.")
         code = secrets.token_urlsafe(24)
-        _write_issued(issued + [{"id": _new_id(issued), "code": code, "by": u.uid, "from": u.name, "name": req.name, "email": req.email, "created": _now()}])
+        _write_issued(issued + [{"code": code, "by": u.uid, "from": u.name, "name": req.name, "email": req.email, "created": _now()}])
     return {"code": code, **_mine(u)}
 
 
@@ -311,17 +298,9 @@ def invite_ticket(code: str, request: Request):
     i = next((i for i in _issued() if hmac.compare_digest(i["code"].encode(), code.encode()) and (u.admin or i["by"] == u.uid)), None)
     if i is None:
         raise HTTPException(404, "We can't find that invite.")
-    return Response(ticket(i, request.url.netloc, u.name), media_type="image/png", headers={"Cache-Control": "private, no-store"})
-
-
-def ticket(i: dict, host: str, inviter: str = "Decision Factory") -> bytes:
     import typically_share   # Pillow + fonts live there (the og card)
-    return typically_share.ticket_png(_view(i)["name"], i.get("from") or inviter, ticket_no(i["code"]), host, i["created"])
-
-
-def by_id(iid: str) -> dict | None:
-    """The issued invite behind a public id (the /i/{id} preview), or None: sign-in off, unknown id, or revoked."""
-    return next((i for i in _issued() if i["id"] == iid), None) if enabled() else None
+    png = typically_share.ticket_png(_view(i)["name"], i.get("from") or u.name, ticket_no(i["code"]), request.url.netloc, i["created"])
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
 
 # ---------------------------------------------------------------- ownership: the one rule
