@@ -10,6 +10,7 @@ import { SHORTCUT } from "@/components/command-palette"
 import { InviteDialog } from "@/components/invite-dialog"
 import { BrandMark } from "@/components/layout"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { invites, type Invites, type LibraryModel } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
@@ -27,29 +28,23 @@ export function StatusDot({ status, className }: { status: LibraryModel["status"
   )
 }
 
-/** Invites as their own small card, not one more nav row: how many of your 5 are in use (admins: unlimited). */
-function InviteCard({ onOpen, refresh }: { onOpen: () => void; refresh: number }) {
+/** Invites: one compact button with a thin copper-to-teal gradient border; the count at its end ("2/5", admins "∞"). */
+function InviteButton({ onOpen, refresh }: { onOpen: () => void; refresh: number }) {
   const { t } = useI18n()
   const [data, setData] = useState<Invites | null>(null)
   useEffect(() => { invites.list().then(setData).catch(() => setData(null)) }, [refresh])
   const used = data?.invites.length ?? 0, limit = data?.limit ?? null
+  const spelled = !data ? "" : limit === null ? t("invite.unlimited") : t("invite.used", { used, limit })
   return (
     <SidebarMenuItem>
       <SidebarMenuButton tooltip={t("invite.button")} onClick={onOpen} className="hidden group-data-[collapsible=icon]:flex"><UserPlus /></SidebarMenuButton>
-      <button type="button" onClick={onOpen}
-        className="grid w-full gap-2 rounded-lg border bg-card px-3 py-2.5 text-start transition-colors hover:border-primary/40 hover:bg-background group-data-[collapsible=icon]:hidden">
-        <span className="flex items-center gap-2 text-sm font-medium"><UserPlus className="size-4 text-primary" /> {t("invite.button")}</span>
-        {limit === null ? (
-          <span className="text-xs text-muted-foreground">{data ? t("invite.unlimited") : "\u00a0"}</span>
-        ) : (
-          <span className="flex items-center gap-2">
-            <span aria-hidden className="flex gap-0.5">  {/* the brand's bars: one per invite */}
-              {Array.from({ length: limit }, (_, i) => <span key={i} className={cn("h-3 w-1.5 rounded-xs", i < used ? "bg-primary" : "bg-muted-foreground/25")} />)}
-            </span>
-            <span className="font-mono text-xs text-muted-foreground tabular">{t("invite.used", { used, limit })}</span>
-          </span>
-        )}
-      </button>
+      <div className="flex w-full rounded-md bg-linear-to-r from-standard via-[#e07a3f] to-yours p-px group-data-[collapsible=icon]:hidden rtl:bg-linear-to-l">
+        <Button onClick={onOpen} aria-label={spelled ? `${t("invite.button")}, ${spelled}` : undefined}
+          className="h-9 w-full justify-start rounded-[calc(var(--radius-md)-1px)] bg-background text-foreground hover:bg-background">
+          <UserPlus data-icon="inline-start" /> {t("invite.button")}
+          {data && <span aria-hidden className="ms-auto font-mono text-xs text-muted-foreground tabular">{limit === null ? <span className="text-base leading-none">∞</span> : `${used}/${limit}`}</span>}
+        </Button>
+      </div>
     </SidebarMenuItem>
   )
 }
@@ -152,7 +147,7 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
       <SidebarFooter>
         <SidebarMenu>
           {user ? <>
-            <InviteCard onOpen={() => (setOpenMobile(false), setInviting(true))} refresh={invitesSeen} />
+            <InviteButton onOpen={() => (setOpenMobile(false), setInviting(true))} refresh={invitesSeen} />
             <SidebarMenuItem>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

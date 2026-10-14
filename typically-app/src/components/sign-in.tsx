@@ -14,12 +14,13 @@ import { useI18n } from "@/lib/i18n"
 /** Invite-code sign-in (TYPICALLY_AUTH=1). */
 export function SignIn({ done }: { done: (u: User) => void }) {
   const { t, lang, setLang } = useI18n()
-  // an invite link (#/?invite=<code>) prefills the code; the code leaves the address bar once read
-  const [code, setCode] = useState(() => new URLSearchParams(window.location.hash.split("?")[1]).get("invite") ?? "")
+  // an invite link (#/?invite=<code>&for=<name>) prefills the code and name; the code leaves the address bar once read
+  const [link] = useState(() => new URLSearchParams(window.location.hash.split("?")[1]))
+  const [code, setCode] = useState(link.get("invite") ?? "")
   useEffect(() => {
     if (window.location.hash.includes("invite=")) history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/`)
   }, [])
-  const [name, setName] = useState("")
+  const [name, setName] = useState((link.get("for") ?? "").slice(0, 40))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 

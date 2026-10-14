@@ -216,9 +216,9 @@ def share_page(share_id: str, request: Request):
 
 # ---------------------------------------------------------------- og.png
 
-def _font(size: int, weight: int, text: str = "") -> ImageFont.FreeTypeFont:
-    hebrew = any("֐" <= ch <= "׿" for ch in text)
-    f = ImageFont.truetype(str(FONTS / ("Heebo.ttf" if hebrew else "SchibstedGrotesk.ttf")), size)
+def _font(size: int, weight: int, text: str = "", mono: bool = False) -> ImageFont.FreeTypeFont:
+    hebrew = any("֐" <= ch <= "׿" for ch in text)   # Geist Mono has no Hebrew either: Heebo for both
+    f = ImageFont.truetype(str(FONTS / ("Heebo.ttf" if hebrew else "GeistMono.ttf" if mono else "SchibstedGrotesk.ttf")), size)
     f.set_variation_by_axes([weight])
     return f
 
@@ -263,3 +263,79 @@ def og_png(c: dict) -> bytes:
 @router.get("/s/{share_id}/og.png")
 def share_image(share_id: str):
     return Response(og_png(_public(share_id)), media_type="image/png", headers={"Cache-Control": "public, max-age=300"})
+
+
+# ---------------------------------------------------------------- invite ticket (typically_auth: GET /api/auth/invites/{code}/ticket.png)
+# the app's DOM ticket (typically-app/src/components/invite-dialog.tsx, .ticket in index.css), drawn at 1 cqw = 12 px
+TICKET_STOPS, TICKET_INK, TICKET_BACKDROP = ("#e2703a", "#ee9a62", "#f5c49c"), (46, 24, 13), "#2a1d17"
+
+
+def two_lines(name: str) -> list[str]:
+    """Split at the space nearest the middle (the app's twoLines)."""
+    spaces = [i for i, ch in enumerate(name) if ch == " "]
+    if not spaces:
+        return [name]
+    cut = min(spaces, key=lambda i: abs(i - len(name) / 2))
+    return [name[:cut], name[cut + 1:]]
+
+
+def ticket_png(for_: str | None, inviter: str, no: str, host: str, created: str) -> bytes:
+    import numpy as np
+    W, H, pad, notch, stub = 1200, 600, 56, 26, 288
+    perf = W - stub
+    rgb = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in TICKET_STOPS], float)
+    t = (np.arange(W)[None, :] + np.arange(H)[:, None]) / (W + H)   # CSS linear-gradient(135deg) on this box
+    img = np.stack([np.interp(t, (0, .55, 1), rgb[:, k]) for k in range(3)], -1)
+    img *= 1 + (np.random.default_rng(int(no)).random((H, W, 1)) - .5) * .22   # grain
+    base = Image.fromarray(img.clip(0, 255).astype("uint8")).convert("RGBA")
+
+    mask = Image.new("L", (W, H), 0)
+    m = ImageDraw.Draw(mask)
+    m.rounded_rectangle((0, 0, W - 1, H - 1), 24, fill=255)
+    for y in (0, H):
+        m.ellipse((perf - notch, y - notch, perf + notch, y + notch), fill=0)
+    base.putalpha(mask)
+
+    ink = TICKET_INK + (255,)
+    layer = Image.new("RGBA", (W, H))
+    d = ImageDraw.Draw(layer)
+    for y in range(notch + 14, H - notch - 10, 12):   # perforation
+        d.ellipse((perf - 2.5, y - 2.5, perf + 2.5, y + 2.5), fill=TICKET_INK + (115,))
+
+    eyebrow, small = "DECISION FACTORY · AN INVITATION FROM ", _font(20, 500, mono=True)
+    d.text((pad, pad), eyebrow, font=small, fill=ink)
+    who = inviter.upper()
+    d.text((pad + d.textlength(eyebrow, font=small), pad), _visual(_fit(d, who, _font(20, 600, who, mono=True), perf - 2 * pad - 520)),
+           font=_font(20, 600, who, mono=True), fill=ink)
+
+    name = " ".join((for_ or "").split()).upper() or "ADMIT ONE BEARER"
+    lines, size = two_lines(name), 120
+    while size > 36 and max(d.textlength(ln, font=_font(size, 600, ln, mono=True)) for ln in lines) > perf - 2 * pad:
+        size -= 4
+    y = H / 2 - size * len(lines) * .98 / 2
+    for ln in lines:
+        f = _font(size, 600, ln, mono=True)
+        d.text((pad, y), _visual(_fit(d, ln, f, perf - 2 * pad)), font=f, fill=ink)
+        y += size * .98
+    when = datetime.fromisoformat(created).strftime("%d %b %Y").upper()
+    d.text((pad, H - pad - 20), f"{host.upper()} · {when}", font=small, fill=ink)
+
+    def vertical(text: str, size: int, alpha: int, x: int):   # reads bottom to top, like the DOM's writing-mode + rotate(180deg)
+        f = _font(size, 600, mono=True)
+        w = int(d.textlength(text, font=f))
+        strip = Image.new("RGBA", (w, size + 8))
+        ImageDraw.Draw(strip).text((0, 0), text, font=f, fill=TICKET_INK + (alpha,))
+        strip = strip.rotate(90, expand=True)
+        layer.alpha_composite(strip, (x, (H - strip.height) // 2))
+
+    vertical("ADMIT ONE", 60, 255, perf + 40)
+    vertical(f"No. {no}", 92, 70, perf + 128)
+    out = Image.alpha_composite(base, layer)
+    out.putalpha(mask)   # corners + notches cut through to the backdrop
+    # posted like the YC tickets: the ticket at 960x480 (drawn at 1200x600, downsampled) on a dark warm-brown 16:9 card
+    card = Image.new("RGBA", (1200, 675), TICKET_BACKDROP)
+    card.alpha_composite(out.resize((960, 480), Image.LANCZOS), (120, 97))
+    out = card.convert("RGB")
+    buf = io.BytesIO()
+    out.save(buf, "PNG", optimize=True)
+    return buf.getvalue()

@@ -3,7 +3,8 @@
 Off unless TYPICALLY_AUTH=1, so local dev is unchanged (no user, everything visible, no quotas). When on:
 - POST /api/auth/login {code, name?} sets a signed session cookie (HMAC-SHA256, TYPICALLY_SECRET); GET /api/auth/me; POST /api/auth/logout.
   Invite codes: TYPICALLY_INVITES (comma-separated) + <data>/invites.json (a JSON list, the operator's) + <data>/issued_invites.json
-  (made by users: GET / POST / DELETE /api/auth/invites, INVITE_LIMIT active each, admins unlimited); TYPICALLY_ADMINS (codes) are admins.
+  (made by users: GET / POST {for?} / DELETE /api/auth/invites, GET /api/auth/invites/{code}/ticket.png; INVITE_LIMIT active each,
+  admins unlimited); TYPICALLY_ADMINS (codes) are admins.
   Removing a code from the invites signs its sessions out (checked on every request).
 - every /api/* request needs a session, except /api/auth/* and /api/health. /v1/models/{id}/decide (its own bearer keys), the
   public share cards (/s/*), the static site and the /app bundle (it renders the sign-in screen itself) stay open.
@@ -191,8 +192,13 @@ def _inviter() -> User:
     return u
 
 
+def ticket_no(code: str) -> str:
+    """The ticket's printed number: stable, derived from the code, and says nothing about it."""
+    return f"{int(hashlib.sha256(f'ticket:{code}'.encode()).hexdigest()[:8], 16) % 10000:04d}"
+
+
 def _mine(u: User) -> dict:
-    mine = [{"code": i["code"], "created": i["created"]} for i in _issued() if i["by"] == u.uid]
+    mine = [{"code": i["code"], "created": i["created"], "for": i.get("for"), "no": ticket_no(i["code"])} for i in _issued() if i["by"] == u.uid]
     return {"invites": mine, "limit": None if u.admin else INVITE_LIMIT, "left": None if u.admin else max(0, INVITE_LIMIT - len(mine))}
 
 
@@ -201,15 +207,21 @@ def my_invites():
     return _mine(_inviter())
 
 
+class NewInvite(BaseModel):
+    for_: str | None = Field(None, alias="for", max_length=40)   # who it's for: printed on the ticket, prefills their name
+
+
 @router.post("/api/auth/invites")
-def create_invite():
+def create_invite(req: NewInvite | None = None):
     u = _inviter()
+    who = " ".join(((req and req.for_) or "").split()) or None
     with _issued_lock:
         issued = _issued()
         if not u.admin and sum(i["by"] == u.uid for i in issued) >= INVITE_LIMIT:
             raise HTTPException(429, f"You can have {INVITE_LIMIT} invites at a time. Revoke one to make a new one.")
         code = secrets.token_urlsafe(24)
-        _write_issued(issued + [{"code": code, "by": u.uid, "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}])
+        _write_issued(issued + [{"code": code, "by": u.uid, "from": u.name, "for": who,
+                                 "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}])
     return {"code": code, **_mine(u)}
 
 
@@ -229,6 +241,18 @@ def revoke_invite(code: str):
             keep = [i for i in keep if i["by"] not in gone]
         _write_issued(keep)
     return _mine(u)
+
+
+@router.get("/api/auth/invites/{code}/ticket.png")
+def invite_ticket(code: str, request: Request):
+    """The invite as a printable ticket (owner or admin; 404 otherwise). Never prints the code."""
+    u = _inviter()
+    i = next((i for i in _issued() if hmac.compare_digest(i["code"].encode(), code.encode()) and (u.admin or i["by"] == u.uid)), None)
+    if i is None:
+        raise HTTPException(404, "We can't find that invite.")
+    import typically_share   # Pillow + fonts live there (the og card)
+    png = typically_share.ticket_png(i.get("for"), i.get("from") or u.name, ticket_no(i["code"]), request.url.netloc, i["created"])
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
 
 # ---------------------------------------------------------------- ownership: the one rule

@@ -222,12 +222,14 @@ export const shares = {
 }
 
 /** Invite codes the signed-in user made (sign-in on only). limit/left: null for admins (unlimited). */
-export interface Invite { code: string; created: string }
+export interface Invite { code: string; created: string; for: string | null; no: string }  // no: the ticket's number, derived from the code
 export interface Invites { invites: Invite[]; limit: number | null; left: number | null }
-export const inviteLink = (code: string) => `${new URL(".", window.location.href).href}#/?invite=${encodeURIComponent(code)}`   // the app's own path: / hosted, /app/ local
+// the app's own path: / hosted, /app/ local; &for= prefills the invitee's name on the sign-in screen (the inviter typed it, so the link may carry it)
+export const inviteLink = (i: Invite) => `${new URL(".", window.location.href).href}#/?invite=${encodeURIComponent(i.code)}${i.for ? `&for=${encodeURIComponent(i.for)}` : ""}`
+export const ticketUrl = (code: string) => `/api/auth/invites/${encodeURIComponent(code)}/ticket.png`
 
 export const invites = {
   list: () => call<Invites>("invites", undefined, undefined, "/api/auth/"),
-  create: () => call<Invites>("invites", {}, undefined, "/api/auth/"),
+  create: (name?: string) => call<Invites & { code: string }>("invites", { for: name || null }, undefined, "/api/auth/"),
   revoke: (code: string) => call<Invites>(`invites/${encodeURIComponent(code)}`, undefined, "DELETE", "/api/auth/"),
 }
