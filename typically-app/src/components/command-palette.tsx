@@ -1,5 +1,5 @@
 import { useEffect } from "react"
-import { Boxes, Database, Languages, MessageSquare, Moon, Plus, Sun } from "lucide-react"
+import { Boxes, Compass, Database, Languages, MessageSquare, Moon, Plus, Sun } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import { StatusDot } from "@/components/app-sidebar"
@@ -11,7 +11,7 @@ import { go, type Route } from "@/lib/router"
 export const SHORTCUT = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K"
 
 /** ⌘K / Ctrl+K: jump to a page or a model, or run an action. Open state lives in the shell (the sidebar's Search row opens it too). */
-export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (o: boolean | ((o: boolean) => boolean)) => void }) {
+export function CommandPalette({ open, setOpen, onTour }: { open: boolean; setOpen: (o: boolean | ((o: boolean) => boolean)) => void; onTour: () => void }) {
   const { t, lang, setLang } = useI18n()
   const { lib } = useLibrary()
   const { resolvedTheme, setTheme } = useTheme()
@@ -82,6 +82,9 @@ export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (o: 
           </CommandItem>
           <CommandItem value="action theme" keywords={["theme", "dark", "light", "ערכת נושא", t(dark ? "nav.theme.light" : "nav.theme.dark")]} onSelect={run(() => setTheme(dark ? "light" : "dark"))}>
             {dark ? <Sun /> : <Moon />} {t(dark ? "nav.theme.light" : "nav.theme.dark")}
+          </CommandItem>
+          <CommandItem value="action tour" keywords={["tour", "help", "סיור", t("tour.take")]} onSelect={run(onTour)}>
+            <Compass /> {t("tour.take")}
           </CommandItem>
         </CommandGroup>
       </CommandList>

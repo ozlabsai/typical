@@ -1,3 +1,5 @@
+/* driver.js (the product tour, components/tour.tsx) in the lowest layer: its popover is restyled with our utilities and Button classes */
+@import "driver.js/dist/driver.css" layer(driver);
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";

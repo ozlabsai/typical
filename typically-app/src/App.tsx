@@ -4,6 +4,7 @@ import { ThemeProvider } from "next-themes"
 import { AppSidebar } from "@/components/app-sidebar"
 import { CommandPalette } from "@/components/command-palette"
 import { SignIn } from "@/components/sign-in"
+import { useTour } from "@/components/tour"
 import { HeaderSlotProvider, Page } from "@/components/layout"
 import { ErrorState } from "@/components/shared"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb"
@@ -32,6 +33,7 @@ function Shell() {
   const { lib, error, refresh, find } = useLibrary()
   const route = useRoute()
   const [search, setSearch] = useState(false)
+  const tour = useTour()
   const crumbs: { label: string; to?: string }[] =
     route.name === "chat" ? [{ label: t("app.chat") }]
     : route.name === "new" ? [{ label: t("app.new") }]
@@ -47,8 +49,8 @@ function Shell() {
             className="sr-only z-50 rounded-md bg-background px-3 py-2 text-sm font-medium shadow-md ring-3 ring-ring/50 focus:not-sr-only focus:absolute focus:start-2 focus:top-2">
             {t("app.skip")}
           </a>
-          <AppSidebar route={route} onSearch={() => setSearch(true)} />
-          <CommandPalette open={search} setOpen={setSearch} />
+          <AppSidebar route={route} onSearch={() => setSearch(true)} onTour={tour} />
+          <CommandPalette open={search} setOpen={setSearch} onTour={tour} />
           {/* the window never scrolls; one scroll container with a reserved gutter, so width never jumps between routes */}
           <SidebarInset className="h-svh min-w-0 overflow-hidden">
             <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">

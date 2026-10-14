@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Boxes, Database, Ellipsis, Languages, LogOut, MessageSquare, Moon, Plus, Search, Sun, UserPlus } from "lucide-react"
+import { Boxes, Compass, Database, Ellipsis, Languages, LogOut, MessageSquare, Moon, Plus, Search, Sun, UserPlus } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import {
@@ -38,10 +38,10 @@ function InviteButton({ onOpen, refresh }: { onOpen: () => void; refresh: number
   const label = spelled ? `${t("invite.button")}, ${spelled}` : undefined
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton tooltip={t("invite.button")} aria-label={label} onClick={onOpen} className="hidden group-data-[collapsible=icon]:flex">
+      <SidebarMenuButton tooltip={t("invite.button")} aria-label={label} onClick={onOpen} data-tour="invite" className="hidden group-data-[collapsible=icon]:flex">
         <span aria-hidden className="ticket-mini ticket-glyph"><span className="ticket-mini-fill" /></span>
       </SidebarMenuButton>
-      <button type="button" onClick={onOpen} aria-label={label} className="ticket-btn group-data-[collapsible=icon]:hidden">
+      <button type="button" onClick={onOpen} aria-label={label} data-tour="invite" className="ticket-btn group-data-[collapsible=icon]:hidden">
         <span className="ticket-mini">
           <span aria-hidden className="ticket-mini-fill" />
           <span className="flex min-w-0 flex-1 items-center gap-2 ps-3 font-mono text-[11px] font-medium tracking-[0.12em] uppercase rtl:font-sans rtl:text-xs rtl:tracking-normal">
@@ -56,7 +56,7 @@ function InviteButton({ onOpen, refresh }: { onOpen: () => void; refresh: number
   )
 }
 
-export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => void }) {
+export function AppSidebar({ route, onSearch, onTour }: { route: Route; onSearch: () => void; onTour: () => void }) {
   const { t, lang, setLang } = useI18n()
   const { lib, error } = useLibrary()
   const { user, signOut } = useAuth()
@@ -107,12 +107,12 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={route.name === "new"} tooltip={t("app.new")}>
-                  <a href={href({ name: "new" })}><Plus /> <span>{t("app.new")}</span></a>
+                  <a href={href({ name: "new" })} data-tour="new-model"><Plus /> <span>{t("app.new")}</span></a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={route.name === "models"} tooltip={t("app.models")}>
-                  <a href={href({ name: "models" })}><Boxes /> <span>{t("app.models")}</span></a>
+                  <a href={href({ name: "models" })} data-tour="models"><Boxes /> <span>{t("app.models")}</span></a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
@@ -174,6 +174,7 @@ export function AppSidebar({ route, onSearch }: { route: Route; onSearch: () => 
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={() => setLang(lang === "en" ? "he" : "en")}><Languages /> {t("nav.lang")}</DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setTheme(dark ? "light" : "dark")}>{dark ? <Sun /> : <Moon />} {t(dark ? "nav.theme.light" : "nav.theme.dark")}</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => (setOpenMobile(false), onTour())}><Compass /> {t("tour.take")}</DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={() => void signOut()}><LogOut className="rtl:-scale-x-100" /> {t("auth.signOut")}</DropdownMenuItem>
                 </DropdownMenuContent>

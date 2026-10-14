@@ -382,7 +382,7 @@ export function ChatPage({ modelId }: { modelId?: string }) {
   }
 
   const composer = (
-    <div className="grid min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow focus-within:shadow-md focus-within:ring-3 focus-within:ring-ring/20">
+    <div data-tour="composer" className="grid min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow focus-within:shadow-md focus-within:ring-3 focus-within:ring-ring/20">
       {/* one inset for everything: 16px, the same as the answer cards (p-4); the controls divider runs full width */}
       {/* the case: a card once pasted, a textarea while typing */}
       {caseCard ? (
@@ -465,7 +465,7 @@ export function ChatPage({ modelId }: { modelId?: string }) {
             </div>
             {missing && model && <p role="status" dir="auto" className="text-sm text-muted-foreground">{t("chat.unknownModel", { id: modelId!, name: model.name })}</p>}
             {model?.id === demo.model && (
-              <figure className="grid gap-4 rounded-xl border bg-card p-4">
+              <figure data-tour="demo" className="grid gap-4 rounded-xl border bg-card p-4">
                 <figcaption className="eyebrow">{t("chat.demo", { name: model.name })}</figcaption>
                 <div className="grid gap-1">
                   <p dir="auto" className="line-clamp-2 text-sm text-muted-foreground">{snippet(demo.case)}</p>

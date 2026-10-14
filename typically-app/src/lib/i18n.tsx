@@ -250,9 +250,22 @@ const en = {
   "src.northwind": "Northwind sample",
   "brand.name": "Decision Factory",
   "brand.credit": "built on Typical",
+  // product tour (components/tour.tsx); {{current}} / {{total}} are driver.js's, not ours
+  "tour.take": "Take the tour", "tour.progress": "Step {{current}} of {{total}}",
+  "tour.next": "Next", "tour.back": "Back", "tour.skip": "Skip tour", "tour.done": "Start exploring",
+  "tour.welcome.title": "Welcome to Decision Factory",
+  "tour.welcome.body": "Decision Factory trains a model on your team's past decisions, so it answers new cases the way you would.",
+  "tour.demo.title": "How sure is each model?",
+  "tour.demo.body": "The bars show how confident a model is in every possible answer. Compare the standard model with your model, trained on your decisions.",
+  "tour.composer.title": "Ask about a case",
+  "tour.composer.body": "Paste a case, add one or more questions and ask. With your own model, Compare shows the standard model next to yours.",
+  "tour.new.title": "Train your own model", "tour.new.body": "Start from a table of past decisions or from an email archive.",
+  "tour.models.title": "Your models", "tour.models.body": "Each model has its results, an API and a share link.",
+  "tour.invite.title": "Invite people", "tour.invite.body": "Each ticket invites one person. You can have 5 invites at a time.",
+  "tour.inviteAdmin.title": "Invite people", "tour.inviteAdmin.body": "Each ticket invites one person. As an admin, you have unlimited invites.",
 }
 
-type Key = keyof typeof en
+export type Key = keyof typeof en
 
 const he: Record<Key, string> = {
   "nav.theme.dark": "מעבר לתצוגה כהה",
@@ -485,6 +498,18 @@ const he: Record<Key, string> = {
   "src.northwind": "הדוגמה של Northwind",
   "brand.name": "Decision Factory",
   "brand.credit": "built on Typical",
+  "tour.take": "סיור במוצר", "tour.progress": "שלב {{current}} מתוך {{total}}",
+  "tour.next": "הבא", "tour.back": "חזרה", "tour.skip": "דילוג על הסיור", "tour.done": "מתחילים",
+  "tour.welcome.title": "ברוכים הבאים ל־Decision Factory",
+  "tour.welcome.body": "Decision Factory מאמן מודל על ההחלטות הקודמות של הצוות שלכם, כך שהוא עונה על מקרים חדשים כמו שאתם הייתם עונים.",
+  "tour.demo.title": "כמה בטוח כל מודל?",
+  "tour.demo.body": "הפסים מראים כמה המודל בטוח בכל תשובה אפשרית. השוו בין המודל הרגיל למודל שלכם, שאומן על ההחלטות שלכם.",
+  "tour.composer.title": "שאלו על מקרה",
+  "tour.composer.body": "הדביקו מקרה, הוסיפו שאלה אחת או יותר ושאלו. עם מודל משלכם, השוואה מציגה את המודל הרגיל לצד שלכם.",
+  "tour.new.title": "אמנו מודל משלכם", "tour.new.body": "התחילו מטבלה של החלטות קודמות או מארכיון מיילים.",
+  "tour.models.title": "המודלים שלכם", "tour.models.body": "לכל מודל יש תוצאות, API וקישור שיתוף.",
+  "tour.invite.title": "הזמנת אנשים", "tour.invite.body": "כל כרטיס מזמין אדם אחד. אפשר להחזיק 5 הזמנות בכל פעם.",
+  "tour.inviteAdmin.title": "הזמנת אנשים", "tour.inviteAdmin.body": "כל כרטיס מזמין אדם אחד. כמנהלים, יש לכם הזמנות ללא הגבלה.",
 }
 
 const DICTS: Record<Lang, Record<Key, string>> = { en, he }
