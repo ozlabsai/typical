@@ -282,9 +282,16 @@ def test_removing_an_invite_revokes_its_api_keys(env, monkeypatch):
     assert e.value.status_code == 401
 
 
-def test_hosted_root_redirects_to_the_app(env):
-    r = TestClient(server.app, base_url="http://localhost").get("/", follow_redirects=False)
-    assert r.status_code == 307 and r.headers["location"] == "/app/"
+def test_hosted_app_lives_at_the_root(env):
+    c = TestClient(server.app, base_url="http://localhost")
+    r = c.get("/")
+    assert r.status_code == 200 and 'id="root"' in r.text   # the app's index, not the research site
+    asset = next(p.name for p in (server.APP_DIR / "assets").iterdir())
+    assert c.get(f"/assets/{asset}").status_code == 200
+    assert c.get("/server.py").status_code == 404 and c.get("/data/typically_sample.csv").status_code == 404   # no source or research files
+    for old in ("/app", "/app/", "/app/index.html"):   # links shared before the move (invites) land on the root
+        r = c.get(old, follow_redirects=False)
+        assert r.status_code == 307 and r.headers["location"] == "/"
 
 
 def test_invites_users_make(env, monkeypatch):

@@ -43,7 +43,7 @@ maps to the same models.
 cd typically-app && npm run build && cd ..
 TYPICALLY_AUTH=1 TYPICALLY_SECRET=dev-secret TYPICALLY_INVITES=try-me-123 TYPICALLY_ADMINS=admin-456 \
   uv run uvicorn --app-dir site server:app --port 8787
-# open http://127.0.0.1:8787/app/ and sign in with try-me-123
+# open http://127.0.0.1:8787/ and sign in with try-me-123 (with sign-in on, the app is the whole site)
 ```
 
 On localhost the cookie is not marked `Secure`, so plain http works. Anywhere else it is, so serve over https.

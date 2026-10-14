@@ -79,7 +79,7 @@ up() {
     # the tunnel opens before the server: wait for the server itself, through the tunnel
     if u=$(on_pod "cat /workspace/public_url 2>/dev/null") && [ -n "$u" ] && curl -fsS -m 10 -o /dev/null "$u/api/health" 2>/dev/null; then
       trap - EXIT INT TERM
-      echo "public URL: $u/app/   (share links: $u/s/...)"; return
+      echo "public URL: $u/   (share links: $u/s/...)"; return
     fi
     sleep 10
   done

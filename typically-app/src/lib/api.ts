@@ -224,7 +224,7 @@ export const shares = {
 /** Invite codes the signed-in user made (sign-in on only). limit/left: null for admins (unlimited). */
 export interface Invite { code: string; created: string }
 export interface Invites { invites: Invite[]; limit: number | null; left: number | null }
-export const inviteLink = (code: string) => `${window.location.origin}/app/#/?invite=${encodeURIComponent(code)}`
+export const inviteLink = (code: string) => `${new URL(".", window.location.href).href}#/?invite=${encodeURIComponent(code)}`   // the app's own path: / hosted, /app/ local
 
 export const invites = {
   list: () => call<Invites>("invites", undefined, undefined, "/api/auth/"),

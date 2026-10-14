@@ -428,10 +428,19 @@ def health():
     return {"ok": True, "loaded": len(_cache)}   # no model ids: it is open without sign-in
 
 
+APP_DIR = (REPO_ROOT / "site" / "app").resolve()   # the product app (typically-app/, built here with relative asset paths)
+
+
 @app.get("/app")
+def app_bare():   # hosted: the app lives at /; locally the trailing slash keeps its relative asset paths right
+    return RedirectResponse("/" if auth.enabled() else "/app/")
+
+
 @app.get("/app/{path:path}")
-def spa(path: str = ""):   # the product app (typically-app/, built to site/app/): real files are served, anything else is a client route
-    root = (REPO_ROOT / "site" / "app").resolve()
+def spa(path: str = ""):   # real files are served, anything else is a client route (hash routing: the server only sees /)
+    if auth.enabled():   # old /app/... links (invites shared before the move): the browser keeps the #fragment across the redirect
+        return RedirectResponse("/")
+    root = APP_DIR
     f = (root / path).resolve()
     if f.is_file() and f.is_relative_to(root):
         return FileResponse(f)
@@ -454,6 +463,23 @@ app.include_router(auth.router)
 
 @app.get("/", include_in_schema=False)
 def root():   # hosted Decision Factory: the domain is the app; locally "/" stays the research site
-    return RedirectResponse("/app/") if auth.enabled() else FileResponse(REPO_ROOT / "site" / "index.html")
+    return FileResponse((APP_DIR if auth.enabled() else REPO_ROOT / "site") / "index.html")
 
-app.mount("/", StaticFiles(directory=REPO_ROOT / "site", html=True), name="site")
+
+@app.get("/assets/{path:path}", include_in_schema=False)
+@app.get("/favicon.svg", include_in_schema=False)
+def app_files(path: str = ""):   # hosted: the app's files at the root; locally these paths stay the research site's
+    base = APP_DIR if auth.enabled() else (REPO_ROOT / "site").resolve()
+    f = (base / ("assets/" + path if path else "favicon.svg")).resolve()
+    if not (f.is_file() and f.is_relative_to(base)):
+        raise HTTPException(404, "Not found.")
+    return FileResponse(f)
+
+class ResearchSite(StaticFiles):   # local only: hosted, the domain is just the app (site/ also holds this server's own source)
+    async def get_response(self, path, scope):
+        if auth.enabled():
+            raise HTTPException(404, "Not found.")
+        return await super().get_response(path, scope)
+
+
+app.mount("/", ResearchSite(directory=REPO_ROOT / "site", html=True), name="site")

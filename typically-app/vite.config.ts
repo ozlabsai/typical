@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
 export default defineConfig({
-  base: '/app/',
+  base: './',   // relative: the same build serves at / (hosted) and /app/ (local, next to the research site)
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': path.resolve(import.meta.dirname, 'src') } },
   server: { proxy: { '/api': 'http://127.0.0.1:8787', '/data': 'http://127.0.0.1:8787' } },
