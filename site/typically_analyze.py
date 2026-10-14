@@ -14,10 +14,10 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from functools import cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -50,9 +50,22 @@ class Source(BaseModel):
     url: str | None = None
 
 
+class IntentQuestion(BaseModel):   # one of the user's own questions, as /parse_question returned it (maybe edited)
+    question: str = Field(min_length=1, max_length=300)
+    type: Literal["choice", "noul", "score"] | None = None
+    labels: list[Annotated[str, Field(min_length=1, max_length=80)]] | None = Field(None, max_length=20)
+
+
+class Intent(BaseModel):   # what the user wants decided: "auto" = find the decisions in the data
+    mode: Literal["auto", "questions"] = "auto"
+    topic: str | None = Field(None, max_length=120)   # "support tickets": context for the AI reading only
+    questions: list[IntentQuestion] = Field([], max_length=10)
+
+
 class AnalyzeRequest(BaseModel):
     source: Source
     lang: Literal["en", "he"] = "en"   # language of the questions, reasons and warnings we write
+    intent: Intent | None = None
 
 
 def _upload_file(token: str, must_exist: bool = True) -> Path:
@@ -105,13 +118,15 @@ def analyze(req: AnalyzeRequest):
         if src["kind"] != "upload":
             name = tp.name_hint(src)
         prof = tp.profile(records)
+        intent = _intent(req.intent)
         if tllm.available():   # the operator's key only: users never bring one
-            plan, source, llm_warnings = tp.llm_plan(prof, tp.sample_rows(prof, records), records, lang=req.lang)
+            plan, source, llm_warnings = tp.llm_plan(prof, tp.sample_rows(prof, records), records, lang=req.lang, intent=intent)
             warnings += llm_warnings
         else:
-            plan, source = tp.heuristic_plan(prof, records, req.lang), "heuristic"
+            plan, source = tp.heuristic_plan(prof, records, req.lang, intent), "heuristic"
     except ValueError as e:
         raise HTTPException(400, str(e))
+    matches = plan.pop("intent_matches", [])   # not part of the plan /teach gets back
     if not plan["decisions"]:
         warnings.append(tp.msg(req.lang, "w_nodecision"))
     if token is None:
@@ -136,10 +151,18 @@ def analyze(req: AnalyzeRequest):
         "name_hint": name, "n_rows": len(records), "columns": list(prof["columns"]),
         "profile": trim(prof), "plan": plan, "plan_source": source, "lang": req.lang,
         "preview_cases": [{"case": tp.render_case(records[i], plan), "answers": tp.answers(records[i], plan)} for i in pick],
-        "records_token": token, "warnings": warnings,
+        "records_token": token, "warnings": warnings, "intent_matches": matches,   # [{question, column | null}]: questions mode only
         **({"sheets": sheets, "sheet": src.get("sheet") or sheets[0]} if sheets else {}),   # xlsx: the UI offers the other sheets
         **({"mail": mail} if mail else {}),   # {owner, messages, threads, inbound}
     }
+
+
+def _intent(i: Intent | None) -> dict:
+    """{topic?, questions?} for the planners; questions only in questions mode, blank ones dropped."""
+    if not i:
+        return {}
+    qs = [q.model_dump(exclude_none=True) | {"question": q.question.strip()} for q in i.questions if i.mode == "questions" and q.question.strip()]
+    return {k: v for k, v in (("topic", (i.topic or "").strip()), ("questions", qs)) if v}
 
 
 # ---------------------------------------------------------------- datasets (the Data page)

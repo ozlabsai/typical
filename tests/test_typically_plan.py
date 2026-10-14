@@ -214,3 +214,45 @@ def test_hebrew_heuristic_plan_and_analyze_lang(monkeypatch):
     assert [d["labels"] for d in he["plan"]["decisions"]] == [d["labels"] for d in en["plan"]["decisions"]]   # data labels are not translated
     assert all(re.search("[א-ת]", i["detail"] + i["action"]) for i in he["plan"]["issues"])
     assert all(re.search("[א-ת]", e["reason"]) for e in he["plan"]["excluded"])
+
+
+# ---------------------------------------------------------------- intent (what the user wants decided)
+
+ASKED = [{"question": "Which team should handle this?", "type": "choice", "labels": ["Claims", "Billing", "Dispatch", "Sales"]},
+         {"question": "Will this customer churn?"}, {"question": "How urgent is it?"}]
+
+
+def test_heuristic_intent_matches_by_shared_words():
+    plan = tp.heuristic_plan(PROF, RECORDS, intent={"questions": ASKED})
+    assert plan["intent_matches"] == [{"question": ASKED[0]["question"], "column": "team"}, {"question": ASKED[1]["question"], "column": None},
+                                      {"question": ASKED[2]["question"], "column": "urgency"}]   # "urgent" meets "urgency"
+    dec = {d["column"]: d for d in plan["decisions"]}
+    assert dec["team"]["question"] == ASKED[0]["question"] and dec["urgency"]["question"] == ASKED[2]["question"]
+    assert [c for c, d in dec.items() if d["include"]] == ["team", "urgency"]   # the rest stay listed, left out
+    assert not any(i.get("column") in ("escalate", "refund") for i in plan["issues"])   # health is about what is learned
+
+
+def test_heuristic_intent_nothing_matched_keeps_the_plan():
+    plan = tp.heuristic_plan(PROF, RECORDS, intent={"questions": [{"question": "Will this customer churn?"}]})
+    assert plan["intent_matches"] == [{"question": "Will this customer churn?", "column": None}]
+    assert all(d["include"] for d in plan["decisions"]) and len(plan["decisions"]) == 4
+    assert "intent_matches" not in tp.heuristic_plan(PROF, RECORDS)
+
+
+def test_llm_plan_gets_the_intent_and_its_matches_are_checked():
+    reply = llm_json()
+    for d in reply["decisions"]:
+        d["include"] = d["column"] == "team"
+    reply["intent_matches"] = [{"question": ASKED[0]["question"], "column": "team"}, {"question": ASKED[1]["question"], "column": "escalate"},
+                               {"question": ASKED[2]["question"], "column": None}]   # escalate is not included: not trusted
+    c = FakeClient(reply)
+    plan, source, _ = tp.llm_plan(PROF, tp.sample_rows(PROF, RECORDS), RECORDS, client=c, intent={"topic": "freight support", "questions": ASKED})
+    kw = c.calls[0]
+    sent = json.loads(kw["messages"][0]["content"])["intent"]
+    assert source == "llm" and sent == {"topic": "freight support", "questions": ASKED}
+    assert "intent_matches" in kw["output_config"]["format"]["schema"]["properties"] and "intent.topic" in kw["system"] and "intent_matches" in kw["system"]
+    assert [m["column"] for m in plan["intent_matches"]] == ["team", None, None]
+    assert next(d for d in plan["decisions"] if d["column"] == "team")["question"] == ASKED[0]["question"]
+    c = FakeClient(llm_json())   # topic only: same schema, no matches
+    plan, _, _ = tp.llm_plan(PROF, [], RECORDS, client=c, intent={"topic": "freight support"})
+    assert c.calls[0]["output_config"]["format"]["schema"] is tp.PLAN_SCHEMA and "intent_matches" not in plan

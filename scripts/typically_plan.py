@@ -418,9 +418,10 @@ def _heuristic_decision(c: str, p: dict, d: dict, lang: str = "en") -> dict:
             "needs_review": bool(d["leaks"] or d["text_leaks"] or d["conflicts"]["share"] > 0.1)}
 
 
-def heuristic_plan(prof: dict, records: list[dict] | None = None, lang: str = "en") -> dict:
+def heuristic_plan(prof: dict, records: list[dict] | None = None, lang: str = "en", intent: dict | None = None) -> dict:
     """The always-available plan: free text is the case body, short categorical columns (2-20 answers) are decisions,
-    ids/dates/constants/pii are left out, other short columns are facts."""
+    ids/dates/constants/pii are left out, other short columns are facts. intent {"questions": [...]}: see match_intent
+    (its matches come back as plan["intent_matches"], which /analyze moves out of the plan)."""
     cols, cand = prof["columns"], prof["decisions"]
     parts, decisions, excluded = [], [], []
     ex = lambda c, why, key=None, **kw: excluded.append({"column": c, "why": why, "confidence": 0.7, "reason": msg(lang, "x_" + (key or why), **kw)})
@@ -451,8 +452,55 @@ def heuristic_plan(prof: dict, records: list[dict] | None = None, lang: str = "e
         if not facts:
             raise ValueError("We couldn't find a text column that describes each case.")
         facts[0].update(role="body", reason=msg(lang, "p_longest"))
-    return _finish({"case": {"parts": parts, "max_tokens": MAX_CASE_TOKENS, "overflow": "truncate"},
-                    "decisions": decisions, "excluded": excluded}, prof, records, lang)
+    plan = {"case": {"parts": parts, "max_tokens": MAX_CASE_TOKENS, "overflow": "truncate"}, "decisions": decisions, "excluded": excluded}
+    matches = match_intent(plan, prof, intent["questions"]) if intent and intent.get("questions") else None
+    plan = _finish(plan, prof, records, lang)
+    return plan if matches is None else {**plan, "intent_matches": matches}
+
+
+QWORDS = set("which what who whom when where why how should would could can will does did do is are was were be been "
+             "the this that these those for with and you your our we they it its to of in on at by from any each".split())
+
+
+def _stems(text: str) -> set[str]:
+    """Content words cut to 5 letters, so "urgent" meets "urgency" and "escalate" meets "escalation"."""
+    return {w[:5] for w in re.findall(r"[^\W\d_]{3,}", norm(text)) if w not in QWORDS}
+
+
+def match_intent(plan: dict, prof: dict, questions: list[dict]) -> list[dict]:
+    """Rules-only questions mode: each question goes to the decision column sharing the most words with it (a word of the
+    column name counts 2, a word of its answers 1); a column answers one question. Matched decisions take the user's wording,
+    the others are left out. Nothing matched: the plan stays as found. -> [{question, column | None}] in the questions' order.
+    ponytail: word overlap only; a synonym ("department" for a "team" column) needs the AI path."""
+    cols = prof["columns"]
+    def score(q: dict, d: dict) -> int:
+        words = _stems(" ".join([q["question"], *(q.get("labels") or [])]))
+        answers = " ".join(v["raws"][0] for v in cols[d["column"]]["values"])
+        return 2 * len(words & _stems(d["column"])) + len(words & _stems(answers))
+    pairs = sorted(((score(q, d), i, j) for i, q in enumerate(questions) for j, d in enumerate(plan["decisions"])), key=lambda x: (-x[0], x[1], x[2]))
+    hit: dict[int, int] = {}
+    for s, i, j in pairs:
+        if s and i not in hit and j not in hit.values():
+            hit[i] = j
+    if hit:
+        for j, d in enumerate(plan["decisions"]):
+            d["include"] = j in hit.values()
+        for i, j in hit.items():
+            plan["decisions"][j]["question"] = questions[i]["question"]
+    return [{"question": q["question"], "column": plan["decisions"][hit[i]]["column"] if i in hit else None} for i, q in enumerate(questions)]
+
+
+def clean_matches(raw: list[dict], plan: dict, questions: list[dict]) -> list[dict]:
+    """The AI's intent_matches, trusted only where they name an included decision; that decision takes the user's wording."""
+    inc = {d["column"]: d for d in plan["decisions"] if d["include"]}
+    said = {norm(m.get("question") or ""): m.get("column") for m in raw}
+    out = []
+    for i, q in enumerate(questions):
+        c = said.get(norm(q["question"]), raw[i].get("column") if i < len(raw) else None)
+        if c in inc:
+            inc[c]["question"] = q["question"]
+        out.append({"question": q["question"], "column": c if c in inc else None})
+    return out
 
 
 def _finish(plan: dict, prof: dict, records: list[dict] | None, lang: str = "en") -> dict:
@@ -631,18 +679,31 @@ def _coverage_errors(plan: dict, prof: dict, max_share: float = 0.02) -> list[st
     return errs
 
 
-def llm_plan(prof: dict, sample: list[dict], records: list[dict] | None = None, client=None, lang: str = "en"):
+INTENT_TOPIC = "\n- The user says what this data is about (intent.topic). Use it as context for what the decisions are and how to word the questions."
+INTENT_QUESTIONS = """
+- The user listed the questions they want the model to answer (intent.questions, with the answers they expect when they gave any). Set include true ONLY for decisions that answer one of those questions; list other decision columns with include false. A decision that answers a user question uses the user's wording as its question text, and its labels follow the user's answers where they correspond to observed values (still map every observed value).
+- Fill intent_matches with one entry per user question, in their order: the question exactly as the user wrote it, and the decision column that answers it, or null when no column in this data records that decision. Never force a match.
+- If none of the questions can be answered from this data, include the decisions you would have picked anyway and give every question a null column."""
+
+
+def llm_plan(prof: dict, sample: list[dict], records: list[dict] | None = None, client=None, lang: str = "en", intent: dict | None = None):
     """One structured-output call (plus one retry with the validation errors) -> (plan, "llm"|"heuristic", warnings).
-    Any API failure, an oversized prompt or two invalid plans fall back to heuristic_plan with a warning."""
-    fallback = lambda why: (heuristic_plan(prof, records, lang), "heuristic", [why])
-    user = json.dumps({"profile": prof, "sample_rows": sample}, ensure_ascii=False)
+    Any API failure, an oversized prompt or two invalid plans fall back to heuristic_plan with a warning.
+    intent {topic?, questions?}: goes in the prompt; with questions the plan carries "intent_matches" (see heuristic_plan)."""
+    intent = intent or {}
+    questions = intent.get("questions") or []
+    fallback = lambda why: (heuristic_plan(prof, records, lang, intent), "heuristic", [why])
+    user = json.dumps({"profile": prof, "sample_rows": sample, **({"intent": intent} if intent.get("topic") or questions else {})}, ensure_ascii=False)
     if (len(SYSTEM) + len(user)) / 2.5 > MAX_PROMPT_TOKENS:   # chars/2.5 ~ tokens: profiles are dense JSON (QA: 45k real vs 24k at chars/4)
         return fallback(msg(lang, "w_big"))
-    system = SYSTEM if lang == "en" else SYSTEM + f"\n- Write every question, reason and sentence template in {LANGS[lang]} (natural, neutral phrasing). Do not translate column names, mapping values or labels (labels stay in the data's own words and language), and keep the {{value}} placeholder."
+    system = SYSTEM + (INTENT_TOPIC if intent.get("topic") else "") + (INTENT_QUESTIONS if questions else "")
+    if lang != "en":
+        system += f"\n- Write every question, reason and sentence template in {LANGS[lang]} (natural, neutral phrasing). Do not translate column names, mapping values or labels (labels stay in the data's own words and language), and keep the {{value}} placeholder."
+    schema = PLAN_SCHEMA if not questions else _obj(**PLAN_SCHEMA["properties"], intent_matches=_arr(_obj(question=_STR, column=_NULL_STR)))
     messages, errs = [{"role": "user", "content": user}], []
     for _ in range(2):
         try:
-            raw, _usage = tllm.complete_json(system, messages, PLAN_SCHEMA, max_tokens=16000, client=client)
+            raw, _usage = tllm.complete_json(system, messages, schema, max_tokens=16000, client=client)
         except tllm.LLMError as e:   # type + status only, never a key
             return fallback(msg(lang, "w_fail", err=str(e)))
         try:
@@ -651,7 +712,8 @@ def llm_plan(prof: dict, sample: list[dict], records: list[dict] | None = None, 
         except (ValueError, KeyError, TypeError) as e:
             errs = [f"the JSON does not match the schema: {e!r}"]
         if not errs:
-            return _finish(plan, prof, records, lang), "llm", []
+            plan = _finish(plan, prof, records, lang)
+            return ({**plan, "intent_matches": clean_matches(raw.get("intent_matches") or [], plan, questions)} if questions else plan), "llm", []
         messages += [{"role": "assistant", "content": json.dumps(raw, ensure_ascii=False)},
                      {"role": "user", "content": "The plan has these problems, return a corrected full plan:\n- " + "\n- ".join(errs[:20])}]
     return fallback(msg(lang, "w_invalid", err=errs[0][:120]))

@@ -236,9 +236,9 @@ def _plan_records(req: BuildPlanRequest, slug: str) -> list[dict]:
     records = typically_analyze.load_upload(req.records_token)
     try:
         if errs := typically_plan.validate_plan(req.plan, typically_plan.profile(records)):
-            raise HTTPException(400, "These settings don't match your data (" + "; ".join(errs[:5]) + "). Check the questions in the Understand step.")
+            raise HTTPException(400, "These settings don't match your data (" + "; ".join(errs[:5]) + "). Check the questions under Review details in step 2.")
     except (KeyError, TypeError, AttributeError) as e:
-        raise HTTPException(400, "Something went wrong reading these settings. Go back to the Understand step and try again.")
+        raise HTTPException(400, "Something went wrong reading these settings. Go back to step 2 (Add your data) and try again.")
     return records
 
 
@@ -258,7 +258,7 @@ def _build_plan(req: BuildPlanRequest, slug: str, records: list[dict], progress=
     except ValueError as e:
         raise HTTPException(400, str(e))
     except (KeyError, TypeError, AttributeError) as e:
-        raise HTTPException(400, "Something went wrong reading these settings. Go back to the Understand step and try again.")
+        raise HTTPException(400, "Something went wrong reading these settings. Go back to step 2 (Add your data) and try again.")
     out = TYPICALLY / "jobs" / slug
     shutil.rmtree(out / "eval", ignore_errors=True)   # a rebuild must not keep the previous build's eval files (e.g. an old language)
     write(out, split)

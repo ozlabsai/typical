@@ -129,3 +129,18 @@ def test_train_status_series(env):
     assert c.get("/api/typically/train/acme").json()["series"]["step"] == [10, 50, 100]
     (d / "status.json").write_text(json.dumps({"phase": "uploading"}))
     assert "series" not in c.get("/api/typically/train/acme").json()
+
+
+def test_analyze_intent_matches_and_bounds(env):
+    c, _ = env
+    asked = [{"question": "Which team should handle this?", "type": "choice", "labels": ["Claims", "Billing"]}, {"question": "Will this customer churn?"}]
+    a = c.post("/api/typically/analyze", json={"source": {"kind": "sample"}, "intent": {"mode": "questions", "topic": "freight tickets", "questions": asked}}).json()
+    assert a["intent_matches"] == [{"question": asked[0]["question"], "column": "team"}, {"question": asked[1]["question"], "column": None}]
+    assert "intent_matches" not in a["plan"] and [d["column"] for d in a["plan"]["decisions"] if d["include"]] == ["team"]
+    auto = c.post("/api/typically/analyze", json={"source": {"kind": "sample"}, "intent": {"mode": "auto", "questions": asked}}).json()
+    assert auto["intent_matches"] == [] and all(d["include"] for d in auto["plan"]["decisions"])   # auto ignores the questions
+    assert c.post("/api/typically/analyze", json={"source": {"kind": "sample"}}).json()["intent_matches"] == []
+    for bad in ({"mode": "questions", "questions": [{"question": "q?"}] * 11}, {"topic": "x" * 121}, {"mode": "guess"},
+                {"mode": "questions", "questions": [{"question": ""}]}, {"mode": "questions", "questions": [{"question": "q" * 301}]},
+                {"mode": "questions", "questions": [{"question": "q?", "labels": ["a"] * 21}]}, {"mode": "questions", "questions": [{"question": "q?", "type": "free"}]}):
+        assert c.post("/api/typically/analyze", json={"source": {"kind": "sample"}, "intent": bad}).status_code == 422, bad
