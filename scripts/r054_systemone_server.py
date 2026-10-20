@@ -7,6 +7,8 @@
            --thinking default --base-url http://127.0.0.1:8000/v1 --port 8010
   d1:  LiquidAI/d1-3B's shipped native readout (`model.system_one`, trust_remote_code).
        python r054_systemone_server.py d1 LiquidAI/d1-3B --revision <sha> --port 8011
+  clef: Cloudflare/clef-flash's shipped reference path (`joint_schema_model.systemone`, joint head, bf16).
+       python r054_systemone_server.py clef Cloudflare/clef-flash --revision <sha> --port 8012
 
 The response `model` is the served name, so WorkflowEvals' `typical:` provider rejects any mismatch.
 """
@@ -57,9 +59,27 @@ def d1_backend(args):
     return args.model.rsplit("/", 1)[-1], answer
 
 
+def clef_backend(args):
+    import torch
+    from huggingface_hub import snapshot_download
+
+    path = snapshot_download(args.model, revision=args.revision)
+    sys.path.insert(0, path)  # the release's own code, as in its model card
+    from joint_schema_model import load_release_model, systemone
+
+    model, processor = load_release_model(path, device="cuda", dtype=torch.bfloat16)
+    lock = threading.Lock()  # ponytail: one GPU forward at a time, as d1
+
+    def answer(state, questions):
+        with lock:
+            return systemone(model, processor, {"model": args.model, "state": state, "questions": questions})
+
+    return args.model.rsplit("/", 1)[-1], answer
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("backend", choices=("llm", "d1"))
+    ap.add_argument("backend", choices=("llm", "d1", "clef"))
     ap.add_argument("model")
     ap.add_argument("--port", type=int, default=8010)
     ap.add_argument("--served-name", help="model id echoed in responses (default: backend identity)")
@@ -69,7 +89,7 @@ def main():
     ap.add_argument("--revision")
     ap.add_argument("--workflowevals", default="WorkflowEvals")
     args = ap.parse_args()
-    name, answer = (llm_backend if args.backend == "llm" else d1_backend)(args)
+    name, answer = {"llm": llm_backend, "d1": d1_backend, "clef": clef_backend}[args.backend](args)
     name = args.served_name or name
 
     class Handler(BaseHTTPRequestHandler):

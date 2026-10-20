@@ -2,18 +2,48 @@
 
 > **EVAL-ONLY.** Nothing here may be used for training, distillation or training-data selection.
 
-Each cell is accuracy / Brier / ECE. Scores come from `scripts/hejev_score.py` (argmax accuracy with invalid
+Scores come from `scripts/hejev_score.py` (argmax accuracy with invalid
 counted as wrong; jevbench Brier; top-label ECE over 10 bins). EN is the public 231. HE is `translated` (230), MX is
 `mixed` (230) and native is `native` (119, gold = teacher-consensus argmax, so its accuracy is accuracy against the
 soft gold). Twin columns give Δacc (HE−EN or MX−EN, on the 230 pairs) / prediction agreement / mean JSD (log2).
 The full reports are in `<model>/score.json`.
 
+## Decision models, 9–14B (apples-to-apples)
+
+Only single-pass decision models of 9-14B, each served through its own released readout, on the same jevbench runner,
+adapter and pod type. Accuracy columns are EN / HE translated / MX mixed / native. Brier / ECE are given for EN and
+HE. Gap, agreement and JSD are HE vs EN on the 230 twin pairs. Sorted by HE accuracy.
+
+| model (run id) | params | base | EN | HE | MX | native | EN Brier / ECE | HE Brier / ECE | HE−EN | agree | JSD |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| StartLux-Decision-v1.1-9B-Instant, bidirectional letter readout (`StartLux-Decision-v1.1-9B-Instant-18a17f7`) | 9.7B | Qwen3.5-9B | **.896** | **.878** | **.874** | **.916** | **.134 / .035** | **.163 / .036** | −.017 | .935 | **.016** |
+| Torchcast Decision 12B, BF16, letter readout (`torchcast-decision-12b`, rev 49107b5) | 12B | Gemma-4-12B-it (LoRA, merged) | .879 | .865 | .865 | .899 | .165 / .051 | .216 / .064 | **−.013** | **.939** | .036 |
+| Winnow-12B Q8_0 (`Winnow-12B`, label `hejev-winnow-12b-*`) | 12B | Gemma-4-12B-it (LoRA) | .853 | .865 | .843 | .840 | .206 / .065 | .213 / .076 | +.013 | .939 | .034 |
+| Cygnet: frozen Gemma-4-12B-it, letter readout, T=3.4 (`cygnet-gemma-4-12B-it-707f0a3-T3.4`) | 12B | Gemma-4-12B-it (frozen) | .879 | .839 | .839 | .882 | .173 / .026 | .216 / .049 | −.043 | .904 | .027 |
+| Typical R044-R, native readout (`typical-r044r-sha256-198185cfb418`) | 12B | Gemma-4-12B-it (LoRA) | .853 | .830 | .843 | .866 | .195 / .062 | .241 / .090 | −.022 | .913 | .038 |
+| Cloudflare Clef-Flash, joint schema head (`clef-flash-f0b7d3c`) | 9.4B | Qwen3.5-9B | .823 | .774 | .752 | .782 | .235 / .062 | .297 / .072 | −.052 | .878 | .036 |
+
+Native NLL vs soft gold: StartLux .584, Cygnet .658, Clef .767, R044-R .870, Torchcast .900, Winnow .911.
+MX−EN Δacc / agreement: StartLux −.022 / .939, Torchcast −.013 / .948, Winnow −.009 / .926, Cygnet −.043 / .913,
+R044-R −.009 / .913, Clef −.074 / .887.
+
+Peer readout:
+- StartLux 9B Instant leads every accuracy and calibration column. Its HE Brier (.163) is lower than every other
+  peer's EN Brier. Its Hebrew penalty is small (−1.7, hard −0.9) and its EN/HE probability vectors are the closest (JSD .016).
+- Torchcast 12B reproduces its card's 203/231 exactly (.879) and loses only 1.3 points on HE. It matches Cygnet on EN
+  with the same base model and readout family, but holds up much better in Hebrew (Cygnet −4.3).
+- Clef-Flash is the weakest peer here and degrades the most: −5.2 on HE and −7.4 on MX (original −6.9, hard −6.4,
+  easy 0). Its card lists English benchmarks only.
+- Typical R044-R is fifth of six on HE accuracy and last on HE Brier/ECE (.241 / .090).
+
+## Reference (not peers)
+
+General LLMs with thinking, and a 3B decision model. Same files, runner and scorer, but not comparable as peers.
+Each cell is accuracy / Brier / ECE.
+
 | model (run id) | EN | HE translated | MX mixed | native | native NLL vs soft gold | HE−EN Δacc / agree / JSD | MX−EN Δacc / agree / JSD |
 |---|---|---|---|---|---|---|---|
-| Cygnet: frozen Gemma-4-12B-it, letter readout, T=3.4 (`cygnet-gemma-4-12B-it-707f0a3-T3.4`) | .879 / .173 / .026 | .839 / .216 / .049 | .839 / .223 / .033 | .882 / .183 / .074 | .658 | −.043 / .904 / .027 | −.043 / .913 / .028 |
 | Gemma-4-12B-it thinking (`vllm:google/gemma-4-12B-it`) | .974 / .039 / .029 ᴾ | .952 / .099 / .055 | .987 / .034 / .031 | .933 / .132 / .063 | 1.626 | −.022 / .952 / .044 | +.013 / .974 / .027 |
-| Typical R044-R, native readout (`typical-r044r-sha256-198185cfb418`) | .853 / .195 / .062 | .830 / .241 / .090 | .843 / .228 / .067 | .866 / .221 / .084 | .870 | −.022 / .913 / .038 | −.009 / .913 / .036 |
-| Winnow-12B Q8_0 (`Winnow-12B`, label `hejev-winnow-12b-*`) | .853 / .206 / .065 | .865 / .213 / .076 | .843 / .223 / .072 | .840 / .263 / .107 | .911 | +.013 / .939 / .034 | −.009 / .926 / .037 |
 | Qwen3.8-27B-FP8 thinking (`vllm:Qwen/Qwen3.8-27B-FP8`) | .991 / .026 / .019 ᴾ | .996 / .018 / .016 | .996 / .018 / .016 | .966 / .071 / .050 | .832 | +.004 / .996 / .008 | +.004 / .996 / .007 |
 | LiquidAI d1-3B@051bcc4 native (`d1-3B-051bcc4`) | .753 / .349 / .108 ᴾ | .683 / .425 / .084 | .661 / .454 / .103 | .605 / .492 / .121 | 1.015 | −.074 / .822 / .078 | −.096 / .791 / .080 |
 
@@ -36,6 +66,34 @@ Readout:
   letter readout has the best native NLL (.658).
 
 ## Protocol notes and deviations
+
+**Decision peers (StartLux, Torchcast, Clef), second pod.** One H100 80GB HBM3, pod `798zfnc7mwo41i`, $3.99/h, up
+19:16:15 → 20:12:28 UTC = **0.94 GPU-h, about $3.7**. It is now EXITED. Runner, adapter, chunking and scorer are the
+same as above (`psetup`, `clef`, `startlux`, `torchcast` in `scripts/hejev_pod_run.sh`). Results are in
+`<model>/` (`clef-flash`, `startlux-9b-instant`, `torchcast-12b`); pod logs are in `peers/`. Each model was served
+the way its own card or code says:
+- **StartLux-Decision-v1.1-9B-Instant** @18a17f7 (CC BY-NC 4.0). `startlux-decide serve --launch-vllm` from
+  StartLuxLabs/StartLux-Decision@83fe6c7 on vLLM 0.31.0, with the launcher's own flags (prefix caching and chunked
+  prefill off, 131k context). The vLLM log confirms "prefix-bidirectional prompt attention ON". The card does not
+  name AutoThink as the recommended mode, so the AutoThink variant was not run.
+  - Incident: the first start aborted after 3 s. The launcher's default vLLM port 8001 is taken by RunPod's nginx,
+    which answered `/health`, and the launcher's plugin check then refused to serve. It was rerun with
+    `--vllm-base-port 8101`. No item was answered by the failed start.
+- **Torchcast Decision 12B** (CC BY-NC 4.0). The task named `mradermacher/torchcast-decision-12b-GGUF` Q8 via
+  llama.cpp. That repo is a third-party quant with no inference spec. The original card says that generic examples do
+  not reproduce the evaluated interface, and its shim needs vLLM (`structured_outputs` letter constraint and
+  `/v1/models` `max_model_len`). So the original BF16 weights were run exactly as its serving README says:
+  `torchcast-ai/torchcast-decision-12b@49107b5` (weight sha256 f8553c9e… verified), vLLM 0.30.0, and
+  `serving/torchcast_shim.py` from the GitHub tag v1.0.0, with no `SHIM_*` overrides beyond those shown. The HF tag
+  v1.0.0 points at a47d9f4, but the serving README pins 49107b5. The served name is fixed (`torchcast-decision-12b`),
+  so the run is told apart by its directory and label. EN 203/231 matches the card's 203.
+  - First pass: 11 `ConnectionReset` errors in 10 chunks, the same listen-backlog issue as Cygnet. Each chunk was
+    rerun once and all of them passed. The readout is a deterministic logprob read, so the rerun does not resample.
+- **Clef-Flash** @f0b7d3c (Apache-2.0). Its release code `joint_schema_model.systemone()` (joint schema head, bf16)
+  with transformers 5.10.2 as on the card, behind `r054_systemone_server.py clef`. The card's SGLang image needs
+  Docker, which the pod does not have. flash-linear-attention was installed, causal-conv1d was not (torch conv
+  fallback), and one forward runs at a time, so it took 33 min. Speed does not change the answers. `encode_record`
+  truncates the state at 16,384 tokens, but no item came near that.
 
 - **Single pod.** One H100 80GB HBM3, pod `0kajvwon98ar1n`, $3.99/h, up 17:29:37 → 19:08:32 UTC = **1.65 GPU-h,
   about $6.6**. It is now EXITED.
