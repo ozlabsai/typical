@@ -10,6 +10,7 @@ import json
 import math
 import random
 import time
+from itertools import combinations
 from numbers import Real
 from pathlib import Path
 
@@ -90,6 +91,8 @@ def parse_args():
     parser.add_argument("--eval-samples", type=int, default=128)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--pair-consistency-weight", type=float, default=0.0)
+    parser.add_argument("--twin-consistency-weight", type=float, default=0.0,
+                        help="Weight of JS divergence between meta.twin_id twins (0 = off)")
     parser.add_argument("--pair-consistency-min-gold-probability", type=float, default=0.80)
     parser.add_argument("--pair-consistency-clip", type=float, default=4.0)
     parser.add_argument("--pair-consistency-beta", type=float, default=1.0)
@@ -124,6 +127,7 @@ def flatten_row(row, source_dir=None):
         image = image if image.is_absolute() else Path(source_dir) / image
         image = str(image.resolve())
     examples = []
+    twin_id = (row.get("meta") or {}).get("twin_id")
     for qid, question in row["questions"].items():
         criteria = question.get("criteria")
         if question["type"] == "score":
@@ -156,6 +160,8 @@ def flatten_row(row, source_dir=None):
             "gold_label": label,
             "image": image,
         })
+        if twin_id is not None:
+            examples[-1]["twin"] = f"{twin_id}/{qid}"
     return examples
 
 
@@ -495,9 +501,50 @@ def load_examples(paths):
     return examples
 
 
+def group_twins(examples):
+    """Merge views sharing a twin key into one logical slot: one microbatch, one optimizer step."""
+    slots, twins = [], {}
+    for example in examples:
+        key = example.get("twin")
+        if key is None:
+            slots.append(example)
+        elif key in twins:
+            twins[key].append(example)
+        else:
+            twins[key] = [example]
+            slots.append(twins[key])
+    grouped = []
+    for slot in slots:
+        if not isinstance(slot, list):
+            grouped.append(slot)
+        elif len(slot) == 1:
+            grouped.append(slot[0])
+        else:
+            if len({frozenset(label for label, _ in view["items"]) for view in slot}) != 1:
+                raise ValueError(f"twin {slot[0]['twin']}: twins need identical option keys")
+            grouped.append({"id": f"twin:{slot[0]['twin']}", "twin_views": slot})
+    return grouped
+
+
+def twin_js_term(view_scores):
+    """Mean pairwise Jensen-Shannon over twin option distributions, aligned by option key."""
+    keys = sorted(view_scores[0][1])
+    if any(sorted(labels) != keys for _, labels in view_scores):
+        raise ValueError("twin views need identical option keys")
+    log_probs = [F.log_softmax(scores[[labels.index(key) for key in keys]], dim=0)
+                 for scores, labels in view_scores]
+    terms = []
+    # No stop-grad: both twins move toward each other (symmetric JS, gradient through both).
+    for left, right in combinations(log_probs, 2):
+        middle = torch.logsumexp(torch.stack([left, right]), dim=0) - math.log(2)
+        terms.append(0.5 * (F.kl_div(middle, left, log_target=True, reduction="sum")
+                            + F.kl_div(middle, right, log_target=True, reduction="sum")))
+    return torch.stack(terms).mean()
+
+
 def logical_slot_views(example):
     """Return canonical views followed by optional training-only auxiliary views."""
-    action = example.get("action_views")
+    action = example.get("action_views") or example.get("twin_views")
     if action is not None:
         return action
     paired = example.get("paired_views")
@@ -960,7 +1007,7 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                       pair_flip_weight=0.0, pair_flip_margin=1.0,
                       return_components=False, processor=None, action_loss_weight=0.0,
                       action_temperature=1.0, exact_policy_outcome_loss="nll",
-                      return_exact_policy_components=False):
+                      return_exact_policy_components=False, twin_consistency_weight=0.0):
     validate_pair_objectives(pair_consistency_weight, return_components,
                              pair_flip_weight, pair_flip_margin)
     validate_action_objective(action_loss_weight, action_temperature)
@@ -1035,11 +1082,13 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     action_loss_kinds = []
     action_correct = 0
     exact_component_slots = []
+    twin_terms = []
     cursor = 0
     for logical_example, views in zip(examples, logical_views):
         end = cursor + len(views)
         slot_view_losses = view_losses[cursor:end]
         canonical_count = (len(views) if "action_views" in logical_example
+                           or "twin_views" in logical_example
                            else 2 if "paired_views" in logical_example else 1)
         auxiliary_count = len(views) - canonical_count
         canonical_views_seen += canonical_count
@@ -1102,6 +1151,12 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                 action_loss_kinds.append("nll")
             slot_losses.append([action_slot])
             action_losses.append(action_loss)
+        elif "twin_views" in logical_example:
+            if return_components:
+                raise ValueError("twin consistency is incompatible with guard projection")
+            twin = twin_js_term(view_scores[cursor:end])
+            twin_terms.append(twin.detach())
+            slot_losses.append([pair_slot_loss(slot_view_losses, twin, twin_consistency_weight)])
         elif logical_example.get("pair_mode") is not None:
             if len(logical_example.get("paired_views", [])) != 2:
                 raise ValueError(f"{logical_example['id']}: counterfactual pair needs two views")
@@ -1161,7 +1216,9 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     stats.update({"pair_flip_seen": len(flip_losses),
                   "pair_flip_active": flip_active,
                   "pair_flip_loss": (sum(loss.detach().item() for loss in flip_losses) /
-                                     len(flip_losses) if flip_losses else 0.0)})
+                                     len(flip_losses) if flip_losses else 0.0),
+                  "twin_seen": len(twin_terms),
+                  "twin_js": (torch.stack(twin_terms).mean().item() if twin_terms else 0.0)})
     if action_losses:
         mean_action_loss = (sum(item.detach().item() for item in action_losses) /
                             len(action_losses))
@@ -1316,6 +1373,12 @@ def main():
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     train = load_examples(args.train)
+    if args.twin_consistency_weight < 0:
+        raise ValueError("twin consistency weight must be nonnegative")
+    if args.twin_consistency_weight > 0:
+        if args.project_consistency_against_guard:
+            raise ValueError("twin consistency is incompatible with guard projection")
+        train = group_twins(train)
     validate_action_training_mix(
         train, args.action_loss_weight, args.pair_consistency_weight,
         args.pair_flip_weight, args.project_consistency_against_guard,
@@ -1398,6 +1461,8 @@ def main():
         pair_active = pair_seen = 0
         flip_active = flip_seen = 0
         flip_loss_sum = 0.0
+        twin_seen = 0
+        twin_js_sum = 0.0
         action_groups_seen = action_groups_correct = 0
         action_loss_sum = 0.0
         action_loss_kinds = set()
@@ -1511,7 +1576,10 @@ def main():
                     pair_flip_margin=args.pair_flip_margin, processor=processor,
                     action_loss_weight=args.action_loss_weight,
                     action_temperature=args.action_temperature,
-                    exact_policy_outcome_loss=args.exact_policy_outcome_loss)
+                    exact_policy_outcome_loss=args.exact_policy_outcome_loss,
+                    twin_consistency_weight=args.twin_consistency_weight)
+                twin_seen += pair_stats["twin_seen"]
+                twin_js_sum += pair_stats["twin_js"] * pair_stats["twin_seen"]
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
                 flip_active += pair_stats["pair_flip_active"]
@@ -1552,6 +1620,9 @@ def main():
                   "pair_flip_loss": flip_loss_sum / flip_seen if flip_seen else 0.0,
                   "pair_flip_weight": flip_weight,
                   "pair_flip_weight_configured": args.pair_flip_weight}
+        if args.twin_consistency_weight > 0:
+            metric.update({"twin_seen": twin_seen,
+                           "twin_js": twin_js_sum / twin_seen if twin_seen else 0.0})
         if has_action_training:
             metric.update({"action_groups_seen": action_groups_seen,
                            "action_groups_correct": action_groups_correct,
