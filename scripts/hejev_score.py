@@ -57,12 +57,17 @@ def split_metrics(tasks: dict, rows: dict) -> dict:
     scored = [(t, r) for t, r in hit if r.get("valid") and r.get("probs")]
     briers = [brier_score(r["probs"], str(t["expected"]), t["labels"]) for t, r in scored]
     mean = lambda xs: sum(xs) / len(xs) if xs else None  # noqa: E731
+    # native items: cross-entropy against the teacher-consensus soft gold (expected = its argmax, so accuracy is
+    # already accuracy vs soft gold). Probabilities floored at 1e-6; invalid rows are excluded, as for Brier.
+    soft = [-sum(g * math.log(max(r["probs"].get(k, 0.0), 1e-6)) for k, g in t["provenance"]["soft_gold"].items() if g)
+            for t, r in scored if t.get("provenance", {}).get("soft_gold")]
     return {"n_tasks": len(tasks), "n_results": len(hit), "coverage": len(hit) / len(tasks) if tasks else None,
             "accuracy": mean([bool(r.get("correct")) for _, r in hit]),
             "valid_rate": mean([bool(r.get("valid")) for _, r in hit]),
             "brier": mean(briers),
             "ece": ece_top_label([(max(r["probs"].values()), bool(r.get("correct"))) for _, r in scored])["ece"]
-            if scored else None}
+            if scored else None,
+            **({"soft_gold_nll": mean(soft)} if soft else {})}
 
 
 def paired(prefix: str, en: dict, other: dict) -> dict:

@@ -24,7 +24,7 @@ setup() {
   (cd "$WE" && uv sync --locked -q && uv run --frozen python -m unittest discover 2>&1 | tail -1)
   git clone -q https://github.com/fstandhartinger/jevbench.git "$JB" && git -C "$JB" checkout -q bb05a335bc809e61b20c0f745d25499a82b326fc
   (cd "$JB" && uv sync -q)
-  uv venv -q "$R/venv-vllm" && uv pip install -q --python "$R/venv-vllm/bin/python" vllm ninja
+  uv venv -q "$R/venv-vllm" && uv pip install -q --python "$R/venv-vllm/bin/python" vllm==0.31.0 ninja  # the version Phase 0 ran
   uv venv -q "$R/venv-d1" && uv pip install -q --python "$R/venv-d1/bin/python" "transformers>=5.14" torch torchvision pillow accelerate
   "$R/venv-vllm/bin/vllm" --version
 }

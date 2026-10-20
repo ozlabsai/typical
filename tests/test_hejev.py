@@ -1,4 +1,5 @@
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -57,6 +58,10 @@ def test_scorer_paired_metrics():
     p = rep["paired"]["he_vs_en"]["all"]
     assert p["n_pairs"] == 2 and p["acc_gap_other_minus_en"] == -.5 and p["prediction_agreement"] == .5
     assert p["flips_en_right_other_wrong"] == 1 and 0 < p["mean_jsd"] < 1
+    native = {"n1": {"id": "n1", "expected": "yes", "labels": ["no", "yes"],
+                     "provenance": {"soft_gold": {"yes": .8, "no": .2}}}}
+    nll = hs.score({"native": {"n1": row("n1", .9, True)}}, {"native": native})["splits"]["native"]["soft_gold_nll"]
+    assert nll == pytest.approx(-(.8 * math.log(.9) + .2 * math.log(.1)))
 
 
 @pytest.mark.skipif(not (hb.OUT / "translated.jsonl").exists(), reason="benchmark not built")
