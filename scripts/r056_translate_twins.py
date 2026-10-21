@@ -93,8 +93,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     OUT.mkdir(parents=True, exist_ok=True)
     r053.LEDGER.update(usd=hj.spent(), max_usd=args.max_usd)
-    nodes = [n for wf in WORKFLOWS if (GEN / wf / "nodes.jsonl").exists()
-             for n in map(json.loads, (GEN / wf / "nodes.jsonl").open()) if twin_case(n["case_id"])]
+    nodes = [n for d in sorted(ROOT.glob(".context/r056/gen*/")) for wf in WORKFLOWS if (d / wf / "nodes.jsonl").exists()
+             for n in map(json.loads, (d / wf / "nodes.jsonl").open()) if twin_case(n["case_id"])]
     for n in nodes:
         n["workflow"] = next(wf for wf in WORKFLOWS if f"-{wf.split('_')[0]}-" in n["case_id"])
 

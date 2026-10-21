@@ -29,7 +29,8 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 WE = ROOT / ".context" / "research_sources" / "WorkflowEvals"
 DATA = ROOT / ".context" / "r053-data"
-GENERATOR = {"openrouter": "anthropic/claude-opus-5.5", "cli": "claude-opus-5-5"}
+GENERATOR = {"openrouter": "anthropic/claude-opus-5.5", "cli": "claude-opus-5-5",
+             "vllm": "google/gemma-4-12B-it", "codex": "gpt-5.6-terra"}  # vllm: $R056_VLLM_URL (OpenAI-compatible)
 PER_CALL = {"security_incidents": 3, "customer_service": 3, "agent_trace_observability": 1,
             "invoice_processing": 1}  # several cases per call where the schema is small
 NGRAM, SHINGLE, MAX_JACCARD = 13, 5, 0.3
@@ -429,6 +430,44 @@ def expand(wf: str, case_id: str, raw: dict, metadata: dict) -> list[dict]:
     return list(nodes.values())
 
 
+def open_model(model: str, user: str) -> dict:
+    """Cached chat call to a self-hosted vLLM (R056 open-model generators), thinking off, cost 0."""
+    import urllib.request
+
+    import scripts.r053_teacher_label as r053
+
+    def fetch():
+        body = {"model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
+                "max_tokens": 30000, "temperature": 1.0, "chat_template_kwargs": {"enable_thinking": False}}
+        req = urllib.request.Request(os.environ["R056_VLLM_URL"].rstrip("/") + "/chat/completions",
+                                     json.dumps(body).encode(), {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3600) as resp:
+            return json.loads(resp.read())
+
+    return r053._cached([model, "vllm-gen", SYSTEM, user], model, fetch)
+
+
+def codex_text(model: str, user: str, effort: str) -> str:
+    """Cached `codex exec` (GPT family; subscription, $0 notional), free-form JSON answer."""
+    import subprocess
+    import tempfile
+
+    import scripts.r053_teacher_label as r053
+
+    def fetch():
+        with tempfile.TemporaryDirectory() as d:
+            proc = subprocess.run(["codex", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+                                   "--skip-git-repo-check", "-s", "read-only", "-C", d, "-m", model,
+                                   "-c", f"model_reasoning_effort={effort}", "-o", f"{d}/out.txt", "-"],
+                                  input=SYSTEM + "\n\n" + user, capture_output=True, text=True, timeout=3600)
+            out = Path(d, "out.txt")
+            if not out.exists() or not out.read_text().strip():
+                raise RuntimeError(f"codex failed: {(proc.stderr or proc.stdout)[-300:]}")
+            return {"result": out.read_text(), "total_cost_usd": 0.0}
+
+    return r053._cached([model, "codex-gen", effort, SYSTEM, user], model, fetch)["result"]
+
+
 def main(argv=None) -> int:
     sys.path.insert(0, str(WE))
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -460,6 +499,10 @@ def main(argv=None) -> int:
     model = args.model or GENERATOR[args.backend]
 
     def llm(user: str) -> str:
+        if args.backend == "vllm":
+            return usage_of(open_model(model, user))["text"]
+        if args.backend == "codex":
+            return codex_text(model, user, args.effort)
         if args.backend == "openrouter":
             return usage_of(openrouter(model, [{"role": "system", "content": SYSTEM},
                                                {"role": "user", "content": user}], args.effort))["text"]

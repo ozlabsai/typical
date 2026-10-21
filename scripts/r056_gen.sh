@@ -7,7 +7,7 @@ wf=$1 start=$2 end=$3 per=$4 chunk=${5:-40}
 for ((s = start; s < end; s += chunk)); do
   n=$(( end - s < chunk ? end - s : chunk ))
   uv run --frozen python ../../../scripts/r053_generate_cases.py --workflows "$wf" --start "$s" --n "$n" \
-    --per-call "$per" --backend cli --model claude-haiku-5-5 --effort "${EFFORT:-medium}" --out ../../r056/gen --tag r056 \
+    --per-call "$per" --backend "${BACKEND:-cli}" --model "${MODEL:-claude-haiku-5-5}" --effort "${EFFORT:-medium}" --out "../../r056/${GENDIR:-gen}" --tag "${TAG:-r056}" \
     --max-usd "${MAX_USD:-150}" --workers "${WORKERS:-8}" || echo "chunk $s failed rc=$?"
 done
 echo "GEN_DONE $wf $start $end"

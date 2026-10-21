@@ -5,11 +5,12 @@
 #   srv <gpu> gemma|qwen            vLLM thinking teacher on GPU g (:802g) + vllm: systemone shim (:801g)
 #   stopsrv <gpu>                   stop GPU g's teacher + shim
 #   lab <name> <deadline> <gpu>...  label $IN/<name>.jsonl through the shims of those GPUs -> $O6/labels_<name>.jsonl
+#   labloop <name> <gpu>...         streaming lab: re-runs until $O6/STOP_<name> (input re-pushed by r056_push.sh)
 #   train <steps>                   torchrun x4: fresh Gemma-4-12B-it LoRA on $R/.context/r056/mix
 #   devsel <step>...                dev teacher-NLL (+ per-question probs) of saved checkpoints, one GPU each
-#   serve <gpu> <step> <port>       native-readout server of a checkpoint (+ temperatures.json if present)
-#   wf <port> <id> <workflow>...    WorkflowEvals (pinned revisions, typical: provider, questions all)
-#   evalhe <gpu> <step>             JevBench public 231 + hejev (HE/MX/native) + external panel, then retention
+#   evalall <step>                  stage adapter (+ $O6/temperatures.json), 2 replicas/GPU behind r056_lb.py, then
+#                                   WorkflowEvals 705 (typical:, questions all) || JevBench 231 + hejev + external;
+#                                   then MASSIVE/ScienceQA retention
 set -euo pipefail
 source "$(dirname "$0")/r055_pod.sh" true  # env, ulimit, setup/rsetup, wait_url, killtree, jev, G/Q pins, PY, GM
 O6=/workspace/g1/r056; MIX6=$R/.context/r056/mix; IN=$R/.context/r056/label_in
@@ -46,6 +47,14 @@ lab() {  # name deadline gpu...
   echo "$(date -u +%FT%TZ) LAB_DONE $name" >>"$O6/logs/label-$name.log"
 }
 
+labloop() {  # name gpu... -- streaming: re-run `lab` on the (growing) input until $O6/STOP_<name> exists
+  local name=$1; shift
+  until [[ -e $O6/STOP_$name ]]; do
+    lab "$name" 2030-01-01T00:00:00Z "$@"
+    sleep 60
+  done
+}
+
 train() {  # steps [extra trainer args]
   local steps=$1; shift
   mkdir -p "$O6/train"
@@ -71,43 +80,63 @@ devsel() {  # step... -> $O6/devsel/step-N.json, one GPU per checkpoint
   for p in "${pids[@]}"; do wait "$p" || true; done
 }
 
-serve() {  # gpu step port -- 2-file adapter tree (+ temperatures.json) as R055; id typical:r056-sha256-<12>
-  local gpu=$1 step=$2 port=$3 srv=$O6/serve sha id
-  mkdir -p "$srv"
-  cp "$O6/train/step-$(printf %06d "$step")"/{adapter_config.json,adapter_model.safetensors} "$srv/"
+stage() {  # step -- 2-file adapter tree (+ temperatures.json) as R055; id typical:r056-sha256-<12>
+  local srv=$O6/serve sha
+  rm -rf "$srv"; mkdir -p "$srv"
+  cp "$O6/train/step-$(printf %06d "$1")"/{adapter_config.json,adapter_model.safetensors} "$srv/"
   [[ -e $O6/temperatures.json ]] && cp "$O6/temperatures.json" "$srv/"
   sha=$(cd "$R" && $PY -c 'import sys; from scripts.preflight_r043_assets import tree_hash; print(tree_hash(sys.argv[1])[0])' "$srv")
-  id=r056-sha256-${sha:0:12}; echo "$id $sha step=$step" >"$O6/served-id.txt"
-  (cd "$R" && CUDA_VISIBLE_DEVICES=$gpu TYPICAL_API_KEY= exec setsid uv run --no-sync python scripts/serve_typesafe_gemma_lora.py \
-    --model "${G[0]}" --model-revision "${G[1]}" --adapter "$srv" --expected-adapter-tree-sha256 "$sha" --model-id "$id" \
-    ${TEMPS:+--temperatures "$srv/temperatures.json"} --receipt "$O6/server-startup-receipt-$port.json" \
-    --max-context 16384 --port "$port" >"$O6/logs/serve-$port.log" 2>&1) &
-  echo $! >"$O6/pids/serve$port"
-  wait_url http://127.0.0.1:$port/v1/models "$(cat "$O6/pids/serve$port")" || { tail -30 "$O6/logs/serve-$port.log"; return 1; }
+  echo "r056-sha256-${sha:0:12} $sha step=$1" >"$O6/served-id.txt"
+}
+
+replicas() {  # per_gpu -- native-readout replicas of $O6/serve on every GPU (:8100+) behind r056_lb.py (:8090)
+  local srv=$O6/serve id sha g k port urls=()
+  read -r id sha _ <"$O6/served-id.txt"
+  mkdir -p "$O6/receipts"
+  for g in 0 1 2 3; do for k in $(seq 0 $(($1 - 1))); do
+    port=$((8100 + 10 * g + k)); urls+=(http://127.0.0.1:$port)
+    (cd "$R" && CUDA_VISIBLE_DEVICES=$g TYPICAL_API_KEY= exec setsid uv run --no-sync python scripts/serve_typesafe_gemma_lora.py \
+      --model "${G[0]}" --model-revision "${G[1]}" --adapter "$srv" --expected-adapter-tree-sha256 "$sha" --model-id "$id" \
+      $([[ -e $srv/temperatures.json ]] && echo --temperatures "$srv/temperatures.json") \
+      --receipt "$O6/receipts/$port.json" --max-context 16384 --port "$port" >"$O6/logs/serve-$port.log" 2>&1) &
+    echo $! >"$O6/pids/serve$port"
+  done; done
+  for u in "${urls[@]}"; do wait_url "$u/v1/models" "$(cat "$O6/pids/serve${u##*:}")" || { tail -20 "$O6/logs/serve-${u##*:}.log"; return 1; }; done
+  setsid python3 "$R/scripts/r056_lb.py" 8090 "${urls[@]}" >"$O6/logs/lb.log" 2>&1 &
+  echo $! >"$O6/pids/lb"
+  wait_url http://127.0.0.1:8090/v1/models "$(cat "$O6/pids/lb")"
   echo "$id"
+}
+
+stopall() {  # replicas + lb
+  local f; for f in "$O6"/pids/serve* "$O6/pids/lb"; do [[ -e $f ]] && { killtree "$(cat "$f")" || true; rm -f "$f"; }; done
 }
 
 wf() {  # port id workflow... -- the R050/Phase-0 harness path, typical: provider, questions all
   local port=$1 id=$2 w pids=(); shift 2
   for w in "$@"; do
-    (cd "$WE" && TYPICAL_API_KEY=local TYPICAL_BASE_URL=http://127.0.0.1:$port exec uv run --frozen python run.py "$w" \
-      --model "typical:$id" --name r056 --dataset-revision "${REV[$w]}" --questions all --workers 4 \
-      --question-workers 1 --timeout 1800 --retry-errors >"$O6/logs/wf-$w.log" 2>&1
-     rsync -a "$WE/runs/$w/r056/" "$O6/wf/$w/") & pids+=($!)
+    (cd "$WE" && TYPICAL_API_KEY=local TYPICAL_BASE_URL=http://127.0.0.1:$port uv run --frozen python run.py "$w" \
+      --model "typical:$id" --name r056 --dataset-revision "${REV[$w]}" --questions all --workers 8 \
+      --question-workers 1 --timeout 3600 --retry-errors >"$O6/logs/wf-$w.log" 2>&1
+     mkdir -p "$O6/wf/$w"; rsync -a "$WE/runs/$w/r056/" "$O6/wf/$w/") & pids+=($!)
   done
   for p in "${pids[@]}"; do wait "$p" || true; done
 }
 
-evalhe() {  # gpu step -- JevBench 231 + hejev + external (as R055 evalarm), then MASSIVE/ScienceQA retention
-  local gpu=$1 step=$2 port=$((8095 + $1)) id
-  id=$(serve "$gpu" "$step" "$port" | tail -1)
-  OUT=$O6/hejev jev r056 http://127.0.0.1:$port "$id" en translated mixed native
-  OUT=$O6/hejev jev r056 http://127.0.0.1:$port "$id" $EXT
-  killtree "$(cat "$O6/pids/serve$port")" || true
-  (cd "$R" && CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=$R $PY -m scripts.eval_gemma_mm_he --model "$GM" --adapter "$O6/serve" \
+evalall() {  # step -- stage + replicas, then WorkflowEvals (705) || JevBench 231 + hejev + external; retention last
+  local id
+  stage "$1"; id=$(replicas "${PER_GPU:-2}" | tail -1)
+  date -u +%FT%TZ >"$O6/EVAL.START"
+  wf 8090 "$id" security_incidents agent_trace_observability invoice_processing customer_service &
+  local wfp=$!
+  OUT=$O6/hejev jev r056 http://127.0.0.1:8090 "$id" en translated mixed native
+  OUT=$O6/hejev jev r056 http://127.0.0.1:8090 "$id" $EXT
+  wait $wfp || true
+  stopall
+  (cd "$R" && CUDA_VISIBLE_DEVICES=0 PYTHONPATH=$R $PY -m scripts.eval_gemma_mm_he --model "$GM" --adapter "$O6/serve" \
     --he-left data_he/eval/massive_he_test.jsonl --he-right data_he/eval/massive_en_test_paired.jsonl \
     --mm-dir data_v/eval --out "$O6/mmhe.json" >"$O6/logs/mmhe.log" 2>&1)
-  echo done >"$O6/EVALHE_DONE"
+  date -u +%FT%TZ >"$O6/EVAL.DONE"
 }
 
 "$@"
