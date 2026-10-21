@@ -15,7 +15,7 @@ from peft import PeftModel
 from transformers import AutoModelForImageTextToText, AutoTokenizer
 
 from scripts.singleton_option_scorer import singleton_option_probabilities
-from scripts.train_gemma_decision_lora import encode, letter_token_groups, load_examples
+from scripts.train_gemma_decision_lora import enable_bidirectional_prompt, encode, letter_token_groups, load_examples
 
 
 def main():
@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--dev", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--max-length", type=int, default=16384)
+    ap.add_argument("--ids", help="R060-pre: score only the example ids listed in this file (the proxy set)")
+    ap.add_argument("--bidirectional-prompt", action="store_true", help="R057: adapter trained with the prompt mask")
     args = ap.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
     model = AutoModelForImageTextToText.from_pretrained(args.model, dtype=torch.bfloat16, local_files_only=True,
@@ -32,9 +34,14 @@ def main():
     if args.adapter:
         model = PeftModel.from_pretrained(model, args.adapter, local_files_only=True)
     model = model.to("cuda").eval()
+    if args.bidirectional_prompt:
+        enable_bidirectional_prompt(model)
+    keep = set(open(args.ids).read().split()) if args.ids else None
     groups = letter_token_groups(tokenizer)
     rows, skipped = [], 0
     for ex in load_examples([args.dev]):
+        if keep is not None and ex["id"] not in keep:
+            continue
         try:
             ids, teacher = encode(ex, tokenizer, args.max_length, shuffle=False)
         except ValueError:
