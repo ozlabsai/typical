@@ -111,6 +111,12 @@ def parse_args():
                         default="nll")
     parser.add_argument("--skip-overlength", action="store_true",
                         help="Skip training slots longer than --max-length instead of failing (counted)")
+    parser.add_argument("--kl-to-base-weight", type=float, default=0.0,
+                        help="R060: weight of KL(p_base || p_student) on anchored rows (0 = off)")
+    parser.add_argument("--kl-to-base-on", default="anchor",
+                        help="meta key selecting anchored rows (meta[KEY] truthy)")
+    parser.add_argument("--kl-to-base-only", action="store_true",
+                        help="drop CE on anchored rows; they train on the KL anchor alone")
     return parser.parse_args()
 
 
@@ -133,7 +139,8 @@ def flatten_row(row, source_dir=None):
         image = image if image.is_absolute() else Path(source_dir) / image
         image = str(image.resolve())
     examples = []
-    twin_id = (row.get("meta") or {}).get("twin_id")
+    meta = row.get("meta") or {}
+    twin_id = meta.get("twin_id")
     for qid, question in row["questions"].items():
         criteria = question.get("criteria")
         if question["type"] == "score":
@@ -168,6 +175,11 @@ def flatten_row(row, source_dir=None):
         })
         if twin_id is not None:
             examples[-1]["twin"] = f"{twin_id}/{qid}"
+        if meta:
+            examples[-1]["meta"] = meta
+        base_probs = (meta.get("base_probs") or {}).get(qid)
+        if base_probs is not None:  # R060 cache: {option label: base probability}
+            examples[-1]["base_probs"] = base_probs
     return examples
 
 
@@ -604,6 +616,20 @@ def semantic_gold_margin(option_scores, item_labels, gold_label):
     except ValueError as error:
         raise ValueError("counterfactual gold label is not an option") from error
     return option_scores[gold_index] - option_scores[1 - gold_index]
+
+
+def option_scores_from_logits(logits, groups, count, device):
+    """Per-option score = logsumexp over every token that decodes to that option's letter."""
+    return torch.stack([torch.logsumexp(logits[token_ids.to(device)], dim=0)
+                        for token_ids in groups[:count]])
+
+
+def kl_to_base_term(option_scores, base_probs):
+    """KL(p_base || p_student) over the rendered options. Forward (mass-covering) direction on purpose: the
+    student pays wherever the base has mass it drops, so it keeps the base's whole answer distribution; reverse
+    KL would let it collapse onto one base mode and still score well."""
+    base = base_probs.to(option_scores)
+    return F.kl_div(F.log_softmax(option_scores, dim=0), base / base.sum(), reduction="sum")
 
 
 def pair_flip_term(margin_a, margin_b, margin):
@@ -1058,7 +1084,8 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                       pair_flip_weight=0.0, pair_flip_margin=1.0,
                       return_components=False, processor=None, action_loss_weight=0.0,
                       action_temperature=1.0, exact_policy_outcome_loss="nll",
-                      return_exact_policy_components=False, twin_consistency_weight=0.0):
+                      return_exact_policy_components=False, twin_consistency_weight=0.0,
+                      kl_to_base_weight=0.0, kl_to_base_on="anchor", kl_to_base_only=False):
     validate_pair_objectives(pair_consistency_weight, return_components,
                              pair_flip_weight, pair_flip_margin)
     validate_action_objective(action_loss_weight, action_temperature)
@@ -1100,6 +1127,26 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     union = torch.unique(positions, sorted=True)
     output = model(**model_inputs, use_cache=False, logits_to_keep=union.to(device))
     offsets = {position.item(): index for index, position in enumerate(union)}
+    anchored = [kl_to_base_weight > 0 and bool((example.get("meta") or {}).get(kl_to_base_on))
+                for example in flat_examples]
+    live = [index for index, (flag, example) in enumerate(zip(anchored, flat_examples))
+            if flag and "base_probs" not in example]
+    base_logits, kl_skipped_image = {}, 0
+    if live:
+        # One extra no-grad forward of the anchored rows only, LoRA off = the frozen base.
+        base_inputs = (model_inputs if image_examples else
+                       {name: value[torch.tensor(live, device=device)]
+                        for name, value in model_inputs.items()})
+        try:
+            with torch.no_grad(), model.disable_adapter():
+                base_output = model(**base_inputs, use_cache=False, logits_to_keep=union.to(device))
+            base_logits = dict(zip(live, base_output.logits))
+        except Exception:  # ponytail: image rows whose adapter-off forward breaks are counted, not anchored
+            if not image_examples:
+                raise
+            kl_skipped_image = len(live)
+    kl_terms = []
+    view_ce = []
     view_losses = []
     view_correct = []
     view_scores = []
@@ -1107,11 +1154,20 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
     for batch_index, ((_, probabilities, labels), position, example) in enumerate(
             zip(encoded, positions, flat_examples)):
         logits = output.logits[batch_index, offsets[position.item()]].float()
-        option_scores = torch.stack([
-            torch.logsumexp(logits[token_ids.to(device)], dim=0)
-            for token_ids in groups[:len(probabilities)]
-        ])
-        view_losses.append(-(probabilities.to(device) * F.log_softmax(option_scores, dim=0)).sum())
+        option_scores = option_scores_from_logits(logits, groups, len(probabilities), device)
+        view_loss = -(probabilities.to(device) * F.log_softmax(option_scores, dim=0)).sum()
+        view_ce.append(view_loss)
+        if anchored[batch_index] and (batch_index in base_logits or "base_probs" in example):
+            # ponytail: cached base_probs come from the canonical order; a shuffled render reuses them by label.
+            base = (torch.tensor([float(example["base_probs"][label]) for label in labels])
+                    if "base_probs" in example else F.softmax(option_scores_from_logits(
+                        base_logits[batch_index][offsets[position.item()]].float(), groups,
+                        len(probabilities), device), dim=0))
+            kl = kl_to_base_term(option_scores, base)
+            kl_terms.append(kl.detach())
+            view_loss = (kl_to_base_weight * kl if kl_to_base_only
+                         else view_loss + kl_to_base_weight * kl)
+        view_losses.append(view_loss)
         view_correct.append(float(option_scores.argmax().item() == probabilities.argmax().item()))
         view_scores.append((option_scores, labels))
         gold_index = labels.index(example["gold_label"])
@@ -1144,10 +1200,10 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
         auxiliary_count = len(views) - canonical_count
         canonical_views_seen += canonical_count
         canonical_views_correct += sum(view_correct[cursor:cursor + canonical_count])
-        canonical_ce_losses.extend(slot_view_losses[:canonical_count])
+        canonical_ce_losses.extend(view_ce[cursor:cursor + canonical_count])
         auxiliary_views_seen += auxiliary_count
         auxiliary_views_correct += sum(view_correct[cursor + canonical_count:end])
-        auxiliary_ce_losses.extend(slot_view_losses[canonical_count:])
+        auxiliary_ce_losses.extend(view_ce[cursor + canonical_count:end])
         if "action_views" in logical_example:
             qids = logical_example["action_qids"]
             if len(qids) != len(views) or set(qids) != set(logical_example["action_qid_to_field"]):
@@ -1270,6 +1326,10 @@ def loss_for_examples(model, examples, tokenizer, groups, max_length, device, sh
                                      len(flip_losses) if flip_losses else 0.0),
                   "twin_seen": len(twin_terms),
                   "twin_js": (torch.stack(twin_terms).mean().item() if twin_terms else 0.0)})
+    if kl_to_base_weight > 0:
+        stats.update({"kl_base_seen": len(kl_terms),
+                      "kl_base_mean": torch.stack(kl_terms).mean().item() if kl_terms else 0.0,
+                      "kl_base_skipped_image": kl_skipped_image})
     if action_losses:
         mean_action_loss = (sum(item.detach().item() for item in action_losses) /
                             len(action_losses))
@@ -1440,6 +1500,10 @@ def main():
     train = load_examples(args.train)
     if args.twin_consistency_weight < 0:
         raise ValueError("twin consistency weight must be nonnegative")
+    if args.kl_to_base_weight < 0 or (args.kl_to_base_only and args.kl_to_base_weight == 0):
+        raise ValueError("--kl-to-base-weight must be nonnegative and positive with --kl-to-base-only")
+    if args.kl_to_base_weight > 0 and args.project_consistency_against_guard:
+        raise ValueError("KL-to-base is incompatible with guard projection")
     if args.twin_consistency_weight > 0:
         if args.project_consistency_against_guard:
             raise ValueError("twin consistency is incompatible with guard projection")
@@ -1535,6 +1599,8 @@ def main():
         flip_loss_sum = 0.0
         twin_seen = 0
         twin_js_sum = 0.0
+        kl_seen = kl_skipped_image = 0
+        kl_sum = 0.0
         action_groups_seen = action_groups_correct = 0
         action_loss_sum = 0.0
         action_loss_kinds = set()
@@ -1650,7 +1716,9 @@ def main():
                     action_loss_weight=args.action_loss_weight,
                     action_temperature=args.action_temperature,
                     exact_policy_outcome_loss=args.exact_policy_outcome_loss,
-                    twin_consistency_weight=args.twin_consistency_weight)
+                    twin_consistency_weight=args.twin_consistency_weight,
+                    kl_to_base_weight=args.kl_to_base_weight, kl_to_base_on=args.kl_to_base_on,
+                    kl_to_base_only=args.kl_to_base_only)
                 except ValueError as error:
                     if not (args.skip_overlength and "exceeds" in str(error)):
                         raise
@@ -1658,6 +1726,9 @@ def main():
                     continue
                 twin_seen += pair_stats["twin_seen"]
                 twin_js_sum += pair_stats["twin_js"] * pair_stats["twin_seen"]
+                kl_seen += pair_stats.get("kl_base_seen", 0)
+                kl_sum += pair_stats.get("kl_base_mean", 0.0) * pair_stats.get("kl_base_seen", 0)
+                kl_skipped_image += pair_stats.get("kl_base_skipped_image", 0)
                 pair_active += pair_stats["pair_consistency_active"]
                 pair_seen += pair_stats["pair_consistency_seen"]
                 flip_active += pair_stats["pair_flip_active"]
@@ -1708,6 +1779,10 @@ def main():
         if args.twin_consistency_weight > 0:
             metric.update({"twin_seen": twin_seen,
                            "twin_js": twin_js_sum / twin_seen if twin_seen else 0.0})
+        if args.kl_to_base_weight > 0:
+            metric.update({"kl_base_seen": kl_seen,
+                           "kl_base_mean": kl_sum / kl_seen if kl_seen else 0.0,
+                           "kl_base_skipped_image": kl_skipped_image})
         if has_action_training:
             metric.update({"action_groups_seen": action_groups_seen,
                            "action_groups_correct": action_groups_correct,
