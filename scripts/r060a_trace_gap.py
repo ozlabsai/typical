@@ -109,11 +109,16 @@ def cmd_label(args):
     t.CACHE, t.LEDGER["max_usd"] = OUT / "cache", 0.0 if args.dry_run else args.max_usd
     client = SystemOneAdapterClient(structured_outputs=True, llm_answer_mode="probabilities",
                                     normalize_probabilities=True, n_retry_malformed_structure=1)
-    qs = [r for r in jsonl(OUT / f"{args.set}_questions.jsonl") if args.workflow in (None, r["workflow"])][: args.limit]
+    qs = [r for r in jsonl(OUT / f"{args.set}_questions.jsonl") if args.workflow in (None, r["workflow"])]
+    model, suffix = (MODEL, "") if args.backend == "openrouter" else (MODEL.split("/")[1], "_codex")
+    if args.backend == "codex":  # R060: OpenRouter credits ran out; codex labels only what OpenRouter didn't
+        done = {(a["id"], a["qid"]) for a in jsonl(OUT / f"labels_astra_{args.set}.jsonl")}
+        qs = [r for r in qs if (r["id"], r["qid"]) not in done]
+    qs = qs[: args.limit]
 
     def one(r):
         try:
-            return r, t.ask(client, "openrouter", MODEL, r["state"], {r["qid"]: r["question"]})[r["qid"]], None
+            return r, t.ask(client, args.backend, model, r["state"], {r["qid"]: r["question"]})[r["qid"]], None
         except Exception as exc:  # budget stops are instant; keep the rest
             return r, None, f"{type(exc).__name__}: {exc}"[:300]
 
@@ -125,8 +130,8 @@ def cmd_label(args):
                 missing[r["workflow"]] += err.startswith("BudgetExceeded")
             else:
                 out.append({"id": r["id"], "qid": r["qid"], "workflow": r["workflow"], "type": r["type"],
-                            "teacher": MODEL, "p": p})
-    s = t.STATS[MODEL]
+                            "teacher": f"{args.backend}:{model}", "p": p})
+    s = t.STATS[model]
     summary = {"set": args.set, "workflow": args.workflow, "questions": len(qs), "labeled": len(out),
                "errors": dict(errors), "usd": round(s["usd"], 4), "new_usd": round(t.LEDGER["usd"], 4),
                "usd_per_question": round(s["usd"] / max(len(out), 1), 5), "new_calls": t.LEDGER["calls"],
@@ -142,7 +147,7 @@ def cmd_label(args):
         summary["dry_run"] = {"uncached_by_workflow": dict(missing), "usd_per_question": rate,
                               "est_usd": round(sum(n * rate.get(wf, float("nan")) for wf, n in missing.items()), 2)}
     else:
-        name = f"{args.set}{'_' + args.workflow if args.workflow else ''}"
+        name = f"{args.set}{'_' + args.workflow if args.workflow else ''}{suffix}"
         write(OUT / f"labels_astra_{name}.jsonl", out)
         (OUT / f"labels_astra_{name}_summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     print(json.dumps(summary, indent=1))
@@ -263,6 +268,8 @@ def main(argv=None):
     s.add_argument("--max-usd", type=float, default=0.0, help="stop starting calls past this (in-flight calls finish)")
     s.add_argument("--dry-run", action="store_true", help="$0 budget: count uncached questions and price them")
     s.add_argument("--workers", type=int, default=8)
+    s.add_argument("--backend", choices=("openrouter", "codex"), default="openrouter",
+                   help="codex: `codex exec` gpt-6-astra ($0), only questions missing from labels_astra_<set>.jsonl")
     s.add_argument("--limit", type=int)
     sub.add_parser("fit")
     sub.add_parser("push")

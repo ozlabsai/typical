@@ -117,7 +117,8 @@ def retarget(rows, astra, qwen, stats):
 
 def cmd_mix(args):
     rng = random.Random(60)
-    astra = {(a["id"], a["qid"]): a["p"] for a in jsonl(ROOT / ".context/r060a/labels_astra_full.jsonl")}
+    astra = {(a["id"], a["qid"]): a["p"] for f in ("labels_astra_full.jsonl", "labels_astra_full_codex.jsonl")
+             for a in jsonl(ROOT / ".context/r060a" / f)}  # OpenRouter, then Codex CLI for the rest (credits ran out)
     qwen = {(r["id"], r["qid"]): r["p_qwen"] for r in jsonl(ROOT / ".context/r060a/full_questions.jsonl")
             if r["workflow"] == TRACE}
     stats = Counter()

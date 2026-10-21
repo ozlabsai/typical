@@ -29,7 +29,7 @@ DATA = ROOT / ".context" / "r053-data"
 CACHE = DATA / "cache"
 WORKFLOWS = ("security_incidents", "customer_service", "agent_trace_observability", "invoice_processing")
 TEACHERS = {"openrouter": ("openai/gpt-6-astra", "anthropic/claude-fable-5.1"),
-            "cli": ("claude-fable-5-1", "claude-opus-5-5")}
+            "cli": ("claude-fable-5-1", "claude-opus-5-5"), "codex": ("gpt-6-astra",)}
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 
 
@@ -110,6 +110,35 @@ def claude(model: str, system: str, user: str, effort: str = "high", schema: dic
     return _cached([model, effort, system, user] + ([schema] if schema is not None else []), model, fetch)
 
 
+def codex(model: str, system: str, user: str, effort: str = "high", schema: dict | None = None) -> dict:
+    """Cached `codex exec` call (ChatGPT subscription, $0), --output-schema for the strict schema. Returns
+    {"result": final message, "usage": turn usage}; usage_of reads it like the claude CLI's JSON."""
+    import tempfile
+
+    def fetch():
+        error = ""
+        for _ in range(2):  # ponytail: one transport retry; schema retries belong to the adapter
+            with tempfile.TemporaryDirectory() as d:
+                cmd = ["codex", "exec", "-m", model, "--ignore-user-config", "--ignore-rules", "--ephemeral",
+                       "--skip-git-repo-check", "-C", d, "--sandbox", "read-only", "-c", f"model_reasoning_effort={effort}",
+                       "-o", f"{d}/out.txt", "--json", "-"]
+                if schema is not None:
+                    Path(f"{d}/schema.json").write_text(json.dumps(schema))
+                    cmd[-1:-1] = ["--output-schema", f"{d}/schema.json"]
+                proc = subprocess.run(cmd, input=f"{system}\n\n{user}", capture_output=True, text=True, timeout=1800)
+                out = Path(f"{d}/out.txt").read_text() if Path(f"{d}/out.txt").exists() else ""
+            usage = [json.loads(x)["usage"] for x in proc.stdout.splitlines() if '"turn.completed"' in x]
+            if proc.returncode == 0 and out.strip() and usage:
+                u = usage[-1]
+                return {"result": out, "usage": {"input_tokens": u.get("input_tokens", 0),
+                                                 "output_tokens": u.get("output_tokens", 0),
+                                                 "output_tokens_details": {"thinking_tokens": u.get("reasoning_output_tokens", 0)}}}
+            error = (proc.stderr or proc.stdout)[-500:]
+        raise RuntimeError(f"codex CLI failed for {model}: {error}")
+
+    return _cached(["codex", model, effort, system, user] + ([schema] if schema is not None else []), model, fetch)
+
+
 def _api_key() -> str:
     if os.environ.get("OPENROUTER_API_KEY"):
         return os.environ["OPENROUTER_API_KEY"]
@@ -167,7 +196,8 @@ class Provider:
             system, first, *rest = messages
             # ponytail: the CLI takes one user turn, so a corrective retry is replayed as a transcript.
             user = first.content + "".join(f"\n\n[{m.role}]\n{m.content}" for m in rest)
-            raw = claude(self.model_name, system.content, user, schema=schema if structured else None)
+            call = codex if self.backend == "codex" else claude
+            raw = call(self.model_name, system.content, user, schema=schema if structured else None)
         u = usage_of(raw)
         with _LOCK:
             STATS[self.model_name].update({"calls": 1, "usd": u["usd"], "wall_s": raw.get("wall_s", 0),
