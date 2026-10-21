@@ -204,17 +204,16 @@ def diag_main(results: Path) -> dict:
 # ---------------------------------------------------------------- rows (stdlib)
 
 def r056_target(wf: str, teachers: dict) -> dict | None:
-    """R056's training target for one question (coordinator rule): security = Qwen only, never Gemma-only;
-    elsewhere the mean of the teachers present, a lone Gemma noul clipped to [.02, .98]."""
+    """R056's training target (r056_build.teacher_target): security = Qwen only; else mean(Gemma, Qwen);
+    Gemma alone is smoothed off exact 0/1 (0.96 p + 0.04 / K); Qwen alone as is."""
+    g, q = teachers.get("gemma"), teachers.get("qwen")
     if wf == "security_incidents":
-        return teachers.get("qwen")
-    if not teachers:
-        return None
-    if set(teachers) == {"gemma"} and "true" in teachers["gemma"]:
-        p = min(0.98, max(0.02, teachers["gemma"]["true"]))
-        return {"true": p, "false": 1 - p}
-    keys = list(next(iter(teachers.values())))
-    return {k: sum(t[k] for t in teachers.values()) / len(teachers) for k in keys}
+        return q
+    if g and q:
+        return {k: (g[k] + q[k]) / 2 for k in g}
+    if g and any(x in (0.0, 1.0) for x in g.values()):
+        return {k: 0.96 * x + 0.04 / len(g) for k, x in g.items()}
+    return g or q
 
 
 def probs_of(question: dict, answer: dict) -> dict[str, float]:
@@ -254,6 +253,14 @@ def rows_main(r056: Path, out: Path, max_train: int) -> None:
         t = json.loads(line)
         if is_dev(t["case_id"]) and t["twin_id"] in nodes:
             nodes[t["request_id"]] = t  # twins inherit the English node's teacher labels (R056 mix rule)
+    # R056's mix decides which nodes are clean (13-gram decontamination vs every benchmark) and in which split
+    mix = {split: {json.loads(line)["id"].split(":")[1] for line in (r056 / "mix" / f).read_text().splitlines()
+                   if json.loads(line)["meta"].get("lang") == "en" and ":" in json.loads(line)["id"]}
+           for split, f in (("train", "train.jsonl"), ("dev", "dev_wf.jsonl"))}
+    dirty = {n["case_id"] for rid, n in nodes.items() if n["lang"] == "en" and is_dev(n["case_id"]) and rid not in mix["dev"]
+             and any((rid, q) in labels for q in n["questions"])}  # a labeled dev node the mix dropped
+    nodes = {rid: n for rid, n in nodes.items() if n["case_id"] not in dirty
+             and (is_dev(n["case_id"]) or n.get("twin_id", rid) in mix["train"])}
     train, dev = [], []
     for rid, n in nodes.items():
         src = n.get("twin_id", rid)
@@ -278,7 +285,7 @@ def rows_main(r056: Path, out: Path, max_train: int) -> None:
         (d / "cases.jsonl").write_text("".join(json.dumps(cases[wf][c], ensure_ascii=False) + "\n" for c in sorted(dev_ids)))
         (d / "nodes.jsonl").write_text("".join(json.dumps(n, ensure_ascii=False) + "\n" for n in nodes.values()
                                                if n["case_id"] in dev_ids and n["lang"] == "en"))
-    summary = {"train": len(train), "dev": len(dev), "dev_labeled": sum(bool(r["target"]) for r in dev),
+    summary = {"dirty_dev_cases_dropped": len(dirty), "train": len(train), "dev": len(dev), "dev_labeled": sum(bool(r["target"]) for r in dev),
                "dev_he": sum(r["lang"] == "he" for r in dev),
                "dev_cases": {wf: sum(is_dev(c) for c in cases[wf]) for wf in WORKFLOWS},
                "train_by_wf": {wf: sum(r["workflow"] == wf for r in train) for wf in WORKFLOWS}}
