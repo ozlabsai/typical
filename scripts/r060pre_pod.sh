@@ -9,6 +9,8 @@
 #               WorkflowEvals 705 (R056 `wf` settings) || JevBench 231 + hejev + external panel
 #   evalbase    λ 0, two replicas per GPU: WorkflowEvals 705 (JevBench/hejev at λ 0 are R057's base numbers)
 #   all         psetup, proxy, evalpair, evalbase -> ALL_DONE
+#   merge       (own process) M1/M2 rank-concat merges of R056 + R055-B: proxy, retention, hejev/EN/external,
+#               WF for the proxy winner, after ALL_DONE -> MERGE_DONE
 #   contested   (own process) zoom-ai/contested-fast-decisions on λ .5/.75/0 fleets, then λ 1 -> CONTESTED_DONE
 set -euo pipefail
 source "$(dirname "$0")/r057_pod.sh" true  # xsetup, jev, killtree, wait_url, G, GM, PY, EXT, REV, WE
@@ -127,12 +129,29 @@ cfd() {  # name port -- zoom-ai/contested-fast-decisions (EVAL ONLY) through one
 
 on() { until curl -fsS "http://127.0.0.1:$1/v1/models" 2>/dev/null | grep -q "r060-$2-"; do sleep 20; done; }
 
-contested() {  # separate process: rides the chain's fleets (λ .5/.75, then λ 0); λ 1 on GPU 0 after ALL_DONE
+merge() {  # separate process. M1 = R056 + .5·R055-B, M2 = .75·R056 + .5·R055-B (rank concat, fixed in advance).
+  # After ALL_DONE: proxy + retention; then JevBench/hejev/external for both || full WF for the lower proxy NLL arm
+  (cd "$R" && $PY scripts/r060pre_proxy.py merge "$O/dl/r056" 1 "$A/r055b" .5 "$A/m1" &&
+    $PY scripts/r060pre_proxy.py merge "$O/dl/r056" .75 "$A/r055b" .5 "$A/m2")
+  until [[ -e $O/ALL_DONE ]]; do sleep 30; done
+  dsel m1 0 & dsel m2 1 & mmhe m1 0 & mmhe m2 1 & wait
+  local win
+  win=$(python3 -c 'import json, sys; d = sys.argv[1]
+print(min(("m1", "m2"), key=lambda m: json.load(open(f"{d}/{m}.json"))["summary"]["all"]["nll"]))' "$O/proxy")
+  echo "$win" >"$O/merge-winner.txt"
+  fleet m1 8090 $(ports 8100 1)
+  fleet m2 8091 $(ports 8200 1)
+  wfrun "$win" $([[ $win == m1 ]] && echo 8090 || echo 8091) "$NG" & hev m1 8090 & hev m2 8091 & wait
+  stopall
+  touch "$O/MERGE_DONE"
+}
+
+contested() {  # separate process: rides the chain's fleets (λ .5/.75, then λ 0); λ 1 on GPU 0 after MERGE_DONE
   uvx --from huggingface_hub hf download zoom-ai/contested-fast-decisions --repo-type dataset --local-dir "$O/data/cfd"
   mkdir -p "$O/contested"
   on 8091 lam075; cfd lam050 8090 & cfd lam075 8091; wait
   on 8090 lam000; cfd lam000 8090
-  until [[ -e $O/ALL_DONE ]]; do sleep 30; done
+  until [[ -e $O/MERGE_DONE ]]; do sleep 30; done
   rep lam100 0 8300
   wait_url http://127.0.0.1:8300/v1/models "$(cat "$O/pids/serve8300")" && cfd lam100 8300
   stopall
