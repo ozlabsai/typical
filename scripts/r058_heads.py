@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """R058: three idea heads on frozen features of the R056 student (docs/research/R058_IDEA_HEADS.md).
 
+  rows   <r056 dir> <out_dir> [max_train]     train/dev question rows + dev case files from R056's generated data
   cache  <rows.jsonl> <out_dir> --model M --model-revision R --adapter A [--temperatures T]
                                               [GPU] answer-slot state (lm_head input) + option logits per question
   train  <train_cache> <dev_cache> <out_dir>  4 heads on the frozen features; dev answers of every arm -> pred.jsonl
@@ -198,6 +199,91 @@ def diag_main(results: Path) -> dict:
     return {"label": "NON-SHIPPABLE DIAGNOSTIC: fixed [.15,.75] projection of is_true_positive",
             "exact_actions_raw": raw["exact_actions"], "exact_actions_clamped": clamp["exact_actions"],
             "case_errors": [raw["case_errors"], clamp["case_errors"]]}
+
+
+# ---------------------------------------------------------------- rows (stdlib)
+
+def r056_target(wf: str, teachers: dict) -> dict | None:
+    """R056's training target for one question (coordinator rule): security = Qwen only, never Gemma-only;
+    elsewhere the mean of the teachers present, a lone Gemma noul clipped to [.02, .98]."""
+    if wf == "security_incidents":
+        return teachers.get("qwen")
+    if not teachers:
+        return None
+    if set(teachers) == {"gemma"} and "true" in teachers["gemma"]:
+        p = min(0.98, max(0.02, teachers["gemma"]["true"]))
+        return {"true": p, "false": 1 - p}
+    keys = list(next(iter(teachers.values())))
+    return {k: sum(t[k] for t in teachers.values()) / len(teachers) for k in keys}
+
+
+def probs_of(question: dict, answer: dict) -> dict[str, float]:
+    if answer["type"] == "noul":
+        return {"true": answer["noul"], "false": 1 - answer["noul"]}
+    keys = list(question["criteria"]) if question["type"] == "choice" else [str(i) for i in range(len(question["criteria"]))]
+    z = sum(answer["probabilities"].get(k, 0.0) for k in keys) or 1.0
+    return {k: answer["probabilities"].get(k, 0.0) / z for k in keys}
+
+
+def rows_main(r056: Path, out: Path, max_train: int) -> None:
+    """rows_{train,dev}.jsonl + dev_cases/<wf>/{cases,nodes}.jsonl from every R056 generator dir.
+    dev = R056's held-out split (sha256(case_id) % 10 == 0), every question of every node (labeled or not, so
+    head-driven branches have answers) + Hebrew twins of dev nodes; train = labeled non-dev questions, <= max_train."""
+    import hashlib
+    is_dev = lambda c: int(hashlib.sha256(c.encode()).hexdigest(), 16) % 10 == 0  # noqa: E731  (r056_build.is_dev)
+    labels = defaultdict(dict)
+    for path in sorted((r056 / "labels").glob("labels_*.jsonl")):
+        teacher = "qwen" if "qwen" in path.name else "gemma"
+        for line in path.read_text().splitlines():
+            r = json.loads(line)
+            if "answer" in r:
+                labels[(r["id"], r["qid"])][teacher] = r["answer"]
+    nodes, cases = {}, defaultdict(dict)
+    for gen in sorted(r056.glob("gen*")):
+        for wf in WORKFLOWS:
+            for name, sink in (("nodes.jsonl", nodes), ("cases.jsonl", None)):
+                path = gen / wf / name
+                for line in (path.read_text().splitlines() if path.exists() else []):
+                    r = json.loads(line)
+                    if sink is None:
+                        cases[wf][r["case_id"]] = r
+                    else:
+                        nodes[r["request_id"]] = r | {"workflow": wf, "lang": "en"}
+    twins = r056 / "twins" / "twins.jsonl"
+    for line in (twins.read_text().splitlines() if twins.exists() else []):
+        t = json.loads(line)
+        if is_dev(t["case_id"]) and t["twin_id"] in nodes:
+            nodes[t["request_id"]] = t  # twins inherit the English node's teacher labels (R056 mix rule)
+    train, dev = [], []
+    for rid, n in nodes.items():
+        src = n.get("twin_id", rid)
+        for qid, q in n["questions"].items():
+            teachers = {k: probs_of(nodes[src]["questions"][qid], a) for k, a in labels.get((src, qid), {}).items()}
+            row = {"case_id": n["case_id"], "request_id": rid, "workflow": n["workflow"], "node": n["node"], "qid": qid,
+                   "lang": n["lang"], "question": q, "state": n["state"], "teachers": teachers,
+                   "target": r056_target(n["workflow"], teachers)}
+            if is_dev(n["case_id"]):
+                dev.append(row)
+            elif row["target"] and n["lang"] == "en":
+                train.append(row)
+    train.sort(key=lambda r: hashlib.sha256(f"{r['request_id']}/{r['qid']}".encode()).hexdigest())
+    train = train[:max_train]
+    out.mkdir(parents=True, exist_ok=True)
+    for name, rows in (("rows_train.jsonl", train), ("rows_dev.jsonl", dev)):
+        (out / name).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    for wf in WORKFLOWS:
+        d = out / "dev_cases" / wf
+        d.mkdir(parents=True, exist_ok=True)
+        dev_ids = {c for c in cases[wf] if is_dev(c)}
+        (d / "cases.jsonl").write_text("".join(json.dumps(cases[wf][c], ensure_ascii=False) + "\n" for c in sorted(dev_ids)))
+        (d / "nodes.jsonl").write_text("".join(json.dumps(n, ensure_ascii=False) + "\n" for n in nodes.values()
+                                               if n["case_id"] in dev_ids and n["lang"] == "en"))
+    summary = {"train": len(train), "dev": len(dev), "dev_labeled": sum(bool(r["target"]) for r in dev),
+               "dev_he": sum(r["lang"] == "he" for r in dev),
+               "dev_cases": {wf: sum(is_dev(c) for c in cases[wf]) for wf in WORKFLOWS},
+               "train_by_wf": {wf: sum(r["workflow"] == wf for r in train) for wf in WORKFLOWS}}
+    (out / "rows_summary.json").write_text(json.dumps(summary, indent=1) + "\n")
+    print(json.dumps(summary, indent=1))
 
 
 # ---------------------------------------------------------------- features (GPU; repo venv)
@@ -611,6 +697,8 @@ if __name__ == "__main__":
     cmd, *argv = sys.argv[1:] or ["help"]
     if cmd == "replay":
         print(json.dumps(replay_main(Path(argv[0]), Path(argv[1]), Path(argv[2])), indent=1))
+    elif cmd == "rows":
+        rows_main(Path(argv[0]), Path(argv[1]), int(argv[2]) if len(argv) > 2 else 20000)
     elif cmd == "diag":
         print(json.dumps(diag_main(Path(argv[0])), indent=1))
     elif cmd == "cache":
