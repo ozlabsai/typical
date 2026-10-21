@@ -196,8 +196,14 @@ def cmd_build(args):
         for r in jsonl(p):
             freq.update(set().union(*(ho.grams(t) for t in ho.texts_of_task(r))))
     index = {g for g, c in freq.items() if c < 20}  # same boilerplate rule as D2 decon
-    hit = lambda r: any(ho.grams(t) & index for t in ho.texts_of_row(r))  # noqa: E731
+    hit = lambda r: any(ho.grams(t) & index  # noqa: E731  (states may be JSON objects: every string leaf)
+                        for t in ho.texts_of_task({"state": r["state"], "questions": r["questions"]}))
     train = d1_train + open_rows + native_train + en_pool + r044_text + images
+    # Rows whose trainer encoding exceeds --max-length (found on the pod with the Gemma tokenizer), with their twins.
+    drop = set(Path(args.drop_ids).read_text().split()) if args.drop_ids else set()
+    drop_twins = {r["meta"].get("twin_id") for r in train + d1_dev if r["id"] in drop} - {None}
+    keep = lambda r: r["id"] not in drop and r["meta"].get("twin_id") not in drop_twins  # noqa: E731
+    train, d1_dev, native_dev = [r for r in train if keep(r)], [r for r in d1_dev if keep(r)], [r for r in native_dev if keep(r)]
     dropped = Counter(r["meta"]["r055_source"] for r in train if hit(r))
     bad_twins = {r["meta"]["twin_id"] for r in train if r["meta"].get("twin_id") and hit(r)}
     train = [r for r in train if not hit(r) and r["meta"].get("twin_id") not in bad_twins]
@@ -225,7 +231,7 @@ def cmd_build(args):
     manifest = {
         "task": "R055 Hebrew training mix (train-only); dev = D1 dev + 10% native by case",
         "built_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"), "seed": SEED,
-        "inputs": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in
+        "inputs": {str(p).replace(f"{ROOT}/", ""): hashlib.sha256(p.read_bytes()).hexdigest() for p in
                    [D1 / "train.jsonl", D1 / "dev.jsonl", D2 / "open_train.jsonl", R044 / "arm-b.jsonl",
                     *[q for q in (D2 / "native_unlabeled.jsonl", Path(args.labels)) if q.exists()]]},
         "files": files,
@@ -240,6 +246,7 @@ def cmd_build(args):
         "contamination": {"test_files": [str(p.relative_to(ROOT)) for p in tests], "index_13grams": len(index),
                           "dropped_rows_by_source": dict(dropped), "dropped_twin_ids": len(bad_twins),
                           "final_assert": "passed"},
+        "overlong_dropped": {"ids": sorted(drop), "twin_ids": sorted(drop_twins), "max_length": 8192},
         "arm_b_slots": {"slots": slots_b, "views_per_slot": round(views_per_slot_b, 4)},
         "steps_for_20k_presentations": {"A": round(PRESENTATIONS / SLOTS_PER_STEP),
                                         "B": round(PRESENTATIONS / SLOTS_PER_STEP / views_per_slot_b)},
@@ -264,6 +271,7 @@ def main(argv=None):
     bld.add_argument("--open-cap", type=int, default=4000)
     bld.add_argument("--en-replay-min", type=int, default=2000)
     bld.add_argument("--en-replay-max", type=int, default=6000)
+    bld.add_argument("--drop-ids", help="file of row ids to drop (with their twins): over-length rows")
     args = ap.parse_args(argv)
     {"label": cmd_label, "build": cmd_build}[args.cmd](args)
 

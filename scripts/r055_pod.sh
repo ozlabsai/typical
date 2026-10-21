@@ -31,24 +31,24 @@ rsetup() {
 
 killtree() { local c; for c in $(pgrep -P "$1"); do killtree "$c"; done; kill "$1" 2>/dev/null || true; }
 
-label() {  # deadline
+label() {  # deadline -- vLLM on 8020/8021: RunPod nginx owns 8001
   local pids=() g
   for g in 0 1; do
     CUDA_VISIBLE_DEVICES=$g PATH="$R/venv-vllm/bin:$PATH" "$R/venv-vllm/bin/vllm" serve "${Q[0]}" --revision "${Q[1]}" \
-      --served-model-name "${Q[0]}" --host 127.0.0.1 --port 800$g --max-model-len 65536 --gpu-memory-utilization 0.92 \
+      --served-model-name "${Q[0]}" --host 127.0.0.1 --port 802$g --max-model-len 65536 --gpu-memory-utilization 0.92 \
       --enable-prefix-caching --reasoning-parser qwen3 --max-num-seqs 256 --gdn-prefill-backend triton \
       --max-num-batched-tokens 16384 --structured-outputs-config '{"backend": "xgrammar", "disable_any_whitespace": true}' \
       >"$O5/logs/qwen$g-vllm.log" 2>&1 & pids+=($!)
   done
-  for g in 0 1; do wait_url http://127.0.0.1:800$g/v1/models ${pids[$g]} || { tail -40 "$O5/logs/qwen$g-vllm.log"; return 1; }; done
+  for g in 0 1; do wait_url http://127.0.0.1:802$g/v1/models ${pids[$g]} || { tail -40 "$O5/logs/qwen$g-vllm.log"; return 1; }; done
   for g in 0 1; do
     (cd "$WE" && exec uv run --frozen python "$R/scripts/r054_systemone_server.py" llm "vllm:${Q[0]}" --thinking default \
-      --base-url http://127.0.0.1:800$g/v1 --port 801$g --workflowevals "$WE" >"$O5/logs/qwen$g-shim.log" 2>&1) & pids+=($!)
+      --base-url http://127.0.0.1:802$g/v1 --port 801$g --workflowevals "$WE" >"$O5/logs/qwen$g-shim.log" 2>&1) & pids+=($!)
   done
   for g in 0 1; do wait_url http://127.0.0.1:801$g/v1/models ${pids[$((g + 2))]}; done
   date -u +%FT%TZ >"$O5/label.START"
   python3 "$R/scripts/r055_build_mix.py" label --data "$R/.context/he-train/d2/native_unlabeled.jsonl" \
-    --out "$O5/native_labels.jsonl" --endpoint http://127.0.0.1:8010 --endpoint http://127.0.0.1:8011 --deadline "$1" \
+    --out "$O5/native_labels.jsonl" --endpoint http://127.0.0.1:8010 --endpoint http://127.0.0.1:8011 --deadline "$1" --workers ${WORKERS:-128} \
     >"$O5/logs/label.log" 2>&1 || true
   date -u +%FT%TZ >"$O5/label.DONE"
   grep -h "throughput" "$O5"/logs/qwen*-vllm.log | tail -4 >"$O5/label-throughput.txt" || true
@@ -106,9 +106,10 @@ peers() {  # gpu fn... -- peer functions on one GPU, external panel only; down()
   export CUDA_VISIBLE_DEVICES=$1; local gpu=$1 m; shift
   eval "jev_orig() $(declare -f jev | tail -n +2)"
   jev() { jev_orig "$1" "$2" "$3" $EXT; }
+  eval "$(declare -f startlux | sed "s/--gpus 0/--gpus $gpu/")"  # its launcher sets CUDA_VISIBLE_DEVICES itself
   down() {  # ponytail: kill this chain's process tree, not every server on the pod (the other GPU is busy)
-    local c; for c in $(pgrep -P $BASHPID); do killtree "$c"; done
-    for _ in $(seq 60); do
+    local c me=$BASHPID; for c in $(pgrep -P $me); do killtree "$c"; done  # $BASHPID inside $() is the subshell
+    for _ in $(seq ${DRAIN:-60}); do  # DRAIN=small when a trainer shares the GPU
       (( $(nvidia-smi -i "$gpu" --query-gpu=memory.used --format=csv,noheader,nounits) < 2000 )) && return 0; sleep 3
     done
   }
