@@ -119,11 +119,15 @@ def _api_key() -> str:
     raise RuntimeError("OPENROUTER_API_KEY missing from environment and .env")
 
 
-def openrouter(model: str, messages: list[dict], effort: str = "high") -> dict:
-    """Cached OpenRouter chat completion; cost comes from the response usage."""
+def openrouter(model: str, messages: list[dict], effort: str = "high", schema: dict | None = None) -> dict:
+    """Cached OpenRouter chat completion; cost comes from the response usage. A schema = the gold run's strict
+    json_schema output (WorkflowEvals core/clients.py: name "evaluation", strict)."""
     import httpx
 
     body = {"model": model, "messages": messages, "reasoning": {"effort": effort}, "usage": {"include": True}}
+    if schema is not None:
+        body["response_format"] = {"type": "json_schema",
+                                   "json_schema": {"name": "evaluation", "strict": True, "schema": schema}}
 
     def fetch():
         for attempt in range(4):
@@ -144,7 +148,7 @@ def openrouter(model: str, messages: list[dict], effort: str = "high") -> dict:
             time.sleep(5 * 2 ** attempt)
         raise RuntimeError(f"OpenRouter failed for {model}: {error}")
 
-    return _cached(["openrouter", model, effort, messages], model, fetch)
+    return _cached(["openrouter", model, effort, messages] + ([schema] if schema is not None else []), model, fetch)
 
 
 class Provider:
@@ -157,7 +161,8 @@ class Provider:
         from system_one_adapter.providers import ProviderResult
 
         if self.backend == "openrouter":
-            raw = openrouter(self.model_name, [{"role": m.role, "content": m.content} for m in messages])
+            raw = openrouter(self.model_name, [{"role": m.role, "content": m.content} for m in messages],
+                             schema=schema if structured else None)
         else:
             system, first, *rest = messages
             # ponytail: the CLI takes one user turn, so a corrective retry is replayed as a transcript.
