@@ -129,3 +129,61 @@ R044-R comes from `.context/r044-rebuild/mmhe.json`.
   - R044-R, clef and Winnow shared a GPU with training. This affects only speed, not outputs.
 - **D1 fix.** The coordinator's D1 fix (78 garbled-option twins removed at 21:50Z) was in place before the final mix
   was built. The mix manifest records the post-fix sha256 values.
+
+## Readout check (Cygnet letter readout)
+
+Question: on the same Gemma-4-12B-it base, Cygnet's readout (option-letter logits via vLLM, one fitted temperature)
+gets EN .879 while both R055 arms get .848 with the native readout. Is the native readout costing accuracy?
+
+**Answer: no.** Under the Cygnet readout the arms score about the same as under their own readout. A goes from .848
+to .835 on EN and B from .848 to .857. On the Hebrew splits and the external panel the changes are within ±.02, and
+most go down. Neither arm gets near Cygnet's EN .879 or StartLux on any split. The 3-point EN gap to Cygnet comes from
+the adapter weights, not from the readout.
+
+**Setup.** The LoRA trees served earlier (`serve-{a,b}`, adapter sha256 verified) were loaded into one vLLM 0.30.0
+with the G0 flags (`.context/run_g0.sh`: Gemma@707f0a3, `--max-model-len 16384 --gpu-memory-utilization 0.90`)
+plus `--enable-lora --max-lora-rank 32 --max-loras 2 --lora-modules r055-a=… r055-b=…`. Each arm ran behind
+cygnet-recipe@10b4099 `shim/decision_server.py` with `SHIM_MODEL=r055-<arm>`. That is the same shim
+`hejev_pod_run.sh cygnet()` uses, with one 4-line deviation in `cygnet_shim.server_context()`: vLLM lists a LoRA
+without `max_model_len`, so the shim takes it from the parent model. The prompt, letter readout and temperature code
+are unchanged. Runner: `scripts/r055_readout_pod.sh`. Dev conversion, T fit and scoring: `scripts/r055_readout.py`.
+Raw outputs: `.context/r055/readout/pod/`.
+
+**Selection, dev only.** The dev set is the 542 HE+MX rows of the D1 dev split (`.context/he-train/d1/dev.jsonl`,
+training distribution), converted to jevbench tasks. The rule was written to `.context/r055/readout/PREREG.txt`
+before any result:
+- T is fitted per arm on the Cygnet T=1 dev run, grid 0.5–5.0, minimising dev NLL (rule of cygnet-recipe `calibration/fit.py`).
+- One readout is picked for both arms, by pooled dev accuracy. A tie (<1 item) goes to native.
+- The choice was fixed in the same file before any test run.
+
+| dev (542 HE+MX) | native acc | Cygnet acc | native NLL | Cygnet NLL T=1 → fitted | fitted T |
+|---|---|---|---|---|---|
+| R055-A | .876 (475) | .884 (479) | .390 | .381 → .362 | 1.4 |
+| R055-B | .838 (454) | .843 (457) | .425 | .436 → .419 | 1.3 |
+| pooled | 929/1084 | **936/1084** | | | |
+
+On dev, Cygnet's readout was ahead by 7 of 1,084 items, so it was chosen. T does not change argmax accuracy; it only
+changes the probabilities (NLL, Brier, ECE).
+
+**Test, Cygnet readout at the dev-fitted T.** The protocol is the same as the table above (jevbench bb05a335,
+`hejev_score.py`; external accuracy is the unweighted mean of the six sets).
+
+| model | readout | HE | MX | native | EN 231 | Belebele | HebNLI | G-MMLU | Sentiment | Winograd | HeQ | **ext. mean** | HE−EN | HE/EN agree |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| R055-A | Cygnet T=1.4 | .817 | .813 | .857 | .835 | .903 | .815 | .628 | .826 | .755 | .920 | **.808** | −.017 | .909 |
+| R055-A | native (above) | .813 | .822 | .874 | .848 | .901 | .848 | .617 | .828 | .770 | .925 | **.815** | −.035 | .883 |
+| R055-B | Cygnet T=1.3 | .835 | .822 | .857 | .857 | .893 | .751 | .612 | .838 | .752 | .912 | **.793** | −.022 | .930 |
+| R055-B | native (above) | .843 | .826 | .866 | .848 | .890 | .787 | .607 | .824 | .755 | .920 | **.797** | −.004 | .926 |
+| Cygnet (frozen Gemma, T=3.4) | Cygnet | .839 | .839 | .882 | .879 | .899 | .743 | .647 | .760 | .745 | .910 | .784 | −.043 | .904 |
+| StartLux-9B-Instant | own | **.878** | **.874** | **.916** | **.896** | **.917** | **.903** | .703 | .792 | **.863** | **.927** | **.851** | −.017 | .935 |
+| torchcast-12b | own | .865 | .865 | .899 | .879 | .900 | .791 | .630 | .786 | .773 | .920 | .800 | −.013 | .939 |
+
+- **Vs native.** Across the 10 test sets, A changes by +.004 HE, −.009 MX, −.017 native, −.013 EN and −.007 ext.
+  B changes by −.008 HE, −.004 MX, −.009 native, +.009 EN and −.004 ext. The largest single move is HebNLI
+  (A −.033, B −.036, about 30 of 884 items). The +7-item dev lead does not carry to test.
+- **Vs StartLux.** The arms stay 4–6 points behind on every column: HE, MX, native, EN and the external mean.
+  The verdict above ("not best in Hebrew") stands.
+- **Calibration.** At the fitted T, A's HE Brier is lower than native (.257 vs .275). B's is about the same
+  (.231 vs .228). See `cyg-*/score.json`.
+- **Cost.** One H100 SXM pod (`hsdnrwyn10no33`, $3.99/h) ran 04:19:25 → 04:50:18 UTC. That is ≈0.52 GPU-h, ≈$2.1.
+  The pod ended EXITED.
