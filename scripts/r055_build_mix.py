@@ -86,7 +86,7 @@ def cmd_label(args):
         for attempt in range(4):  # ponytail: ThreadingHTTPServer backlog is 5; bursts reset, so retry
             try:
                 req = urllib.request.Request(f"{endpoint}/v1/systemone", body, {"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=3600) as resp:
+                with urllib.request.urlopen(req, timeout=args.timeout) as resp:
                     answer = json.loads(resp.read())["answers"][qid]
                 record = {"id": row["id"], "qid": qid, "answer": answer}
                 break
@@ -266,6 +266,7 @@ def main(argv=None):
     lab.add_argument("--endpoint", action="append", required=True)
     lab.add_argument("--deadline", required=True, help="UTC ISO time; later questions are skipped")
     lab.add_argument("--workers", type=int, default=192)
+    lab.add_argument("--timeout", type=float, default=3600, help="per-request seconds (a stalled shim must not absorb every worker)")
     bld = sub.add_parser("build")
     bld.add_argument("--labels", default=str(ROOT / ".context/r055/native_labels.jsonl"))
     bld.add_argument("--open-cap", type=int, default=4000)

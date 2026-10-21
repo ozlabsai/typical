@@ -33,6 +33,15 @@ srv() {  # gpu model
   echo "$2" >"$O6/pids/model$g"; echo "srv $2 gpu$g up"
 }
 
+reshim() {  # gpu -- restart a stalled systemone shim (R055: threads stall, sockets in CLOSE-WAIT)
+  local g=$1 m; [[ $(cat "$O6/pids/model$g") == gemma ]] && m=${G[0]} || m=${Q[0]}
+  killtree "$(cat "$O6/pids/shim$g")" || true
+  (cd "$WE" && exec setsid uv run --frozen python "$R/scripts/r054_systemone_server.py" llm "vllm:$m" --thinking default \
+    --base-url http://127.0.0.1:802$g/v1 --port 801$g --workflowevals "$WE" >>"$O6/logs/shim$g-restart.log" 2>&1) &
+  echo $! >"$O6/pids/shim$g"
+  wait_url http://127.0.0.1:801$g/v1/models "$(cat "$O6/pids/shim$g")" && echo "reshim $g ok"
+}
+
 stopsrv() {
   local f; for f in "$O6/pids/shim$1" "$O6/pids/vllm$1"; do [[ -e $f ]] && { killtree "$(cat "$f")" || true; rm -f "$f"; }; done
   for _ in $(seq 60); do (( $(nvidia-smi -i "$1" --query-gpu=memory.used --format=csv,noheader,nounits) < 2000 )) && return 0; sleep 3; done
@@ -43,7 +52,7 @@ lab() {  # name deadline gpu...
   local name=$1 deadline=$2 g eps=(); shift 2
   for g in "$@"; do eps+=(--endpoint "http://127.0.0.1:801$g"); done
   python3 "$R/scripts/r055_build_mix.py" label --data "$IN/$name.jsonl" --out "$O6/labels_$name.jsonl" "${eps[@]}" \
-    --deadline "$deadline" --workers $((64 * $#)) >>"$O6/logs/label-$name.log" 2>&1
+    --deadline "$deadline" --workers $((64 * $#)) --timeout 1200 >>"$O6/logs/label-$name.log" 2>&1
   echo "$(date -u +%FT%TZ) LAB_DONE $name" >>"$O6/logs/label-$name.log"
 }
 
