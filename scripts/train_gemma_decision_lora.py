@@ -90,6 +90,8 @@ def parse_args():
     parser.add_argument("--eval-every", type=int, default=250)
     parser.add_argument("--eval-samples", type=int, default=128)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--bidirectional-prompt", action="store_true",
+                        help="R057: read the prompt before the answer slot bidirectionally (StartLux-style)")
     parser.add_argument("--pair-consistency-weight", type=float, default=0.0)
     parser.add_argument("--twin-consistency-weight", type=float, default=0.0,
                         help="Weight of JS divergence between meta.twin_id twins (0 = off)")
@@ -959,6 +961,51 @@ def letter_token_groups(tokenizer):
     return [torch.tensor(groups[letter]) for letter in LETTERS]
 
 
+def prefix_bidirectional_masks(lengths, total, sliding_window, device=None):
+    """R057 masks for Gemma 4, as the {layer_type: [B,1,L,L] bool} mapping its forward accepts in place of
+    attention_mask. Row b holds n = lengths[b] tokens, right-padded to `total`; its last token n-1 is the answer
+    read-out slot. q may read k iff k < n and (k <= q or (q < n-1 and k < n-1)): the prompt before the read-out
+    slot is one bidirectional block (image soft tokens included), the slot stays causal (it reads everything
+    anyway) and no earlier token reads it. Sliding layers also keep a symmetric window |q-k| < sliding_window
+    (Gemma's causal window is k > q - W); Gemma's 280-token image blocks fit inside it, so its own image rule
+    (bidirectional within an image on sliding layers) is a subset of this mask."""
+    n = torch.as_tensor(lengths, device=device).view(-1, 1, 1, 1)
+    q = torch.arange(total, device=device).view(1, 1, -1, 1)
+    k = q.transpose(-1, -2)
+    full = (k < n) & ((k <= q) | ((q < n - 1) & (k < n - 1)))
+    return {"full_attention": full, "sliding_attention": full & ((q - k).abs() < sliding_window)}
+
+
+def enable_bidirectional_prompt(model):
+    """Make every cache-free forward of a Gemma 4 (or PEFT-wrapped) model use prefix_bidirectional_masks.
+    A pre-hook on the inner multimodal model turns its 2D/absent attention_mask into the mask mapping, so the
+    trainer, the server and the retention screen need no other change. Off (never called) = stock causal."""
+    base = model.get_base_model() if hasattr(model, "get_base_model") else model
+    body = base.model
+    text = body.config.get_text_config()
+    if set(text.layer_types) - {"full_attention", "sliding_attention"}:
+        raise ValueError(f"unexpected Gemma 4 layer types {sorted(set(text.layer_types))}")
+
+    def hook(module, args, kwargs):
+        mask = kwargs.get("attention_mask")
+        if isinstance(mask, dict):
+            return None
+        if args or kwargs.get("past_key_values") is not None:
+            raise ValueError("bidirectional prompt needs a keyword, cache-free forward")
+        ref = kwargs["input_ids"] if kwargs.get("input_ids") is not None else kwargs["inputs_embeds"]
+        rows, total = ref.shape[:2]
+        if mask is None:
+            lengths = torch.full((rows,), total, device=ref.device)
+        else:
+            lengths = mask.sum(-1)
+            if not torch.equal(mask.bool(), torch.arange(total, device=mask.device) < lengths[:, None]):
+                raise ValueError("bidirectional prompt needs right-padded rows")
+        kwargs["attention_mask"] = prefix_bidirectional_masks(lengths, total, text.sliding_window, ref.device)
+        return args, kwargs
+
+    return body.register_forward_pre_hook(hook, with_kwargs=True)
+
+
 def encode(example, tokenizer, max_length, shuffle, include_labels=False):
     order = list(range(len(example["items"])))
     if shuffle and not example.get("fixed_order", False):
@@ -1404,6 +1451,8 @@ def main():
         args.model, dtype=torch.bfloat16, local_files_only=True, attn_implementation="sdpa"
     )
     model.config.use_cache = False
+    if args.bidirectional_prompt:
+        enable_bidirectional_prompt(model)
     model = attach_lora(model, args.init_adapter, args.rank, args.alpha)
     validate_trainable_path(model)
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})

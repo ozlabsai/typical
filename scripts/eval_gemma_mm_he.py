@@ -12,7 +12,7 @@ from peft import PeftModel
 from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
-from scripts.train_gemma_decision_lora import SYSTEM, letter_token_groups
+from scripts.train_gemma_decision_lora import SYSTEM, enable_bidirectional_prompt, letter_token_groups
 
 
 NULL_OPTION = "None of the options is supported by the image."
@@ -148,6 +148,8 @@ def main():
     parser.add_argument("--mm-dir", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--max-length", type=int, default=8192)
+    parser.add_argument("--bidirectional-prompt", action="store_true",
+                        help="R057: the candidate (not the frozen base) reads its prompt bidirectionally")
     args = parser.parse_args()
     suites = {"he": _read(args.he_left, multimodal=False), "en": _read(args.he_right, multimodal=False)}
     suites.update({name: _read(Path(args.mm_dir) / filename, multimodal=True) for name, filename in MM_FILES.items()})
@@ -169,6 +171,8 @@ def main():
     candidate_model = PeftModel.from_pretrained(AutoModelForImageTextToText.from_pretrained(
         args.model, dtype=torch.bfloat16, local_files_only=True, attn_implementation="sdpa"), args.adapter,
         local_files_only=True).to(device).eval()
+    if args.bidirectional_prompt:
+        enable_bidirectional_prompt(candidate_model)
     candidate = _run(candidate_model, processor, groups, suites, device, args.max_length)
     comparison = _comparison(base, candidate)
     comparison["gates"] = {"he_errors_lost_at_most_one": comparison["he_errors_lost"] <= 1,

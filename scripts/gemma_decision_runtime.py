@@ -217,6 +217,7 @@ class GemmaDecisionRuntime:
         dtype: str,
         device: str = "cuda",
         attn_implementation: str = "sdpa",
+        bidirectional_prompt: bool = False,
     ) -> None:
         if max_context < 1:
             raise ValueError("max_context must be positive")
@@ -228,6 +229,7 @@ class GemmaDecisionRuntime:
         self.dtype = dtype
         self.device = device
         self.attn_implementation = attn_implementation
+        self.bidirectional_prompt = bidirectional_prompt
         self._model = self._tokenizer = self._groups = None
         self._lock = threading.Lock()
 
@@ -242,7 +244,7 @@ class GemmaDecisionRuntime:
         from peft import PeftModel
         from transformers import AutoModelForImageTextToText, AutoTokenizer
 
-        from scripts.train_gemma_decision_lora import letter_token_groups
+        from scripts.train_gemma_decision_lora import enable_bidirectional_prompt, letter_token_groups
 
         dtypes = {
             "bfloat16": torch.bfloat16,
@@ -280,6 +282,8 @@ class GemmaDecisionRuntime:
                 local_files_only=Path(self.adapter).exists(),
             )
         model.config.use_cache = False
+        if self.bidirectional_prompt:
+            enable_bidirectional_prompt(model)
         self._model = model.to(self.device).eval()
         self._groups = letter_token_groups(self._tokenizer)
         self.load_s = time.perf_counter() - started

@@ -110,6 +110,7 @@ def build_startup_receipt(
     dtype: str,
     device: str,
     attn_implementation: str,
+    bidirectional_prompt: bool = False,
 ) -> dict[str, Any]:
     """Bind the served name to artifacts, exact code, and inference configuration."""
     model_artifact = bind_artifact(
@@ -145,6 +146,8 @@ def build_startup_receipt(
             "dtype": dtype,
             "device": device,
             "attn_implementation": attn_implementation,
+            # R057: only recorded when on, so default receipts stay byte-identical
+            **({"prompt_attention": "bidirectional"} if bidirectional_prompt else {}),
         },
         "code": {
             "runtime_sha256": _sha256_file(Path(__file__).with_name("gemma_decision_runtime.py")),
@@ -340,6 +343,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", choices=("bfloat16", "float16", "float32"), default="bfloat16")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--attn-implementation", default="sdpa")
+    parser.add_argument("--bidirectional-prompt", action="store_true",
+                        help="R057: read the prompt before the answer slot bidirectionally (adapter trained so)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument(
@@ -381,6 +386,7 @@ def main() -> None:
             dtype=args.dtype,
             device=args.device,
             attn_implementation=args.attn_implementation,
+            bidirectional_prompt=args.bidirectional_prompt,
         )
     except ValueError as error:
         raise SystemExit(str(error)) from error
@@ -393,6 +399,7 @@ def main() -> None:
         args.dtype,
         args.device,
         args.attn_implementation,
+        args.bidirectional_prompt,
     ).load()
     write_startup_receipt(args.receipt, receipt)
     app = create_app(
