@@ -668,7 +668,7 @@ def train_main(train_dir: Path, dev_dir: Path, out: Path, temps_path: Path | Non
             logs[name + sfx] = fit(models[name + sfx], bt, tr_idx, va_idx)
             print(name + sfx, logs[name + sfx]["best_epoch"], f"{min(logs[name + sfx]['val_loss']):.4f}", flush=True)
     out.mkdir(parents=True, exist_ok=True)
-    torch.save({"hp": HP, "tau": tau, "mu": mu, "sd": sd, "qvocab": qvocab, "slices": slices, "temps": temps,
+    torch.save({"hp": HP, "tau": tau, "taus": {k: v[1] for k, v in variants.items()}, "mu": mu, "sd": sd, "qvocab": qvocab, "slices": slices, "temps": temps,
                 "d": h_tr.shape[1], "state": {k: m.state_dict() for k, m in models.items()}}, out / "heads.pt")
 
     with torch.no_grad():
@@ -719,7 +719,8 @@ def serve_main(a) -> None:
     heads, _ = build_heads(ck["d"], len(ck["qvocab"]) + 1)
     head = None
     if a.head != "student":
-        head = heads[a.head](ck["tau"]) if a.head == "b_gate" else heads[a.head]()
+        kind, _, sfx = a.head.partition("+")
+        head = heads[kind](ck["taus"]["+" + sfx if sfx else ""]) if kind == "b_gate" else heads[kind]()
         head.load_state_dict(ck["state"][a.head])
         head.eval()
     student = Student(a.model, a.model_revision, a.adapter)
@@ -781,7 +782,7 @@ if __name__ == "__main__":
     elif cmd == "serve":
         ap = argparse.ArgumentParser()
         ap.add_argument("heads", type=Path)
-        ap.add_argument("head", choices=("student", "base0", "a_spread", "b_gate", "c_cert"))
+        ap.add_argument("head", help="student | base0 | a_spread | b_gate | c_cert, optionally +corr")
         for k in ("--model", "--model-revision", "--adapter", "--model-id"):
             ap.add_argument(k, required=True)
         ap.add_argument("--port", type=int, default=8090)

@@ -32,30 +32,33 @@ cache() {
 }
 
 train() {
-  h8 train "$O8/cache_train" "$O8/cache_dev" "$O8/heads" ${TEMPS:+--temperatures "$IN/adapter/temperatures.json"} \
+  local extra=()
+  [[ -e $IN/adapter/temperatures.json ]] && extra+=(--temperatures "$IN/adapter/temperatures.json")
+  [[ -e $IN/security_targets_corrected.jsonl ]] && extra+=(--corrected "$IN/security_targets_corrected.jsonl")  # R059
+  h8 train "$O8/cache_train" "$O8/cache_dev" "$O8/heads" "${extra[@]}" \
     >"$O8/logs/train.log" 2>&1
   touch "$O8/TRAIN_DONE"
 }
 
 wf() {  # head -- one server, the four workflows in parallel (R056 `wf` settings)
-  local head=$1 sha id pid w pids=()
+  local head=$1 tag=${1/+/-} sha id pid w pids=()
   sha=$(cd "$R" && uv run --no-sync python -c 'import sys; from scripts.preflight_r043_assets import tree_hash; print(tree_hash(sys.argv[1])[0])' "$IN/adapter")
-  id=typical-r058-$head-sha256-${sha:0:12}; echo "$id" >"$O8/served-id-$head.txt"
+  id=typical-r058-$tag-sha256-${sha:0:12}; echo "$id" >"$O8/served-id-$tag.txt"
   (cd "$R" && PYTHONPATH=$R exec uv run --no-sync python scripts/r058_heads.py serve "$O8/heads/heads.pt" "$head" \
     --model "${G[0]}" --model-revision "${G[1]}" --adapter "$IN/adapter" --model-id "$id" --port 8090 \
-    >"$O8/logs/serve-$head.log" 2>&1) &
+    >"$O8/logs/serve-$tag.log" 2>&1) &
   pid=$!
-  wait_url http://127.0.0.1:8090/v1/models $pid || { tail -30 "$O8/logs/serve-$head.log"; return 1; }
+  wait_url http://127.0.0.1:8090/v1/models $pid || { tail -30 "$O8/logs/serve-$tag.log"; return 1; }
   for w in "${!REV[@]}"; do
     (cd "$WE" && TYPICAL_API_KEY=local TYPICAL_BASE_URL=http://127.0.0.1:8090 uv run --frozen python run.py "$w" \
-      --model "typical:$id" --name "r058-$head" --dataset-revision "${REV[$w]}" --questions all --workers 4 \
-      --question-workers 1 --timeout 1800 --retry-errors >"$O8/logs/wf-$head-$w.log" 2>&1
-     rsync -a "$WE/runs/$w/r058-$head/" "$O8/wf-$head/$w/") & pids+=($!)
+      --model "typical:$id" --name "r058-$tag" --dataset-revision "${REV[$w]}" --questions all --workers 4 \
+      --question-workers 1 --timeout 1800 --retry-errors >"$O8/logs/wf-$tag-$w.log" 2>&1
+     rsync -a "$WE/runs/$w/r058-$tag/" "$O8/wf-$tag/$w/") & pids+=($!)
   done
   for w in "${pids[@]}"; do wait "$w" || true; done
   pkill -f "r058_heads.py serve" || true
   for _ in $(seq 60); do (( $(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1) < 2000 )) && break; sleep 3; done
-  touch "$O8/WF_DONE-$head"
+  touch "$O8/WF_DONE-$tag"
 }
 
 "$@"
