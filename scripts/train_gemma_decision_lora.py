@@ -8,7 +8,9 @@ model's weights.
 import argparse
 import json
 import math
+import os
 import random
+from datetime import timedelta
 import time
 from itertools import combinations
 from numbers import Real
@@ -107,6 +109,8 @@ def parse_args():
     parser.add_argument("--action-temperature", type=float, default=1.0)
     parser.add_argument("--exact-policy-outcome-loss", choices=("nll", "brier"),
                         default="nll")
+    parser.add_argument("--skip-overlength", action="store_true",
+                        help="Skip training slots longer than --max-length instead of failing (counted)")
     return parser.parse_args()
 
 
@@ -1319,13 +1323,18 @@ def evaluate(model, examples, args, tokenizer, groups, device, processor=None):
     action_loss_kinds = set()
     for start in range(0, min(args.eval_samples, len(examples)), args.microbatch):
         batch = examples[start:start + args.microbatch]
-        loss, batch_correct, stats = loss_for_examples(
+        try:
+          loss, batch_correct, stats = loss_for_examples(
             model, batch, tokenizer, groups, args.max_length, device, shuffle=False,
             processor=processor,
             action_loss_weight=getattr(args, "action_loss_weight", 0.0),
             action_temperature=getattr(args, "action_temperature", 1.0),
             exact_policy_outcome_loss=getattr(
                 args, "exact_policy_outcome_loss", "nll"))
+        except ValueError as error:
+            if not (getattr(args, "skip_overlength", False) and "exceeds" in str(error)):
+                raise
+            continue
         losses.append(loss.item())
         correct += batch_correct
         count += len(batch)
@@ -1417,6 +1426,15 @@ def main():
                              args.project_consistency_against_guard,
                              args.pair_flip_weight, args.pair_flip_margin,
                              args.pair_flip_start_step, args.steps)
+    # Data parallel under torchrun (R056): every rank trains a disjoint stride of the same shuffled
+    # order; LoRA gradients are averaged before each optimizer step; rank 0 evaluates, logs and saves.
+    world = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    if world > 1:
+        if args.project_consistency_against_guard or args.stage_counterfactual_pairs:
+            raise ValueError("data parallel supports the plain/twin objective only")
+        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        torch.distributed.init_process_group("nccl", timeout=timedelta(hours=3))
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     train = load_examples(args.train)
@@ -1441,7 +1459,8 @@ def main():
         if args.stage_counterfactual_pairs else None)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "config.json").write_text(json.dumps(vars(args), indent=2) + "\n")
+    if rank == 0:
+        (out / "config.json").write_text(json.dumps({**vars(args), "world_size": world}, indent=2) + "\n")
 
     multimodal = examples_have_images(train) or any(
         examples_have_images(rows) for rows in validation.values())
@@ -1481,18 +1500,22 @@ def main():
     if staged_order is None:
         order = list(range(len(train)))
         random.shuffle(order)
+        order = order[rank::world]
+        random.seed(args.seed + rank)  # per-rank option shuffles and reshuffles
     else:
         order = staged_order
     cursor = 0
     optimizer.zero_grad(set_to_none=True)
     metrics = out / "metrics.jsonl"
     started = time.time()
-    baseline = {"step": 0, "validation": {
-        name: evaluate(model, rows, args, tokenizer, groups, device, processor)
-        for name, rows in validation.items()
-    }}
-    metrics.write_text(json.dumps(baseline) + "\n")
-    print(json.dumps(baseline), flush=True)
+    if rank == 0:
+        baseline = {"step": 0, "validation": {
+            name: evaluate(model, rows, args, tokenizer, groups, device, processor)
+            for name, rows in validation.items()
+        }}
+        metrics.write_text(json.dumps(baseline) + "\n")
+        print(json.dumps(baseline), flush=True)
+    skipped_overlength = 0
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     if args.project_consistency_against_guard:
         grad_d = [torch.zeros_like(p, dtype=torch.float32) for p in params]
@@ -1615,7 +1638,8 @@ def main():
                     batch_pairs = sum(example.get("pair_mode") is not None for example in batch)
                     staged_step_pairs += batch_pairs
                     staged_step_singles += len(batch) - batch_pairs
-                loss, _, pair_stats = loss_for_examples(
+                try:
+                  loss, _, pair_stats = loss_for_examples(
                     model, batch, tokenizer, groups, args.max_length, device, shuffle=True,
                     pair_consistency_weight=args.pair_consistency_weight,
                     pair_consistency_min_gold_probability=args.pair_consistency_min_gold_probability,
@@ -1627,6 +1651,11 @@ def main():
                     action_temperature=args.action_temperature,
                     exact_policy_outcome_loss=args.exact_policy_outcome_loss,
                     twin_consistency_weight=args.twin_consistency_weight)
+                except ValueError as error:
+                    if not (args.skip_overlength and "exceeds" in str(error)):
+                        raise
+                    skipped_overlength += 1  # ponytail: this microbatch slot is lost, not refilled
+                    continue
                 twin_seen += pair_stats["twin_seen"]
                 twin_js_sum += pair_stats["twin_js"] * pair_stats["twin_seen"]
                 pair_active += pair_stats["pair_consistency_active"]
@@ -1652,6 +1681,12 @@ def main():
                 raise RuntimeError(f"staged counterfactual exposure mismatch at step {step}")
             staged_singles_seen += staged_step_singles
             staged_pairs_seen += staged_step_pairs
+        if world > 1:
+            for parameter in params:
+                if parameter.grad is None:
+                    parameter.grad = torch.zeros_like(parameter)
+                torch.distributed.all_reduce(parameter.grad)
+                parameter.grad /= world
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         scheduler.step()
@@ -1668,7 +1703,8 @@ def main():
                   "pair_flip_seen": flip_seen,
                   "pair_flip_loss": flip_loss_sum / flip_seen if flip_seen else 0.0,
                   "pair_flip_weight": flip_weight,
-                  "pair_flip_weight_configured": args.pair_flip_weight}
+                  "pair_flip_weight_configured": args.pair_flip_weight,
+                  "skipped_overlength": skipped_overlength}
         if args.twin_consistency_weight > 0:
             metric.update({"twin_seen": twin_seen,
                            "twin_js": twin_js_sum / twin_seen if twin_seen else 0.0})
@@ -1706,6 +1742,8 @@ def main():
                 step, cumulative_removed_energy, cumulative_cons_energy)
             if early_stop:
                 metric["early_stop"] = "projection_removed_energy_fraction_below_0.01_at_step_50"
+        if rank != 0:
+            continue
         if step == 1 or step % args.eval_every == 0 or step == args.steps:
             metric["validation"] = {
                 name: evaluate(model, rows, args, tokenizer, groups, device, processor)

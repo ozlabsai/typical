@@ -4,9 +4,10 @@
 The generator (Claude Opus 5.5 via OpenRouter; `--backend cli` for the Claude Code CLI) sees only a structural skeleton derived from the
 benchmark schema (keys, types, numeric ranges, lowercase structural enums; all free text replaced
 by placeholders) plus hand-written format notes. Generated cases then pass a contamination filter
-against every benchmark case of the workflow (8-word-gram overlap, ignoring boilerplate 8-grams found in
->=5% of that workflow's benchmark cases; 5-shingle Jaccard > 0.3;
-reused ID/hostname/name strings) and are run through WorkflowEvals' own adapters with stub answers
+against every benchmark case of the workflow (13-word-gram overlap, ignoring boilerplate 13-grams found in
+>=5% of that workflow's benchmark cases; 5-shingle Jaccard > 0.3; reused ID/hostname/name strings, where
+IDs/names found in >=5% of benchmark cases and generic field names (JSON keys, `key:` record labels,
+snake/dotted identifiers) are vocabulary, not identity; R056 fix) and are run through WorkflowEvals' own adapters with stub answers
 (several answer variants) so every reachable node request {state, questions} is recorded.
 
 uv run --project .context/research_sources/WorkflowEvals python scripts/r053_generate_cases.py --n 6
@@ -31,7 +32,8 @@ DATA = ROOT / ".context" / "r053-data"
 GENERATOR = {"openrouter": "anthropic/claude-opus-5.5", "cli": "claude-opus-5-5"}
 PER_CALL = {"security_incidents": 3, "customer_service": 3, "agent_trace_observability": 1,
             "invoice_processing": 1}  # several cases per call where the schema is small
-NGRAM, SHINGLE, MAX_JACCARD = 8, 5, 0.3
+NGRAM, SHINGLE, MAX_JACCARD = 13, 5, 0.3
+BOILERPLATE_FRAC = 0.05  # strings in >=5% of a workflow's benchmark cases are its template, not case content
 VARIANTS = 5  # stub answer variants per case: high, low, three random
 
 # ---------------------------------------------------------------- contamination filter
@@ -63,7 +65,12 @@ NAME_KEY = re.compile(r"name|holder|vendor|company|entit|merchant|principal|auth
 ID_TOKEN = re.compile(r"[\w.@\\/:-]+")
 DATE_LIKE = re.compile(r"[\d.:/tz+-]+")
 # number+unit/ordinal/word compounds and month-name dates are vocabulary, not identifiers
-GENERIC = re.compile(r"\d+[a-z]{1,3}|\d+(-[a-z]+)+|[a-z]+-\d{1,2}|\d{1,2}-[a-z]{3}-\d{2,4}|[\d.]+/[a-z]+|t\d{4}(\.\d{3})?")
+GENERIC = re.compile(r"\d+[a-z]{1,3}|\d+(-[a-z]+)+|[a-z]+-\d{1,2}|\d{1,2}-[a-z]{3}-\d{2,4}|[\d.]+/[a-z]+|t\d{4}(\.\d{3})?"
+                     # R056: field/event names (card_last4, address_line1, user.session.start) and cloud regions
+                     r"|[a-z]+(?:_[a-z]+\d{0,2})+|[a-z]{2}-[a-z]+-\d"
+                     r"|[a-z]+\d{0,2}\.(?:exe|dll|sys|ps1|bat|cmd|msi|vbs|js|py|sh)")  # stock binaries (rundll32.exe)
+TLDS = {"com", "net", "org", "io", "local", "corp", "internal", "lan", "ai", "co", "us", "uk", "edu", "gov", "dev", "app"}
+JSON_KEY = re.compile(r'"([A-Za-z_][\w.-]*)"\s*:|^\s*([A-Za-z_][\w.-]*):\s', re.M)
 
 
 def id_tokens(text: str) -> set[str]:
@@ -71,10 +78,11 @@ def id_tokens(text: str) -> set[str]:
     out = set()
     for tok in ID_TOKEN.findall(text.lower()):
         tok = tok.strip(".:/\\-")
-        if len(tok) < 5 or DATE_LIKE.fullmatch(tok) or GENERIC.fullmatch(tok):
+        if len(tok) < 8 or DATE_LIKE.fullmatch(tok) or GENERIC.fullmatch(tok):
             continue  # dates, versions, units, MITRE technique ids: shared vocabulary, not case identity
         if (re.search(r"[a-z]", tok) and re.search(r"\d", tok)) or "@" in tok \
-                or tok.count(".") >= 2 or re.fullmatch(r"[a-z]\.[a-z]{3,}", tok):
+                or (tok.count(".") >= 2 and (re.search(r"\d", tok) or tok.rsplit(".", 1)[-1] in TLDS)) \
+                or re.fullmatch(r"[a-z]\.[a-z]{3,}", tok):  # R056: dotted event names (user.session.start) are not hosts
             out.add(tok)
     return out
 
@@ -82,24 +90,37 @@ def id_tokens(text: str) -> set[str]:
 def contamination_index(cases: list) -> dict:
     """Everything the filter compares against, from benchmark inputs (+ metadata)."""
     index = {"grams": set(), "shingles": [], "ids": set(), "names": set()}
-    enum_like, df = Counter(), Counter()
+    enum_like, df, id_df, name_df, fields = Counter(), Counter(), Counter(), Counter(), set()
     for case in cases:
-        case_shingles, case_grams = set(), set()
+        case_shingles, case_grams, case_ids, case_names = set(), set(), set(), set()
+        stack = [case]
+        while stack:  # every dict key anywhere is a field name
+            v = stack.pop()
+            if isinstance(v, dict):
+                fields |= {k.lower() for k in v}
+                stack += list(v.values())
+            elif isinstance(v, list):
+                stack += v
         for key, text in leaves(case):
             toks = words(text)
             case_grams |= grams(toks, NGRAM)
             case_shingles |= grams(toks, SHINGLE)
-            index["ids"] |= id_tokens(text)
+            case_ids |= id_tokens(text)
+            fields |= {(a or b).lower() for a, b in JSON_KEY.findall(text)}  # keys inside JSON strings / records
             if NAME_KEY.search(key.lower()) and 6 <= len(text) <= 60 and not DATE_LIKE.fullmatch(text.lower()):
-                index["names"].add(text.strip().lower())
+                case_names.add(text.strip().lower())
             enum_like[text] += 1
         index["shingles"].append(case_shingles)
         df.update(case_grams)
-    # 8-grams present in >=5% of the workflow's cases are its own template/format boilerplate (e.g. the
-    # charter headers WE's trace parser keys on), not case content; every rarer 8-gram rejects.
-    template = max(2, 0.05 * len(cases))
+        id_df.update(case_ids)
+        name_df.update(case_names)
+    # n-grams/ids/names present in >=5% of the workflow's cases are its own template/format boilerplate (e.g. the
+    # charter headers WE's trace parser keys on), not case content; every rarer one rejects.
+    template = max(2, BOILERPLATE_FRAC * len(cases))
     index["grams"] = {g for g, c in df.items() if c < template}
     index["template"] = set(df) - index["grams"]
+    index["ids"] = {t for t, c in id_df.items() if c < template and t not in fields}
+    index["names"] = {t for t, c in name_df.items() if c < template and t not in fields}
     # Frequent lowercase snake values (span names, roles) are structure, not identity.
     index["names"] -= {v.lower() for v, c in enum_like.items() if c >= 3 and re.fullmatch(r"[a-z_.]+", v)}
     return index
@@ -111,7 +132,7 @@ def contaminated(case, index: dict) -> str | None:
     for key, text in leaves(case):
         toks = words(text)
         if hit := grams(toks, NGRAM) & index["grams"]:
-            return "ngram8:" + " ".join(sorted(hit)[0])
+            return f"ngram{NGRAM}:" + " ".join(sorted(hit)[0])
         shingles |= grams(toks, SHINGLE)
         if text.strip().lower() in index["names"]:
             return f"name:{text.strip()[:40]}"
@@ -282,8 +303,8 @@ OUTCOMES = {
 }
 
 
-def seed_for(wf: str, i: int) -> dict:
-    rng = random.Random(f"r053/{wf}/{i}")
+def seed_for(wf: str, i: int, tag: str = "r053") -> dict:
+    rng = random.Random(f"{tag}/{wf}/{i}")
     seed = {"industry": rng.choice(INDUSTRIES), "topic": rng.choice(TOPICS[wf]), "difficulty": rng.choice(DIFFICULTY)}
     if wf in OUTCOMES:
         seed["outcome"] = rng.choice(OUTCOMES[wf])
@@ -297,7 +318,7 @@ SYSTEM = ("You write synthetic but realistic test fixtures for workflow-evaluati
           "You reply with exactly one JSON object and nothing else - no prose, no Markdown fences.")
 
 
-def prompt(wf: str, skel, schema, seeds: list[dict]) -> str:
+def prompt(wf: str, skel, schema, seeds: list[dict], size: int | None = None) -> str:
     k = len(seeds)
     parts = [
         f"Write ONE new raw input case for the `{wf}` workflow." if k == 1 else
@@ -320,6 +341,10 @@ def prompt(wf: str, skel, schema, seeds: list[dict]) -> str:
         "lines) - a careful reviewer should be unsure. For clear seeds, make it clear.\n"
         "- Never state the intended outcome, label or difficulty inside the case.\n"
         "- Same keys and nesting as the skeleton; keep size similar to the observed lengths.\n"
+        + (f"- Size: about {size:,} characters of JSON per case (typical of real exports); records/messages "
+           "carry realistic detail, not one-liners.\n" if size else "")
+        + "- No annotation fields or comments that state a conclusion (e.g. 'note: suspicious', 'id: none'); "
+        "let the raw facts speak.\n"
         "Return only the JSON object." if k == 1 else
         f'Return only one JSON object {{"cases": [...]}} holding the {k} case objects in seed order.',
     ]
@@ -367,6 +392,24 @@ class StubSession:
         return SystemOneResponse(model="stub", answers=answers, usage=Usage())
 
 
+def strip_extra(raw: dict, model, tries: int = 50) -> None:
+    """Drop keys the strict pydantic packet forbids (generators add stray fields); other errors still raise later."""
+    from pydantic import ValidationError
+    for _ in range(tries):
+        try:
+            model.model_validate(raw)
+            return
+        except ValidationError as exc:
+            extra = [e["loc"] for e in exc.errors() if e["type"] == "extra_forbidden"]
+            if not extra:
+                return
+            for loc in extra:
+                node = raw
+                for k in loc[:-1]:
+                    node = node[k]
+                node.pop(loc[-1], None)
+
+
 def expand(wf: str, case_id: str, raw: dict, metadata: dict) -> list[dict]:
     """Run the case through WE's own adapter under every stub variant; return unique node requests."""
     from importlib import import_module
@@ -393,6 +436,7 @@ def main(argv=None) -> int:
     from evals.invoice_processing.structured.state import Packet
 
     sys.path.insert(0, str(ROOT))
+    import scripts.r053_teacher_label as r053
     from scripts.r053_teacher_label import LEDGER, claude, openrouter, usage_of
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -404,7 +448,14 @@ def main(argv=None) -> int:
     parser.add_argument("--per-call", type=int, help="cases per generation call (default: per workflow)")
     parser.add_argument("--effort", default="high")
     parser.add_argument("--max-usd", type=float, default=25.0)
+    parser.add_argument("--out", default=str(DATA), help="output dir (cases/nodes per workflow, cache/, report)")
+    parser.add_argument("--tag", default="r053", help="case-id prefix and seed namespace")
+    parser.add_argument("--workers", type=int, default=6)
     args = parser.parse_args(argv)
+    data = Path(args.out)
+    r053.CACHE = data / "cache"
+    if args.out != str(DATA):  # cap counts every cached response under this output dir, across runs
+        LEDGER["usd"] = sum(usage_of(json.loads(f.read_text()))["usd"] for f in r053.CACHE.glob("*.json"))
     LEDGER["max_usd"] = args.max_usd
     model = args.model or GENERATOR[args.backend]
 
@@ -416,7 +467,8 @@ def main(argv=None) -> int:
 
     from concurrent.futures import ThreadPoolExecutor
 
-    report_path = DATA / "generation_report.json"
+    report_path = data / ("generation_report.json" if args.out == str(DATA) else
+                          f"generation_report.{args.workflows[0] if len(args.workflows) == 1 else 'all'}.json")
     report = json.loads(report_path.read_text()) if report_path.exists() else {}
     for wf in args.workflows:
         spent_before = LEDGER["usd"]
@@ -424,31 +476,32 @@ def main(argv=None) -> int:
         records = [{**bench.metadata[c], **bench.inputs[c]} if wf == "customer_service" else bench.inputs[c]
                    for c in sorted(bench.inputs)]
         skel = skeleton(records)
+        size = int(statistics.median(len(json.dumps(r)) for r in records)) if args.tag != "r053" else None
         if wf == "customer_service":  # metadata: keep only the structural theme; ids are ours
             skel = {k: v for k, v in skel.items() if k not in ("note", "case_id", "dialog_id")}
         schema = Packet.model_json_schema() if wf == "invoice_processing" else None
         index = contamination_index([bench.inputs[c] | {"_meta": bench.metadata[c]} for c in bench.inputs])
         ids = list(range(args.start, args.start + args.n))
-        seeds = {i: seed_for(wf, i) for i in ids}
+        seeds = {i: seed_for(wf, i, args.tag) for i in ids}
         per_call = args.per_call or PER_CALL[wf]
         batches = [ids[j:j + per_call] for j in range(0, len(ids), per_call)]
 
         def generate(batch):
             try:
-                out = parse_json(llm(prompt(wf, skel, schema, [seeds[i] for i in batch])))
+                out = parse_json(llm(prompt(wf, skel, schema, [seeds[i] for i in batch], size)))
                 out = [out] if len(batch) == 1 else out["cases"]
                 return dict(zip(batch, out)) if len(out) == len(batch) else {i: ValueError("wrong case count") for i in batch}
             except Exception as exc:  # unparseable output or transport failure: drop the cases
                 return {i: exc for i in batch}
 
-        with ThreadPoolExecutor(6) as pool:
+        with ThreadPoolExecutor(args.workers) as pool:
             generated = {i: c for part in pool.map(generate, batches) for i, c in part.items()}
 
-        out = DATA / wf
+        out = data / wf
         out.mkdir(parents=True, exist_ok=True)
         cases, nodes, stats, offending = [], [], Counter(), Counter()
         for i, raw in sorted(generated.items()):
-            case_id = f"r053-{wf.split('_')[0]}-{i:04d}"
+            case_id = f"{args.tag}-{wf.split('_')[0]}-{i:04d}"
             if not isinstance(raw, dict):
                 stats["unparseable"] += 1
                 print(f"  {case_id}: generation failed: {str(raw)[:200]}")
@@ -467,6 +520,7 @@ def main(argv=None) -> int:
                 raw["id"] = case_id
             elif wf == "invoice_processing":
                 raw["case_id"] = case_id
+                strip_extra(raw, Packet)
             try:
                 case_nodes = expand(wf, case_id, raw, metadata)
             except Exception as exc:
@@ -480,7 +534,7 @@ def main(argv=None) -> int:
         # Merge by case_id so runs over other --start ranges accumulate.
         for name, rows in (("cases.jsonl", cases), ("nodes.jsonl", nodes)):
             old = [json.loads(x) for x in (out / name).read_text().splitlines()] if (out / name).exists() else []
-            redo = {f"r053-{wf.split('_')[0]}-{i:04d}" for i in ids}
+            redo = {f"{args.tag}-{wf.split('_')[0]}-{i:04d}" for i in ids}
             rows[:0] = [r for r in old if r["case_id"] not in redo]
             (out / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
         template_hits = Counter(" ".join(g) for c in generated.values() if isinstance(c, dict)
