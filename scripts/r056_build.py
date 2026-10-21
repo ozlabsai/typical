@@ -53,7 +53,7 @@ def nodes(wf):
 def cmd_labelin(args):
     sec, trace, cust, inv = (nodes(wf) for wf in WFS)
     out = {"gemma": write(R6 / "label_in/gemma.jsonl", trace + cust + inv + sec),  # security last: reference only
-           "qwen": write(R6 / "label_in/qwen.jsonl", sec), "qwen_trace": write(R6 / "label_in/qwen_trace.jsonl", trace)}
+           "qwen": write(R6 / "label_in/qwen.jsonl", sec + trace)}  # security first, then agent_trace
     q = lambda rows: sum(len(r["questions"]) for r in rows)  # noqa: E731
     print(json.dumps({**out, "questions": {"security": q(sec), "agent_trace": q(trace), "customer": q(cust),
                                            "invoice": q(inv)}}))
@@ -190,7 +190,7 @@ def contamination_index():
     import os
     import sys
     sys.path.insert(0, str(ROOT / "scripts"))
-    sys.path.insert(0, str(ROOT / ".context/research_sources/WorkflowEvals"))
+    sys.path.insert(0, os.environ.get("WORKFLOWEVALS", str(ROOT / ".context/research_sources/WorkflowEvals")))
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     import r055_hebrew_open as ho
     from core.dataset import load_dataset
@@ -232,6 +232,18 @@ def images(n, out):
     return rows, rejected
 
 
+def cmd_images(args):
+    import shutil
+    out = R6 / "img"
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    rows, rejected = images(args.n, out)
+    write(out / "rows.jsonl", rows)
+    (out / "rejected.json").write_text(json.dumps(rejected))
+    print(len(rows), rejected)
+
+
 def cmd_mix(args):
     import random
     import shutil
@@ -261,7 +273,9 @@ def cmd_mix(args):
         if pres(picked[kind]) < SHARE[kind] * total:
             picked[kind] += [{**r, "meta": {**r["meta"], "r056_source": f"r055:{r['meta'].get('r055_source')}"}}
                              for r in rs]
-    img, img_rejected = images(round(SHARE["img"] * total), out)
+    img = jsonl(R6 / "img/rows.jsonl")  # prebuilt locally (`images`): the laptop uplink is too slow for data_v_full
+    img_rejected = json.loads((R6 / "img/rejected.json").read_text())
+    shutil.copytree(R6 / "img/images", out / "images")
 
     train = wf_train + picked["he"] + picked["en"] + img
     bad = {r["meta"].get("twin_id") or r["id"] for r in train if hit(r)}
@@ -313,9 +327,10 @@ def cmd_mix(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=("labelin", "mix"))
+    ap.add_argument("cmd", choices=("labelin", "images", "mix"))
+    ap.add_argument("--n", type=int, default=2000, help="images: ScienceQA rows (~5%% of ~40k presentations)")
     args = ap.parse_args(argv)
-    {"labelin": cmd_labelin, "mix": lambda a: cmd_mix(a)}[args.cmd](args)
+    {"labelin": cmd_labelin, "images": cmd_images, "mix": cmd_mix}[args.cmd](args)
 
 
 if __name__ == "__main__":
