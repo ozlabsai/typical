@@ -100,9 +100,9 @@ def replay_main(cases_dir: Path, pred_path: Path, out: Path) -> dict:
             lookups[arm][r["case_id"]][key] = wire(r["type"], probs)
         if r.get("target"):
             lookups["teacher"][r["case_id"]][key] = wire(r["type"], r["target"])
+            lookups["teacher_corr"][r["case_id"]][key] = wire(r["type"], r.get("target_corr") or r["target"])
 
-    res = {"arms": arms, "workflows": {}, "headline_metric": HEADLINE}
-    for wf in WORKFLOWS:
+    def score(wf: str, ref_name: str) -> dict:
         path = cases_dir / wf / "cases.jsonl"
         cases = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
         cases = [c for c in cases if c["case_id"] in lookups["teacher"]]
@@ -112,7 +112,7 @@ def replay_main(cases_dir: Path, pred_path: Path, out: Path) -> dict:
             adapter = import_module(f"evals.{wf}.eval_adapter").Adapter(
                 WE / "evals" / wf, SimpleNamespace(inputs={cid: c["input"]}, metadata={cid: c["metadata"]}))
             metric = next(m for m in adapter.bundle.metrics if m.metric_id == HEADLINE[wf])
-            ref = replay_case(adapter, cid, lookups["teacher"][cid])
+            ref = replay_case(adapter, cid, lookups[ref_name][cid])
             if ref is None:
                 ref_missing += 1  # teacher labels do not cover the reference path: no reference for this case
                 continue
@@ -130,44 +130,63 @@ def replay_main(cases_dir: Path, pred_path: Path, out: Path) -> dict:
                 for arm, v in cmp.items():
                     hits[arm] += bool(v)
                     arm_missing[arm] += got[arm] is None
-        res["workflows"][wf] = {"cases": len(cases), "decisions": n, "ref_missing_cases": ref_missing,
-                                "agreement": {arm: hits[arm] / n if n else None for arm in arms},
-                                "arm_unseen_branch_decisions": dict(arm_missing)}
+        return {"cases": len(cases), "decisions": n, "ref_missing_cases": ref_missing,
+                "agreement": {arm: hits[arm] / n if n else None for arm in arms},
+                "arm_unseen_branch_decisions": dict(arm_missing)}
+
+    res = {"arms": arms, "workflows": {wf: score(wf, "teacher") for wf in WORKFLOWS}, "headline_metric": HEADLINE}
     # preregistered: the mean is over workflows with >= MIN_CASES replayable dev cases (invoice has ~1)
     scored = [wf for wf in WORKFLOWS if res["workflows"][wf]["cases"] - res["workflows"][wf]["ref_missing_cases"] >= MIN_CASES]
     res["mean_agreement"] = {arm: sum(res["workflows"][wf]["agreement"][arm] for wf in scored) / len(scored)
                              for arm in arms}
     res["mean_over"] = scored
     res["binary"] = binary_metrics(preds, arms)
-    res["gates"] = gates(res, preds, json.loads((pred_path.parent / "train_log.json").read_text())["tau"])
+    log = json.loads((pred_path.parent / "train_log.json").read_text())
+    taus = log.get("tau_variants") or {"": log["tau"]}
+    res["gates"] = {k: v for sfx in taus for k, v in gates(res, preds, taus, sfx).items()}
+    if any("target_corr" in r for r in preds):  # R059: security also scored against the gold-style corrected targets
+        sec = [r for r in preds if r["workflow"] == "security_incidents" and r["type"] == "noul" and r.get("lang") == "en"
+               and r.get("target_corr")]
+        res["security_vs_corrected"] = {
+            "replay": score("security_incidents", "teacher_corr"),
+            "noul_mae": {arm: sum(abs(r["arms"][arm]["true"] - r["target_corr"]["true"]) for r in sec) / len(sec)
+                         for arm in arms},
+            "is_true_positive_mae": {arm: (lambda rows: sum(abs(r["arms"][arm]["true"] - r["target_corr"]["true"])
+                                                             for r in rows) / max(len(rows), 1))(
+                [r for r in sec if r["qid"] == "is_true_positive"]) for arm in arms},
+            "n_noul": len(sec)}
     out.mkdir(parents=True, exist_ok=True)
     (out / "replay.json").write_text(json.dumps(res, indent=1) + "\n")
     return res
 
 
-def gates(res: dict, preds: list[dict], tau: float) -> dict:
-    """Each idea's own go/kill rule (idea files §4), applied to held-out synthetic replay."""
-    mean, sec = res["mean_agreement"], {a: res["workflows"]["security_incidents"]["agreement"][a] for a in res["arms"]}
+def gates(res: dict, preds: list[dict], taus: dict, sfx: str = "") -> dict:
+    """Each idea's own go/kill rule (idea files §4), applied to held-out synthetic replay. sfx "+corr" = R059 variant."""
+    mean = res["mean_agreement"]
+    sec = {a: res["workflows"]["security_incidents"]["agreement"][a] for a in res["arms"]}
     mae = {a: res["binary"]["all_noul"][a]["mae"] for a in res["arms"]}
+    base, spread, gate, cert = (n + sfx for n in ("base0", "a_spread", "b_gate", "c_cert"))
     he = [r for r in preds if r.get("lang") == "he"]
     argmax = lambda p: max(p, key=p.get)  # noqa: E731
-    he_flips = sum(argmax(r["arms"]["a_spread"]) != argmax(r["arms"]["base0"]) for r in he) / len(he) if he else None
-    a = {"mae_cut_vs_base0": mae["base0"] - mae["a_spread"], "agreement_gain_vs_base0": mean["a_spread"] - mean["base0"],
+    he_flips = sum(argmax(r["arms"][spread]) != argmax(r["arms"][base]) for r in he) / len(he) if he else None
+    a = {"mae_cut_vs_base0": mae[base] - mae[spread], "agreement_gain_vs_base0": mean[spread] - mean[base],
          "he_argmax_flip_rate_vs_base0": he_flips, "he_rows": len(he)}
     a["pass"] = a["mae_cut_vs_base0"] >= 0.025 and a["agreement_gain_vs_base0"] >= 0.020 and (he_flips or 0) <= 2 / 128
-    rows = [r for r in preds if r.get("js_student_target") is not None]
-    blends = {k: v for k, v in mean.items() if k.startswith("blend_g")}
-    best_const = max([mean["student"], *blends.values()])
-    b = {"tau": tau, "gate_auprc": auprc([r["extra"]["b_gate.gate"] for r in rows],
+    tau = taus[sfx]
+    rows = [r for r in preds if r.get("js_student_target") is not None and r.get("lang") == "en"]
+    blends = [k for k in mean if k.startswith(f"blend{sfx}_g")]
+    best_const = max(["student", *blends], key=mean.get)
+    b = {"tau": tau, "gate_auprc": auprc([r["extra"][f"{gate}.gate"] for r in rows],
                                          [int(r["js_student_target"] >= tau) for r in rows]),
          "positive_rate": sum(r["js_student_target"] >= tau for r in rows) / len(rows),
-         "gain_vs_student": mean["b_gate"] - mean["student"], "gain_vs_best_constant_blend": mean["b_gate"] - best_const,
-         "best_constant_arm": max(["student", *blends], key=mean.get), "security_vs_student": sec["b_gate"] - sec["student"]}
-    b["pass"] = (b["gate_auprc"] or 0) >= 0.50 and mean["b_gate"] - max(mean["student"], best_const) >= 0.020 \
-        and b["security_vs_student"] >= 0
-    c = {"security": sec["c_cert"], "mean": mean["c_cert"], "security_base0": sec["base0"], "mean_base0": mean["base0"]}
-    c["pass"] = sec["c_cert"] >= 0.50 and mean["c_cert"] >= 0.57
-    return {"a_spread": a, "b_gate": b, "c_cert": c}
+         "gain_vs_student": mean[gate] - mean["student"], "gain_vs_best_constant": mean[gate] - mean[best_const],
+         "best_constant_arm": best_const, "security_vs_student": sec[gate] - sec["student"]}
+    b["pass"] = (b["gate_auprc"] or 0) >= 0.50 and b["gain_vs_best_constant"] >= 0.020 and b["security_vs_student"] >= 0
+    c = {"security": sec[cert], "mean": mean[cert], "security_base0": sec[base], "mean_base0": mean[base]}
+    # econ_law_pl.md's numbers are official-WorkflowEvals thresholds; on synthetic replay (a different scale) the
+    # head must also not lose to its own uncertified distribution (base0), fixed before any real score.
+    c["pass"] = sec[cert] >= 0.50 and mean[cert] >= 0.57 and mean[cert] >= mean[base]
+    return {spread: a, gate: b, cert: c}
 
 
 def binary_metrics(preds: list[dict], arms: list[str]) -> dict:
@@ -592,7 +611,27 @@ def fit(model, b, train_idx, val_idx):
     return {"best_epoch": log.index(best), "val_loss": log}
 
 
-def train_main(train_dir: Path, dev_dir: Path, out: Path, temps_path: Path | None) -> None:
+def load_corrected(path: Path | None) -> dict:
+    """R059 gold-style security targets: (request_id, qid) -> corrected P(true)."""
+    if not path:
+        return {}
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    return {(r.get("request_id") or r["id"], r["qid"]): float(r.get("p_corrected", r.get("p"))) for r in rows}
+
+
+def with_corrected(meta: list[dict], corr: dict) -> list[dict]:
+    """Security nouls retargeted to the corrected P(true) (target and the lone security teacher alike)."""
+    out = []
+    for m in meta:
+        p = corr.get((m.get("twin_id") or m["request_id"].removesuffix("-he"), m["qid"]))
+        if m["workflow"] == "security_incidents" and m["type"] == "noul" and p is not None and m.get("target"):
+            t = {"true": p, "false": 1 - p}
+            m = m | {"target": t, "teachers": {"qwen": t}}
+        out.append(m)
+    return out
+
+
+def train_main(train_dir: Path, dev_dir: Path, out: Path, temps_path: Path | None, corr_path: Path | None = None) -> None:
     import hashlib
 
     import torch
@@ -608,17 +647,26 @@ def train_main(train_dir: Path, dev_dir: Path, out: Path, temps_path: Path | Non
     qvocab = {q: i + 1 for i, q in enumerate(sorted({m["qid"] for m in m_tr}))}  # 0 = unseen qid
     btr = batch_of(norm(h_tr), s_tr, m_tr, qvocab, slices, temps)
     bdev = batch_of(norm(h_dev), s_dev, m_dev, qvocab, slices, temps)
-    in_val = torch.tensor([int(hashlib.sha256(m["case_id"].encode()).hexdigest(), 16) % HP["opt"]["internal_val_mod"] == 0
+    in_val = torch.tensor([int(hashlib.sha256(f"r058-val/{m['case_id']}".encode()).hexdigest(), 16) % HP["opt"]["internal_val_mod"] == 0
                            for m in m_tr])
     tr_idx, va_idx = (~in_val).nonzero()[:, 0], in_val.nonzero()[:, 0]
+    assert len(va_idx) and len(tr_idx), "empty internal split"  # salted: R056's dev rule is also sha256 % 10
     heads, js = build_heads(h_tr.shape[1], len(qvocab) + 1)
     with torch.no_grad():
         tau = float(torch.quantile(js(btr["m"], torch.softmax(btr["s"], -1), btr["mask"]), HP["gate"]["tau_pct"] / 100))
     models, logs = {}, {}
-    for name, cls in heads.items():
-        models[name] = cls(tau) if name == "b_gate" else cls()
-        logs[name] = fit(models[name], btr, tr_idx, va_idx)
-        print(name, logs[name]["best_epoch"], f"{min(logs[name]['val_loss']):.4f}", flush=True)
+    variants = {"": (btr, tau)}
+    corr = load_corrected(corr_path)
+    if corr:  # R059 extra: every head once more against the corrected security targets
+        bc = batch_of(norm(h_tr), s_tr, with_corrected(m_tr, corr), qvocab, slices, temps)
+        with torch.no_grad():
+            tau_c = float(torch.quantile(js(bc["m"], torch.softmax(bc["s"], -1), bc["mask"]), HP["gate"]["tau_pct"] / 100))
+        variants["+corr"] = (bc, tau_c)
+    for sfx, (bt, tau_v) in variants.items():
+        for name, cls in heads.items():
+            models[name + sfx] = cls(tau_v) if name == "b_gate" else cls()
+            logs[name + sfx] = fit(models[name + sfx], bt, tr_idx, va_idx)
+            print(name + sfx, logs[name + sfx]["best_epoch"], f"{min(logs[name + sfx]['val_loss']):.4f}", flush=True)
     out.mkdir(parents=True, exist_ok=True)
     torch.save({"hp": HP, "tau": tau, "mu": mu, "sd": sd, "qvocab": qvocab, "slices": slices, "temps": temps,
                 "d": h_tr.shape[1], "state": {k: m.state_dict() for k, m in models.items()}}, out / "heads.pt")
@@ -630,8 +678,9 @@ def train_main(train_dir: Path, dev_dir: Path, out: Path, temps_path: Path | Non
             pred = m.predict(bdev)
             arms[name] = pred["p"]
             extra |= {f"{name}.{k}": v for k, v in pred.items() if k != "p"}
-        for g in HP["blends"]:
-            arms[f"blend_g{g}"] = models["b_gate"].predict(bdev, g)["p"]
+        for sfx in variants:
+            for g in HP["blends"]:
+                arms[f"blend{sfx}_g{g}"] = models["b_gate" + sfx].predict(bdev, g)["p"]
         # NON-SHIPPABLE DIAGNOSTIC: the student's security answer clamped to the program's neutral cell, no certificate.
         q = arms["student"].gather(1, bdev["tpos"][:, None])[:, 0]
         clamp = torch.where(bdev["slice"], torch.minimum(torch.maximum(q, bdev["lo"]), bdev["hi"]), q)
@@ -640,17 +689,20 @@ def train_main(train_dir: Path, dev_dir: Path, out: Path, temps_path: Path | Non
         arms["diag_clamp"][set_rows, bdev["tpos"][set_rows]] = clamp[set_rows]
         arms["diag_clamp"][set_rows, bdev["fpos"][set_rows]] = 1 - clamp[set_rows]
         js_dev = js(bdev["m"], torch.softmax(bdev["s"], -1), bdev["mask"])
+    m_corr = with_corrected(m_dev, corr)
     with (out / "pred.jsonl").open("w") as f:
         for i, m in enumerate(m_dev):
             n = len(m["labels"])
             f.write(json.dumps({**{k: m[k] for k in ("case_id", "request_id", "workflow", "node", "qid", "type", "lang")},
                                 "target": m.get("target"),
+                                **({"target_corr": m_corr[i]["target"]} if corr else {}),
                                 "arms": {a: dict(zip(m["labels"], p[i, :n].double().div(p[i, :n].sum()).tolist()))
                                          for a, p in arms.items()},
                                 "extra": {k: float(v[i]) for k, v in extra.items()},
                                 "js_student_target": float(js_dev[i]) if m.get("target") else None}) + "\n")
     (out / "train_log.json").write_text(json.dumps({"tau": tau, "n_train": len(tr_idx), "n_internal_val": len(va_idx),
-                                                    "n_dev": len(m_dev), "fits": logs, "hp": HP, "slices": slices},
+                                                    "n_dev": len(m_dev), "corrected": str(corr_path) if corr else None,
+                                                    "tau_variants": {k: v[1] for k, v in variants.items()}, "fits": logs, "hp": HP, "slices": slices},
                                                    indent=1) + "\n")
 
 
@@ -723,8 +775,9 @@ if __name__ == "__main__":
         for k in ("train", "dev", "out"):
             ap.add_argument(k, type=Path)
         ap.add_argument("--temperatures", type=Path)
+        ap.add_argument("--corrected", type=Path, help="R059 security_targets_corrected.jsonl (optional variant)")
         a = ap.parse_args(argv)
-        train_main(a.train, a.dev, a.out, a.temperatures)
+        train_main(a.train, a.dev, a.out, a.temperatures, a.corrected)
     elif cmd == "serve":
         ap = argparse.ArgumentParser()
         ap.add_argument("heads", type=Path)
