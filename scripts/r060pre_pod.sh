@@ -9,9 +9,9 @@
 #               WorkflowEvals 705 (R056 `wf` settings) || JevBench 231 + hejev + external panel
 #   evalbase    λ 0, two replicas per GPU: WorkflowEvals 705 (JevBench/hejev at λ 0 are R057's base numbers)
 #   all         psetup, proxy, evalpair, evalbase -> ALL_DONE
-#   merge       (own process) M1/M2 rank-concat merges of R056 + R055-B: proxy, retention, hejev/EN/external,
-#               WF for the proxy winner only with MERGE_WF=1 (cost), after ALL_DONE -> MERGE_DONE
-#   contested   (own process) zoom-ai/contested-fast-decisions on λ .5/.75/0 fleets, then λ 1 -> CONTESTED_DONE
+#   finish      (own process) after ALL_DONE: zoom-ai/contested-fast-decisions for λ .5/.75/0/1 (CONTESTED_DONE),
+#               then merge: M1/M2 rank-concat merges of R056 + R055-B (proxy, retention, hejev/EN/external), their
+#               WF only if `r060pre_proxy.py gate` passes -> MERGE_DONE
 set -euo pipefail
 source "$(dirname "$0")/r057_pod.sh" true  # xsetup, jev, killtree, wait_url, G, GM, PY, EXT, REV, WE
 O=/workspace/g1/r060pre; A=$O/adapters; O5=$O; NG=$(nvidia-smi -L | wc -l)
@@ -127,37 +127,39 @@ cfd() {  # name port -- zoom-ai/contested-fast-decisions (EVAL ONLY) through one
     echo "FAILED contested $1"
 }
 
-on() { until curl -fsS "http://127.0.0.1:$1/v1/models" 2>/dev/null | grep -q "r060-$2-"; do sleep 20; done; }
 
-merge() {  # separate process. M1 = R056 + .5·R055-B, M2 = .75·R056 + .5·R055-B (rank concat, fixed in advance).
-  # After ALL_DONE: proxy + retention; then JevBench/hejev/external for both || full WF for the lower proxy NLL arm
+merge() {  # M1 = R056 + .5·R055-B, M2 = .75·R056 + .5·R055-B (rank concat, fixed in advance): proxy, retention,
+  # JevBench/hejev/external; full WF only if `r060pre_proxy.py gate` passes (coordinator rule, budget)
   (cd "$R" && $PY scripts/r060pre_proxy.py merge "$O/dl/r056" 1 "$A/r055b" .5 "$A/m1" &&
     $PY scripts/r060pre_proxy.py merge "$O/dl/r056" .75 "$A/r055b" .5 "$A/m2")
-  until [[ -e $O/ALL_DONE ]]; do sleep 30; done
   dsel m1 0 & dsel m2 1 & mmhe m1 0 & mmhe m2 1 & wait
-  local win
-  win=$(python3 -c 'import json, sys; d = sys.argv[1]
-print(min(("m1", "m2"), key=lambda m: json.load(open(f"{d}/{m}.json"))["summary"]["all"]["nll"]))' "$O/proxy")
-  echo "$win" >"$O/merge-winner.txt"
   fleet m1 8090 $(ports 8100 1)
   fleet m2 8091 $(ports 8200 1)
-  # ponytail: the winner's full WF (~3.3 GPU-h) is gated, it alone would take R060-pre past its $60 cap
-  [[ ${MERGE_WF:-0} == 1 ]] && { wfrun "$win" $([[ $win == m1 ]] && echo 8090 || echo 8091) "$NG" & }
   hev m1 8090 & hev m2 8091 & wait
   stopall
+  local win
+  win=$(cd "$R" && $PY scripts/r060pre_proxy.py gate "$O/proxy" "$O/hejev" --out "$O/merge-gate.json" | tail -1)
+  echo "merge gate: ${win:-fail}"
+  if [[ $win == m1 || $win == m2 ]]; then fleet "$win" 8090 $(ports 8100 2); wfrun "$win" 8090 $((2 * NG)); stopall; fi
   touch "$O/MERGE_DONE"
 }
 
-contested() {  # separate process: rides the chain's fleets (λ .5/.75, then λ 0); λ 1 on GPU 0 after MERGE_DONE
-  uvx --from huggingface_hub hf download zoom-ai/contested-fast-decisions --repo-type dataset --local-dir "$O/data/cfd"
-  mkdir -p "$O/contested"
-  on 8091 lam075; cfd lam050 8090 & cfd lam075 8091; wait
-  on 8090 lam000; cfd lam000 8090
-  until [[ -e $O/MERGE_DONE ]]; do sleep 30; done
-  rep lam100 0 8300
-  wait_url http://127.0.0.1:8300/v1/models "$(cat "$O/pids/serve8300")" && cfd lam100 8300
+cfdpair() {  # a b -- contested on dedicated replicas, a on GPU 0 and b on GPU 1
+  fleet "$1" 8090 8100:0
+  fleet "$2" 8091 8110:$((NG - 1))
+  cfd "$1" 8090 & cfd "$2" 8091 & wait
   stopall
+}
+
+finish() {  # separate process, after the chain's ALL_DONE: contested-fast-decisions (λ .5, .75, 0, 1), then merge
+  # bench/gate on the pod read jevbench + the hejev splits from the local-checkout paths
+  ln -sfn "$JB" "$R/.context/jevbench-v154"; mkdir -p "$R/.context/hebrew-bench"
+  ln -sfn "$R/hejev" "$R/.context/hebrew-bench/hejev-v0"; ln -sfn "$R/hejev" "$R/.context/hebrew-bench/external"
+  until [[ -e $O/ALL_DONE ]]; do sleep 30; done
+  cfdpair lam050 lam075
+  cfdpair lam000 lam100
   touch "$O/CONTESTED_DONE"
+  merge
 }
 
 all() {

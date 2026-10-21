@@ -7,6 +7,7 @@
                                           EN/HE twins drawn together
   score <name>=<devsel.json>... --out x   teacher-NLL / Brier / argmax agreement, per workflow and overall
   bench <name>=<hejev run dir>... --out x JevBench 231 / hejev HE MX native / external panel per model
+  gate <proxy dir> <hejev dir> --out x     merge-WF rule (merge arm beats both λ blends on proxy NLL and HE/MX/native)
   corr <proxy.json> <name>=<wf run dir>... --out x
                                           Spearman/Pearson of the proxy vs WF headline, per (model × workflow)
 """
@@ -154,6 +155,21 @@ def bench(runs, out):
         print(f"| {name} | " + " | ".join(str(m[k]) if k == "en_correct" else f"{m[k]:.3f}" for k in keys) + " |")
 
 
+def gate(proxy_dir, hejev_dir, out):
+    """Coordinator rule for the merge WF: the lower-proxy-NLL merge arm must beat BOTH λ blends on proxy
+    teacher-NLL and on the Hebrew JevBench mean (HE/MX/native), with EN 231 >= 200. Prints the arm or nothing."""
+    names = ("m1", "m2", "lam050", "lam075")
+    bench([f"{n}={hejev_dir}/{n}" for n in names], out + ".bench.json")
+    b = json.loads(Path(out + ".bench.json").read_text())
+    nll = {n: json.loads((Path(proxy_dir) / f"{n}.json").read_text())["summary"]["all"]["nll"] for n in names}
+    heb = {n: st.mean(b[n][k] for k in ("he", "mx", "native")) for n in names}
+    win = min(("m1", "m2"), key=nll.get)
+    ok = all(nll[win] < nll[l] and heb[win] > heb[l] for l in ("lam050", "lam075")) and b[win]["en_correct"] >= 200
+    Path(out).write_text(json.dumps({"arm": win, "pass": ok, "nll": nll, "hebrew_mean": heb,
+                                     "en_correct": {n: b[n]["en_correct"] for n in names}}, indent=1) + "\n")
+    print(win if ok else "")
+
+
 def wf_headline(run_dir):
     out = {}
     for wf, metric in HEADLINE.items():
@@ -223,6 +239,7 @@ def main():
     p = sub.add_parser("sample"); p.add_argument("dev"); p.add_argument("out"); p.add_argument("--n", type=int, default=2000)
     p = sub.add_parser("score"); p.add_argument("pairs", nargs="+"); p.add_argument("--out", required=True)
     p = sub.add_parser("bench"); p.add_argument("runs", nargs="+"); p.add_argument("--out", required=True)
+    p = sub.add_parser("gate"); p.add_argument("proxy_dir"); p.add_argument("hejev_dir"); p.add_argument("--out", required=True)
     p = sub.add_parser("corr"); p.add_argument("proxy"); p.add_argument("pairs", nargs="+"); p.add_argument("--out", required=True)
     a = ap.parse_args()
     if a.cmd == "scale":
@@ -233,6 +250,8 @@ def main():
         sample(a.dev, a.out, a.n)
     elif a.cmd == "bench":
         bench(a.runs, a.out)
+    elif a.cmd == "gate":
+        gate(a.proxy_dir, a.hejev_dir, a.out)
     elif a.cmd == "score":
         score(a.pairs, a.out)
     else:
