@@ -8,8 +8,10 @@ set -a; . /workspace/.env; set +a
 export HF_HOME=/workspace/hf UV_CACHE_DIR=/workspace/uv HF_HUB_OFFLINE=0 WORKFLOWEVALS=/workspace/r054/WorkflowEvals
 mkdir -p .context/r056/labels
 cp /workspace/g1/r056/labels_gemma.jsonl /workspace/g1/r056/labels_qwen.jsonl .context/r056/labels/
-tar -xf /workspace/r056_img.tar -C .context/r056/
-tar -xzf /workspace/r056_mixin.tgz -C .
+[[ -d .context/r056/img ]] || tar -xf /workspace/r056_img.tar -C .context/r056/ 2>/dev/null
+tar -xzf /workspace/r056_mixin.tgz -C . 2>/dev/null
+find .context -name "._*" -delete  # macOS tar AppleDouble files
+ln -sfn /workspace/r054/jevbench/jevbench .context/jevbench-v154/jevbench  # r055_hebrew_open imports jevbench from here
 (cd WorkflowEvals && uv run --frozen --with pandas python ../scripts/r056_build.py mix) > /workspace/g1/r056/logs/mix.log 2>&1
 cp .context/r056/mix/manifest.json /workspace/g1/r056/mix-manifest.json
 # private HF backup: cases (meta.generator), teacher labels, train mix + dev splits, manifest

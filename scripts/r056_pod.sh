@@ -135,6 +135,7 @@ wf() {  # port id workflow... -- the R050/Phase-0 harness path, typical: provide
 evalall() {  # step -- stage + replicas, then WorkflowEvals (705) || JevBench 231 + hejev + external; retention last
   local id
   stage "$1"; id=$(replicas "${PER_GPU:-2}" | tail -1)
+  mkdir -p "$O6/hejev" "$O6/wf"
   date -u +%FT%TZ >"$O6/EVAL.START"
   wf 8090 "$id" security_incidents agent_trace_observability invoice_processing customer_service &
   local wfp=$!
