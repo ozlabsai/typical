@@ -143,10 +143,22 @@ def corr(proxy_path, pairs, out):
                 p = proxy[name][wf]
                 pts.append((name, wf, v, p["nll"], p["brier"], p["agree"]))
 
+    def ranks(v):  # average ranks for ties (Spearman = Pearson on ranks)
+        order = sorted(range(len(v)), key=v.__getitem__)
+        out, i = [0.0] * len(v), 0
+        while i < len(v):
+            j = i
+            while j + 1 < len(v) and v[order[j + 1]] == v[order[i]]:
+                j += 1
+            for k in range(i, j + 1):
+                out[order[k]] = (i + j) / 2
+            i = j + 1
+        return out
+
     def rho(xs, ys):
         if len(xs) < 3 or len(set(xs)) < 2 or len(set(ys)) < 2:
             return {"spearman": None, "pearson": None, "n": len(xs)}
-        return {"spearman": st.correlation(xs, ys, method="ranked"), "pearson": st.correlation(xs, ys), "n": len(xs)}
+        return {"spearman": st.correlation(ranks(xs), ranks(ys)), "pearson": st.correlation(xs, ys), "n": len(xs)}
 
     def block(sel):
         wf = [p[2] for p in sel]
