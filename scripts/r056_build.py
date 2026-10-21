@@ -184,9 +184,10 @@ def pres(rows):
     return sum(len(r["questions"]) for r in rows)
 
 
-def contamination_index():
+def contamination_index(extra=()):
     """13-gram index of WorkflowEvals inputs (per-workflow >=5% boilerplate ignored), JevBench public, hejev-v0
-    and the external Hebrew panel (R055 rule: 13-grams in >=20 test rows are boilerplate)."""
+    and the external Hebrew panel (R055 rule: 13-grams in >=20 test rows are boilerplate); `extra` = more test
+    jsonl paths under the same rule (R060: contested-fast-decisions)."""
     import os
     import sys
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -205,7 +206,7 @@ def contamination_index():
         index |= {g for g, c in df.items() if c < max(2, 0.05 * len(bench.inputs))}
     freq = {}
     tests = [*sorted((ROOT / ".context/jevbench-v154/datasets/public").glob("*.jsonl")),
-             *sorted(ho.HEJEV.glob("*.jsonl")), *sorted(ho.EXT.glob("*.jsonl"))]
+             *sorted(ho.HEJEV.glob("*.jsonl")), *sorted(ho.EXT.glob("*.jsonl")), *map(Path, extra)]
     for path in tests:
         for r in jsonl(path):
             for g in set().union(*(ho.grams(t) for t in ho.texts_of_task(r))):

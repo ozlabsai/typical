@@ -51,14 +51,19 @@ def main():
         with torch.inference_mode():
             student = singleton_option_probabilities(model, ids[None].to("cuda"), groups, labels)
         rows.append({"id": ex["id"], "student": [student[k] for k in labels], "teacher": teacher.tolist()})
+        if "base_probs" in ex:  # R060 anchor dev: KL(base || student) next to the teacher NLL
+            rows[-1]["base"] = [ex["base_probs"][k] for k in labels]
     by = defaultdict(list)
     for r in rows:
         ce = -sum(t * math.log(max(s, 1e-12)) for t, s in zip(r["teacher"], r["student"]))
         hit = max(range(len(r["teacher"])), key=r["teacher"].__getitem__) == max(range(len(r["student"])), key=r["student"].__getitem__)
         r["ce"], r["hit"] = ce, hit
+        if "base" in r:
+            r["kl"] = sum(b * math.log(max(b, 1e-12) / max(s, 1e-12)) for b, s in zip(r["base"], r["student"]) if b > 0)
         by["all"].append(r)
         by[r["id"].split("-")[1]].append(r)  # r056-<workflow>-NNNN-...
-    summary = {k: {"nll": sum(r["ce"] for r in v) / len(v), "acc": sum(r["hit"] for r in v) / len(v), "n": len(v)}
+    summary = {k: {"nll": sum(r["ce"] for r in v) / len(v), "acc": sum(r["hit"] for r in v) / len(v), "n": len(v),
+                   **({"kl": sum(r["kl"] for r in v) / len(v)} if all("kl" in r for r in v) else {})}
                for k, v in by.items()}
     summary["skipped_overlength"] = skipped
     json.dump({"adapter": args.adapter, "summary": summary, "rows": rows}, open(args.out, "w"))
