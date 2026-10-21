@@ -112,26 +112,40 @@ class ReplaySession:
         return SystemOneResponse.model_validate_json(json.dumps(blob))
 
 
-def replay(workflow, lookup: dict[str, dict], temps: dict | None) -> dict:
-    """Run the official workflow program on stored answers; score with core.scoring."""
-    from core.contract import CaseResult, Decision, ModelIdentity, Run
-    from core.scoring import build_score_data
+def execute_cases(workflow, lookup: dict[str, dict], temps: dict | None) -> tuple[list, set[str]]:
+    """Run the official workflow program on stored answers -> (CaseResults, ids of cases that errored)."""
+    from core.contract import CaseResult, Decision
 
     bundle = workflow.bundle
     policy_ids = [p.policy_id for p in bundle.policies]
-    cases, errors = [], 0
+    cases, errors = [], set()
     for case in bundle.cases:
         try:
             result = workflow.execute(case.case_id, ReplaySession(lookup.get(case.case_id, {}), policy_ids, temps))
         except Exception as exc:  # ponytail: unseen branch/missing answer counts as wrong, like the runner
-            errors += 1
+            errors.add(case.case_id)
             result = CaseResult(case_id=case.case_id, decisions=[
                 Decision.failed(p.policy_id, p.revision, repr(exc)) for p in bundle.policies])
         result.case_hash, result.input_status = case.content_hash, "verified"
         cases.append(result)
-    scored = bundle.model_copy(update={"runs": [Run(run_id="replay", model=ModelIdentity(name="replay"), cases=cases)]})
-    series = build_score_data(scored, label_ids=["labels-consensus"], model_selection="all").series[0]
-    return {**series.metrics, "decisions": series.decisions, "case_errors": errors}
+    return cases, errors
+
+
+def score_cases(workflow, cases: list) -> dict:
+    """Score CaseResults against labels-consensus with core.scoring."""
+    from core.contract import ModelIdentity, Run
+    from core.scoring import build_score_data
+
+    run = Run(run_id="replay", model=ModelIdentity(name="replay"), cases=cases)
+    series = build_score_data(workflow.bundle.model_copy(update={"runs": [run]}),
+                              label_ids=["labels-consensus"], model_selection="all").series[0]
+    return {**series.metrics, "decisions": series.decisions}
+
+
+def replay(workflow, lookup: dict[str, dict], temps: dict | None) -> dict:
+    """Run the official workflow program on stored answers; score with core.scoring."""
+    cases, errors = execute_cases(workflow, lookup, temps)
+    return {**score_cases(workflow, cases), "case_errors": len(errors)}
 
 
 def mean(scores: dict) -> float:
