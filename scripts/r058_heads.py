@@ -27,6 +27,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 WE = Path(os.environ.get("WORKFLOWEVALS", ROOT / ".context" / "research_sources" / "WorkflowEvals"))
 WORKFLOWS = ("security_incidents", "agent_trace_observability", "invoice_processing", "customer_service")
+MIN_CASES = 10
 BAND = (0.15, 0.75)  # security is_true_positive middle cell; also the reported "middle band" for every binary
 
 
@@ -132,7 +133,8 @@ def replay_main(cases_dir: Path, pred_path: Path, out: Path) -> dict:
         res["workflows"][wf] = {"cases": len(cases), "decisions": n, "ref_missing_cases": ref_missing,
                                 "agreement": {arm: hits[arm] / n if n else None for arm in arms},
                                 "arm_unseen_branch_decisions": dict(arm_missing)}
-    scored = [wf for wf in WORKFLOWS if res["workflows"][wf]["decisions"]]
+    # preregistered: the mean is over workflows with >= MIN_CASES replayable dev cases (invoice has ~1)
+    scored = [wf for wf in WORKFLOWS if res["workflows"][wf]["cases"] - res["workflows"][wf]["ref_missing_cases"] >= MIN_CASES]
     res["mean_agreement"] = {arm: sum(res["workflows"][wf]["agreement"][arm] for wf in scored) / len(scored)
                              for arm in arms}
     res["mean_over"] = scored
@@ -172,7 +174,7 @@ def binary_metrics(preds: list[dict], arms: list[str]) -> dict:
     """MAE of P(true) to the teacher target and middle-band rates, all binaries and the security slice."""
     out = {}
     for name, keep in (("all_noul", lambda r: True), ("is_true_positive", lambda r: r["qid"] == "is_true_positive")):
-        rows = [r for r in preds if r["type"] == "noul" and r.get("target") and keep(r)]
+        rows = [r for r in preds if r["type"] == "noul" and r.get("target") and r.get("lang") == "en" and keep(r)]
         if not rows:
             continue
         mid = lambda p: BAND[0] <= p <= BAND[1]  # noqa: E731
@@ -281,13 +283,13 @@ def rows_main(r056: Path, out: Path, max_train: int) -> None:
     for wf in WORKFLOWS:
         d = out / "dev_cases" / wf
         d.mkdir(parents=True, exist_ok=True)
-        dev_ids = {c for c in cases[wf] if is_dev(c)}
+        dev_ids = {c for c in cases[wf] if is_dev(c) and c not in dirty}
         (d / "cases.jsonl").write_text("".join(json.dumps(cases[wf][c], ensure_ascii=False) + "\n" for c in sorted(dev_ids)))
         (d / "nodes.jsonl").write_text("".join(json.dumps(n, ensure_ascii=False) + "\n" for n in nodes.values()
                                                if n["case_id"] in dev_ids and n["lang"] == "en"))
     summary = {"dirty_dev_cases_dropped": len(dirty), "train": len(train), "dev": len(dev), "dev_labeled": sum(bool(r["target"]) for r in dev),
                "dev_he": sum(r["lang"] == "he" for r in dev),
-               "dev_cases": {wf: sum(is_dev(c) for c in cases[wf]) for wf in WORKFLOWS},
+               "dev_cases": {wf: sum(is_dev(c) and c not in dirty for c in cases[wf]) for wf in WORKFLOWS},
                "train_by_wf": {wf: sum(r["workflow"] == wf for r in train) for wf in WORKFLOWS}}
     (out / "rows_summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     print(json.dumps(summary, indent=1))
