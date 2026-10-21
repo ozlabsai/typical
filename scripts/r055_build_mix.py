@@ -52,7 +52,7 @@ def bucket(key: str, mod: int) -> int:
 
 def wire_question(q: dict) -> dict:
     """Trainer schema -> TypeSafe wire: noul criteria are true/false, not yes/no."""
-    if q["type"] == "noul":
+    if q["type"] == "noul" and "yes" in (q.get("criteria") or {}):  # already-wire rows (R056 nodes) pass through
         return {**q, "criteria": {"true": q["criteria"]["yes"], "false": q["criteria"]["no"]}}
     return q
 

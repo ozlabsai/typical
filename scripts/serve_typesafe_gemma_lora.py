@@ -32,7 +32,9 @@ from scripts.gemma_decision_runtime import (
     runtime_environment_identity,
 )
 from scripts.preflight_r043_assets import file_hash
-from scripts.singleton_option_scorer import validate_native_probs
+import math
+
+from scripts.singleton_option_scorer import probabilities_from_option_scores, validate_native_probs
 
 MAX_OPTIONS = 26
 DEFAULT_MAX_QUESTIONS = 256
@@ -204,9 +206,18 @@ def _items(question: Question) -> list[Option]:
     return [(str(index), value) for index, value in enumerate(question.criteria)]
 
 
-def _answer(question: Question, scores: OptionScores) -> dict[str, Any]:
+def _tempered(probabilities: dict[str, float], temperature: float) -> dict[str, float]:
+    """R056 calibration: softmax(z / T) from softmax(z), i.e. p^(1/T) renormalized."""
+    if temperature == 1.0:
+        return probabilities
+    labels = list(probabilities)
+    return probabilities_from_option_scores(
+        labels, [math.log(max(probabilities[k], 1e-300)) / temperature for k in labels])
+
+
+def _answer(question: Question, scores: OptionScores, temperature: float = 1.0) -> dict[str, Any]:
     labels = [label for label, _ in _items(question)]
-    probabilities = validate_native_probs(scores.probabilities, labels)
+    probabilities = _tempered(validate_native_probs(scores.probabilities, labels), temperature)
     if isinstance(question, NoulQuestion):
         return {"type": "noul", "noul": probabilities["true"]}
     count = len(probabilities)
@@ -238,6 +249,7 @@ def create_app(
     api_key: str | None = None,
     max_questions: int = DEFAULT_MAX_QUESTIONS,
     release_date: str = "2026-10-07",
+    temperatures: dict[str, float] | None = None,
 ) -> FastAPI:
     """Create an injectable, exact-model server without loading GPU state at import time."""
     if not model_id.strip():
@@ -304,7 +316,9 @@ def create_app(
                         or scores.input_tokens < 0
                     ):
                         raise ValueError("runtime returned an invalid input token count")
-                    answers[question_id] = _answer(question, scores)
+                    temperature = (temperatures or {}).get(
+                        question_id, (temperatures or {}).get(f"type:{question.type}", 1.0))
+                    answers[question_id] = _answer(question, scores, temperature)
                     input_tokens += scores.input_tokens
         except Overlength as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -358,6 +372,8 @@ def parse_args() -> argparse.Namespace:
         help="environment variable containing the optional bearer token; empty disables auth",
     )
     parser.add_argument("--release-date", default="2026-10-07")
+    parser.add_argument("--temperatures", type=Path,
+                        help="R056: JSON {question_id or 'type:<noul|choice|score>': T} applied to served probabilities")
     return parser.parse_args()
 
 
@@ -408,6 +424,7 @@ def main() -> None:
         api_key=api_key,
         max_questions=args.max_questions,
         release_date=args.release_date,
+        temperatures=json.loads(args.temperatures.read_text()) if args.temperatures else None,
     )
     import uvicorn
 
