@@ -9,6 +9,7 @@
 #               WorkflowEvals 705 (R056 `wf` settings) || JevBench 231 + hejev + external panel
 #   evalbase    λ 0, two replicas per GPU: WorkflowEvals 705 (JevBench/hejev at λ 0 are R057's base numbers)
 #   all         psetup, proxy, evalpair, evalbase -> ALL_DONE
+#   contested   (own process) zoom-ai/contested-fast-decisions on λ .5/.75/0 fleets, then λ 1 -> CONTESTED_DONE
 set -euo pipefail
 source "$(dirname "$0")/r057_pod.sh" true  # xsetup, jev, killtree, wait_url, G, GM, PY, EXT, REV, WE
 O=/workspace/g1/r060pre; A=$O/adapters; O5=$O; NG=$(nvidia-smi -L | wc -l)
