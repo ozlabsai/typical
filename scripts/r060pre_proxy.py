@@ -6,6 +6,7 @@
   sample <dev_wf.jsonl> <ids.txt>         ~2,000 dev questions, stratified by (workflow, question type);
                                           EN/HE twins drawn together
   score <name>=<devsel.json>... --out x   teacher-NLL / Brier / argmax agreement, per workflow and overall
+  bench <name>=<hejev run dir>... --out x JevBench 231 / hejev HE MX native / external panel per model
   corr <proxy.json> <name>=<wf run dir>... --out x
                                           Spearman/Pearson of the proxy vs WF headline, per (model × workflow)
 """
@@ -123,6 +124,36 @@ def score(pairs, out):
             f"{m[c]['nll']:.3f} / {m[c]['brier']:.3f} / {m[c]['agree']:.3f}" if c in m else "-" for c in cols) + " |")
 
 
+EXT = ("belebele", "hebnli", "gmmlu", "sentiment", "winograd", "heq")
+
+
+def bench(runs, out):
+    """JevBench 231 + hejev (scripts/hejev_score.py) + external Hebrew panel (unweighted mean of six) per run dir."""
+    sys.path.insert(0, str(Path(__file__).parent))
+    import hejev_score as h
+    ext_dir = h.OUT.parent / "external"
+    report = {}
+    for pair in runs:
+        name, d = pair.split("=", 1)
+        d = Path(d)
+        r = h.score({s: h.load_results([d / f]) for s, f in
+                     (("en", "en"), ("he", "translated"), ("mx", "mixed"), ("native", "native"))})
+        ext = {s: h.split_metrics(h.load_tasks([ext_dir / f"{s}.jsonl"]), h.load_results([d / s])) for s in EXT}
+        report[name] = {"en": r["splits"]["en"]["accuracy"], "en_correct": round(r["splits"]["en"]["accuracy"] * 231),
+                        "he": r["splits"]["he"]["accuracy"], "mx": r["splits"]["mx"]["accuracy"],
+                        "native": r["splits"]["native"]["accuracy"],
+                        "he_minus_en": r["paired"]["he_vs_en"]["all"]["acc_gap_other_minus_en"],
+                        "he_en_agree": r["paired"]["he_vs_en"]["all"]["prediction_agreement"],
+                        "coverage": {s: m["coverage"] for s, m in [*r["splits"].items(), *ext.items()]},
+                        **{s: m["accuracy"] for s, m in ext.items()},
+                        "ext_mean": st.mean(m["accuracy"] for m in ext.values())}
+    Path(out).write_text(json.dumps(report, indent=1) + "\n")
+    keys = ["he", "mx", "native", "en", "en_correct", *EXT, "ext_mean", "he_minus_en", "he_en_agree"]
+    print("| model | " + " | ".join(keys) + " |")
+    for name, m in report.items():
+        print(f"| {name} | " + " | ".join(str(m[k]) if k == "en_correct" else f"{m[k]:.3f}" for k in keys) + " |")
+
+
 def wf_headline(run_dir):
     out = {}
     for wf, metric in HEADLINE.items():
@@ -191,6 +222,7 @@ def main():
     p.add_argument("w2", type=float); p.add_argument("dst")
     p = sub.add_parser("sample"); p.add_argument("dev"); p.add_argument("out"); p.add_argument("--n", type=int, default=2000)
     p = sub.add_parser("score"); p.add_argument("pairs", nargs="+"); p.add_argument("--out", required=True)
+    p = sub.add_parser("bench"); p.add_argument("runs", nargs="+"); p.add_argument("--out", required=True)
     p = sub.add_parser("corr"); p.add_argument("proxy"); p.add_argument("pairs", nargs="+"); p.add_argument("--out", required=True)
     a = ap.parse_args()
     if a.cmd == "scale":
@@ -199,6 +231,8 @@ def main():
         merge(a.src1, a.w1, a.src2, a.w2, a.dst)
     elif a.cmd == "sample":
         sample(a.dev, a.out, a.n)
+    elif a.cmd == "bench":
+        bench(a.runs, a.out)
     elif a.cmd == "score":
         score(a.pairs, a.out)
     else:
