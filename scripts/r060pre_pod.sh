@@ -10,7 +10,7 @@
 #   evalbase    λ 0, two replicas per GPU: WorkflowEvals 705 (JevBench/hejev at λ 0 are R057's base numbers)
 #   all         psetup, proxy, evalpair, evalbase -> ALL_DONE
 #   merge       (own process) M1/M2 rank-concat merges of R056 + R055-B: proxy, retention, hejev/EN/external,
-#               WF for the proxy winner, after ALL_DONE -> MERGE_DONE
+#               WF for the proxy winner only with MERGE_WF=1 (cost), after ALL_DONE -> MERGE_DONE
 #   contested   (own process) zoom-ai/contested-fast-decisions on λ .5/.75/0 fleets, then λ 1 -> CONTESTED_DONE
 set -euo pipefail
 source "$(dirname "$0")/r057_pod.sh" true  # xsetup, jev, killtree, wait_url, G, GM, PY, EXT, REV, WE
@@ -141,7 +141,9 @@ print(min(("m1", "m2"), key=lambda m: json.load(open(f"{d}/{m}.json"))["summary"
   echo "$win" >"$O/merge-winner.txt"
   fleet m1 8090 $(ports 8100 1)
   fleet m2 8091 $(ports 8200 1)
-  wfrun "$win" $([[ $win == m1 ]] && echo 8090 || echo 8091) "$NG" & hev m1 8090 & hev m2 8091 & wait
+  # ponytail: the winner's full WF (~3.3 GPU-h) is gated, it alone would take R060-pre past its $60 cap
+  [[ ${MERGE_WF:-0} == 1 ]] && { wfrun "$win" $([[ $win == m1 ]] && echo 8090 || echo 8091) "$NG" & }
+  hev m1 8090 & hev m2 8091 & wait
   stopall
   touch "$O/MERGE_DONE"
 }
