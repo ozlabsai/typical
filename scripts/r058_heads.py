@@ -548,7 +548,7 @@ def build_heads(d: int, nq: int):
             g = self.gate(b)
             logp = torch.log_softmax(self.logits_g(b, g), -1)
             logp0 = torch.log_softmax(b["s"], -1)
-            tag = (js(b["m"], torch.softmax(b["s"], -1), b["mask"]) / self.tau).clamp(max=1)
+            tag = (js(b["m"], torch.softmax(b["s"], -1), b["mask"]) / self.tau).nan_to_num(0).clamp(0, 1)  # JS rounds below 0
             p = ptrue(logp.exp(), b)
             k, mt = hp["band_kappa"], ptrue(b["m"], b)
             band = sum(torch.where(mt > th, F.softplus(k * (th - p)), F.softplus(k * (p - th))) / k
