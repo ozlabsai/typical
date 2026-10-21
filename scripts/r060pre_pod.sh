@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# R060-pre on one 4-GPU pod, eval only (docs/research/R060PRE_BLEND_PROXY.md). Repo staged at /workspace/r054
+# R060-pre on one multi-GPU pod (2 or 4), eval only (docs/research/R060PRE_BLEND_PROXY.md). Repo staged at /workspace/r054
 # (+ data_he/eval, data_v/{eval,images/test}, hejev/ splits, .context/r060pre/proxy_ids.txt); results in
 # /workspace/g1/r060pre (the cost guard watches /workspace/g1).
 #   psetup      r057 xsetup (pinned + repo venvs, jevbench, WorkflowEvals+typical patch, Gemma) + adapters + dev split;
@@ -11,7 +11,7 @@
 #   all         psetup, proxy, evalpair, evalbase -> ALL_DONE
 set -euo pipefail
 source "$(dirname "$0")/r057_pod.sh" true  # xsetup, jev, killtree, wait_url, G, GM, PY, EXT, REV, WE
-O=/workspace/g1/r060pre; A=$O/adapters; O5=$O
+O=/workspace/g1/r060pre; A=$O/adapters; O5=$O; NG=$(nvidia-smi -L | wc -l)
 mkdir -p "$O/logs" "$O/pids" "$O/receipts" "$O/proxy" "$O/hejev"
 
 psetup() {
@@ -43,11 +43,12 @@ mmhe() {  # name gpu
     --mm-dir data_v/eval --out "$O/$1.mmhe.json" >"$O/logs/mmhe-$1.log" 2>&1) || echo "FAILED mmhe $1"
 }
 
-proxy() {
-  { dsel lam000 0; mmhe lam050 0; } & { dsel lam050 0; } &
-  { dsel lam075 1; mmhe lam075 1; } & { dsel lam100 1; } &
-  { dsel r044r 2; } & { dsel r055a 2; } &
-  { dsel r055b 3; } & { dsel r057h 3 --bidirectional-prompt; } &
+proxy() {  # the jobs round-robin over 2 slots per GPU
+  local jobs=("dsel lam000" "dsel lam050" "dsel lam075" "dsel lam100" "dsel r044r" "dsel r055a" "dsel r055b"
+              "dsel r057h --bidirectional-prompt" "mmhe lam050" "mmhe lam075") k j
+  for ((k = 0; k < 2 * NG; k++)); do
+    (for ((j = k; j < ${#jobs[@]}; j += 2 * NG)); do set -- ${jobs[j]}; "$1" "$2" $((k % NG)) "${@:3}"; done) &
+  done
   wait
   touch "$O/PROXY_DONE"
 }
@@ -98,17 +99,21 @@ hev() {  # name lbport -- JevBench 231 + hejev translated/mixed/native + externa
   OUT=$O/hejev jev "$1" "http://127.0.0.1:$2" "$id" en translated mixed native $EXT
 }
 
-evalpair() {
-  fleet lam050 8090 8100:0 8101:1 8102:2 8103:3
-  fleet lam075 8091 8110:0 8111:1 8112:2 8113:3
-  wfrun lam050 8090 4 & wfrun lam075 8091 4 & { hev lam050 8090; hev lam075 8091; } &
+ports() {  # base per_gpu -> port:gpu list
+  local g k; for ((g = 0; g < NG; g++)); do for ((k = 0; k < $2; k++)); do echo "$(($1 + 10 * g + k)):$g"; done; done
+}
+
+evalpair() {  # WF workers = replicas, i.e. 4 requests in flight per replica as R056
+  fleet lam050 8090 $(ports 8100 1)
+  fleet lam075 8091 $(ports 8200 1)
+  wfrun lam050 8090 "$NG" & wfrun lam075 8091 "$NG" & { hev lam050 8090; hev lam075 8091; } &
   wait
   stopall
 }
 
 evalbase() {
-  fleet lam000 8090 8100:0 8101:0 8102:1 8103:1 8104:2 8105:2 8106:3 8107:3
-  wfrun lam000 8090 8
+  fleet lam000 8090 $(ports 8100 2)
+  wfrun lam000 8090 $((2 * NG))
   stopall
 }
 
