@@ -364,7 +364,7 @@ def cache_main(rows_path: Path, out: Path, args) -> None:
     _, s0, labels0, _ = student(r["state"], r["question"])
     served = student.rt.score_options(r["state"], r["question"].get("instructions"),
                                       server_items(r["question"]), question_type=r["question"]["type"]).probabilities
-    assert torch.allclose(torch.softmax(s0, 0).double(), torch.tensor([served[k] for k in labels0]), atol=1e-5), served
+    assert torch.allclose(torch.softmax(s0, 0).double(), torch.tensor([served[k] for k in labels0], dtype=torch.float64), atol=1e-5), served
     shard = 500
     for start in range(0, len(rows), shard):
         name = f"{start // shard:05d}"
