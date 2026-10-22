@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # R060 on one 4-GPU pod: anchored continuation of R056 on astra-relabelled workflow rows (scripts/r060_build.py).
 # Repo staged at /workspace/r054 (+ data_he/eval, data_v/{eval,images/test}, hejev/ splits); results in
-# /workspace/g1/r060 (the cost guard watches /workspace/g1). Data from private HF guychuk/typical-r060-data mix/.
+# /workspace/g1/r060 (the cost guard watches /workspace/g1). Data from private HF guychuk/typical-r060-data mix_v2/.
 #   setup     r057 xsetup + R056 adapter (init) + R056 images + anchors + contested-fast-decisions
 #   base      frozen-base option probs into the anchors (meta.base_probs), 4 GPU shards; then anchor_dev
-#   waitmix   poll HF for mix/READY (pushed from the laptop once the astra labels are in), download the mix
+#   waitmix   poll HF for mix_v2/READY (pushed from the laptop once the astra labels are in), download the mix
 #   train     torchrun x4 from the R056 adapter, KL-to-base on anchors, twin JS .5, steps = slots / 32
 #   post      devsel (wf dev teacher-NLL + anchor-dev KL) on the last third -> temperatures -> eval -> HF model
 #   all       setup, base, waitmix, train, post -> ALL_DONE
@@ -18,14 +18,14 @@ setup() {
   "${HFD[@]}" guychuk/typical-r056 adapter_config.json adapter_model.safetensors --local-dir "$O/init"
   "${HFD[@]}" guychuk/typical-r056-data --repo-type dataset --include 'mix/images/*' --local-dir "$O/dl056" >/dev/null
   ln -sfn "$O/dl056/mix/images" "$M/images"
-  "${HFD[@]}" guychuk/typical-r060-data mix/anchors.jsonl mix/anchor_dev.jsonl --repo-type dataset --local-dir "$O/dl"
+  "${HFD[@]}" guychuk/typical-r060-data mix_v2/anchors.jsonl mix_v2/anchor_dev.jsonl --repo-type dataset --local-dir "$O/dl"
   "${HFD[@]}" zoom-ai/contested-fast-decisions --repo-type dataset --local-dir "$O/cfd" >/dev/null
   touch "$O/SETUP_DONE"
 }
 
-base() {  # name -- $O/dl/mix/<name>.jsonl -> $M/<name>.base.jsonl, one shard per GPU
+base() {  # name -- $O/dl/mix_v2/<name>.jsonl -> $M/<name>.base.jsonl, one shard per GPU
   local n=$1 g pids=() sh=$O/shards/$1
-  mkdir -p "$sh"; split -n l/4 -d -a 1 "$O/dl/mix/$n.jsonl" "$sh/in."
+  mkdir -p "$sh"; split -n l/4 -d -a 1 "$O/dl/mix_v2/$n.jsonl" "$sh/in."
   for g in 0 1 2 3; do
     (cd "$R" && CUDA_VISIBLE_DEVICES=$g PYTHONPATH=$R $PY -m scripts.r060_precompute_base_probs --model "$GM" \
       --input "$sh/in.$g" --out "$sh/out.$g" >"$O/logs/base-$n-$g.log" 2>&1) & pids+=($!)
@@ -36,10 +36,10 @@ base() {  # name -- $O/dl/mix/<name>.jsonl -> $M/<name>.base.jsonl, one shard pe
 }
 
 waitmix() {
-  until "${HFD[@]}" guychuk/typical-r060-data mix/READY --repo-type dataset --local-dir "$O/dl" >/dev/null 2>&1; do sleep 60; done
-  "${HFD[@]}" guychuk/typical-r060-data mix/wf_train.jsonl mix/img.jsonl mix/dev_wf.jsonl mix/dev_he.jsonl \
-    mix/manifest.json --repo-type dataset --local-dir "$O/dl"
-  cp "$O"/dl/mix/{wf_train,img,dev_wf,dev_he}.jsonl "$O/dl/mix/manifest.json" "$M/"
+  until "${HFD[@]}" guychuk/typical-r060-data mix_v2/READY --repo-type dataset --local-dir "$O/dl" >/dev/null 2>&1; do sleep 60; done
+  "${HFD[@]}" guychuk/typical-r060-data mix_v2/wf_train.jsonl mix_v2/img.jsonl mix_v2/dev_wf.jsonl mix_v2/dev_he.jsonl \
+    mix_v2/manifest.json --repo-type dataset --local-dir "$O/dl"
+  cp "$O"/dl/mix_v2/{wf_train,img,dev_wf,dev_he}.jsonl "$O/dl/mix_v2/manifest.json" "$M/"
   cat "$M/anchors.base.jsonl" "$M/wf_train.jsonl" "$M/img.jsonl" >"$M/train.jsonl"
 }
 
@@ -119,10 +119,11 @@ evalall() {  # step -- WorkflowEvals 705 || JevBench 231 + hejev + external, the
   date -u +%FT%TZ >"$O/EVAL.START"
   wf "$id" & local wfp=$!
   OUT=$O/hejev jev r060 http://127.0.0.1:8090 "$id" en translated mixed native $EXT
+  wait $wfp || true
+  # after WF, not beside it: on shared replicas contested queued behind invoice calls (R060-pre)
   (cd "$R" && uv run --no-sync python scripts/contested_eval.py --data "$O/cfd/data/train.jsonl" \
     --endpoint http://127.0.0.1:8090 --model "$id" --out "$O/contested/r060.jsonl" >"$O/logs/contested.log" 2>&1) ||
     echo "FAILED contested"
-  wait $wfp || true
   stopall
   (cd "$R" && CUDA_VISIBLE_DEVICES=0 PYTHONPATH=$R $PY -m scripts.eval_gemma_mm_he --model "$GM" --adapter "$O/serve" \
     --he-left data_he/eval/massive_he_test.jsonl --he-right data_he/eval/massive_en_test_paired.jsonl \

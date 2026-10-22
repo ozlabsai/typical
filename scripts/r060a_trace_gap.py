@@ -111,8 +111,10 @@ def cmd_label(args):
                                     normalize_probabilities=True, n_retry_malformed_structure=1)
     qs = [r for r in jsonl(OUT / f"{args.set}_questions.jsonl") if args.workflow in (None, r["workflow"])]
     model, suffix = (MODEL, "") if args.backend == "openrouter" else (MODEL.split("/")[1], "_codex")
-    if args.backend == "codex":  # R060: OpenRouter credits ran out; codex labels only what OpenRouter didn't
-        done = {(a["id"], a["qid"]) for a in jsonl(OUT / f"labels_astra_{args.set}.jsonl")}
+    # R060: OpenRouter credits ran out mid-run, Codex took over; each backend skips what the other one labelled
+    other = OUT / f"labels_astra_{args.set}{'' if suffix else '_codex'}.jsonl"
+    if other.exists():
+        done = {(a["id"], a["qid"]) for a in jsonl(other)}
         qs = [r for r in qs if (r["id"], r["qid"]) not in done]
     qs = qs[: args.limit]
 
@@ -269,7 +271,7 @@ def main(argv=None):
     s.add_argument("--dry-run", action="store_true", help="$0 budget: count uncached questions and price them")
     s.add_argument("--workers", type=int, default=8)
     s.add_argument("--backend", choices=("openrouter", "codex"), default="openrouter",
-                   help="codex: `codex exec` gpt-6-astra ($0), only questions missing from labels_astra_<set>.jsonl")
+                   help="codex: `codex exec` gpt-6-astra ($0); either backend skips questions the other one labelled")
     s.add_argument("--limit", type=int)
     sub.add_parser("fit")
     sub.add_parser("push")

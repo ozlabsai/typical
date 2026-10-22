@@ -5,8 +5,8 @@
            -> .context/r060/mix/{anchors,anchor_dev}.jsonl (base_probs are added on the GPU by
            r060_precompute_base_probs.py). anchor_dev = tasksource dev sample + R056 dev_he, both anchored.
   mix      R056 mix workflow rows with new targets -> wf_train.jsonl / dev_wf.jsonl, R056 images -> img.jsonl.
-           agent_trace: astra where labelled, else Qwen-only (Gemma dropped); security choice/score: astra where
-           labelled, else unchanged; security noul, customer, invoice: unchanged. HE twins inherit the EN target.
+           agent_trace: astra where labelled, else Qwen-only (Gemma dropped); security, customer, invoice: unchanged
+           (security astra coverage was 25/1,938 when labelling stopped). HE twins inherit the EN target.
   Both commands contamination-assert their output (WorkflowEvals, public JevBench, hejev-v0, external Hebrew panel,
   zoom-ai/contested-fast-decisions). Inputs: .context/r060/src/{r056/mix,cfd}, .context/r060/tasksource,
   .context/r055/mix, .context/r060a/{labels_astra_full,full_questions}.jsonl.
@@ -102,8 +102,6 @@ def retarget(rows, astra, qwen, stats):
             if wf == TRACE:
                 t, who = (vec(astra[key], keys), "astra") if key in astra else \
                     (vec(qwen[key], keys), "qwen") if qwen.get(key) else (None, "none")
-            elif wf == SEC and q["type"] != "noul" and key in astra:
-                t, who = vec(astra[key], keys), "astra"
             stats[f"{wf}/{q['type']}/{who}/{r['meta']['lang']}"] += 1
             if t is None:
                 continue
@@ -117,8 +115,10 @@ def retarget(rows, astra, qwen, stats):
 
 def cmd_mix(args):
     rng = random.Random(60)
-    astra = {(a["id"], a["qid"]): a["p"] for f in ("labels_astra_full.jsonl", "labels_astra_full_codex.jsonl")
-             for a in jsonl(ROOT / ".context/r060a" / f)}  # OpenRouter, then Codex CLI for the rest (credits ran out)
+    astra = {}  # OpenRouter (full, its first run, pilot) first, then Codex CLI for the rest (credits ran out)
+    for f in ("labels_astra_full.jsonl", "labels_astra_full.or1.jsonl", "labels_astra_pilot.jsonl", "labels_astra_full_codex.jsonl"):
+        for a in jsonl(ROOT / ".context/r060a" / f):
+            astra.setdefault((a["id"], a["qid"]), a["p"])
     qwen = {(r["id"], r["qid"]): r["p_qwen"] for r in jsonl(ROOT / ".context/r060a/full_questions.jsonl")
             if r["workflow"] == TRACE}
     stats = Counter()
