@@ -109,8 +109,9 @@ ports() {  # base per_gpu -> port:gpu list
 evalpair() {  # WF workers = replicas, i.e. 4 requests in flight per replica as R056
   fleet lam050 8090 $(ports 8100 1)
   fleet lam075 8091 $(ports 8200 1)
-  wfrun lam050 8090 "$NG" & wfrun lam075 8091 "$NG" & { hev lam050 8090; hev lam075 8091; } &
-  wait
+  local p=()  # wait on these jobs only: a bare `wait` also waits on the never-exiting servers (hung R060-pre once)
+  wfrun lam050 8090 "$NG" & p+=($!); wfrun lam075 8091 "$NG" & p+=($!); { hev lam050 8090; hev lam075 8091; } & p+=($!)
+  wait "${p[@]}"
   stopall
 }
 
@@ -135,7 +136,7 @@ merge() {  # M1 = R056 + .5·R055-B, M2 = .75·R056 + .5·R055-B (rank concat, f
   dsel m1 0 & dsel m2 1 & mmhe m1 0 & mmhe m2 1 & wait
   fleet m1 8090 $(ports 8100 1)
   fleet m2 8091 $(ports 8200 1)
-  hev m1 8090 & hev m2 8091 & wait
+  local p=(); hev m1 8090 & p+=($!); hev m2 8091 & p+=($!); wait "${p[@]}"
   stopall
   local win
   win=$(cd "$R" && $PY scripts/r060pre_proxy.py gate "$O/proxy" "$O/hejev" --out "$O/merge-gate.json" | tail -1)
@@ -147,7 +148,7 @@ merge() {  # M1 = R056 + .5·R055-B, M2 = .75·R056 + .5·R055-B (rank concat, f
 cfdpair() {  # a b -- contested on dedicated replicas, a on GPU 0 and b on GPU 1
   fleet "$1" 8090 8100:0
   fleet "$2" 8091 8110:$((NG - 1))
-  cfd "$1" 8090 & cfd "$2" 8091 & wait
+  local p=(); cfd "$1" 8090 & p+=($!); cfd "$2" 8091 & p+=($!); wait "${p[@]}"
   stopall
 }
 
