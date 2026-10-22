@@ -141,7 +141,10 @@ merge() {  # M1 = R056 + .5·R055-B, M2 = .75·R056 + .5·R055-B (rank concat, f
   local win
   win=$(cd "$R" && $PY scripts/r060pre_proxy.py gate "$O/proxy" "$O/hejev" --out "$O/merge-gate.json" | tail -1)
   echo "merge gate: ${win:-fail}"
-  if [[ $win == m1 || $win == m2 ]]; then fleet "$win" 8090 $(ports 8100 2); wfrun "$win" 8090 $((2 * NG)); stopall; fi
+  # a WF takes ~1.9 h here; start it only if it ends before COST_DEADLINE (epoch s, the pod's budget cap)
+  if [[ $win == m1 || $win == m2 ]] && (( $(date +%s) + 7000 <= ${COST_DEADLINE:-0} )); then
+    fleet "$win" 8090 $(ports 8100 2); wfrun "$win" 8090 $((2 * NG)); stopall
+  elif [[ -n $win ]]; then echo "merge gate passed ($win) but its WF would end after COST_DEADLINE: skipped"; fi
   touch "$O/MERGE_DONE"
 }
 
