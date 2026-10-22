@@ -86,7 +86,8 @@ check_pod() {
       '\'')
       active=$(printf "%s\n" "$processes" | awk "NF { n++ } END { print n+0 }")
       artifacts=$(find /workspace/g1 -mindepth 1 -maxdepth 3 -type f -print 2>/dev/null | wc -l | tr -d " ")
-      printf "METRICS|%s|%s|%s|%s\n%s\n" "${util:-0}" "${memory:-0}" "$active" "$artifacts" "$processes"
+      remote_safe=0; [ -e /workspace/g1/SAFE_TO_STOP ] && remote_safe=1
+      printf "METRICS|%s|%s|%s|%s|%s\n%s\n" "${util:-0}" "${memory:-0}" "$active" "$artifacts" "$remote_safe" "$processes"
     ' 2>/dev/null) || {
       log "pod=$POD_ID state=RUNNING action=none reason=ssh_failed"
       return
@@ -98,7 +99,7 @@ check_pod() {
   else
     processes=''
   fi
-  IFS='|' read -r _ util memory active artifacts <<< "$metrics"
+  IFS='|' read -r _ util memory active artifacts remote_safe <<< "$metrics"
   if [[ ! "$util" =~ '^[0-9]+$' || ! "$active" =~ '^[0-9]+$' || ! "$artifacts" =~ '^[0-9]+$' ]]; then
     log "pod=$POD_ID state=RUNNING action=none reason=invalid_probe"
     return
@@ -109,7 +110,8 @@ check_pod() {
     [[ -n "$processes" ]] && print -r -- "$processes" | sed 's/^/  process: /' >> "$LOG_FILE"
     return
   fi
-  if [[ "$volume_in_gb" == 0 && ! -f "$SAFE_TO_STOP_FILE" ]]; then
+  # An on-pod chain that has uploaded everything leaves /workspace/g1/SAFE_TO_STOP (R062): same as the local receipt.
+  if [[ "$volume_in_gb" == 0 && ! -f "$SAFE_TO_STOP_FILE" && "${remote_safe:-0}" != 1 ]]; then
     log "pod=$POD_ID state=RUNNING gpu=${util}% memory=${memory}MiB active=0 action=hold reason=ephemeral_without_archive_receipt receipt=$SAFE_TO_STOP_FILE"
     return
   fi

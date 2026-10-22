@@ -5,6 +5,9 @@ For every WorkflowEvals question id with >= --min-n dev rows, T minimises the cr
 distribution and softmax(log p_student / T) over a log grid; ids with fewer rows keep T=1. Only question ids are
 keyed (no type-level fallback), so JevBench/Hebrew questions are served untouched.
   python3 scripts/r056_calibrate.py devsel/step-N.json temperatures.json
+R062: with a dev .jsonl as last argument, temperatures are keyed `type:<choice|noul|score>` instead (the server's
+per-type fallback), for question ids that never repeat (Hebrew/general dev).
+  python3 scripts/r056_calibrate.py devsel/step-N.json temperatures.json dev_he.jsonl
 """
 import json
 import math
@@ -24,11 +27,12 @@ def ce(rows, t):
     return total / len(rows)
 
 
-def main(src, dst, min_n=30):
+def main(src, dst, min_n=30, dev=None):
     rows = json.load(open(src))["rows"]
+    types = {f"{r['id']}/{q}": f"type:{v['type']}" for r in map(json.loads, open(dev)) for q, v in r["questions"].items()} if dev else {}
     by = defaultdict(list)
     for r in rows:
-        by[r["id"].rsplit("/", 1)[1]].append(r)
+        by[types.get(r["id"]) or r["id"].rsplit("/", 1)[1]].append(r)
     temps, report = {}, {}
     for qid, rs in sorted(by.items()):
         if len(rs) < min_n:
@@ -46,4 +50,6 @@ def main(src, dst, min_n=30):
 
 if __name__ == "__main__":
     assert ce([{"student": [0.9, 0.1], "teacher": [0.9, 0.1]}], 1.0) < ce([{"student": [0.9, 0.1], "teacher": [0.9, 0.1]}], 2.0)
-    main(sys.argv[1], sys.argv[2], *(int(x) for x in sys.argv[3:]))
+    extra = sys.argv[3:]
+    main(sys.argv[1], sys.argv[2], *(int(x) for x in extra if not x.endswith(".jsonl")),
+         **({"dev": extra[-1]} if extra and extra[-1].endswith(".jsonl") else {}))

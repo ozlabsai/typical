@@ -63,6 +63,8 @@ def from_legacy(r: dict, rid: str, qtype: str) -> dict | None:
     """state/query/candidates/target -> trainer schema with one question `decision`."""
     if r.get("p_null") or r.get("image") or not isinstance(r.get("state"), str):
         return None
+    if not 0 <= r["label"] < len(r["candidates"]):  # R055 option-key bug: label -1 picked keys[-1] (fixed in data only)
+        return None
     cands, lines = r["candidates"], r["query"].split("\n")
     parts = re.split(r"\s{2,}", lines[-1].strip()) if len(lines) > 1 else []
     opts = dict(p.split(": ", 1) for p in parts if ": " in p)
