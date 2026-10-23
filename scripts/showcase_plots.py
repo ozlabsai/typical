@@ -41,12 +41,10 @@ BOARD = [
                                   ("WINNOW-12B", 84.0, "peer"), ("CYGNET 12B", 88.2, "peer"), ("CLEF-FLASH", 78.2, "peer")]),
 ]
 
-PROGRESS = [("CYGNET 12B (FROZEN)", 52.1, "peer"), ("PREVIOUS RECIPE (R044)", 52.8, "peer"),
-            ("GEMMA-12B + THINKING (TEACHER)", 61.2, "peer"), ("TYPICAL", 64.9, "ours"), ("JEV 1.13", 67.8, "jev")]
 
 BLEND = [("BASE (SCALE 0)", 55.0, 202), ("SCALE 0.5", 60.1, 202), ("SCALE 0.75", 60.8, 199), ("R056 (SCALE 1)", 64.9, 196)]
 
-IMAGES = [("FROZEN GEMMA-4-12B", 85, "peer"), ("TYPICAL", 120, "ours")]
+IMAGES = [("BASE MODEL", 85, "peer"), ("TYPICAL", 120, "ours")]
 
 
 def page(t, w, h):
@@ -111,30 +109,19 @@ def board(t, name, jev=True, lead_only=False):
     header(fig, t, "Typical vs decision models of similar size",
            "WORKFLOWEVALS (705 CASES) · CONTESTED-FAST-DECISIONS · HEBREW JEVBENCH V0 · ACCURACY %")
     h = fig.get_figheight()
-    gs = fig.add_gridspec(nrows, cols, left=.05, right=.97, top=1 - 1.25 / h, bottom=.95 / h, wspace=.12, hspace=.35)
+    gs = fig.add_gridspec(nrows, cols, left=.05, right=.97, top=1 - 1.25 / h, bottom=.45 / h, wspace=.12, hspace=.35)
     for k, (title, rows) in enumerate(panels):
         bar_panel(fig.add_subplot(gs[k // cols, k % cols]), t, title, rows, vmax=100)
-    first = "Highlighted: Typical (Gemma-4-12B + LoRA, single forward pass)."
-    fig.text(.05, .62 / h, first + (" Orange: JEV 1.13." if jev else ""), color=t["ink2"], fontsize=7.5, family=t["mono"])
-    fig.text(.05, .42 / h, "Peers measured on our harness; contested-decision peers from its public leaderboard. "
-             "Hebrew native labels are Claude-consensus.", color=t["ink2"], fontsize=7.5, family=t["mono"])
     fig.savefig(OUT / f"{name}_board.png", dpi=220, facecolor=t["page"])
     plt.close(fig)
 
 
-def progress(t, name, jev=True):
-    fig = page(t, 10, 4.2)
-    header(fig, t, "Thinking-teacher distillation: WorkflowEvals .53 → .65",
-           "WORKFLOWEVALS MEAN · 4 WORKFLOWS · 705 CASES · ACCURACY %")
-    bar_panel(body(fig), t, "", keep(PROGRESS, jev), vmax=80, label_w=.36)
-    fig.savefig(OUT / f"{name}_progress.png", dpi=220, facecolor=t["page"])
-    plt.close(fig)
 
 
 def tradeoff(t, name, jev=True):
     fig = page(t, 9, 5.6)
     header(fig, t, "Scaling the adapter trades workflow skill for general skill",
-           "SCALE = FRACTION OF THE R056 LORA DELTA APPLIED")
+           "SCALE = STRENGTH OF THE TYPICAL FINE-TUNE")
     ax = body(fig, left=.1, right=.94, bottom_in=.8)
     ax.set_facecolor(t["card"] or t["page"])
     for s in ax.spines.values():
@@ -174,7 +161,7 @@ if __name__ == "__main__":
     for old in OUT.glob("*.png"):
         old.unlink()
     for tname, t in THEMES.items():
-        for f in (progress, tradeoff, images):
+        for f in (tradeoff, images):
             f(t, tname)
             f(t, f"{tname}_nojev", jev=False)
         board(t, tname)
