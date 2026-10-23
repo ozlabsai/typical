@@ -155,8 +155,8 @@ HEBREW = [("TYPICAL", 87.0, "ours"), ("TORCHCAST-12B", 86.5, "peer"), ("WINNOW-1
 
 def hebrew(t, name):
     fig = page(t, 10, 2.2 + .45 * len(HEBREW))
-    header(fig, t, "Typical leads mixed Hebrew–English decisions",
-           "HEBREW JEVBENCH V0 · HEBREW DOCUMENT, ENGLISH QUESTION · 230 ITEMS · ACCURACY %")
+    header(fig, t, "Typical leads in Hebrew decisions",
+           "HEBREW JEVBENCH V0 · 230 ITEMS · ACCURACY %")
     bar_panel(body(fig), t, "", HEBREW, vmax=100, label_w=.25)
     fig.savefig(OUT / f"{name}_hebrew.png", dpi=220, facecolor=t["page"])
     plt.close(fig)
