@@ -73,7 +73,7 @@ def wf_per_workflow():
 
 
 def hebrew_peers():
-    models = [("StartLux-9B", (.878, .874, .916), GRAY), ("torchcast-12b", (.865, .865, .899), GRAY),
+    models = [("torchcast-12b", (.865, .865, .899), GRAY),
               ("Winnow-12B", (.865, .843, .840), GRAY), ("Frozen Gemma base", (.852, .835, .815), GRAY),
               ("Typical R056 (λ=.5)", (.852, .843, .899), BLUE), ("Typical R062 (Hebrew)", (.852, .870, .840), BLUE),
               ("Clef-flash", (.774, .752, .782), GRAY)]
@@ -90,7 +90,7 @@ def hebrew_peers():
         ax.grid(axis="y", visible=False)
         ax.invert_yaxis() if j == 0 else None
     axes[0].set_yticks(range(len(models)), [m[0] for m in models])
-    fig.suptitle("Hebrew, 9–14B decision models: near StartLux on mixed (.870 vs .874), behind on pure Hebrew",
+    fig.suptitle("Hebrew decisions: Typical leads mixed-language (.870), ties native (.899), trails on translated",
                  x=.01, ha="left", fontsize=12.5, fontweight="semibold", color=INK)
     finish(fig, "03_hebrew_peers", "Hebrew JevBench v0 (eval-only; 230/230/119 items). Native labels are Claude-consensus. Source: hebrew/R062_RESULTS.md.")
 
@@ -116,7 +116,7 @@ def blend_tradeoff():
 
 def contested():
     rows = [("Typical R056", 66.5, 35.0, BLUE), ("JEV 1.13", 65.5, 52.5, ORANGE),
-            ("StartLux-9B", 63.1, 49.7, GRAY), ("LiquidAI d1", 60.3, 59.6, GRAY)]
+            ("LiquidAI d1", 60.3, 59.6, GRAY)]
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.6), sharey=True)
     for ax, j, title in ((axes[0], 1, "Single-label decisions"), (axes[1], 2, "Multi-label decisions")):
         ax.barh(range(len(rows)), [r[j] for r in rows], color=[r[3] for r in rows], height=.55)
