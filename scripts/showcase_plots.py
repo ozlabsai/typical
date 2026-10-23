@@ -148,15 +148,18 @@ def tradeoff(t, name, jev=True):
     plt.close(fig)
 
 
-HEBREW = [("TYPICAL", 87.0, "ours"), ("TORCHCAST-12B", 86.5, "peer"), ("WINNOW-12B", 84.3, "peer"),
-          ("CYGNET 12B", 83.9, "peer"), ("CLEF-FLASH", 75.2, "peer"),
-          ("LIQUIDAI D1-3B", 66.1, "peer")]
+# mean accuracy of the translated / mixed / native splits (HEJEV_V0_RESULTS.md); Typical = R056 at scale 0.5,
+# one model on all three splits (.852 / .843 / .899)
+HEBREW = [("TYPICAL", 86.5, "ours"), ("CYGNET 12B", 85.3, "peer"), ("WINNOW-12B", 84.9, "peer"),
+          ("DECIDER-12B", 83.3, "peer"), ("D3-FLASH", 81.5, "peer"), ("D3-MINI", 80.5, "peer"),
+          ("INTERN-DECISION-4B", 80.4, "peer"), ("CLEF-FLASH", 76.9, "peer"), ("KEV-9B", 75.3, "peer"),
+          ("INTERN-DECISION-2B", 72.1, "peer"), ("LIQUIDAI D1-3B", 65.0, "peer")]
 
 
 def hebrew(t, name):
     fig = page(t, 10, 2.2 + .45 * len(HEBREW))
     header(fig, t, "Typical leads in Hebrew decisions",
-           "HEBREW JEVBENCH V0 · 230 ITEMS · ACCURACY %")
+           "HEBREW JEVBENCH V0 · TRANSLATED, MIXED AND NATIVE · MEAN ACCURACY %")
     bar_panel(body(fig), t, "", HEBREW, vmax=100, label_w=.25)
     fig.savefig(OUT / f"{name}_hebrew.png", dpi=220, facecolor=t["page"])
     plt.close(fig)
