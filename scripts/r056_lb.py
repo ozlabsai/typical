@@ -4,6 +4,7 @@
 The native server serialises forwards per process, so WorkflowEvals + JevBench run against several replicas
 (2 per GPU) behind one URL. GET is answered by the first backend; POST goes to the backend with the fewest
 requests in flight.   python3 scripts/r056_lb.py 8090 http://127.0.0.1:8100 http://127.0.0.1:8101 ...
+`@file` instead of URLs re-reads the backend list (one URL per line) on every request, so replicas can join mid-run.
 """
 import sys
 import threading
@@ -11,9 +12,16 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-BACKENDS = sys.argv[2:]
-BUSY = {b: 0 for b in BACKENDS}
+ARGS = sys.argv[2:]
+BUSY = {}
 LOCK = threading.Lock()
+
+
+def backends():
+    if ARGS[0].startswith("@"):
+        with open(ARGS[0][1:]) as f:
+            return [line.strip() for line in f if line.strip()]
+    return ARGS
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -35,12 +43,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        self.relay(BACKENDS[0])
+        self.relay(backends()[0])
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         with LOCK:
-            backend = min(BACKENDS, key=BUSY.__getitem__)
+            backend = min(backends(), key=lambda b: BUSY.setdefault(b, 0))
             BUSY[backend] += 1
         try:
             self.relay(backend, body)
