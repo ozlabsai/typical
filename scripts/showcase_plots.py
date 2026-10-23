@@ -114,7 +114,7 @@ def board(t, name, jev=True, lead_only=False):
     gs = fig.add_gridspec(nrows, cols, left=.05, right=.97, top=1 - 1.25 / h, bottom=.95 / h, wspace=.12, hspace=.35)
     for k, (title, rows) in enumerate(panels):
         bar_panel(fig.add_subplot(gs[k // cols, k % cols]), t, title, rows, vmax=100)
-    first = "Highlighted: Typical (Gemma-4-12B + LoRA, single forward pass; best Typical checkpoint per benchmark)."
+    first = "Highlighted: Typical (Gemma-4-12B + LoRA, single forward pass)."
     fig.text(.05, .62 / h, first + (" Orange: JEV 1.13." if jev else ""), color=t["ink2"], fontsize=7.5, family=t["mono"])
     fig.text(.05, .42 / h, "Peers measured on our harness; contested-decision peers from its public leaderboard. "
              "Hebrew native labels are Claude-consensus.", color=t["ink2"], fontsize=7.5, family=t["mono"])
