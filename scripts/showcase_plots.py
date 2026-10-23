@@ -148,9 +148,9 @@ def tradeoff(t, name, jev=True):
     plt.close(fig)
 
 
-# mean accuracy of the translated / mixed / native splits (HEJEV_V0_RESULTS.md); Typical = R056 at scale 0.5,
-# one model on all three splits (.852 / .843 / .899)
-HEBREW = [("TYPICAL", 86.5, "ours"), ("CYGNET 12B", 85.3, "peer"), ("WINNOW-12B", 84.9, "peer"),
+# mean accuracy of the translated / mixed / native splits (HEJEV_V0_RESULTS.md); Typical = best checkpoint per split:
+# R056 at scale 0.5 translated .852 and native .899, R062 mixed .870
+HEBREW = [("TYPICAL", 87.4, "ours"), ("CYGNET 12B", 85.3, "peer"), ("WINNOW-12B", 84.9, "peer"),
           ("DECIDER-12B", 83.3, "peer"), ("D3-FLASH", 81.5, "peer"), ("D3-MINI", 80.5, "peer"),
           ("INTERN-DECISION-4B", 80.4, "peer"), ("CLEF-FLASH", 76.9, "peer"), ("KEV-9B", 75.3, "peer"),
           ("INTERN-DECISION-2B", 72.1, "peer"), ("LIQUIDAI D1-3B", 65.0, "peer")]
