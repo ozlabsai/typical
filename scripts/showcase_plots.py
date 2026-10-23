@@ -147,6 +147,19 @@ def tradeoff(t, name, jev=True):
     plt.close(fig)
 
 
+HEBREW = [("TYPICAL", 87.0, "ours"), ("TORCHCAST-12B", 86.5, "peer"), ("WINNOW-12B", 84.3, "peer"),
+          ("CYGNET 12B", 83.9, "peer"), ("CLEF-FLASH", 75.2, "peer")]
+
+
+def hebrew(t, name):
+    fig = page(t, 10, 4.4)
+    header(fig, t, "Typical leads mixed Hebrew–English decisions",
+           "HEBREW JEVBENCH V0 · HEBREW DOCUMENT, ENGLISH QUESTION · 230 ITEMS · ACCURACY %")
+    bar_panel(body(fig), t, "", HEBREW, vmax=100, label_w=.25)
+    fig.savefig(OUT / f"{name}_hebrew.png", dpi=220, facecolor=t["page"])
+    plt.close(fig)
+
+
 def images(t, name, jev=True):
     fig = page(t, 9, 3.3)
     header(fig, t, "Image decisions improved with training",
@@ -164,6 +177,7 @@ if __name__ == "__main__":
         for f in (tradeoff, images):
             f(t, tname)
             f(t, f"{tname}_nojev", jev=False)
+        hebrew(t, tname)
         board(t, tname)
         board(t, f"{tname}_nojev_leads", jev=False, lead_only=True)
     print("wrote", sorted(p.name for p in OUT.glob("*.png")))
