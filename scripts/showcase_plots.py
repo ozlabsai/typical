@@ -36,7 +36,8 @@ BOARD = [
     ("HEBREW JEVBENCH · TRANSLATED", [("TYPICAL", 85.2, "ours"), ("TORCHCAST-12B", 86.5, "peer"),
                                       ("WINNOW-12B", 86.5, "peer"), ("CYGNET 12B", 83.9, "peer"), ("CLEF-FLASH", 77.4, "peer")]),
     ("HEBREW JEVBENCH · MIXED HE/EN", [("TYPICAL", 87.0, "ours"), ("TORCHCAST-12B", 86.5, "peer"),
-                                       ("WINNOW-12B", 84.3, "peer"), ("CYGNET 12B", 83.9, "peer"), ("CLEF-FLASH", 75.2, "peer")]),
+                                       ("WINNOW-12B", 84.3, "peer"), ("CYGNET 12B", 83.9, "peer"), ("CLEF-FLASH", 75.2, "peer"),
+          ("LIQUIDAI D1-3B", 66.1, "peer")]),
     ("HEBREW JEVBENCH · NATIVE", [("TYPICAL", 89.9, "ours"), ("TORCHCAST-12B", 89.9, "peer"),
                                   ("WINNOW-12B", 84.0, "peer"), ("CYGNET 12B", 88.2, "peer"), ("CLEF-FLASH", 78.2, "peer")]),
 ]
@@ -148,11 +149,12 @@ def tradeoff(t, name, jev=True):
 
 
 HEBREW = [("TYPICAL", 87.0, "ours"), ("TORCHCAST-12B", 86.5, "peer"), ("WINNOW-12B", 84.3, "peer"),
-          ("CYGNET 12B", 83.9, "peer"), ("CLEF-FLASH", 75.2, "peer")]
+          ("CYGNET 12B", 83.9, "peer"), ("CLEF-FLASH", 75.2, "peer"),
+          ("LIQUIDAI D1-3B", 66.1, "peer")]
 
 
 def hebrew(t, name):
-    fig = page(t, 10, 4.4)
+    fig = page(t, 10, 2.2 + .45 * len(HEBREW))
     header(fig, t, "Typical leads mixed Hebrew–English decisions",
            "HEBREW JEVBENCH V0 · HEBREW DOCUMENT, ENGLISH QUESTION · 230 ITEMS · ACCURACY %")
     bar_panel(body(fig), t, "", HEBREW, vmax=100, label_w=.25)
