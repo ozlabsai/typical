@@ -1,153 +1,169 @@
-"""Showcase figures for Typical (R044 → R062). Numbers copied from the committed result docs:
-docs/research/R056_RESULTS.md, R060_RESULTS.md, R060PRE_BLEND_PROXY.md, hebrew/HEJEV_V0_RESULTS.md, hebrew/R062_RESULTS.md.
+"""Showcase figures for Typical in two house styles: a dark benchmark board (Prime Intellect-like)
+and a light card on sage (TypeSafe-like). Numbers are copied from the committed result docs:
+docs/research/R056_RESULTS.md, R060_RESULTS.md, R060PRE_BLEND_PROXY.md, hebrew/HEJEV_V0_RESULTS.md,
+hebrew/R062_RESULTS.md, and JEV_PARITY_STRATEGY_20261004.md (peer WorkflowEvals rows).
 Run: uv run --with matplotlib python scripts/showcase_plots.py
 """
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch
 
 OUT = Path("docs/research/figures/showcase")
-BLUE, ORANGE, GRAY, LIGHT = "#2a78d6", "#eb6834", "#8a8984", "#c9c8c3"   # Typical, Jev, others, faint
-INK, INK2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 
-plt.rcParams.update({
-    "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
-    "font.size": 11, "axes.edgecolor": GRID, "axes.labelcolor": INK2, "xtick.color": INK2, "ytick.color": INK2,
-    "axes.spines.top": False, "axes.spines.right": False, "axes.grid": True, "grid.color": GRID, "grid.linewidth": .8,
-    "axes.axisbelow": True, "axes.titlelocation": "left", "axes.titleweight": "semibold", "axes.titlesize": 13,
-    "axes.titlecolor": INK,
-})
+THEMES = {
+    "dark": dict(page="#0b0b0b", card=None, ink="#f2f2f2", ink2="#8c8c8c", track="#1c1c1c", other="#3b3b3b",
+                 ours="#f2f2f2", ours_ink="#0b0b0b", jev="#eb6834", grid="#1f1f1f", mono="Space Mono", sans="Inter"),
+    "light": dict(page="#abbab9", card="#ffffff", ink="#2b2c2c", ink2="#6b6d6c", track="#f1f1ef", other="#b9bcbb",
+                  ours="#2a78d6", ours_ink="#ffffff", jev="#eb6834", grid="#ececea", mono="Space Mono", sans="Inter"),
+}
+
+# (label, value in %, kind) — kind: ours | jev | peer.  Typical rows name the exact model.
+BOARD = [
+    ("WORKFLOWEVALS · MEAN", [("TYPICAL R056", 64.9, "ours"), ("JEV 1.13", 67.8, "jev"), ("WINNOW-12B", 55.8, "peer"),
+                              ("CYGNET 12B", 52.1, "peer"), ("INTERN-DECISION-4B", 49.9, "peer")]),
+    ("WORKFLOWEVALS · SECURITY", [("TYPICAL R056", 60.4, "ours"), ("JEV 1.13", 61.7, "jev"), ("WINNOW-12B", 39.2, "peer"),
+                                  ("CYGNET 12B", 33.3, "peer"), ("INTERN-DECISION-4B", 52.1, "peer")]),
+    ("WORKFLOWEVALS · INVOICE", [("TYPICAL R056", 62.7, "ours"), ("JEV 1.13", 61.8, "jev"), ("WINNOW-12B", 47.8, "peer"),
+                                 ("CYGNET 12B", 53.1, "peer"), ("INTERN-DECISION-4B", 44.7, "peer")]),
+    ("WORKFLOWEVALS · AGENT TRACE", [("TYPICAL R056", 63.5, "ours"), ("JEV 1.13", 71.6, "jev"), ("WINNOW-12B", 62.6, "peer"),
+                                     ("CYGNET 12B", 52.3, "peer"), ("INTERN-DECISION-4B", 46.8, "peer")]),
+    ("WORKFLOWEVALS · CUSTOMER", [("TYPICAL R056", 72.9, "ours"), ("JEV 1.13", 76.0, "jev"), ("WINNOW-12B", 73.5, "peer"),
+                                  ("CYGNET 12B", 69.8, "peer"), ("INTERN-DECISION-4B", 55.9, "peer")]),
+    ("CONTESTED DECISIONS · SINGLE-LABEL", [("TYPICAL R056", 66.5, "ours"), ("JEV 1.13", 65.5, "jev"),
+                                            ("LIQUIDAI D1", 60.3, "peer"), ("CLEF-FLASH", 51.3, "peer")]),
+    ("HEBREW JEVBENCH · TRANSLATED", [("TYPICAL R062", 85.2, "ours"), ("TORCHCAST-12B", 86.5, "peer"),
+                                      ("WINNOW-12B", 86.5, "peer"), ("CYGNET 12B", 83.9, "peer"), ("CLEF-FLASH", 77.4, "peer")]),
+    ("HEBREW JEVBENCH · MIXED HE/EN", [("TYPICAL R062", 87.0, "ours"), ("TORCHCAST-12B", 86.5, "peer"),
+                                       ("WINNOW-12B", 84.3, "peer"), ("CYGNET 12B", 83.9, "peer"), ("CLEF-FLASH", 75.2, "peer")]),
+    ("HEBREW JEVBENCH · NATIVE", [("TYPICAL R062", 84.0, "ours"), ("TORCHCAST-12B", 89.9, "peer"),
+                                  ("WINNOW-12B", 84.0, "peer"), ("CYGNET 12B", 88.2, "peer"), ("CLEF-FLASH", 78.2, "peer")]),
+]
+
+PROGRESS = [("CYGNET 12B (FROZEN, ITS READOUT)", 52.1, "peer"), ("TYPICAL R044 (OLD RECIPE)", 52.8, "peer"),
+            ("GEMMA-12B + THINKING (TEACHER)", 61.2, "peer"), ("TYPICAL R056 (DISTILLED)", 64.9, "ours"),
+            ("TYPICAL R060 (+GPT TRACE LABELS)", 64.8, "ours"), ("JEV 1.13", 67.8, "jev")]
+
+BLEND = [("BASE (SCALE 0)", 55.0, 202), ("SCALE 0.5", 60.1, 202), ("SCALE 0.75", 60.8, 199), ("R056 (SCALE 1)", 64.9, 196)]
+
+IMAGES = [("FROZEN BASE", 85, "peer"), ("TYPICAL R056", 114, "ours"), ("TYPICAL R060", 120, "ours"),
+          ("TYPICAL R062", 110, "ours")]
 
 
-def finish(fig, name, note):
-    fig.text(0.01, 0.005, note, fontsize=8.5, color=INK2, ha="left", va="bottom")
-    fig.tight_layout(rect=(0, 0.035, 1, 1))
-    fig.savefig(OUT / f"{name}.png", dpi=200)
+def page(t, w, h):
+    fig = plt.figure(figsize=(w, h), facecolor=t["page"])
+    if t["card"]:
+        fig.patches.append(FancyBboxPatch((.02, .03), .96, .94, boxstyle="round,pad=0,rounding_size=.012",
+                                          transform=fig.transFigure, facecolor=t["card"], edgecolor="none", zorder=-10))
+    return fig
+
+
+def header(fig, t, title, sub):
+    """Title + mono subtitle at fixed inch offsets from the top, so short figures don't collide."""
+    h = fig.get_figheight()
+    fig.text(.05, 1 - .4 / h, title, color=t["ink"], fontsize=17, family=t["sans"], weight="semibold", va="top")
+    fig.text(.05, 1 - .82 / h, sub, color=t["ink2"], fontsize=10, family=t["mono"], va="top")
+
+
+def body(fig, left=.05, right=.95, bottom_in=.35):
+    """Axes rectangle filling the space below the header (1.2 in from the top)."""
+    h = fig.get_figheight()
+    return fig.add_axes((left, bottom_in / h, right - left, 1 - (1.2 + bottom_in) / h))
+
+
+def color(t, kind):
+    return {"ours": t["ours"], "jev": t["jev"], "peer": t["other"]}[kind]
+
+
+def bar_panel(ax, t, title, rows, vmax, fmt="{:.1f}", label_w=.42):
+    """One Prime-style panel: label chips on the left, bars from zero, value at the bar end."""
+    ax.set_facecolor(t["card"] or t["page"])
+    ax.set_xlim(0, 1)
+    ax.set_ylim(len(rows) - .4, -1.1)
+    ax.axis("off")
+    ax.text(0, -.95, title, color=t["ink"], fontsize=9.5, family=t["mono"], va="center", weight="bold")
+    span = 1 - label_w - .1
+    for i, (name, v, kind) in enumerate(rows):
+        c = color(t, kind)
+        ours = kind == "ours"
+        ax.text(label_w - .02, i, name, ha="right", va="center", fontsize=7.6, family=t["mono"],
+                color=t["ours_ink"] if ours else (t["ink"] if kind == "jev" else t["ink2"]),
+                bbox=dict(boxstyle="square,pad=.28", facecolor=t["ours"], edgecolor="none") if ours else None)
+        ax.barh(i, span, left=label_w, height=.62, color=t["track"], zorder=1)
+        ax.barh(i, span * v / vmax, left=label_w, height=.62, color=c, zorder=2)
+        ax.text(label_w + span * v / vmax + .012, i, fmt.format(v), va="center", fontsize=7.8, family=t["mono"],
+                color=t["ink"] if kind != "peer" else t["ink2"])
+
+
+def board(t, name):
+    fig = page(t, 13, 8.6)
+    header(fig, t, "Typical vs decision models of similar size",
+           "WORKFLOWEVALS (705 CASES) · CONTESTED-FAST-DECISIONS · HEBREW JEVBENCH V0 · ACCURACY %")
+    gs = fig.add_gridspec(3, 3, left=.05, right=.97, top=.84, bottom=.08, wspace=.12, hspace=.35)
+    for k, (title, rows) in enumerate(BOARD):
+        bar_panel(fig.add_subplot(gs[k // 3, k % 3]), t, title, rows, vmax=100)
+    fig.text(.05, .06, "Highlighted: Typical (Gemma-4-12B + LoRA, single forward pass). Orange: JEV 1.13. Peers measured on our harness;",
+             color=t["ink2"], fontsize=7.5, family=t["mono"])
+    fig.text(.05, .04, "contested-decision peers from its public leaderboard. Hebrew native labels are Claude-consensus, not human-verified.",
+             color=t["ink2"], fontsize=7.5, family=t["mono"])
+    fig.savefig(OUT / f"{name}_board.png", dpi=220, facecolor=t["page"])
     plt.close(fig)
 
 
-def wf_progress():
-    rows = [("Frozen Gemma-4-12B (Cygnet readout)", .521, GRAY), ("R044 (old recipe)", .528, GRAY),
-            ("Frozen base, our readout", .550, GRAY), ("Gemma + thinking (teacher, slow)", .612, LIGHT),
-            ("R056: distilled single pass", .649, BLUE), ("R060: + GPT agent-trace labels", .648, BLUE)]
-    fig, ax = plt.subplots(figsize=(8, 4.2))
-    y = range(len(rows))
-    for i, (_, v, c) in enumerate(rows):
-        ax.plot([.50, v], [i, i], color=GRID, lw=1.2, zorder=1)
-        ax.scatter(v, i, s=90 if c == BLUE else 60, color=c, zorder=3, edgecolor=SURFACE, linewidth=1.5)
-        ax.text(v - .004, i + .28, f"{v:.3f}", ha="center", color=INK, fontsize=9.5)
-    ax.axvline(.678, color=ORANGE, lw=2, ls="--")
-    ax.text(.676, -.75, "Jev 1.13  .678", color=INK, fontsize=10, ha="right")
-    ax.set_yticks(list(y), [r[0] for r in rows])
-    ax.set_xlim(.50, .70)
-    ax.set_ylim(-1, len(rows) - .4)
-    ax.grid(axis="y", visible=False)
-    ax.set_xlabel("WorkflowEvals mean (equal-weight, 4 workflows, 705 cases)")
-    fig.suptitle("Distillation lifted WorkflowEvals from .53 to .65 (Jev .68)", x=.01, ha="left",
-                 fontsize=13, fontweight="semibold", color=INK)
-    finish(fig, "01_workflowevals_progress", "Single-pass models unless noted. Source: R056/R060 result docs.")
+def progress(t, name):
+    fig = page(t, 10, 4.2)
+    header(fig, t, "Thinking-teacher distillation: WorkflowEvals .53 → .65",
+           "WORKFLOWEVALS MEAN · 4 WORKFLOWS · 705 CASES · ACCURACY %")
+    bar_panel(body(fig), t, "", PROGRESS, vmax=80, label_w=.36)
+    fig.savefig(OUT / f"{name}_progress.png", dpi=220, facecolor=t["page"])
+    plt.close(fig)
 
 
-def wf_per_workflow():
-    wfs = ["Security", "Agent trace", "Invoice", "Customer"]
-    series = [("R044 (old recipe)", [.338, .550, .518, .708], LIGHT), ("Frozen base", [.392, .550, .547, .711], GRAY),
-              ("R060 (ours, best)", [.613, .644, .600, .735], BLUE)]
-    jev = [.617, .716, .618, .760]
-    fig, ax = plt.subplots(figsize=(8, 4.2))
-    w = .26
-    for k, (name, vals, c) in enumerate(series):
-        xs = [i + (k - 1) * w for i in range(4)]
-        ax.bar(xs, vals, width=w - .03, color=c, label=name)
-        if c == BLUE:
-            for x, v in zip(xs, vals):
-                ax.text(x, v - .045, f"{v:.3f}", ha="center", fontsize=9, color="white", fontweight="bold")
-    for i, v in enumerate(jev):
-        ax.plot([i - 1.5 * w, i + 1.5 * w], [v, v], color=ORANGE, lw=2.2, ls="--", label="Jev 1.13" if i == 0 else None)
-    ax.set_xticks(range(4), wfs)
-    ax.set_ylim(0, .9)
-    ax.grid(axis="x", visible=False)
-    ax.set_ylabel("Score vs consensus gold")
-    ax.legend(frameon=False, ncol=4, loc="upper left", fontsize=9.5, bbox_to_anchor=(0, 1.02))
-    ax.set_title("Security is at Jev's level; agent trace (−7 pts) is the biggest gap")
-    finish(fig, "02_workflowevals_by_workflow", "Security/customer: exact action set; agent trace: primary action; invoice: exact. Source: R060_RESULTS.md.")
-
-
-def hebrew_peers():
-    models = [("torchcast-12b", (.865, .865, .899), GRAY),
-              ("Winnow-12B", (.865, .843, .840), GRAY), ("Frozen Gemma base", (.852, .835, .815), GRAY),
-              ("Typical R056 (λ=.5)", (.852, .843, .899), BLUE), ("Typical R062 (Hebrew)", (.852, .870, .840), BLUE),
-              ("Clef-flash", (.774, .752, .782), GRAY)]
-    cols = ["Hebrew (translated)", "Mixed (HE doc, EN question)", "Native Hebrew"]
-    fig, axes = plt.subplots(1, 3, figsize=(10, 4.2), sharey=True)
-    for j, (ax, col) in enumerate(zip(axes, cols)):
-        for i, (name, vals, c) in enumerate(models):
-            ax.plot([.74, vals[j]], [i, i], color=GRID, lw=1, zorder=1)
-            ax.scatter(vals[j], i, s=70 if c == BLUE else 45, color=c, zorder=3, edgecolor=SURFACE, linewidth=1.5)
-            ax.text(vals[j] + .004, i, f"{vals[j]:.3f}", va="center", fontsize=8.5, color=INK if c == BLUE else INK2)
-        ax.set_title(col, fontsize=11, loc="left")
-        ax.set_xlim(.74, .95)
-        ax.set_xticks([.75, .80, .85, .90])
-        ax.grid(axis="y", visible=False)
-        ax.invert_yaxis() if j == 0 else None
-    axes[0].set_yticks(range(len(models)), [m[0] for m in models])
-    fig.suptitle("Hebrew decisions: Typical leads mixed-language (.870), ties native (.899), trails on translated",
-                 x=.01, ha="left", fontsize=12.5, fontweight="semibold", color=INK)
-    finish(fig, "03_hebrew_peers", "Hebrew JevBench v0 (eval-only; 230/230/119 items). Native labels are Claude-consensus. Source: hebrew/R062_RESULTS.md.")
-
-
-def blend_tradeoff():
-    pts = [("base (λ=0)", .550, 202), ("λ=.5", .601, 202), ("λ=.75", .608, 199), ("R056 (λ=1)", .649, 196)]
-    fig, ax = plt.subplots(figsize=(7, 4.4))
-    ax.plot([p[1] for p in pts], [p[2] for p in pts], color=BLUE, lw=2, zorder=2)
-    for name, x, y in pts:
-        ax.scatter(x, y, s=60, color=BLUE, zorder=3, edgecolor=SURFACE, linewidth=1.5)
-        ax.annotate(name, (x, y), textcoords="offset points", xytext=(6, 7), fontsize=9.5, color=INK)
-    ax.scatter(.648, 198, s=60, color=BLUE, marker="s", zorder=3, edgecolor=SURFACE, linewidth=1.5)
-    ax.annotate("R060 (KL anchors)", (.648, 198), textcoords="offset points", xytext=(8, -14), fontsize=9.5, color=INK)
-    ax.scatter(.678, 200, s=90, color=ORANGE, marker="D", zorder=3, edgecolor=SURFACE, linewidth=1.5)
-    ax.annotate("Jev 1.13", (.678, 200), textcoords="offset points", xytext=(-22, 9), fontsize=9.5, color=INK)
-    ax.set_xlabel("WorkflowEvals mean (specialist skill)")
-    ax.set_ylabel("Public JevBench, correct of 231 (general skill)")
-    ax.set_xlim(.53, .70)
+def tradeoff(t, name):
+    fig = page(t, 9, 5.6)
+    header(fig, t, "Scaling the adapter trades workflow skill for general skill",
+           "SCALE = FRACTION OF THE R056 LORA DELTA APPLIED")
+    ax = body(fig, left=.1, right=.94, bottom_in=.8)
+    ax.set_facecolor(t["card"] or t["page"])
+    for s in ax.spines.values():
+        s.set_visible(False)
+    ax.grid(color=t["grid"], lw=.8)
+    ax.tick_params(colors=t["ink2"], labelsize=8.5, length=0)
+    for lab in ax.get_xticklabels() + ax.get_yticklabels():
+        lab.set_family(t["mono"])
+    xs, ys = [b[1] for b in BLEND], [b[2] for b in BLEND]
+    ax.plot(xs, ys, color=t["ours"], lw=2, zorder=2)
+    ax.scatter(xs, ys, s=55, color=t["ours"], zorder=3, edgecolor=t["card"] or t["page"], linewidth=1.5)
+    for lab, x, y in BLEND:
+        ax.annotate(lab, (x, y), textcoords="offset points", xytext=(7, 7), fontsize=8.5, family=t["mono"], color=t["ink"])
+    ax.scatter(64.8, 198, s=55, marker="s", color=t["ours"], zorder=3)
+    ax.annotate("R060 (KL ANCHORS)", (64.8, 198), textcoords="offset points", xytext=(8, -13), fontsize=8.5,
+                family=t["mono"], color=t["ink"])
+    ax.scatter(67.8, 200, s=80, marker="D", color=t["jev"], zorder=3)
+    ax.annotate("JEV 1.13", (67.8, 200), textcoords="offset points", xytext=(-20, 9), fontsize=8.5,
+                family=t["mono"], color=t["ink"])
+    ax.set_xlim(53, 70)
     ax.set_ylim(194, 205)
-    ax.set_title("Scaling the adapter trades workflow skill for general skill")
-    finish(fig, "04_blend_tradeoff", "λ = fraction of the R056 LoRA delta applied. Source: R060PRE_BLEND_PROXY.md.")
+    ax.set_xlabel("WORKFLOWEVALS MEAN %", color=t["ink2"], fontsize=8.5, family=t["mono"])
+    ax.set_ylabel("PUBLIC JEVBENCH, CORRECT / 231", color=t["ink2"], fontsize=8.5, family=t["mono"])
+    fig.savefig(OUT / f"{name}_tradeoff.png", dpi=220, facecolor=t["page"])
+    plt.close(fig)
 
 
-def contested():
-    rows = [("Typical R056", 66.5, 35.0, BLUE), ("JEV 1.13", 65.5, 52.5, ORANGE),
-            ("LiquidAI d1", 60.3, 59.6, GRAY)]
-    fig, axes = plt.subplots(1, 2, figsize=(9, 3.6), sharey=True)
-    for ax, j, title in ((axes[0], 1, "Single-label decisions"), (axes[1], 2, "Multi-label decisions")):
-        ax.barh(range(len(rows)), [r[j] for r in rows], color=[r[3] for r in rows], height=.55)
-        for i, r in enumerate(rows):
-            ax.text(r[j] + .8, i, f"{r[j]:.1f}%", va="center", fontsize=9.5, color=INK)
-        ax.set_title(title, fontsize=11, loc="left")
-        ax.set_xlim(0, 78)
-        ax.grid(axis="y", visible=False)
-    axes[0].set_yticks(range(len(rows)), [r[0] for r in rows])
-    axes[0].invert_yaxis()
-    fig.suptitle("Contested decisions: ahead of JEV 1.13 on single-label; multi-label is the gap",
-                 x=.01, ha="left", fontsize=13, fontweight="semibold", color=INK)
-    finish(fig, "05_contested_decisions", "zoom-ai/contested-fast-decisions (818). Peer numbers from its leaderboard. Source: R060PRE_BLEND_PROXY.md.")
-
-
-def images():
-    rows = [("Frozen base", 85, GRAY), ("R056", 114, BLUE), ("R060", 120, BLUE), ("R062 (Hebrew)", 110, BLUE)]
-    fig, ax = plt.subplots(figsize=(7, 3.4))
-    ax.bar(range(len(rows)), [r[1] / 128 for r in rows], color=[r[2] for r in rows], width=.55)
-    for i, r in enumerate(rows):
-        ax.text(i, r[1] / 128 + .015, f"{r[1]}/128", ha="center", fontsize=10, color=INK)
-    ax.set_xticks(range(len(rows)), [r[0] for r in rows])
-    ax.set_ylim(0, 1.05)
-    ax.set_ylabel("ScienceQA real-image accuracy")
-    ax.grid(axis="x", visible=False)
-    ax.set_title("Image decisions improved with training, not just retained")
-    finish(fig, "06_image_decisions", "128-item ScienceQA retention suite; all retention gates pass for R056/R060/R062.")
+def images(t, name):
+    fig = page(t, 9, 3.3)
+    header(fig, t, "Image decisions improved with training",
+           "SCIENCEQA REAL-IMAGE ACCURACY · 128-ITEM RETENTION SUITE · ALL RETENTION GATES PASS")
+    bar_panel(body(fig), t, "", [(n, v / 128 * 100, k) for n, v, k in IMAGES], vmax=100, label_w=.3)
+    fig.savefig(OUT / f"{name}_images.png", dpi=220, facecolor=t["page"])
+    plt.close(fig)
 
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    for f in (wf_progress, wf_per_workflow, hebrew_peers, blend_tradeoff, contested, images):
-        f()
+    for old in OUT.glob("*.png"):
+        old.unlink()
+    for tname, t in THEMES.items():
+        for f in (board, progress, tradeoff, images):
+            f(t, tname)
     print("wrote", sorted(p.name for p in OUT.glob("*.png")))
