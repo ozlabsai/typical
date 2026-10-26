@@ -4,6 +4,7 @@ import math
 import re
 import time
 
+from doctrine import ACTIONS, STANDING, decide, parse_order, render
 from sim import (BATTERIES, EFFECTORS, ORIGINS, SITE, THREATS, DEFAULT_CONFIG, SCENARIOS, build_plans, build_raid,
                  consequence, money, naive_pick, site_value, plan_score, precompute_windows, site_hit, u01)
 
@@ -15,13 +16,7 @@ CLASS_WORD = {"B": "ballistic missile", "R": "rocket", "C": "cruise missile", "D
 Q_PLAN = "Which action do the rules of engagement require for this threat?"   # lowest ∅ mass with orders (null_probe)
 # Typical makes the doctrine call; the solver resolves it to a concrete plan. Labels echo the rule wording:
 # probe.py measured 58% doctrine-following with plan labels, 99% with these (typical-small, n=148).
-ACTIONS = {"hold": "Hold fire", "protection": "Fire the sure-kill plan", "value": "Fire the cheapest reliable plan"}
-BASE_RULES = ["When the threat will land in open ground, hold fire.",
-              "When the threat will hit a priority site, fire the sure-kill plan.",
-              "When the threat will hit a secondary site, fire the cheapest reliable plan."]
-RULE_RE = re.compile(r"^when the threat (is an? (?P<cls>[a-z ]+?)|will hit (?P<site>.+?)|will land in open ground), "
-                     r"(?P<act>hold fire|fire the sure-kill plan|fire the cheapest reliable plan)\.?$", re.I)
-ACT_OF = {"hold fire": "hold", "fire the sure-kill plan": "protection", "fire the cheapest reliable plan": "value"}
+BASE_RULES = [render(r, "grammar") for r in STANDING]
 
 
 def stock_word(left, init):
@@ -33,33 +28,34 @@ def rules(cfg):
     return [o.strip() for o in cfg.get("orders", []) if o.strip()] + BASE_RULES
 
 
-def doctrine(cfg):
-    """Rules of engagement: one condition per rule, no negations, first match wins (memory: site-design-lessons)."""
-    return "Rules of engagement, in order. The first rule that applies decides.\n" + \
-        "\n".join(f"{i + 1}. {r}" for i, r in enumerate(rules(cfg)))
+def render_state(rule_lines, facts):
+    """The exact text Typical reads -- shared by the live engine and airdef/dataset.py (train = serve)."""
+    return ("Rules of engagement, in order. The first rule that applies decides.\n"
+            + "\n".join(f"{i + 1}. {r}" for i, r in enumerate(rule_lines)) + "\n\nSituation.\n" + "\n".join(facts))
+
+
+def situation_facts(cls_word, name, origin, site, open_ground, prio):
+    # the class sentence mirrors the order grammar exactly ("When the threat is a drone, ..."): 11/12 -> 15/16 on orders.
+    # No uncertainty sentence: no rule uses it, and it pulled priority threats to the cheap action.
+    facts = [f"The threat is a {cls_word}.", f"It is {'an' if name[:1] in 'AEIOU' else 'a'} {name}, launched from {origin}."]
+    if open_ground:
+        return facts + [f"The threat will land in open ground near {site}."]
+    return facts + [f"The threat will hit {site}.", f"{site} is a {'priority' if prio else 'secondary'} site."]
+
+
+def short_name(kind):
+    return re.sub(r"\s*\b(drone|MRBM|SRBM|rocket|cruise missile)\b", "", THREATS[kind][0]).strip()
 
 
 def doctrine_action(cfg, cls_word, site, open_ground, prio):
-    """What the written rules say, evaluated mechanically. Orders outside the grammar are skipped (shown as such)."""
-    for r in rules(cfg):
-        m = RULE_RE.match(r)
-        if not m:
-            continue
-        if m["cls"]:
-            hit = m["cls"].strip().lower() == cls_word
-        elif m["site"]:
-            s = m["site"].strip().lower()
-            hit = (not open_ground and s == site.lower()) or (s == "a priority site" and prio and not open_ground) \
-                or (s == "a secondary site" and not prio and not open_ground)
-        else:
-            hit = open_ground
-        if hit:
-            return ACT_OF[m["act"].lower()]
-    return "value"
+    """What the written rules say (doctrine.decide, the training-label semantics). Free-text orders are skipped."""
+    parsed = [r for r in (parse_order(o) for o in rules(cfg)) if r]
+    act = decide(parsed, dict(cls=cls_word, site=site, open=open_ground), {site} if prio else set())
+    return act or "silent"
 
 
 def parse_ok(order):
-    return bool(RULE_RE.match(order.strip()))
+    return parse_order(order) is not None
 
 
 class Policy:
@@ -111,17 +107,9 @@ class World:
         site = SITE[sid][1]
         prio = sid in self.cfg["priority_sites"]
         open_ground = dist > sigma
-        if open_ground:
-            where = f"The threat will land in open ground near {site}."
-        else:   # uncertainty stays on the map; no rule uses it, and it pulled priority threats to the cheap plan
-            where = f"The threat will hit {site}."
         cw = CLASS_WORD[th.cls]
-        name = re.sub(r"\s*\b(drone|MRBM|SRBM|rocket|cruise missile)\b", "", THREATS[th.kind][0]).strip()
-        # the class sentence mirrors the order grammar exactly ("When the threat is a drone, ..."): 11/12 -> 15/16 on orders
-        facts = [f"The threat is a {cw}.", f"It is a {name}, launched from {ORIGIN_NAME[self.origin_key(th)]}.", where]
-        if not open_ground:
-            facts.append(f"{site} is a {'priority' if prio else 'secondary'} site.")
-        text = doctrine(self.cfg) + "\n\nSituation.\n" + "\n".join(facts)
+        facts = situation_facts(cw, short_name(th.kind), ORIGIN_NAME[self.origin_key(th)], site, open_ground, prio)
+        text = render_state(rules(self.cfg), facts)
         return text, dict(dmg=dmg, sid=sid, conf=conf, dist=dist, sigma=sigma,
                           rule=doctrine_action(self.cfg, cw, site, open_ground, prio))
 

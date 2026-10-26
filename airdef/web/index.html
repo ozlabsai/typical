@@ -5,7 +5,7 @@
 <title>Typical · Air Defence Decision Desk</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Rubik:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <!-- vendored: maplibre-gl 4.7.1, deck.gl 9.0.38 (no CDN at the venue; the basemap tiles still need internet) -->
 <link href="/web/vendor/maplibre-gl.css" rel="stylesheet">
 <script src="/web/vendor/maplibre-gl.js"></script>
@@ -14,9 +14,10 @@
 :root {
   --ink: #f0eeeb; --dim: #a19d97; --mute: #6d6a66; --bg: #141312; --panel: rgba(24, 23, 22, .88);
   --line: rgba(240, 238, 235, .09); --threat: #ff5a36; --int: #5ad1ff; --typ: #ffb547; --ok: #7fd18b; --bad: #ff4d4d;
-  --sans: "Schibsted Grotesk", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace;
+  --sans: "Schibsted Grotesk", "Rubik", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace;
 }
 * { box-sizing: border-box; margin: 0; }
+html[lang=he] { --sans: "Rubik", system-ui, sans-serif; }
 html, body { height: 100%; background: var(--bg); color: var(--ink); font: 13px/1.4 var(--sans); overflow: hidden; }
 #map { position: fixed; inset: 0; }
 .panel { position: fixed; background: var(--panel); backdrop-filter: blur(10px); border: 1px solid var(--line); border-radius: 12px; }
@@ -27,19 +28,19 @@ button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); 
 .eyebrow { font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--mute); }
 
 /* top bar */
-#top { top: 12px; left: 12px; right: 12px; height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 14px; }
+#top { top: 12px; inset-inline: 12px; height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 14px; }
 #brand { font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
 #brand span { color: var(--typ); }
 #scen { display: flex; gap: 4px; flex-wrap: nowrap; overflow: hidden; }
 #scen button { white-space: nowrap; padding: 5px 9px; }
-#transport { display: flex; gap: 4px; margin-left: auto; align-items: center; }
-#clock { font-size: 15px; min-width: 92px; text-align: right; }
+#transport { display: flex; gap: 4px; margin-inline-start: auto; align-items: center; }
+#clock { font-size: 15px; min-width: 92px; text-align: end; direction: ltr; }
 #model { white-space: nowrap; color: var(--dim); }
 #model b { color: var(--typ); font-weight: 600; }
 #busy { color: var(--typ); font-size: 11px; visibility: hidden; }
 
 /* left: threat board */
-#board { top: 76px; left: 12px; width: 372px; bottom: 214px; padding: 14px 0 6px; display: flex; flex-direction: column; }
+#board { top: 76px; inset-inline-start: 12px; width: 372px; bottom: 214px; padding: 14px 0 6px; display: flex; flex-direction: column; }
 #board h3, #side h3 { padding: 0 14px 8px; }
 #boardSummary { padding: 0 14px 10px; color: var(--dim); }
 #rows { flex: 1; overflow: hidden; }
@@ -48,7 +49,7 @@ button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); 
 .row .dot { width: 8px; height: 8px; border-radius: 50%; }
 .row .id { color: var(--dim); }
 .row .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row .tti { text-align: right; color: var(--dim); }
+.row .tti { text-align: end; color: var(--dim); }
 .row .rec { grid-column: 2 / 4; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 .row .rec b { color: var(--ink); font-weight: 500; }
 .chip { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line); text-align: center; }
@@ -59,7 +60,7 @@ button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); 
 .c-esc { color: var(--bg); background: var(--typ); border-color: var(--typ); }
 
 /* right: decision + console */
-#side { top: 76px; right: 12px; width: 440px; bottom: 214px; padding: 14px 0 0; display: flex; flex-direction: column; }
+#side { top: 76px; inset-inline-end: 12px; width: 440px; bottom: 214px; padding: 14px 0 0; display: flex; flex-direction: column; }
 #tabs { display: flex; gap: 4px; padding: 0 14px 10px; }
 .pane { flex: 1; overflow-y: auto; scrollbar-width: thin; padding: 0 14px 14px; display: none; }
 .pane.on { display: block; }
@@ -69,11 +70,11 @@ button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); 
 #dState .hl { color: var(--ink); }
 .bar { display: grid; grid-template-columns: 1fr 44px; gap: 8px; align-items: center; margin: 5px 0; }
 .bar .lab { font-size: 12px; position: relative; padding: 4px 8px; border-radius: 6px; overflow: hidden; }
-.bar .fill { position: absolute; inset: 0 auto 0 0; background: rgba(255,181,71,.22); border-right: 2px solid var(--typ); }
+.bar .fill { position: absolute; inset-block: 0; inset-inline-start: 0; background: rgba(255,181,71,.22); border-inline-end: 2px solid var(--typ); }
 .bar .txt { position: relative; }
-.bar .p { text-align: right; }
+.bar .p { text-align: end; }
 .bar.top .lab { color: var(--ink); } .bar:not(.top) .lab { color: var(--dim); }
-.mark { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; margin-left: 6px; padding: 1px 5px; border-radius: 4px; }
+.mark { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; margin-inline-start: 6px; padding: 1px 5px; border-radius: 4px; }
 .m-opt { color: var(--int); border: 1px solid rgba(90,209,255,.45); }
 .m-rule { color: var(--ok); border: 1px solid rgba(127,209,139,.45); }
 #dFoot { color: var(--dim); margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
@@ -90,12 +91,12 @@ textarea { width: 100%; height: 64px; resize: none; background: rgba(0,0,0,.3); 
 .presets button { font-size: 11.5px; color: var(--dim); padding: 3px 8px; }
 input[type=range] { width: 100%; accent-color: var(--typ); }
 .rng { display: grid; grid-template-columns: 118px 1fr 52px; gap: 8px; align-items: center; margin: 3px 0; color: var(--dim); }
-.rng span:last-child { text-align: right; color: var(--ink); }
+.rng span:last-child { text-align: end; color: var(--ink); }
 
 /* bottom: ledger */
-#ledger { left: 12px; right: 12px; bottom: 12px; height: 190px; display: grid; grid-template-columns: 220px repeat(3, 1fr); }
-#ledger > div { padding: 14px 16px; border-left: 1px solid var(--line); }
-#ledger > div:first-child { border-left: 0; }
+#ledger { inset-inline: 12px; bottom: 12px; height: 190px; display: grid; grid-template-columns: 220px repeat(3, 1fr); }
+#ledger > div { padding: 14px 16px; border-inline-start: 1px solid var(--line); }
+#ledger > div:first-child { border-inline-start: 0; }
 .pol { cursor: pointer; }
 .pol.view { background: rgba(240,238,235,.04); }
 .pol h4 { font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; }
@@ -111,49 +112,57 @@ input[type=range] { width: 100%; accent-color: var(--typ); }
 .mag.low i u { background: var(--typ); } .mag.crit i u { background: var(--bad); }
 #att .big { color: var(--threat); }
 .legend { display: grid; gap: 3px; margin-top: 10px; color: var(--dim); font-size: 11.5px; }
-.legend i { display: inline-block; width: 18px; height: 2px; vertical-align: middle; margin-right: 6px; }
+.legend i { display: inline-block; width: 18px; height: 2px; vertical-align: middle; margin-inline-end: 6px; }
 .maplibregl-ctrl-attrib { opacity: .4; }
+#dState, .mono, .big { direction: ltr; unicode-bidi: isolate; }
+html[lang=he] #dState { text-align: left; }
+html[lang=he] .eyebrow { letter-spacing: 0; }
+details.dmg summary { cursor: pointer; color: var(--dim); margin-bottom: 6px; }
+.sitegrid { display: grid; grid-template-columns: 1fr 74px; gap: 3px 8px; align-items: center; color: var(--dim); font-size: 12px; }
+.sitegrid input { width: 74px; background: rgba(0,0,0,.3); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; font: 12px var(--mono); }
+#lang { font-weight: 600; }
 </style>
 </head>
 <body>
 <div id="map"></div>
 
 <div id="top" class="panel">
-  <div id="brand">Typical <span>·</span> Air Defence Decision Desk</div>
+  <div id="brand">Typical <span>·</span> <i data-i18n="brand" style="font-style:normal">Air Defence Decision Desk</i></div>
   <div id="scen"></div>
   <div id="transport">
-    <span id="busy">re-deciding…</span>
+    <span id="busy" data-i18n="busy">re-deciding…</span>
     <button id="play">Play</button>
     <span class="seg" id="speeds"></span>
-    <button id="skip" title="Fast-forward through transit to the next engagement">Skip transit</button>
-    <button id="reset">Reset</button>
+    <button id="skip" data-i18n="skip">Skip transit</button>
+    <button id="reset" data-i18n="reset">Reset</button>
     <span id="clock" class="mono">T+00:00</span>
   </div>
-  <div id="model">model <b id="modelName">…</b></div>
+  <div id="model"><span data-i18n="model">model</span> <b id="modelName">…</b></div>
+  <button id="lang">עברית</button>
 </div>
 
 <div id="board" class="panel">
-  <h3 class="eyebrow">Live tracks</h3>
+  <h3 class="eyebrow" data-i18n="liveTracks">Live tracks</h3>
   <div id="boardSummary"></div>
   <div id="rows"></div>
 </div>
 
 <div id="side" class="panel">
-  <div id="tabs"><button data-tab="decision" class="on">Decision</button><button data-tab="console">Commander's console</button></div>
-  <div class="pane on" id="p-decision"><div class="empty">Select a track on the map or the board to see what Typical reads and how it decides.</div></div>
+  <div id="tabs"><button data-tab="decision" class="on" data-i18n="tabDecision">Decision</button><button data-tab="console" data-i18n="tabConsole">Commander's console</button></div>
+  <div class="pane on" id="p-decision"></div>
   <div class="pane" id="p-console"></div>
 </div>
 
 <div id="ledger" class="panel">
   <div id="att">
-    <div class="eyebrow">Raid</div>
+    <div class="eyebrow" data-i18n="raid">Raid</div>
     <div class="big mono" id="attCost">$0</div>
-    <div class="kv"><span>attacker spend</span></div>
-    <div class="kv" style="margin-top:6px"><span><b id="launched">0</b> / <span id="total">0</span> launched</span></div>
+    <div class="kv"><span data-i18n="attSpend">attacker spend</span></div>
+    <div class="kv" style="margin-top:6px"><span><b id="launched">0</b> / <span id="total">0</span> <span data-i18n="launched">launched</span></span></div>
     <div class="legend">
-      <span><i style="background:var(--threat)"></i>threat, flown / predicted</span>
-      <span><i style="background:var(--int)"></i>interceptor</span>
-      <span><i style="background:var(--typ)"></i>predicted impact zone</span>
+      <span><i style="background:var(--threat)"></i><span data-i18n="lgThreat">threat, flown / predicted</span></span>
+      <span><i style="background:var(--int)"></i><span data-i18n="lgInt">interceptor</span></span>
+      <span><i style="background:var(--typ)"></i><span data-i18n="lgIpp">predicted impact zone</span></span>
     </div>
   </div>
   <div class="pol naive" data-pol="naive"></div>

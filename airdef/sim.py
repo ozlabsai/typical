@@ -80,6 +80,16 @@ SITES = [
     ("netanya", "Netanya", 32.33, 34.86, 4, "city"),
 ]
 SITE = {s[0]: s for s in SITES}
+THREAT_HE = {"emad": "עמאד", "ghadr": "קדר", "kheibar": "ח׳ייבר שכן", "fattah": "פתאח-1 מתמרן", "palestine2": "פלסטין-2 (חות׳ים)",
+             "fateh110": "פאתח-110", "grad": "גראד 122 מ״מ", "fajr5": "פג׳ר-5", "burkan": "בורקאן", "paveh": "טיל שיוט פאווה",
+             "shahed": "שאהד-136", "uav_lb": "כטב״ם תקיפה של חזבאללה"}
+EFFECTOR_HE = {"arrow3": "חץ 3", "thaad": "THAAD", "sm3": "SM-3", "arrow2": "חץ 2", "sm6": "SM-6", "dsling": "קלע דוד",
+               "ironDome": "כיפת ברזל", "ironBeam": "מגן אור", "aim9x": "AIM-9X", "apkws": "APKWS", "ew": "שיבוש GPS"}
+SITE_HE = {"tel_aviv": "גוש דן", "jerusalem": "ירושלים", "haifa": "חיפה", "haifa_bay": "בתי הזיקוק במפרץ חיפה",
+           "beer_sheva": "באר שבע", "ashdod": "נמל אשדוד", "ashkelon": "אשקלון", "ben_gurion": "נמל התעופה בן גוריון",
+           "nevatim": "בסיס נבטים", "ramat_david": "בסיס רמת דוד", "dimona": "קריית המחקר בדימונה", "eilat": "אילת",
+           "kiryat_shmona": "קריית שמונה", "nahariya": "נהריה", "tiberias": "טבריה", "sderot": "שדרות",
+           "hadera_power": "תחנת הכוח בחדרה", "netanya": "נתניה"}
 
 # Notional batteries -- NOT real deployments.
 BATTERIES = [
@@ -115,7 +125,12 @@ DEFAULT_CONFIG = {
     "pk_scale": 1.0,
     "orders": [],              # commander's orders, prepended to the rules (rule grammar: see engine.RULE_RE)
     "conf_threshold": 0.42,    # escalate to the operator when Typical's top action is below this...
-    "abstain_threshold": 0.9,  # ...or when its ∅ ("none of these") mass is above this    # below this top-prob (or ∅ above it) -> escalate to operator
+    "abstain_threshold": 0.9,  # ...or when its ∅ ("none of these") mass is above this
+    # damage model, all user-configurable: value of a site hit = site_value[sid] (else tier_value[tier])
+    #   x warhead weight (per threat kind, else per class) x priority_multiplier if it's a priority site
+    "site_value": {},          # sid -> $M override
+    "warhead": dict(WARHEAD),
+    "priority_multiplier": 3.0,
 }
 
 EARTH_KM = 6371.0
@@ -206,6 +221,7 @@ def nearest_site(lat, lon):
 # ---------------------------------------------------------------- scenarios
 SCENARIOS = {
     "northern_barrage": dict(
+        title_he="חזית צפון: מטח חזבאללה", blurb_he="150 רקטות, 20 כטב״מים ו-4 פאתח-110 בתוך 6 דקות. רוב הרקטות נופלות בשטח פתוח.",
         title="Northern front: Hezbollah barrage",
         blurb="150 rockets, 20 attack drones and 4 Fateh-110 in 6 minutes. Most rockets fall in open ground.",
         waves=[("grad", "lebanon_s", ["kiryat_shmona", "nahariya", "tiberias", "haifa", "ramat_david"], 110, 14, 0, 360),
@@ -214,6 +230,7 @@ SCENARIOS = {
                ("uav_lb", "lebanon_s", ["kiryat_shmona", "ramat_david", "haifa_bay", "nahariya"], 20, 1.5, 0, 400),
                ("fateh110", "lebanon_bq", ["haifa_bay", "ramat_david", "haifa"], 4, 1.5, 200, 360)]),
     "april_mixed": dict(
+        title_he="13 באפריל 2024: גל משולב מאיראן", blurb_he="כ-60 כטב״מי שאהד, 15 טילי שיוט פאווה ו-60 טילים בליסטיים, מתוזמנים להגיע יחד.",
         title="13 April 2024: mixed wave from Iran",
         blurb="~60 Shahed drones, 15 Paveh cruise missiles and 60 ballistic missiles timed to arrive together.",
         waves=[("shahed", "iran_w", ["nevatim", "ramat_david", "dimona", "jerusalem"], 45, 3, 0, 900),
@@ -222,6 +239,7 @@ SCENARIOS = {
                ("emad", "iran_w", ["nevatim", "ramat_david", "tel_aviv"], 30, 2.5, 700, 900),
                ("ghadr", "iran_nw", ["nevatim", "ramat_david"], 30, 2.5, 700, 900)]),
     "october_saturation": dict(
+        title_he="1 באוקטובר 2024: רוויה בליסטית", blurb_he="כ-120 טילים בליסטיים ב-12 דקות, כולל פתאח-1 מתמרן, לעבר בסיסי חיל האוויר וגוש דן.",
         title="1 October 2024: ballistic saturation",
         blurb="~120 ballistic missiles in 12 minutes, including manoeuvring Fattah-1, aimed at airbases and Tel Aviv.",
         waves=[("emad", "iran_w", ["nevatim", "tel_aviv", "ramat_david"], 40, 3, 0, 720),
@@ -229,6 +247,7 @@ SCENARIOS = {
                ("kheibar", "iran_c", ["nevatim", "tel_aviv", "ben_gurion"], 25, 2.5, 0, 720),
                ("fattah", "iran_c", ["nevatim", "tel_aviv"], 15, 2, 0, 720)]),
     "june_attrition": dict(
+        title_he="יוני 2025: לילה 9 במלחמת התשה", blurb_he="המלאים כבר נמוכים. 35 טילים ו-30 כטב״מים; כל חץ חשוב.",
         title="June 2025: night 9 of an attrition war",
         blurb="Magazines are already low. 35 missiles and 30 drones; every Arrow counts.",
         stock_scale={"arrow3": 0.3, "arrow2": 0.4, "thaad": 0.35, "dsling": 0.6},
@@ -236,6 +255,7 @@ SCENARIOS = {
                ("emad", "iran_w", ["tel_aviv", "haifa", "beer_sheva", "jerusalem"], 20, 3, 600, 900),
                ("shahed", "iran_w", ["beer_sheva", "haifa_bay", "tiberias"], 30, 3, 0, 1200)]),
     "houthi_eilat": dict(
+        title_he="ים סוף: ירי חות׳י ארוך טווח", blurb_he="3 טילי פלסטין-2 ו-8 כטב״מים לעבר אילת והמרכז. מטח קטן, כל החלטה גלויה.",
         title="Red Sea: Houthi long-range",
         blurb="3 Palestine-2 missiles and 8 drones towards Eilat and the centre. Small raid, every decision visible.",
         waves=[("palestine2", "yemen", ["tel_aviv", "eilat", "ben_gurion"], 3, 3, 0, 400),
@@ -413,8 +433,10 @@ def build_plans(th, now, stock, cfg, max_plans=7, price=None, value_price=None):
 # ---------------------------------------------------------------- consequence + optimizer
 def site_value(sid, kind, cfg):
     """$M-equivalent consequence of this threat landing inside site sid."""
-    w = WARHEAD.get(kind, WARHEAD[THREATS[kind][1]])
-    return cfg["tier_value"][SITE[sid][5]] * w * (3 if sid in cfg["priority_sites"] else 1)
+    wh = cfg["warhead"]
+    w = wh.get(kind, wh[THREATS[kind][1]])
+    base = cfg["site_value"].get(sid, cfg["tier_value"][SITE[sid][5]])
+    return base * w * (cfg["priority_multiplier"] if sid in cfg["priority_sites"] else 1)
 
 
 def consequence(th, now, cfg):

@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from engine import World, parse_ok
-from sim import BATTERIES, DEFAULT_CONFIG, EFFECTORS, SCENARIOS, SITES, THREATS
+from sim import BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, SITE_HE, SITES, THREAT_HE, THREATS
 
 ROOT = Path(__file__).parent
 MODEL_ID = os.environ.get("AIRDEF_MODEL", "OzLabs/typical-small")
@@ -68,12 +68,13 @@ def startup():
 @app.get("/api/meta")
 def meta():
     return dict(
-        scenarios={k: dict(title=v["title"], blurb=v["blurb"]) for k, v in SCENARIOS.items()},
-        sites=[dict(id=s[0], name=s[1], lat=s[2], lon=s[3], r=s[4], tier=s[5]) for s in SITES],
+        scenarios={k: dict(title=v["title"], blurb=v["blurb"], title_he=v["title_he"], blurb_he=v["blurb_he"])
+                   for k, v in SCENARIOS.items()},
+        sites=[dict(id=s[0], name=s[1], name_he=SITE_HE[s[0]], lat=s[2], lon=s[3], r=s[4], tier=s[5]) for s in SITES],
         batteries=[dict(id=b[0], eff=b[1], lat=b[2], lon=b[3]) for b in BATTERIES],
-        effectors={k: dict(name=e["name"], cost=e["cost"], rmax=e["rmax"], layer=e["layer"],
+        effectors={k: dict(name=e["name"], name_he=EFFECTOR_HE[k], cost=e["cost"], rmax=e["rmax"], layer=e["layer"],
                            allied=e.get("allied", False)) for k, e in EFFECTORS.items()},
-        threat_types={k: dict(name=v[0], cls=v[1], cost=v[2]) for k, v in THREATS.items()},
+        threat_types={k: dict(name=v[0], name_he=THREAT_HE[k], cls=v[1], cost=v[2]) for k, v in THREATS.items()},
         config=DEFAULT_CONFIG, model=S["model_name"])
 
 
@@ -112,6 +113,7 @@ def state(policy: str = "typical"):
         flights = [f for f in w.flights if f[0] == policy]
         return dict(t=w.t, end=w.end, running=S["running"], speed=S["speed"], backlog=S["backlog"],
                     scenario=w.scenario, model=S["model_name"], cfg=w.cfg, tracks=live,
+                    orders_parsed=[parse_ok(o) for o in w.cfg.get("orders", [])],
                     flights=[dict(b=f[1], th=f[2], t0=f[3], t1=f[4], lat=f[5], lon=f[6], alt=f[7] * 1000, hit=f[8])
                              for f in flights],
                     killed={th.id: pol.st[th.id].get("killed_at") for th in w.threats if pol.st[th.id].get("killed_at")},
@@ -164,6 +166,11 @@ def config(patch: dict):
     bad = set(patch) - allowed
     if bad:
         raise HTTPException(400, f"unknown keys {sorted(bad)}")
+    for k in ("site_value", "warhead", "tier_value"):   # numeric maps: keep known keys, clamp to sane ranges
+        if k in patch:
+            known = {"site_value": {s[0] for s in SITES}, "warhead": set(DEFAULT_CONFIG["warhead"]),
+                     "tier_value": set(DEFAULT_CONFIG["tier_value"])}[k]
+            patch[k] = {kk: min(max(float(v), 0.0), 100_000.0) for kk, v in dict(patch[k]).items() if kk in known}
     if "orders" in patch:   # bounded so the state stays inside the trained length
         patch["orders"] = [str(o)[:160] for o in patch["orders"] if str(o).strip()][:5]
     with lock:

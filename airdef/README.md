@@ -28,6 +28,43 @@ uv run --no-sync python airdef/harness.py --seed 1   # gate: the three policies 
 uv run --no-sync python airdef/probe.py         # wording probe: state/label variants vs doctrine
 ```
 
+## Fine-tuning on doctrine (Decision Factory pipeline)
+
+```bash
+uv run --no-sync python airdef/dataset.py                             # -> .context/typically/jobs/airdef/{train,val,eval/*}.jsonl
+uv run --no-project python scripts/typically_job.py airdef small 800   # one H100, warm start from typical-small, ~30-40 min
+AIRDEF_MODEL=.context/typically/results/co_airdef/best.pt uv run --no-sync uvicorn --app-dir airdef server:app --port 8790
+```
+
+`dataset.py` teaches the model to *read* rules of engagement, not memorise one doctrine:
+
+- Situations come from real sim trajectories (every scenario, 4 seeds) plus procedural long-tail ones.
+- Each row gets a randomised context: priority sites, the standing doctrine (30% of rows reassign actions,
+  drop a rule or reorder), and 0–3 commander's orders, half of them distractors that don't apply. 12% of rows
+  carry a "Treat X as a priority site." modifier.
+- Orders are written in the canonical grammar, English paraphrases or Hebrew. Paraphrase templates are split
+  train / held-out, and `eval/` uses only held-out ones.
+- The label comes from `doctrine.decide` (first match wins). When no rule covers the situation, the target is
+  ∅, meaning "escalate, the doctrine is silent", so abstention means something operational.
+- 40% of rows carry irrelevant facts (time to impact, magazine state, an uncertain prediction) that the model
+  has to ignore.
+- The text is rendered by the live engine's own `render_state` / `situation_facts`, so train equals serve.
+
+`doctrine.py` is the single source of rule semantics and of the English/Hebrew order templates. The live
+"doctrine" marker parses every templated order in both languages, and free text is flagged.
+
+## Damage weights
+
+Everything in the commander's console under *Damage weights* is live: the tier value (strategic / city /
+infrastructure), the priority multiplier, a warhead weight per class or threat type, and a per-site override in
+$M. They feed the optimizer and the "cheapest reliable" resolution of Typical's action. Defaults are in
+`sim.DEFAULT_CONFIG`.
+
+## Language
+
+The **עברית / English** button switches the whole UI, mirrored RTL. The model reads its rules and situation in
+English. Commander's orders can be typed in Hebrew; the fine-tuned model is trained on Hebrew order templates.
+
 ## Five-minute demo script
 
 1. **Red Sea** (small raid). Play at 60×, then press *Skip transit*. Click a Palestine-2 track. The right panel shows
