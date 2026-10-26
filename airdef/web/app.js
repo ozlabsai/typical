@@ -10,7 +10,7 @@ const DONE = ["killed", "leaked", "fell_open"];
 // ---------------------------------------------------------------- i18n
 const I18N = {
   en: {
-    brand: "Air Defence", busy: "deciding…", auto: "⏩ auto-skip", skipped: (x) => `skipped ${x}`, play: "Play", pause: "Pause", skip: "Skip transit", lang: "עברית",
+    brand: "Air Defence", busy: "deciding…", skipped: (x) => `skipped ${x}`, play: "Play", pause: "Pause", skip: "Skip transit", lang: "עברית",
     cls: { B: "ballistic missile", R: "rocket", C: "cruise missile", D: "drone" },
     to: "to", openGround: "open ground near", prio: "priority", secondary: "secondary", impactIn: "impact in",
     following: "Following the most urgent threat", pinned: "Pinned", followBtn: "follow most urgent",
@@ -36,7 +36,7 @@ const I18N = {
     note: "Posture, stock, damage weights and priorities feed all three lenses; Typical reads them as sentences, the planner as numbers.",
   },
   he: {
-    brand: "הגנה אווירית", busy: "מחליט…", auto: "⏩ דילוג אוטומטי", skipped: (x) => `דולגו ${x}`, play: "הפעל", pause: "השהה", skip: "דלג על מעבר", lang: "English",
+    brand: "הגנה אווירית", busy: "מחליט…", skipped: (x) => `דולגו ${x}`, play: "הפעל", pause: "השהה", skip: "דלג על מעבר", lang: "English",
     cls: { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" },
     to: "לעבר", openGround: "שטח פתוח ליד", prio: "בעדיפות", secondary: "משני", impactIn: "פגיעה בעוד",
     following: "עוקב אחרי האיום הדחוף ביותר", pinned: "נעוץ", followBtn: "עקוב אחרי הדחוף",
@@ -90,7 +90,6 @@ async function init() {
   $("#speeds").onclick = (e) => e.target.dataset.x && api("/api/control", { action: "speed", speed: +e.target.dataset.x });
   $("#play").onclick = () => api("/api/control", { action: S?.running ? "pause" : "play" });
   $("#skip").onclick = () => api("/api/control", { action: "skip" });
-  $("#auto").onclick = () => api("/api/control", { action: "autoskip" });
   $("#gear").onclick = () => { $("#drawer").classList.toggle("open"); $("#gear").classList.toggle("on"); };
   $("#card").onclick = (e) => { if (e.target.id === "followBtn") { pinned = false; pickFollow(); } };
   $("#score").onclick = (e) => { if (e.target.id === "cmpBtn") { showPlanner = !showPlanner; renderScore(); } };
@@ -215,8 +214,6 @@ function renderTop() {
   $("#play").classList.toggle("on", S.running);
   document.querySelectorAll("#speeds button").forEach((b) => b.classList.toggle("on", +b.dataset.x === S.speed));
   document.querySelectorAll("#scen button").forEach((b) => b.classList.toggle("on", b.dataset.s === S.scenario));
-  $("#auto").textContent = T().auto;
-  $("#auto").classList.toggle("on", S.autoskip);
   const showSkip = S.skipped > 0 && S.running && performance.now() - (renderTop.lastSkip?.at ?? -1e9) < 2500;
   if (S.skipped !== renderTop.lastSkip?.v) renderTop.lastSkip = { v: S.skipped, at: performance.now() };
   $("#busy").textContent = S.backlog ? T().busy : showSkip ? T().skipped(fmtT(S.skipped)) : "";
