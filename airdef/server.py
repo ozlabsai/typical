@@ -18,7 +18,8 @@ from engine import World, parse_ok
 from sim import BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, SITE_HE, SITES, THREAT_HE, THREATS
 
 ROOT = Path(__file__).parent
-MODEL_ID = os.environ.get("AIRDEF_MODEL", "OzLabs/typical-small")
+TUNED = ROOT.parent / ".context/typically/results/co_airdef/best.pt"   # typically_job.py airdef ... lands here
+MODEL_ID = os.environ.get("AIRDEF_MODEL") or (str(TUNED) if TUNED.exists() else "OzLabs/typical-small")
 TICK_S = 0.25          # real seconds per loop tick
 BUDGET = 6             # Typical calls per tick; the sim slows down when decisions back up
 
@@ -34,7 +35,7 @@ def load_model():
     from typical import Typical
     m = Typical.from_pretrained(MODEL_ID, device="auto", max_states=64)
     m.choice("warm up", "Is this a warm-up?", ["yes", "no"])
-    S["model"], S["model_name"] = m, MODEL_ID.split("/")[-1]
+    S["model"], S["model_name"] = m, ("typical-small · doctrine-tuned" if MODEL_ID.endswith(".pt") else MODEL_ID.split("/")[-1])
 
 
 def new_world(scenario, seed=7, cfg=None):
