@@ -153,7 +153,8 @@ class World:
     def choose(self, pol, th, opts, text):
         """-> (option, info). naive / planner are rules; typical asks the model and escalates when unsure."""
         top = planner.best(opts)
-        info = dict(planner=top.key, state=text, opts=[(o.key, label(o.key), o.total, o.lenses, o.pk) for o in opts])
+        info = dict(planner=top.key, state=text, t=self.t,
+                    opts=[(o.key, label(o.key), o.total, o.lenses, o.pk, o.launch) for o in opts])
         if pol.name == "naive":
             now = [o for o in opts if o.key.startswith(("fire:", "fire2:"))]
             pool = now or [o for o in opts if o.key.startswith("wait:")] or opts

@@ -19,7 +19,7 @@ from pathlib import Path
 from engine import Q, label, run_headless
 from sim import DEFAULT_CONFIG, EFFECTORS, SCENARIOS, SITES
 
-SPLITS = {"train": range(1000, 1400), "val": range(2000, 2030), "eval": range(3000, 3060)}
+SPLITS = {"train": range(1000, 1200), "val": range(2000, 2030), "eval": range(3000, 3060)}
 
 
 def random_night(rng):
@@ -34,13 +34,18 @@ def random_night(rng):
 
 
 def raid(job):
+    """One randomised raid -> its decision points, keeping every fire / fire-two / let-fall decision and a sample of
+    the waits (a waiting threat is re-checked every few seconds, so waits would otherwise be ~90% of all points)."""
     scenario, seed, explore = job
     rng = random.Random(seed * 7919 + hash(scenario) % 1000)
     cfg, scale = random_night(rng)
     SCENARIOS[scenario]["stock_scale"] = {**SCENARIOS[scenario].get("stock_scale", {}), **scale}   # per-process copy
     rec = []
     run_headless(scenario, cfg=cfg, seed=seed, policies=("planner",), explore=explore, record=rec)
-    return rec
+    act = lambda r: min(r["opts"], key=lambda o: o[1])[0].split(":")[0]
+    keep = [r for r in rec if act(r) != "wait"]
+    waits = [r for r in rec if act(r) == "wait"]
+    return keep + rng.sample(waits, min(len(waits), 2 * len(keep) + 20))
 
 
 def to_row(r, rng):
@@ -72,16 +77,21 @@ def collect(seeds, explore, procs=10):
     return out
 
 
+def cell(r):
+    a = r["meta"]["best"].split(":")[0]
+    return ("fire" if a.startswith("fire") else a, r["meta"]["cls"])
+
+
 def balance(rows, n, rng):
-    """Cap each (scenario, class) cell so drone-heavy raids don't drown the ballistic decisions."""
+    """Cap each (action, threat class) cell: firing, waiting and letting fall all get real weight, for every class."""
     rng.shuffle(rows)
-    cells = Counter((r["meta"]["scenario"], r["meta"]["cls"]) for r in rows)
+    cells = Counter(cell(r) for r in rows)
     cap = max(1, n // max(len(cells), 1))
     while sum(min(c, cap) for c in cells.values()) < min(n, len(rows)) and cap < n:
         cap += max(1, cap // 10)
     used, out = Counter(), []
     for r in rows:
-        c = (r["meta"]["scenario"], r["meta"]["cls"])
+        c = cell(r)
         if used[c] < cap and len(out) < n:
             used[c] += 1
             out.append(r)
@@ -103,10 +113,11 @@ if __name__ == "__main__":
         print(f"{split}: {len(recs)} distinct decision points from {len(seeds) * len(SCENARIOS)} raids")
     train = balance(data["train"], a.train, rng)
     val = balance(data["val"], 1500, rng)
-    ev = balance(data["eval"], 2400, rng)
+    rng.shuffle(data["eval"])
     files = {"train": train, "val": val}
-    for cls in ("ballistic missile", "rocket", "drone", "cruise missile"):
-        files[f"eval/airdef_{cls.replace(' ', '_')}"] = [r for r in ev if r["meta"]["cls"] == cls][:600]
+    for cls in ("ballistic missile", "rocket", "drone", "cruise missile"):   # natural mix of held-out raids, per class
+        files[f"eval/airdef_{cls.replace(' ', '_')}"] = [r for r in data["eval"] if r["meta"]["cls"] == cls][:500]
+    files["eval/airdef_fire_moments"] = [r for r in data["eval"] if r["meta"]["best"].startswith("fire")][:500]
     for name, rows in files.items():
         (out / f"{name}.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
         best = Counter(r["meta"]["best"].split(":")[0] for r in rows)

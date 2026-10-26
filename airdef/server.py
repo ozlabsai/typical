@@ -189,3 +189,4 @@ def index():
 
 
 app.mount("/web", StaticFiles(directory=ROOT / "web"), name="web")
+app.mount("/brand", StaticFiles(directory=ROOT / "brand"), name="brand")   # the taste index: tokens + components

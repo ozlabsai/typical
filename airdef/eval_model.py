@@ -18,7 +18,7 @@ from typical import Typical   # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", default="OzLabs/typical-small")
-ap.add_argument("--data", default=str(ROOT / ".context/typically/jobs/airdef/eval"))
+ap.add_argument("--data", default=str(ROOT / ".context/typically/jobs/airdef_t/eval"))
 ap.add_argument("--limit", type=int, default=400)
 ap.add_argument("--out", default="")
 a = ap.parse_args()
@@ -27,8 +27,8 @@ m = Typical.from_pretrained(a.model, device="auto", max_states=4)
 report = {}
 for f in sorted(Path(a.data).glob("*.jsonl")):
     rows = [json.loads(x) for x in f.read_text().splitlines()][: a.limit]
-    hit = n = sil_ok = sil = esc = 0
-    tops, t0 = [], time.time()
+    hit = n = sil_ok = sil = esc = ok_soft = 0
+    tops, t0, per = [], time.time(), {}
     for r in rows:
         d = m.choice(r["state"], r["query"], r["candidates"])
         pn = d.pop("p_null")
@@ -39,13 +39,19 @@ for f in sorted(Path(a.data).glob("*.jsonl")):
             sil_ok += pn > 0.5
             continue
         n += 1
-        hit += top == r["candidates"][r["label"]]
+        right = top == r["candidates"][r["label"]]
+        hit += right
+        ok_soft += r["target"][r["candidates"].index(top)] >= 0.2   # a near-tie the planner itself rates as acceptable
         tops.append(d[top])
-    report[f.stem] = dict(acc=hit / max(n, 1), n=n, silent_abstain=(sil_ok / sil) if sil else None, n_silent=sil,
+        act = r["meta"].get("best", "x").split(":")[0]
+        per.setdefault(act, [0, 0])[0] += right
+        per[act][1] += 1
+    report[f.stem] = dict(acc=hit / max(n, 1), acceptable=ok_soft / max(n, 1), per_action={k: v[0] / v[1] for k, v in per.items()}, n=n, silent_abstain=(sil_ok / sil) if sil else None, n_silent=sil,
                           median_top=statistics.median(tops) if tops else None, escalate=esc / len(rows))
     x = report[f.stem]
     silent = f"∅-on-silent {x['silent_abstain']:.0%} (n={sil})" if sil else ""
-    print(f"{f.stem:28s} acc {x['acc']:.1%} (n={n})  median top {x['median_top']:.2f}  escalate {x['escalate']:.0%}  "
+    pa = " ".join(f"{k} {v[0] / v[1]:.0%}" for k, v in sorted(per.items()))
+    print(f"{f.stem:28s} acc {x['acc']:.1%} acceptable {x['acceptable']:.1%} (n={n}) [{pa}]  median top {x['median_top']:.2f}  escalate {x['escalate']:.0%}  "
           f"{silent}  [{time.time() - t0:.0f}s]", flush=True)
 if a.out:
     Path(a.out).write_text(json.dumps(report, indent=1))
