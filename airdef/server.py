@@ -1,6 +1,6 @@
-"""Live air-defence FinOps demo server.
+"""Live air-defence decision demo server.
 
-    uv run --no-sync uvicorn --app-dir airdef server:app --port 8790        (AIRDEF_MODEL=none for optimizer-only)
+    uv run --no-sync uvicorn --app-dir airdef server:app --port 8790        (AIRDEF_MODEL=none: planner only)
 """
 import os
 import sys
@@ -14,18 +14,20 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from engine import World, parse_ok
-from sim import BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, SITE_HE, SITES, THREAT_HE, THREATS
+import planner
+from engine import DONE, World
+from sim import (BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, SITE_HE, SITES, THREAT_HE, THREATS,
+                 consequence)
 
 ROOT = Path(__file__).parent
-TUNED = ROOT.parent / ".context/typically/results/co_airdef/best.pt"   # typically_job.py airdef ... lands here
+TUNED = ROOT.parent / ".context/typically/results/co_airdef_t/best.pt"   # scripts/typically_job.py airdef_t ... lands here
 MODEL_ID = os.environ.get("AIRDEF_MODEL") or (str(TUNED) if TUNED.exists() else "OzLabs/typical-small")
 TICK_S = 0.25          # real seconds per loop tick
 BUDGET = 6             # Typical calls per tick; the sim slows down when decisions back up
 
 app = FastAPI()
 lock = threading.Lock()   # one lock for world + model (MPS crashes on concurrent calls)
-S = dict(world=None, running=False, speed=10.0, model=None, model_name="optimizer only", backlog=False)
+S = dict(world=None, running=False, speed=10.0, model=None, model_name="planner only", backlog=False)
 
 
 def load_model():
@@ -35,7 +37,7 @@ def load_model():
     from typical import Typical
     m = Typical.from_pretrained(MODEL_ID, device="auto", max_states=64)
     m.choice("warm up", "Is this a warm-up?", ["yes", "no"])
-    S["model"], S["model_name"] = m, ("typical-small · doctrine-tuned" if MODEL_ID.endswith(".pt") else MODEL_ID.split("/")[-1])
+    S["model"], S["model_name"] = m, ("typical-small · tuned" if MODEL_ID.endswith(".pt") else MODEL_ID.split("/")[-1])
 
 
 def new_world(scenario, seed=7, cfg=None):
@@ -49,12 +51,10 @@ def loop():
         with lock:
             w = S["world"]
             if S["running"] and w and w.t < w.end:
-                calls = {n: w.plan_threats(p, BUDGET) for n, p in w.policies.items()}
-                for p in w.policies.values():
-                    w.execute(p)
-                S["backlog"] = calls["typical"] >= BUDGET
                 dt = TICK_S * S["speed"]
-                w.t = min(w.t + (min(dt, 1.0) if S["backlog"] else dt), w.end)
+                calls = w.step(0.0, BUDGET)          # decide + resolve at the current time...
+                S["backlog"] = calls.get("typical", 0) >= BUDGET
+                w.t = min(w.t + (min(dt, 1.0) if S["backlog"] else dt), w.end)   # ...then advance (slower when backed up)
         time.sleep(max(0.0, TICK_S - (time.perf_counter() - t0)))
 
 
@@ -73,7 +73,7 @@ def meta():
                    for k, v in SCENARIOS.items()},
         sites=[dict(id=s[0], name=s[1], name_he=SITE_HE[s[0]], lat=s[2], lon=s[3], r=s[4], tier=s[5]) for s in SITES],
         batteries=[dict(id=b[0], eff=b[1], lat=b[2], lon=b[3]) for b in BATTERIES],
-        effectors={k: dict(name=e["name"], name_he=EFFECTOR_HE[k], cost=e["cost"], rmax=e["rmax"], layer=e["layer"],
+        effectors={k: dict(name=e["name"], name_he=EFFECTOR_HE[k], cost=e["cost"], layer=e["layer"],
                            allied=e.get("allied", False)) for k, e in EFFECTORS.items()},
         threat_types={k: dict(name=v[0], name_he=THREAT_HE[k], cls=v[1], cost=v[2]) for k, v in THREATS.items()},
         config=DEFAULT_CONFIG, model=S["model_name"])
@@ -93,46 +93,48 @@ def paths():
     return dict(scenario=w.scenario, end=w.end, threats=out)
 
 
-def track_row(w, th, s):
-    plat, plon, sigma = th.predicted_impact(w.t)
-    i = s["info"] or {}
-    d = i.get("dist")
-    return dict(id=th.id, kind=th.kind, status=s["status"], tti=th.t0 + th.T - w.t,
-                plan=s["plan"].key if s["plan"] else None, label=s["plan"].label if s["plan"] else None,
-                conf=(max(d.values()) if d else None), p_null=i.get("p_null"), opt=i.get("opt"),
-                escalated=s["escalated"], ipp=[round(plon, 4), round(plat, 4), round(sigma, 2)], site=s.get("site"))
-
-
 @app.get("/api/state")
 def state(policy: str = "typical"):
     with lock:
         w = S["world"]
         pol = w.policies[policy]
-        live = [track_row(w, th, pol.st[th.id]) for th in w.threats
-                if th.t0 <= w.t and (pol.st[th.id]["status"] not in ("killed", "leaked", "fell_open")
-                                     or w.t - (th.t0 + th.T) < 600 * max(1, S["speed"] / 10))]
-        flights = [f for f in w.flights if f[0] == policy]
+        tracks = []
+        for th in w.threats:
+            s = pol.st[th.id]
+            if th.t0 > w.t or (s["status"] in DONE and w.t - (s.get("killed_at") or th.t0 + th.T) > 120 * max(1, S["speed"] / 10)):
+                continue
+            plat, plon, sigma = th.predicted_impact(w.t)
+            d = (s["info"] or {}).get("dist")
+            tracks.append(dict(id=th.id, kind=th.kind, cls=th.cls, status=s["status"], choice=s.get("choice"),
+                               conf=max(d.values()) if d else None, escalated=s["escalated"], tti=th.t0 + th.T - w.t,
+                               impact=th.t0 + th.T, ipp=[round(plon, 4), round(plat, 4), round(sigma, 2)], site=s.get("site")))
         return dict(t=w.t, end=w.end, running=S["running"], speed=S["speed"], backlog=S["backlog"],
-                    scenario=w.scenario, model=S["model_name"], cfg=w.cfg, tracks=live,
-                    orders_parsed=[parse_ok(o) for o in w.cfg.get("orders", [])],
+                    scenario=w.scenario, model=S["model_name"], cfg=w.cfg, tracks=tracks,
                     flights=[dict(b=f[1], th=f[2], t0=f[3], t1=f[4], lat=f[5], lon=f[6], alt=f[7] * 1000, hit=f[8])
-                             for f in flights],
-                    killed={th.id: pol.st[th.id].get("killed_at") for th in w.threats if pol.st[th.id].get("killed_at")},
+                             for f in w.flights if f[0] == policy],
+                    killed={tid: s["killed_at"] for tid, s in pol.st.items() if s.get("killed_at")},
                     ledger=w.ledger(), attacker_cost=w.attacker_cost, launched=sum(th.t0 <= w.t for th in w.threats),
                     total=len(w.threats))
 
 
 @app.get("/api/track/{tid}")
 def track(tid: str, policy: str = "typical"):
+    """Everything the threat card shows: identity, the timeline (windows, shots, past calls) and the current call."""
     with lock:
         w = S["world"]
         if tid not in w.by_id:
             raise HTTPException(404)
-        s = w.policies[policy].st[tid]
-        th = w.by_id[tid]
-        others = {n: (p.st[tid]["plan"].key if p.st[tid]["plan"] else None) for n, p in w.policies.items()}
-        return dict(id=tid, name=THREATS[th.kind][0], status=s["status"], info=s["info"], escalated=s["escalated"],
-                    plan=s["plan"].key if s["plan"] else None, others=others)
+        th, pol = w.by_id[tid], w.policies[policy]
+        s = pol.st[tid]
+        _, sid, _, _, dist, sigma = consequence(th, w.t, w.cfg)
+        return dict(id=tid, kind=th.kind, cls=th.cls, status=s["status"], t=w.t, t0=th.t0, impact=th.t0 + th.T,
+                    site=sid, open_ground=bool(dist > sigma), priority=sid in w.cfg["priority_sites"],
+                    windows=planner.spans(th, w.t, pol.stock, w.cfg),
+                    shots=[dict(b=f[1], eff=next(b[1] for b in BATTERIES if b[0] == f[1]), t0=f[3], t1=f[4], hit=f[8])
+                           for f in w.flights if f[0] == policy and f[2] == tid],
+                    history=s["history"], info=s["info"], escalated=s["escalated"], choice=s.get("choice"),
+                    others={n: p.st[tid].get("choice") for n, p in w.policies.items()},
+                    labels={o[0]: o[1] for o in (s["info"] or {}).get("opts", [])})
 
 
 class Control(BaseModel):
@@ -163,8 +165,7 @@ def control(c: Control):
 
 @app.post("/api/config")
 def config(patch: dict):
-    allowed = set(DEFAULT_CONFIG)
-    bad = set(patch) - allowed
+    bad = set(patch) - set(DEFAULT_CONFIG)
     if bad:
         raise HTTPException(400, f"unknown keys {sorted(bad)}")
     for k in ("site_value", "warhead", "tier_value"):   # numeric maps: keep known keys, clamp to sane ranges
@@ -172,11 +173,9 @@ def config(patch: dict):
             known = {"site_value": {s[0] for s in SITES}, "warhead": set(DEFAULT_CONFIG["warhead"]),
                      "tier_value": set(DEFAULT_CONFIG["tier_value"])}[k]
             patch[k] = {kk: min(max(float(v), 0.0), 100_000.0) for kk, v in dict(patch[k]).items() if kk in known}
-    if "orders" in patch:   # bounded so the state stays inside the trained length
-        patch["orders"] = [str(o)[:160] for o in patch["orders"] if str(o).strip()][:5]
     with lock:
         S["world"].set_config(patch)
-        return {"ok": True, "cfg": S["world"].cfg, "parsed": [parse_ok(o) for o in S["world"].cfg["orders"]]}
+        return {"ok": True, "cfg": S["world"].cfg}
 
 
 @app.get("/")

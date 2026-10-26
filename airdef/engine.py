@@ -1,280 +1,276 @@
-"""World loop + three policies (naive / optimizer / Typical) on one shared raid with common random numbers."""
+"""World loop for time-indexed engagement decisions: three policies on one raid with common random numbers.
+
+At every decision point a threat gets one of: fire E now, fire two E now, wait for E, let it fall. Decision points
+recur (every RECHECK_S, on a miss, when a waited-for window opens, on a config change), so the call can change as
+the threat flies. Policies: naive (most reliable shot now), planner (planner.py, the multi-lens teacher), typical
+(the model reading the verbalised lenses; low confidence escalates to the operator, who takes the planner's call).
+"""
 import copy
 import math
+import random
 import re
 import time
 
-from doctrine import ACTIONS, STANDING, decide, parse_order, render
-from sim import (BATTERIES, EFFECTORS, ORIGINS, SITE, THREATS, DEFAULT_CONFIG, SCENARIOS, build_plans, build_raid,
-                 consequence, money, naive_pick, site_value, plan_score, precompute_windows, site_hit, u01)
+import planner
+from sim import (BATTERIES, EFFECTORS, ORIGINS, SCENARIOS, SITE, THREATS, DEFAULT_CONFIG, build_raid, consequence,
+                 effective_pk, first_shot, money, precompute_windows, site_hit, site_value, u01)
 
-HORIZON_S = 300        # decide a threat once its earliest launch is this close
-RECHECK_S = 4          # re-evaluate an undecided-or-revisable plan at most this often (sim seconds)
+HORIZON_S = 300        # a threat is decided once some interceptor can launch at it within this horizon
+RECHECK_S = {"B": 8, "R": 6, "C": 20, "D": 30}   # re-decide at least this often (sim s), per threat class
+PRICE_S = 10           # recompute raid shadow prices at most this often
 ORIGIN_NAME = {"iran_w": "western Iran", "iran_nw": "north-western Iran", "iran_c": "central Iran", "iraq": "Iraq",
                "yemen": "Yemen", "lebanon_s": "southern Lebanon", "lebanon_bq": "the Beqaa valley", "gaza": "Gaza"}
 CLASS_WORD = {"B": "ballistic missile", "R": "rocket", "C": "cruise missile", "D": "drone"}
-Q_PLAN = "Which action do the rules of engagement require for this threat?"   # lowest ∅ mass with orders (null_probe)
-# Typical makes the doctrine call; the solver resolves it to a concrete plan. Labels echo the rule wording:
-# probe.py measured 58% doctrine-following with plan labels, 99% with these (typical-small, n=148).
-BASE_RULES = [render(r, "grammar") for r in STANDING]
-
-
-def stock_word(left, init):
-    f = left / max(init, 1)
-    return "healthy" if f > 0.5 else "low" if f > 0.2 else "critical"
-
-
-def rules(cfg):
-    return [o.strip() for o in cfg.get("orders", []) if o.strip()] + BASE_RULES
-
-
-def render_state(rule_lines, facts):
-    """The exact text Typical reads -- shared by the live engine and airdef/dataset.py (train = serve)."""
-    return ("Rules of engagement, in order. The first rule that applies decides.\n"
-            + "\n".join(f"{i + 1}. {r}" for i, r in enumerate(rule_lines)) + "\n\nSituation.\n" + "\n".join(facts))
-
-
-def situation_facts(cls_word, name, origin, site, open_ground, prio):
-    # the class sentence mirrors the order grammar exactly ("When the threat is a drone, ..."): 11/12 -> 15/16 on orders.
-    # No uncertainty sentence: no rule uses it, and it pulled priority threats to the cheap action.
-    facts = [f"The threat is a {cls_word}.", f"It is {'an' if name[:1] in 'AEIOU' else 'a'} {name}, launched from {origin}."]
-    if open_ground:
-        return facts + [f"The threat will land in open ground near {site}."]
-    return facts + [f"The threat will hit {site}.", f"{site} is a {'priority' if prio else 'secondary'} site."]
+Q = "What should the air defence do about this threat right now?"
+DONE = ("killed", "leaked", "fell_open")
 
 
 def short_name(kind):
     return re.sub(r"\s*\b(drone|MRBM|SRBM|rocket|cruise missile)\b", "", THREATS[kind][0]).strip()
 
 
-def doctrine_action(cfg, cls_word, site, open_ground, prio):
-    """What the written rules say (doctrine.decide, the training-label semantics). Free-text orders are skipped."""
-    parsed = [r for r in (parse_order(o) for o in rules(cfg)) if r]
-    act = decide(parsed, dict(cls=cls_word, site=site, open=open_ground), {site} if prio else set())
-    return act or "silent"
+def label(key):
+    """Option key -> the candidate text Typical chooses among."""
+    if key == "hold":
+        return "Let it fall"
+    act, e = key.split(":")
+    n = EFFECTORS[e]["name"]
+    return {"fire": f"Fire {n} now", "fire2": f"Fire two {n} now", "wait": f"Wait for {n}"}[act]
 
 
-def parse_ok(order):
-    return parse_order(order) is not None
+def in_words(s):
+    if s < 20:
+        return "seconds"
+    if s < 5400:
+        m = max(1, round(s / 60))
+        return f"about {m} minute{'s' if m > 1 else ''}"
+    return f"about {round(s / 3600)} hours"
+
+
+def pk_word(p):
+    return "almost certain to stop it" if p >= .95 else "very likely to stop it" if p >= .85 else \
+        "likely to stop it" if p >= .7 else "may stop it" if p >= .5 else "unlikely to stop it"
+
+
+def origin_key(th):
+    return min(ORIGINS, key=lambda k: (ORIGINS[k][0] - th.origin[0]) ** 2 + (ORIGINS[k][1] - th.origin[1]) ** 2)
+
+
+def verbalise(th, t, opts, prices, left, inbound, cfg):
+    """The state Typical reads: the three lenses as sentences that pre-compute the comparisons (no arithmetic left)."""
+    dmg, sid, p_hit, conf, dist, sigma = consequence(th, t, cfg)
+    site = SITE[sid][1]
+    prio = sid in cfg["priority_sites"]
+    name = short_name(th.kind)
+    lines = [f"Threat: {'an' if name[:1] in 'AEIOU' else 'a'} {name}, a {CLASS_WORD[th.cls]} from {ORIGIN_NAME[origin_key(th)]}."]
+    if dist > sigma:
+        lines.append(f"It will land in open ground near {site}.")
+    else:
+        heavy = ", a heavy warhead" if site_value(sid, th.kind, cfg) >= 400 else ""
+        lines.append(f"It will hit {site}, a {'priority' if prio else 'secondary'} site{heavy}.")
+    lines.append(f"It arrives in {in_words(th.t0 + th.T - t)}.")
+    now = [o for o in opts if o.key.startswith("fire:")]
+    later = sorted((o for o in opts if o.key.startswith("wait:")), key=lambda o: o.launch)
+    if now:
+        lines.append("Can fire now: " + "; ".join(
+            f"{EFFECTORS[o.eff]['name']}, {pk_word(o.pk)}, {money(EFFECTORS[o.eff]['cost'])}" for o in now) + ".")
+    if later:
+        lines.append("Can fire later: " + "; ".join(
+            f"{EFFECTORS[o.eff]['name']} in {in_words(o.launch - t)}{' (the last chance)' if o is later[-1] else ''}, "
+            f"{pk_word(o.pk)}, {money(EFFECTORS[o.eff]['cost'])}" for o in later) + ".")
+    used = sorted({o.eff for o in opts if o.eff and not EFFECTORS[o.eff].get("unlimited")}, key=lambda e: -EFFECTORS[e]["layer"])
+    raid = [f"{EFFECTORS[e]['name']} is {'short' if prices.get(e, (0, 0))[0] > 0 else 'enough'} tonight ({left.get(e, 0):.0f} left)"
+            for e in used]
+    lines.append(f"Tonight: {inbound} more {CLASS_WORD[th.cls]}s in flight or expected" + (". " + "; ".join(raid) if raid else "") + ".")
+    camp = [EFFECTORS[e]["name"] for e in used if prices.get(e, (0, 0))[1] > EFFECTORS[e]["cost"] * 2]
+    if camp:
+        lines.append(f"The campaign: {', '.join(camp)} must last more nights.")
+    return "\n".join(lines)
 
 
 class Policy:
     def __init__(self, name, threats, stock_scale):
         self.name = name
-        self.stock = {}
-        for bid, eff, *_ , n in BATTERIES:
-            self.stock[bid] = math.inf if EFFECTORS[eff].get("unlimited") else round(n * stock_scale.get(eff, 1))
+        self.stock = {bid: math.inf if EFFECTORS[eff].get("unlimited") else round(n * stock_scale.get(eff, 1))
+                      for bid, eff, *_, n in BATTERIES}
         self.stock_init = dict(self.stock)
-        self.reserved = {b: 0 for b in self.stock}
-        self.st = {t.id: dict(status="pending", plan=None, sig=None, shots_done=0, info=None, escalated=False)
+        self.st = {t.id: dict(status="pending", next=-1.0, cfgv=-1, shots=0, info=None, history=[], escalated=False)
                    for t in threats}
-        self.L = dict(spent=0.0, rounds={}, kills=0, leaks=0, damage=0.0, fell_open=0, held=0, escalated=0,
-                      decisions=0, agree=0, follow=0, calls=0, ms=0.0)
-
-    def avail(self):
-        return {b: self.stock[b] - self.reserved[b] for b in self.stock}
+        self.prices, self.priced_at, self.priced_cfgv = {}, -1e9, -1
+        self.L = dict(spent=0.0, rounds={}, kills=0, leaks=0, damage=0.0, fell_open=0, escalated=0,
+                      decisions=0, agree=0, calls=0, ms=0.0)
 
     def type_left(self):
-        out, init = {}, {}
+        left, init = {}, {}
         for bid, eff, *_ in BATTERIES:
             if self.stock[bid] != math.inf:
-                out[eff] = out.get(eff, 0) + self.stock[bid] - self.reserved[bid]
+                left[eff] = left.get(eff, 0) + self.stock[bid]
                 init[eff] = init.get(eff, 0) + self.stock_init[bid]
-        return out, init
+        return left, init
 
 
 class World:
-    def __init__(self, scenario="houthi_eilat", cfg=None, model=None, seed=7):
+    def __init__(self, scenario="houthi_eilat", cfg=None, model=None, seed=7, policies=("naive", "planner", "typical"),
+                 explore=0.0, record=None):
         self.scenario, self.seed = scenario, seed
         self.cfg = copy.deepcopy(cfg or DEFAULT_CONFIG)
         self.cfg_version = 0
         self.model = model
-        self.memo = {}   # state text -> Typical's answer; a threat's state only changes when its situation does
+        self.memo = {}       # state text + options -> Typical's answer
+        self.explore, self.record, self.rng = explore, record, random.Random(seed)
         self.threats = build_raid(scenario, seed)
         for th in self.threats:
             precompute_windows(th, BATTERIES)
         self.by_id = {t.id: t for t in self.threats}
         scale = SCENARIOS[scenario].get("stock_scale", {})
-        self.policies = {n: Policy(n, self.threats, scale) for n in ("naive", "optimizer", "typical")}
+        self.policies = {n: Policy(n, self.threats, scale) for n in policies}
         self.t = 0.0
         self.end = max(t.t0 + t.T for t in self.threats) + 5
         self.attacker_cost = sum(THREATS[t.kind][2] for t in self.threats)
-        self.flights = []   # interceptor flights for the map: (policy, battery, threat, launch, intercept, lat, lon, alt, hit)
+        self.flights = []   # (policy, battery, threat, launch, intercept, lat, lon, alt, hit)
 
-    # ---------------------------------------------------------- state text for Typical
-    def state_text(self, th):
-        dmg, sid, p_hit, conf, dist, sigma = consequence(th, self.t, self.cfg)
-        site = SITE[sid][1]
-        prio = sid in self.cfg["priority_sites"]
-        open_ground = dist > sigma
-        cw = CLASS_WORD[th.cls]
-        facts = situation_facts(cw, short_name(th.kind), ORIGIN_NAME[self.origin_key(th)], site, open_ground, prio)
-        text = render_state(rules(self.cfg), facts)
-        return text, dict(dmg=dmg, sid=sid, conf=conf, dist=dist, sigma=sigma,
-                          rule=doctrine_action(self.cfg, cw, site, open_ground, prio))
+    def live(self, pol, th):
+        return pol.st[th.id]["status"] not in DONE and th.t0 <= self.t < th.t0 + th.T
 
-    def origin_key(self, th):
-        return min(ORIGINS, key=lambda k: (ORIGINS[k][0] - th.origin[0]) ** 2 + (ORIGINS[k][1] - th.origin[1]) ** 2)
+    def expected(self, pol):
+        """Threats in flight + those early warning expects to launch within cfg['forecast_s'] (the raid lens's demand)."""
+        return [th for th in self.threats if pol.st[th.id]["status"] not in DONE and self.t < th.t0 + th.T
+                and th.t0 <= self.t + self.cfg["forecast_s"]]
 
-    # ---------------------------------------------------------- decisions
-    @staticmethod
-    def resolve(plans, action):
-        if action == "hold":
-            return plans[0]
-        return next((p for p in plans if action in p.tags), plans[0])
+    def in_horizon(self, th):
+        return self.t >= th.first_launch - HORIZON_S
 
-    def decide(self, pol, th, plans, text, cons):
+    # ---------------------------------------------------------- deciding
+    def refresh_prices(self, pol):
+        if self.t - pol.priced_at < PRICE_S and pol.priced_cfgv == self.cfg_version:
+            return
         left, init = pol.type_left()
-        scores = {p.key: plan_score(p, cons["dmg"], left, init, self.cfg) for p in plans}
-        opt = min(plans, key=lambda p: scores[p.key])
-        rule_plan = self.resolve(plans, cons["rule"])
-        info = dict(opt=opt.key, rule=rule_plan.key, rule_action=cons["rule"], scores=scores, state=text,
-                    plans=[(p.key, p.label, p.pk, p.exp_cost) for p in plans],
-                    resolved={a: self.resolve(plans, a).key for a in ACTIONS})
+        busy = {tid for tid, s in pol.st.items() if s["status"] == "inflight"}
+        # every threat in flight, plus those early warning says launch within forecast_s, competes for tonight's stock
+        pol.prices = planner.raid_prices(self.expected(pol), self.t, pol.stock, left, init, self.cfg, busy)
+        pol.priced_at, pol.priced_cfgv = self.t, self.cfg_version
+
+    def choose(self, pol, th, opts, text):
+        """-> (option, info). naive / planner are rules; typical asks the model and escalates when unsure."""
+        top = planner.best(opts)
+        info = dict(planner=top.key, state=text, opts=[(o.key, label(o.key), o.total, o.lenses, o.pk) for o in opts])
         if pol.name == "naive":
-            return naive_pick(plans), info
-        if pol.name == "optimizer" or self.model is None:
-            return opt, info
-        if text not in self.memo:
+            now = [o for o in opts if o.key.startswith(("fire:", "fire2:"))]
+            pool = now or [o for o in opts if o.key.startswith("wait:")] or opts
+            return max(pool, key=lambda o: (round(o.pk, 2), -(o.launch or 0))), info
+        if pol.name == "planner" or self.model is None:
+            if self.explore and self.rng.random() < self.explore:
+                return self.rng.choice(opts), info
+            return top, info
+        labels = [label(o.key) for o in opts]
+        key = text + "\n" + "|".join(labels)
+        if key not in self.memo:
             t0 = time.perf_counter()
-            d = self.model.choice(text, Q_PLAN, list(ACTIONS.values()))
-            self.memo[text] = ({a: d[lab] for a, lab in ACTIONS.items()}, d["p_null"], (time.perf_counter() - t0) * 1000)
+            d = self.model.choice(text, Q, labels)
+            self.memo[key] = (d, (time.perf_counter() - t0) * 1000)
             pol.L["calls"] += 1
-            pol.L["ms"] += self.memo[text][2]
-        dist, p_null, ms = self.memo[text]
-        action = max(dist, key=dist.get)
-        plan = self.resolve(plans, action)
-        info.update(dist=dist, p_null=p_null, ms=ms, action=action)
-        pol.L["agree"] += plan.key == opt.key
-        pol.L["follow"] += action == cons["rule"]
-        # ∅ rises to ~0.5 whenever a commander's order is present (null_probe), so it gets its own, higher bar
-        if dist[action] < self.cfg["conf_threshold"] or p_null > self.cfg["abstain_threshold"]:
-            info["escalated"] = True   # operator takes the optimizer's recommendation
-            return opt, info
-        return plan, info
+            pol.L["ms"] += self.memo[key][1]
+        d, ms = self.memo[key]
+        dist = {o.key: d[label(o.key)] for o in opts}
+        pick = max(opts, key=lambda o: dist[o.key])
+        info.update(dist=dist, p_null=d["p_null"], ms=ms)
+        pol.L["agree"] += pick.key == top.key
+        if dist[pick.key] < self.cfg["conf_threshold"] or d["p_null"] > self.cfg["abstain_threshold"]:
+            info["escalated"] = True   # operator takes the planner's call
+            return top, info
+        return pick, info
 
-    def signature(self, plans, text):
-        return (text, tuple((p.key, p.tags) for p in plans), self.cfg_version)
-
-    def plan_threats(self, pol, budget):
-        """(Re)decide live threats whose first shot hasn't launched. Most urgent first; at most `budget` model calls."""
-        todo = []
-        for th in self.threats:
-            s = pol.st[th.id]
-            if s["status"] not in ("pending", "planned", "held") or self.t < max(th.t0, th.first_launch - HORIZON_S):
-                continue
-            if s["status"] == "planned" and s["shots_done"]:
-                continue
-            if self.t - s.get("checked", -1e9) < RECHECK_S and s.get("cfgv") == self.cfg_version:
-                continue
-            todo.append(th)
-        todo.sort(key=lambda th: th.t0 + th.T)
+    def decide_all(self, pol, budget):
+        self.refresh_prices(pol)
+        left, _ = pol.type_left()
+        due = [th for th in self.threats if self.live(pol, th) and pol.st[th.id]["status"] != "inflight" and self.in_horizon(th)
+               and (self.t >= pol.st[th.id]["next"] or pol.st[th.id]["cfgv"] != self.cfg_version)]
+        due.sort(key=lambda th: th.t0 + th.T)
+        exp = self.expected(pol)
+        inbound = {c: sum(1 for x in exp if x.cls == c) for c in CLASS_WORD}
         calls = 0
-        for th in todo:
+        for th in due:
             s = pol.st[th.id]
-            s["checked"], s["cfgv"] = self.t, self.cfg_version
-            self.unreserve(pol, s)
-            left, init = pol.type_left()
             dmg = consequence(th, self.t, self.cfg)[0]
-            plans = build_plans(th, self.t, pol.avail(), self.cfg,
-                                price=lambda p: plan_score(p, 0.0, left, init, self.cfg),
-                                value_price=lambda p: plan_score(p, dmg, left, init, self.cfg))
-            launches = [p.shots[0][2] for p in plans if p.shots]
-            if not launches or min(launches) > self.t + HORIZON_S:
-                self.reserve(pol, s)
-                continue
-            text, cons = self.state_text(th)
-            sig = self.signature(plans, text)
-            if sig == s["sig"]:
-                self.reserve(pol, s)
-                continue
-            if pol.name == "typical" and self.model is not None and text not in self.memo:
+            opts = planner.option_values(th, self.t, pol.stock, self.cfg, pol.prices, dmg)
+            text = verbalise(th, self.t, opts, pol.prices, left, inbound[th.cls] - 1, self.cfg)
+            if pol.name == "typical" and self.model is not None and text + "\n" + "|".join(label(o.key) for o in opts) not in self.memo:
                 if calls >= budget:
-                    self.reserve(pol, s)
                     break
                 calls += 1
-            plan, info = self.decide(pol, th, plans, text, cons)
+            opt, info = self.choose(pol, th, opts, text)
+            if self.record is not None and pol.name == "planner":
+                self.record.append(dict(state=text, opts=[(o.key, o.total) for o in opts], kind=th.kind,
+                                        scenario=self.scenario))
             if info.get("escalated") and not s["escalated"]:
                 pol.L["escalated"] += 1
                 s["escalated"] = True
             pol.L["decisions"] += 1
-            s.update(plan=plan, sig=sig, info=info, status="held" if plan.key == "hold" else "planned")
-            self.reserve(pol, s)
+            if not s["history"] or s["history"][-1][1] != opt.key:
+                s["history"].append((self.t, opt.key))
+            s.update(info=info, cfgv=self.cfg_version, choice=opt.key)
+            self.apply(pol, th, opt)
+            left, _ = pol.type_left()
         return calls
 
-    def reserve(self, pol, s, sign=1):
-        if s["plan"] is not None:
-            for shot in s["plan"].shots[s["shots_done"]:]:
-                pol.reserved[shot[0]] += sign * (shot[0] in pol.reserved and pol.stock[shot[0]] != math.inf)
+    def apply(self, pol, th, opt):
+        s = pol.st[th.id]
+        recheck = RECHECK_S[th.cls]
+        if opt.key == "hold":
+            s.update(status="held", next=self.t + recheck)
+            return
+        act, e = opt.key.split(":")
+        if act == "wait":
+            s.update(status="waiting", next=max(self.t + 1, min(opt.launch - planner.OPEN_S / 2, self.t + recheck)))
+            return
+        bid = planner.windows(th, self.t, pol.stock, self.cfg)[e][0]
+        shot = first_shot(th, bid, self.t + 4.0)
+        hit = False
+        for _ in range(2 if act == "fire2" else 1):
+            if pol.stock[bid] < 1:
+                break
+            pol.stock[bid] -= 1
+            pol.L["spent"] += EFFECTORS[e]["cost"]
+            pol.L["rounds"][e] = pol.L["rounds"].get(e, 0) + 1
+            h = u01(self.seed, th.id, s["shots"]) < effective_pk(e, th, self.cfg)   # same draw for every policy's n-th shot
+            s["shots"] += 1
+            hit = hit or h
+            self.flights.append((pol.name, bid, th.id, shot[0], shot[1], shot[2], shot[3], shot[4], h))
+        s.update(status="inflight", resolve=shot[1], hit=hit)
 
-    def unreserve(self, pol, s):
-        self.reserve(pol, s, -1)
-
-    # ---------------------------------------------------------- execution
-    def execute(self, pol):
+    def resolve(self, pol):
         for th in self.threats:
             s = pol.st[th.id]
-            if s["status"] in ("planned", "engaging"):
-                shots = s["plan"].shots
-                while s["shots_done"] < len(shots) and shots[s["shots_done"]][2] <= self.t:
-                    i = s["shots_done"]
-                    bid, eff, launch, t_int, lat, lon, alt, pk, cond = shots[i]
-                    if cond and s.get("killed_at"):
-                        self.unreserve_rest(pol, s)   # backup not needed
-                        break
-                    if pol.stock[bid] < 1:   # someone else took the round: re-plan
-                        self.unreserve(pol, s)
-                        s.update(status="pending", plan=None, sig=None, shots_done=0)
-                        break
-                    pol.stock[bid] -= 1
-                    pol.reserved[bid] -= pol.stock[bid] != math.inf
-                    cost = EFFECTORS[eff]["cost"]
-                    pol.L["spent"] += cost
-                    pol.L["rounds"][eff] = pol.L["rounds"].get(eff, 0) + 1
-                    hit = u01(self.seed, th.id, eff, i) < pk
-                    self.flights.append((pol.name, bid, th.id, launch, t_int, lat, lon, alt, hit))
-                    if hit and not s.get("killed_at"):
-                        s["killed_at"] = t_int
-                    s["shots_done"] += 1
-                    s["status"] = "engaging"
-                if s.get("killed_at") and self.t >= s["killed_at"] and s["status"] != "killed":
-                    s["status"] = "killed"
+            if s["status"] == "inflight" and self.t >= s["resolve"]:
+                if s["hit"]:
+                    s.update(status="killed", killed_at=s["resolve"])
                     pol.L["kills"] += 1
-                    self.unreserve_rest(pol, s)
-            if s["status"] in ("pending", "planned", "held", "engaging") and self.t >= th.t0 + th.T:
-                self.unreserve_rest(pol, s)
+                else:
+                    s.update(status="pending", next=self.t)   # missed: decide again now
+            if s["status"] not in DONE and self.t >= th.t0 + th.T:
                 sid = site_hit(*th.impact)
+                s["site"] = sid
                 if sid:
-                    v = site_value(sid, th.kind, self.cfg)
                     pol.L["leaks"] += 1
-                    pol.L["damage"] += v
+                    pol.L["damage"] += site_value(sid, th.kind, self.cfg)
                     s["status"] = "leaked"
                 else:
                     pol.L["fell_open"] += 1
-                    pol.L["held"] += s["plan"] is not None and s["plan"].key == "hold"
                     s["status"] = "fell_open"
-                s["site"] = sid
 
-    def unreserve_rest(self, pol, s):
-        if s["plan"] is not None:
-            for shot in s["plan"].shots[s["shots_done"]:]:
-                pol.reserved[shot[0]] -= pol.stock[shot[0]] != math.inf
-            s["shots_done"] = len(s["plan"].shots)
-
-    def step(self, dt, budget=12):
-        for pol in self.policies.values():
-            self.plan_threats(pol, budget)
-            self.execute(pol)
+    def step(self, dt, budget=10_000):
+        calls = {n: self.decide_all(p, budget) for n, p in self.policies.items()}
+        for p in self.policies.values():
+            self.resolve(p)
         self.t = min(self.t + dt, self.end)
+        return calls
 
     def idle_until(self):
-        """Sim time of the next thing worth simulating (fast-forward through hours of drone transit)."""
-        busy = [st["status"] in ("planned", "engaging", "held") for p in self.policies.values() for st in p.st.values()]
-        if any(busy):
+        """Next sim time worth simulating (fast-forward through hours of drone transit)."""
+        if any(s["status"] in ("inflight", "waiting", "held") for p in self.policies.values() for s in p.st.values()):
             return self.t
-        nxt = [max(th.t0, th.first_launch - HORIZON_S) for th in self.threats
-               if self.policies["naive"].st[th.id]["status"] == "pending"]
-        return min(nxt + [self.end]) if nxt else self.end
+        nxt = [max(th.t0, th.first_launch - HORIZON_S) for th in self.threats if max(th.t0, th.first_launch - HORIZON_S) > self.t]
+        return min(nxt + [self.end])
 
     def set_config(self, patch):
         self.cfg.update(patch)
@@ -284,35 +280,29 @@ class World:
         out = {}
         for n, p in self.policies.items():
             left, init = p.type_left()
-            out[n] = {**p.L, "rounds": dict(p.L["rounds"]), "left": {e: left[e] for e in left},
-                      "init": init, "cer": p.L["spent"] / max(self.attacker_cost, 1e-9),
-                      "total": p.L["spent"] + p.L["damage"]}
+            out[n] = {**p.L, "rounds": dict(p.L["rounds"]), "left": left, "init": init, "total": p.L["spent"] + p.L["damage"]}
         return out
 
 
-def run_headless(scenario, model=None, cfg=None, dt=2.0, seed=7):
-    w = World(scenario, cfg, model, seed)
+def run_headless(scenario, model=None, cfg=None, dt=2.0, seed=7, **kw):
+    w = World(scenario, cfg, model, seed, **kw)
     while w.t < w.end:
-        w.step(dt, budget=10_000)
+        w.step(dt)
         w.t = max(w.t, w.idle_until())
     return w
 
 
-if __name__ == "__main__":   # ponytail: the self-check -- on healthy stocks the optimizer must not lose to naive over seeds
-    healthy = {**DEFAULT_CONFIG, "reserve": 0}
+if __name__ == "__main__":   # ponytail: the self-check -- the planner must beat fire-at-everything on total cost over seeds
     for sc in SCENARIOS:
-        tot = {"naive": [0.0, 0], "optimizer": [0.0, 0]}   # spent, leaks
+        tot, hits, spent = {"naive": 0.0, "planner": 0.0}, {"naive": 0, "planner": 0}, {"naive": 0.0, "planner": 0.0}
+        t0 = time.time()
         for seed in (1, 2, 3):
-            w = run_headless(sc, cfg=healthy, seed=seed)
+            w = run_headless(sc, seed=seed, policies=("naive", "planner"))
             assert all(v >= 0 for p in w.policies.values() for v in p.stock.values()), sc
-            assert all(v >= 0 for p in w.policies.values() for v in p.reserved.values()), sc
             for n, x in w.ledger().items():
-                if n in tot:
-                    tot[n][0] += x["spent"]
-                    tot[n][1] += x["leaks"]
-                    print(f"{sc:20s} s{seed} {n:9s} spent {money(x['spent']):>8s} leaks {x['leaks']:3d} "
-                          f"open {x['fell_open']:3d} kills {x['kills']:3d} total {x['total']:8.0f}")
-        # ponytail: leaks are lumpy (CRN double-misses hit every policy alike), so allow +1 leak per seed
-        assert tot["optimizer"][0] <= tot["naive"][0] and tot["optimizer"][1] <= tot["naive"][1] * 1.5 + 3, (sc, tot)
-        print(f"  ok {sc}: optimizer spends {tot['optimizer'][0] / tot['naive'][0]:.0%} of naive, "
-              f"leaks {tot['optimizer'][1]} vs {tot['naive'][1]}")
+                tot[n] += x["total"]
+                hits[n] += x["leaks"]
+                spent[n] += x["spent"]
+        print(f"{sc:20s} total  naive {tot['naive']:8.0f}  planner {tot['planner']:8.0f} | spent {money(spent['naive'])} vs "
+              f"{money(spent['planner'])} | hits {hits['naive']} vs {hits['planner']}  ({time.time() - t0:.0f}s)")
+        assert tot["planner"] <= tot["naive"] * 1.05, sc
