@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decart Taste Index</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="brand.css">
+<style>
+  /* Guide chrome only — not part of the brand. Built from brand tokens. */
+  body { margin: 0; }
+  .ti-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.5rem; height: 1.25rem; padding: 0 .45rem;
+    border-radius: var(--dc-r-pill); font: 500 .6875rem/1 var(--dc-font-sans); letter-spacing: .04em; vertical-align: middle; }
+  .ti-M { background: var(--dc-blue-tint); color: var(--dc-blue); }
+  .ti-I { background: var(--dc-surface); color: var(--dc-text-nav); }
+  .ti-X { background: transparent; color: var(--dc-text-nav); border: 1px dashed var(--dc-line-strong); }
+  .ti-head { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 3rem; max-width: 52rem; }
+  .ti-spec { font: 400 .8125rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dc-text-nav); }
+  .ti-legend { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin-top: 2rem; }
+  .ti-legend span { display: inline-flex; align-items: center; gap: .5rem; font-size: .875rem; color: var(--dc-text-body); }
+  .ti-group-title { font-size: var(--dc-body-l); font-weight: 500; letter-spacing: -0.02em; color: var(--dc-ink-2); margin: 3rem 0 1rem; }
+  .ti-group-title:first-of-type { margin-top: 0; }
+
+  /* swatches */
+  .ti-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: var(--dc-gap-cards); }
+  .ti-swatch { display: flex; flex-direction: column; gap: .75rem; background: var(--dc-surface); border-radius: var(--dc-r-band);
+    padding: .5rem .5rem 1.25rem; cursor: pointer; border: 0; text-align: left; font-family: inherit; color: inherit; position: relative; }
+  .ti-swatch__chip { height: 6rem; border-radius: 1.1rem; box-shadow: inset 0 0 0 1px rgba(0,0,0,.06); }
+  .ti-swatch__meta { padding: 0 .75rem; display: flex; flex-direction: column; gap: .25rem; }
+  .ti-swatch__name { font-weight: 500; color: var(--dc-ink-2); display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+  .ti-swatch__use { font-size: .875rem; line-height: 1.4; color: var(--dc-text-body); opacity: .8; }
+  .ti-swatch[data-copied]::after { content: "Copied"; position: absolute; top: 1rem; right: 1rem; background: var(--dc-ink); color: #fff;
+    font-size: .75rem; padding: .25rem .6rem; border-radius: var(--dc-r-pill); }
+
+  /* type */
+  .ti-type-row { display: grid; grid-template-columns: 15rem 1fr; gap: 2rem; padding: 1.75rem 0; border-top: 1px solid var(--dc-line); align-items: baseline; }
+  .ti-type-row:last-child { border-bottom: 1px solid var(--dc-line); }
+  .ti-type-label { display: flex; flex-direction: column; gap: .35rem; }
+  .ti-type-label b { font-weight: 500; color: var(--dc-ink-2); }
+
+  /* shape */
+  .ti-radii { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-end; }
+  .ti-radius { display: flex; flex-direction: column; gap: .75rem; align-items: flex-start; }
+  .ti-radius__box { width: 9rem; height: 6.5rem; background: var(--dc-surface); }
+  .ti-layout { border-radius: var(--dc-r-band); background: var(--dc-surface); padding: 1.5rem; }
+  .ti-layout__bar { display: grid; grid-template-columns: 2.5rem 1fr 2.5rem; height: 3rem; }
+  .ti-layout__bar > div { display: grid; place-items: center; font-size: .75rem; color: var(--dc-text-nav); }
+  .ti-layout__bar > div:nth-child(2) { background: var(--dc-blue-tint); color: var(--dc-blue); border-radius: .5rem; }
+  .ti-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--dc-gap-cards); margin: 1rem 2.5rem 0; }
+  .ti-cols > div { height: 4rem; background: var(--dc-white); border-radius: .75rem; display: grid; place-items: center; font-size: .75rem; color: var(--dc-text-nav); }
+
+  /* components */
+  .ti-demo { background: var(--dc-surface); border-radius: var(--dc-r-card); padding: 2.5rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+  .ti-demo--white { background: var(--dc-white); box-shadow: inset 0 0 0 1px var(--dc-line); }
+  .ti-demo--dark { background: #1d1d1f; }   /* [M] site --lucy-bg; on site the dark ground is video */
+  .ti-demo--blue { background: var(--dc-blue); }
+  .ti-row-label { width: 100%; font-size: .8125rem; color: var(--dc-text-nav); }
+  .ti-demo--dark .ti-row-label, .ti-demo--blue .ti-row-label { color: rgba(255,255,255,.7); }
+  .ti-stack { display: flex; flex-direction: column; gap: 1.25rem; }
+  .ti-stage { aspect-ratio: 16/7; margin-top: 1.5rem; }
+  .ti-stage .dc-stage__panel { border-radius: var(--dc-r-panel); display: grid; place-items: center; }
+  .ti-stage .dc-stage__panel span { font-size: var(--dc-h-m-size); letter-spacing: var(--dc-h-ls); color: var(--dc-ink-2); }
+  .ti-pubimg { width: 100%; height: 100%; }
+  .ti-hero { display: grid; grid-template-columns: minmax(0,1fr) minmax(0, min(40.125rem, 48.9%)); gap: 4rem; align-items: center; padding-block: 4rem 5rem; }
+  .ti-hero .dc-panel { aspect-ratio: 1; }
+  .ti-hero__copy { display: flex; flex-direction: column; gap: 1.25rem; align-items: flex-start; }
+  .ti-hero__copy .dc-pill { margin-top: 1rem; }
+  .ti-mark { display: inline-flex; align-items: center; height: 1.75rem; padding: 0 .75rem; border: 1px dashed var(--dc-line-strong);
+    border-radius: .5rem; font-size: .75rem; color: var(--dc-text-nav); white-space: nowrap; }
+  .ti-table { width: 100%; border-collapse: collapse; font-size: .9375rem; }
+  .ti-table th, .ti-table td { text-align: left; padding: .9rem 1rem .9rem 0; border-top: 1px solid var(--dc-line); vertical-align: top; }
+  .ti-table th { font-weight: 500; color: var(--dc-ink-2); font-size: .8125rem; }
+  .ti-table td { color: var(--dc-text-body); }
+  .ti-hover-zoom { width: 12rem; aspect-ratio: 4/3; border-radius: var(--dc-r-band); overflow: hidden; background: var(--dc-surface); }
+  .ti-hover-zoom div { width: 100%; height: 100%; background: var(--dc-wash-lucy); transition: transform var(--dc-dur-zoom) var(--dc-ease); }
+  .ti-hover-zoom:hover div { transform: scale(1.03); }
+  .ti-voice { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: var(--dc-gap-cards); }
+  .ti-voice .dc-card { gap: 1rem; padding: 2rem; }
+  .ti-voice ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .4rem; color: var(--dc-text-body); }
+  .ti-dd { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: var(--dc-gap-cards); }
+  .ti-dd ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .6rem; color: var(--dc-text-body); line-height: 1.45; }
+  .ti-footer-grid { display: grid; grid-template-columns: 1fr repeat(3, 12rem); gap: 2rem; }
+  .ti-footer-grid ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1.1rem; }
+  .ti-footer-bottom { margin-top: auto; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .ti-footer-bottom .dc-footer__legal { display: flex; gap: 1.5rem; }
+  @media (max-width: 991px) {
+    .ti-hero { grid-template-columns: 1fr; }
+    .ti-footer-grid { grid-template-columns: 1fr 1fr; }
+    .dc-nav__links .ti-hide-md { display: none; }
+  }
+  @media (max-width: 767px) {
+    .ti-type-row { grid-template-columns: 1fr; gap: .75rem; }
+    .ti-voice, .ti-dd { grid-template-columns: 1fr; }
+    .ti-demo { padding: 1.5rem; }
+    .dc-nav__links > :not(.dc-nav__cta) { display: none; }
+    .ti-table { font-size: .8125rem; }
+  }
+</style>
+</head>
+<body class="dc">
+
+<!-- NAV ================================================================= -->
+<header class="dc-nav">
+  <div class="dc-nav__inner">
+    <span class="ti-mark" title="Use the official Decart SVG wordmark here">wordmark slot</span>
+    <nav class="dc-nav__links" aria-label="Guide">
+      <a class="dc-nav__link ti-hide-md" href="#color">Color</a>
+      <a class="dc-nav__link ti-hide-md" href="#type">Type</a>
+      <div class="dc-dropdown" data-dc-dropdown>
+        <button class="dc-nav__link" type="button">Components
+          <span class="dc-chevron"><svg viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </button>
+        <div class="dc-dropdown__list">
+          <a class="dc-dropdown__item" href="#buttons"><span class="dc-dropdown__icon"></span><span class="dc-dropdown__text"><span class="dc-dropdown__label">Buttons</span><span class="dc-dropdown__desc">Pills, links, tags</span></span></a>
+          <a class="dc-dropdown__item" href="#cards"><span class="dc-dropdown__icon"></span><span class="dc-dropdown__text"><span class="dc-dropdown__label">Cards</span><span class="dc-dropdown__desc">Feature, publication, band</span></span></a>
+          <a class="dc-dropdown__item" href="#patterns"><span class="dc-dropdown__icon"></span><span class="dc-dropdown__text"><span class="dc-dropdown__label">Patterns</span><span class="dc-dropdown__desc">Tabs, accordion, reveal</span></span></a>
+        </div>
+      </div>
+      <a class="dc-nav__link ti-hide-md" href="#motion">Motion</a>
+      <a class="dc-nav__link ti-hide-md" href="#voice">Voice</a>
+      <a class="dc-pill dc-pill--sm dc-pill--primary dc-nav__cta" href="#dodont">Do / Don't</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<!-- HERO ================================================================ -->
+<section class="dc-section" style="padding-block:0">
+  <div class="dc-container ti-hero">
+    <div class="ti-hero__copy">
+      <p class="dc-kicker">Taste Index</p>
+      <h1 class="dc-display">Built by one designer,<br>every time.</h1>
+      <p class="dc-sub" style="max-width:31rem">The measured design language of decart.ai: color, type, shape, components, motion and voice, as live tokens.</p>
+      <a class="dc-pill dc-pill--lg dc-pill--primary" href="#color">Start with color</a>
+      <div class="ti-legend">
+        <span><i class="ti-badge ti-M">M</i> Measured from the live site</span>
+        <span><i class="ti-badge ti-I">I</i> Inferred from a pattern</span>
+        <span><i class="ti-badge ti-X">X</i> Invented to fill a gap</span>
+      </div>
+    </div>
+    <div class="dc-panel dc-panel--lucy" aria-hidden="true">
+      <div class="dc-blobs">
+        <div class="dc-blob" style="background:radial-gradient(circle,#6b8ae8 0%,transparent 62%)"></div>
+        <div class="dc-blob" style="background:radial-gradient(circle,#9fd0ff 0%,transparent 62%)"></div>
+        <div class="dc-blob" style="background:radial-gradient(circle,#cfd0ff 0%,transparent 62%)"></div>
+      </div>
+      <div class="dc-frame" style="position:absolute;left:12%;right:12%;top:30%;">
+        <div style="background:#111;border-radius:1rem;aspect-ratio:16/9;display:flex;align-items:flex-start;padding:1rem;gap:.5rem;color:#fff;font-size:.8125rem;">
+          <span class="dc-live" style="margin-top:.35rem"></span> 0:08
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- COLOR =============================================================== -->
+<section class="dc-section" id="color">
+  <div class="dc-container">
+    <div class="ti-head">
+      <p class="dc-kicker">Color</p>
+      <h2 class="dc-h-xl">One blue points. Greys do the rest.</h2>
+      <p class="dc-lede dc-lede--soft">Click a swatch to copy its hex. Token names map to the site's own CSS variables, noted in brand.css.</p>
+    </div>
+
+    <h3 class="ti-group-title">Accent</h3>
+    <div class="ti-swatches">
+      <button class="ti-swatch" data-dc-copy="#2548f6"><div class="ti-swatch__chip" style="background:#2548f6"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Blue #2548f6 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-blue</span><span class="ti-swatch__use">Primary pill, CTA band, "Read more →", active blue tab. The only saturated UI color.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#0829cd"><div class="ti-swatch__chip" style="background:#0829cd"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Blue hover #0829cd <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-blue-hover</span><span class="ti-swatch__use">Hover on primary pills and blue links.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#061d94"><div class="ti-swatch__chip" style="background:#061d94"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Blue pressed #061d94 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-blue-pressed</span><span class="ti-swatch__use">Defined as the pressed state; never observed in use.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#eff7ff"><div class="ti-swatch__chip" style="background:#eff7ff"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Blue tint #eff7ff <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-blue-tint</span><span class="ti-swatch__use">Background wash behind the big scroll-reveal statements.</span></div></button>
+    </div>
+
+    <h3 class="ti-group-title">Ink &amp; text</h3>
+    <div class="ti-swatches">
+      <button class="ti-swatch" data-dc-copy="#000000"><div class="ti-swatch__chip" style="background:#000"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Ink #000000 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-ink</span><span class="ti-swatch__use">Hero display, secondary pill outline, product tags.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#101010"><div class="ti-swatch__chip" style="background:#101010"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Ink 2 #101010 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-ink-2</span><span class="ti-swatch__use">Section headings, card and publication titles.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#21222c"><div class="ti-swatch__chip" style="background:#21222c"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Dark #21222c <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-dark</span><span class="ti-swatch__use">Inherited text color; footer background.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#333333"><div class="ti-swatch__chip" style="background:#333"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Body #333333 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-text-body</span><span class="ti-swatch__use">Paragraphs. Section ledes use it at 70% opacity.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#686868"><div class="ti-swatch__chip" style="background:#686868"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Sub #686868 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-text-sub</span><span class="ti-swatch__use">Hero subheading.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#656565"><div class="ti-swatch__chip" style="background:#656565"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Nav #656565 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-text-nav</span><span class="ti-swatch__use">Nav links at rest, dropdown descriptions.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#8a8a8e"><div class="ti-swatch__chip" style="background:#8a8a8e"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Grey #8a8a8e <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-grey</span><span class="ti-swatch__use">Kickers ("Introducing"), dates, legal, text not yet revealed. The most-used text color on the home page.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#5d5d5d"><div class="ti-swatch__chip" style="background:#5d5d5d"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Tab #5d5d5d · Pill #505050 · Version #3a3a3a <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-text-tab / -pill / -version</span><span class="ti-swatch__use">Component-specific greys. Close enough to merge; the site keeps them separate.</span></div></button>
+    </div>
+
+    <h3 class="ti-group-title">Surfaces</h3>
+    <div class="ti-swatches">
+      <button class="ti-swatch" data-dc-copy="#ffffff"><div class="ti-swatch__chip" style="background:#fff"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">White #ffffff <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-bg-page</span><span class="ti-swatch__use">Every section, the nav, icon boxes, active tab.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#f5f5f5"><div class="ti-swatch__chip" style="background:#f5f5f5"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Surface #f5f5f5 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-surface</span><span class="ti-swatch__use">Cards, media panels, tab tracks, image placeholders.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#f9f9f9"><div class="ti-swatch__chip" style="background:#f9f9f9"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Hover #f9f9f9 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-surface-hover</span><span class="ti-swatch__use">Fill on hover for nav links, ghost pills, dropdown rows.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#f6f6f6"><div class="ti-swatch__chip" style="background:#f6f6f6"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Chip #f6f6f6 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-surface-chip</span><span class="ti-swatch__use">Hardware chips ("Google TPUs").</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#e2e2e4"><div class="ti-swatch__chip" style="background:#e2e2e4"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Line #e2e2e4 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-line</span><span class="ti-swatch__use">Dropdown border. The only hairline on the page.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#f4f3f3"><div class="ti-swatch__chip" style="background:#f4f3f3"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Body bg #f4f3f3 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-bg-body</span><span class="ti-swatch__use">&lt;body&gt; background; almost always covered by white sections.</span></div></button>
+    </div>
+
+    <h3 class="ti-group-title">Product washes &amp; status</h3>
+    <div class="ti-swatches">
+      <button class="ti-swatch" data-dc-copy="linear-gradient(160deg, #dee8f9 0%, #c4e0fc 45%, #b3c3ea 100%)"><div class="ti-swatch__chip" style="background:var(--dc-wash-lucy)"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Lucy wash <i class="ti-badge ti-M">M</i></span><span class="ti-spec">#dee8f9 → #c4e0fc → #b3c3ea</span><span class="ti-swatch__use">Behind the Lucy (video editing) demo, with drifting blue blobs.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="linear-gradient(#eef4e6 0%, #dde9d2 50%, #c9dbbb 100%)"><div class="ti-swatch__chip" style="background:var(--dc-wash-oasis)"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Oasis wash <i class="ti-badge ti-M">M</i></span><span class="ti-spec">#eef4e6 → #dde9d2 → #c9dbbb</span><span class="ti-swatch__use">Behind the Oasis (world model) demo, with green blobs.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="linear-gradient(#fff 0%, #eff7ff 23%, #eff7ff 73%, #fff 100%)"><div class="ti-swatch__chip" style="background:var(--dc-wash-statement)"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Statement wash <i class="ti-badge ti-M">M</i></span><span class="ti-spec">#fff → #eff7ff → #fff</span><span class="ti-swatch__use">Full-bleed section behind scroll-revealed statements; fades into white at both ends.</span></div></button>
+      <button class="ti-swatch" data-dc-copy="#ff3b30"><div class="ti-swatch__chip" style="background:#ff3b30"></div><div class="ti-swatch__meta"><span class="ti-swatch__name">Live #ff3b30 <i class="ti-badge ti-M">M</i></span><span class="ti-spec">--dc-live</span><span class="ti-swatch__use">Recording dot on live video only, with a red glow. Not an error color.</span></div></button>
+    </div>
+  </div>
+</section>
+
+<!-- TYPE ================================================================ -->
+<section class="dc-section" id="type">
+  <div class="dc-container">
+    <div class="ti-head">
+      <p class="dc-kicker">Type</p>
+      <h2 class="dc-h-xl">Regular weight, tight tracking, big sizes.</h2>
+      <p class="dc-lede dc-lede--soft">Roobert (Displaay, commercial) at 400 and 500. Rendered here in Figtree unless you have Roobert installed. Tracking tightens as size grows.</p>
+    </div>
+    <div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Display <i class="ti-badge ti-M">M</i></b><span class="ti-spec">65 / 1.12 / -0.05em · 400 · #000</span></div><p class="dc-display">Edit reality as it streams</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Heading XL <i class="ti-badge ti-M">M</i></b><span class="ti-spec">52 / 1.12 / -0.04em · 400 · #101010</span></div><h3 class="dc-h-xl">One stack for every layer.</h3></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Heading L <i class="ti-badge ti-M">M</i></b><span class="ti-spec">48 / 1.24 / -0.04em · 400</span></div><h3 class="dc-h-l">World Generation Model</h3></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Heading M <i class="ti-badge ti-M">M</i></b><span class="ti-spec">40 / 1.2 / -0.04em · 400</span></div><h3 class="dc-h-m">Out of stealth</h3></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Statement <i class="ti-badge ti-M">M</i></b><span class="ti-spec">32 / 1.3 / -0.02em · 400</span></div><p class="dc-statement">Every frame becomes a live asset.</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>CTA title <i class="ti-badge ti-M">M</i></b><span class="ti-spec">32 / 1.4 / -0.03em · 500 · on blue</span></div><p class="dc-band__title" style="color:var(--dc-blue)">Deploy the live layer</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Kicker <i class="ti-badge ti-M">M</i></b><span class="ti-spec">24 / 1.2 / -0.02em · 400 · #8a8a8e</span></div><p class="dc-kicker">Introducing</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Card title <i class="ti-badge ti-M">M</i></b><span class="ti-spec">22 / 1.4 / -0.03em · 400</span></div><p class="dc-card-title">Hardware agnostic</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Pub title <i class="ti-badge ti-M">M</i></b><span class="ti-spec">20 / 1.4 / -0.03em · 500</span></div><p class="dc-pub-title">A spatial memory codec for video world models</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Body L <i class="ti-badge ti-M">M</i></b><span class="ti-spec">18 / 1.52 / -0.02em · 400 · #333</span></div><p class="dc-lede">Frontier optimization that extracts more performance from the chips you already run.</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Body <i class="ti-badge ti-M">M</i></b><span class="ti-spec">16 / 1.52 / -0.02em · 400 · #333</span></div><p class="dc-body">Run optimized workloads across every major chip architecture. Your workload shouldn't care what it runs on.</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Meta <i class="ti-badge ti-M">M</i></b><span class="ti-spec">14 / 1.4 / +0.01em · #8a8a8e</span></div><p class="dc-meta">October 2026</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Caps <i class="ti-badge ti-M">M</i></b><span class="ti-spec">13 / 1.4 / +0.16em · 500 · upper · footer only</span></div><p class="dc-caps" style="margin:0">Optimization</p></div>
+      <div class="ti-type-row"><div class="ti-type-label"><b>Legal <i class="ti-badge ti-M">M</i></b><span class="ti-spec">11 / 2 / +0.02em · upper · #8a8a8e</span></div><p class="dc-legal" style="margin:0">Privacy policy · Terms of use</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- SHAPE =============================================================== -->
+<section class="dc-section" id="shape">
+  <div class="dc-container">
+    <div class="ti-head">
+      <p class="dc-kicker">Shape</p>
+      <h2 class="dc-h-xl">Soft fills, huge radii, no lines.</h2>
+      <p class="dc-lede dc-lede--soft">Radius grows with the container. Shadows only on things that float above another surface.</p>
+    </div>
+    <h3 class="ti-group-title">Radius <i class="ti-badge ti-M">M</i></h3>
+    <div class="ti-radii">
+      <div class="ti-radius"><div class="ti-radius__box" style="border-radius:3.5rem"></div><span class="ti-spec">56 · media panel</span></div>
+      <div class="ti-radius"><div class="ti-radius__box" style="border-radius:2.5rem"></div><span class="ti-spec">40 · feature card</span></div>
+      <div class="ti-radius"><div class="ti-radius__box" style="border-radius:1.5rem"></div><span class="ti-spec">24 · band, pub image</span></div>
+      <div class="ti-radius"><div class="ti-radius__box" style="border-radius:1rem"></div><span class="ti-spec">16 · dropdown</span></div>
+      <div class="ti-radius"><div class="ti-radius__box" style="border-radius:.75rem"></div><span class="ti-spec">12 · row, icon box</span></div>
+      <div class="ti-radius"><div class="ti-radius__box" style="border-radius:62.5rem;height:3.25rem"></div><span class="ti-spec">1000 · every control</span></div>
+    </div>
+
+    <h3 class="ti-group-title">Elevation <i class="ti-badge ti-M">M</i></h3>
+    <div class="ti-demo" style="gap:2.5rem">
+      <div class="ti-stack" style="gap:.75rem"><div style="width:14rem;height:7rem;background:#fff;border:1px solid var(--dc-line);border-radius:1rem;box-shadow:var(--dc-shadow-menu)"></div><span class="ti-spec">menu · 0 12 32 rgba(33,34,44,.08) + 1px #e2e2e4</span></div>
+      <div class="ti-stack" style="gap:.75rem"><div style="width:14rem;height:7rem;background:#fff;border-radius:1.65rem;box-shadow:var(--dc-shadow-frame)"></div><span class="ti-spec">product frame · 0 10 58 rgba(0,0,0,.12)</span></div>
+      <div class="ti-stack" style="gap:.75rem"><div style="width:14rem;height:7rem;background:#fff;border-radius:2.5rem"></div><span class="ti-spec">cards · none</span></div>
+    </div>
+
+    <h3 class="ti-group-title">Layout <i class="ti-badge ti-M">M</i></h3>
+    <div class="ti-layout">
+      <div class="ti-layout__bar"><div>40</div><div>container 1360 (85rem) · max page 1440</div><div>40</div></div>
+      <div class="ti-cols"><div>1fr</div><div>gap 24 · 1fr</div><div>1fr</div></div>
+      <p class="ti-spec" style="margin:1rem 2.5rem 0">Sections: 80px vertical padding · Nav: 80px fixed, white · 2-col media/copy: gap 64 · Breakpoints: 1199 / 991 / 767 / 479</p>
+    </div>
+  </div>
+</section>
+
+<!-- BUTTONS ============================================================= -->
+<section class="dc-section" id="buttons">
+  <div class="dc-container">
+    <div class="ti-head">
+      <p class="dc-kicker">Components</p>
+      <h2 class="dc-h-xl">Everything you can press is a pill.</h2>
+      <p class="dc-lede dc-lede--soft">Hover each one. All state changes are 0.2s ease on color, background and border, nothing else.</p>
+    </div>
+    <div class="ti-stack">
+      <div class="ti-demo ti-demo--white">
+        <span class="ti-row-label">On white — primary, secondary, ghost <i class="ti-badge ti-M">M</i></span>
+        <a class="dc-pill dc-pill--lg dc-pill--primary" href="#">Learn more</a>
+        <a class="dc-pill dc-pill--lg dc-pill--secondary" href="#">Access demo</a>
+        <a class="dc-pill dc-pill--sm dc-pill--ghost" href="#">Start building</a>
+        <button class="dc-pill dc-pill--lg dc-pill--primary" disabled>Disabled</button><i class="ti-badge ti-X">X</i>
+      </div>
+      <div class="ti-demo ti-demo--white">
+        <span class="ti-row-label">Sizes — lg 18px / 12·24 · md 18px / 52 tall · sm 16px / 8·19 <i class="ti-badge ti-M">M</i></span>
+        <a class="dc-pill dc-pill--lg dc-pill--primary" href="#">Try Lucy</a>
+        <a class="dc-pill dc-pill--md dc-pill--primary" href="#">Contact us</a>
+        <a class="dc-pill dc-pill--sm dc-pill--primary" href="#">Contact us</a>
+      </div>
+      <div class="ti-demo ti-demo--dark">
+        <span class="ti-row-label">On dark or video — primary + outline <i class="ti-badge ti-M">M</i></span>
+        <a class="dc-pill dc-pill--lg dc-pill--primary" href="#">Try it now</a>
+        <a class="dc-pill dc-pill--lg dc-pill--outline" href="#">Talk to an expert</a>
+        <span class="dc-tag dc-tag--on-dark">Lucy</span>
+      </div>
+      <div class="ti-demo ti-demo--white">
+        <span class="ti-row-label">Link, product tag + version, hardware chips <i class="ti-badge ti-M">M</i></span>
+        <a class="dc-link" href="#">Read more →</a>
+        <span style="display:inline-flex;align-items:center;gap:.6rem"><span class="dc-tag">Oasis</span><span class="dc-version">Version 3</span></span>
+        <span class="dc-chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>Tensor chips</span>
+        <span class="dc-chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 11h4M7 13h2"/></svg>GPUs</span>
+        <span style="display:inline-flex;align-items:center;gap:.5rem;font-size:.875rem;color:var(--dc-text-body)"><span class="dc-live"></span> Live indicator</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CARDS =============================================================== -->
+<section class="dc-section" id="cards">
+  <div class="dc-container">
+    <div class="ti-head">
+      <p class="dc-kicker">Cards</p>
+      <h2 class="dc-h-xl">Grey fill, big radius, content inside.</h2>
+    </div>
+
+    <h3 class="ti-group-title">Feature card <i class="ti-badge ti-M">M</i></h3>
+    <div class="dc-grid-3">
+      <article class="dc-card">
+        <div class="dc-icon-box"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></svg></div>
+        <div class="dc-card__text"><h3 class="dc-card-title">Hardware agnostic</h3><p class="dc-body">Run the same workload on any chip. The code shouldn't care where it lands.</p></div>
+      </article>
+      <article class="dc-card">
+        <div class="dc-icon-box"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19l5-6 4 3 7-9"/></svg></div>
+        <div class="dc-card__text"><h3 class="dc-card-title">More from the same racks</h3><p class="dc-body">No new hardware. No new contracts. A higher ceiling.</p></div>
+      </article>
+      <article class="dc-card">
+        <div class="dc-icon-box"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 3L5 13h6l-1 8 8-10h-6l1-8z"/></svg></div>
+        <div class="dc-card__text"><h3 class="dc-card-title">Low-latency inference</h3><p class="dc-body">Lower latency, higher throughput. Fast enough to feel live.</p></div>
+      </article>
+    </div>
+
+    <h3 class="ti-group-title">Publication card <i class="ti-badge ti-M">M</i> <span class="ti-spec" style="margin-left:.5rem">hover: image scale 1.03 over 0.4s, link → #0829cd</span></h3>
+    <div class="dc-grid-3">
+      <a class="dc-pub" href="#">
+        <div class="dc-pub__image"><div class="ti-pubimg" style="background:var(--dc-wash-lucy)"></div></div>
+        <div class="dc-pub__body"><p class="dc-meta">October 2026</p><h3 class="dc-pub-title dc-pub__title">Reading only what each view needs</h3><p class="dc-body">Store the whole journey compactly. Each frame reads a few learned entries.</p><span class="dc-pub__more">Read more →</span></div>
+      </a>
+      <a class="dc-pub" href="#">
+        <div class="dc-pub__image"><div class="ti-pubimg" style="background:var(--dc-wash-oasis)"></div></div>
+        <div class="dc-pub__body"><p class="dc-meta">September 2026</p><h3 class="dc-pub-title dc-pub__title">A world model that answers every action</h3><p class="dc-body">Interactive worlds that update the moment you move.</p><span class="dc-pub__more">Read more →</span></div>
+      </a>
+      <a class="dc-pub" href="#">
+        <div class="dc-pub__image"><div class="ti-pubimg" style="background:var(--dc-wash-statement)"></div></div>
+        <div class="dc-pub__body"><p class="dc-meta">July 2026</p><h3 class="dc-pub-title dc-pub__title">What if editing had a volume knob?</h3><p class="dc-body">Describe what to change, then dial how much.</p><span class="dc-pub__more">Read more →</span></div>
+      </a>
+    </div>
+
+    <h3 class="ti-group-title">CTA band <i class="ti-badge ti-M">M</i></h3>
+    <div class="dc-band">
+      <p class="dc-band__title">Deploy the live layer</p>
+      <a class="dc-pill dc-pill--lg dc-pill--white" href="#">Contact us</a>
+    </div>
+
+    <h3 class="ti-group-title">Model row: tag + version, title, lede, two actions <i class="ti-badge ti-M">M</i></h3>
+    <div class="dc-split">
+      <div class="dc-panel dc-panel--oasis" style="aspect-ratio:1" aria-hidden="true">
+        <div class="dc-blobs">
+          <div class="dc-blob" style="background:radial-gradient(circle,#86b56f 0%,transparent 62%)"></div>
+          <div class="dc-blob" style="background:radial-gradient(circle,#b9e0a5 0%,transparent 62%)"></div>
+          <div class="dc-blob" style="background:radial-gradient(circle,#e6f2d2 0%,transparent 62%)"></div>
+        </div>
+        <div class="dc-frame" style="position:absolute;left:14%;right:14%;top:28%;"><div style="background:#f9f9f9;border-radius:1rem;aspect-ratio:16/10"></div></div>
+      </div>
+      <div class="ti-stack" style="gap:1.25rem">
+        <span style="display:inline-flex;align-items:center;gap:.6rem"><span class="dc-tag">Oasis</span><span class="dc-version">Version 3</span></span>
+        <h3 class="dc-h-l">World Generation Model</h3>
+        <p class="dc-lede dc-lede--soft">Create live, interactive worlds that change with every action.</p>
+        <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:1rem"><a class="dc-pill dc-pill--lg dc-pill--primary" href="#">Learn more</a><a class="dc-pill dc-pill--lg dc-pill--secondary" href="#">Access demo</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PATTERNS: reveal, tabs, accordion, marquee ========================== -->
+<section class="dc-section dc-section--wash" id="patterns" style="padding-block:8rem">
+  <div class="dc-container" style="max-width:56rem">
+    <p class="dc-kicker" style="margin-bottom:1.5rem">Scroll reveal <i class="ti-badge ti-M">M</i> look · <i class="ti-badge ti-I">I</i> curve</p>
+    <h2 class="dc-h-l" data-dc-reveal style="letter-spacing:-0.05em;line-height:1.2">The future depends on doing far more with the compute we already have.</h2>
+  </div>
+</section>
+
+<section class="dc-section">
+  <div class="dc-container" style="text-align:center;display:flex;flex-direction:column;align-items:center;gap:1rem">
+    <h2 class="dc-h-xl">What live editing unlocks</h2>
+    <p class="dc-lede dc-lede--soft">Segmented tabs with a 0.35s crossfade between media. <i class="ti-badge ti-M">M</i></p>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;margin-top:1rem;max-width:100%">
+      <div class="dc-tabs" data-dc-tabs>
+        <button class="dc-tab" data-target="p-shop" aria-selected="true">Shopping</button>
+        <button class="dc-tab" data-target="p-ads">Advertising</button>
+        <button class="dc-tab" data-target="p-stream">Live streaming</button>
+        <button class="dc-tab" data-target="p-game">Gaming</button>
+      </div>
+      <div class="dc-tabs dc-tabs--sm dc-tabs--blue" data-dc-tabs>
+        <button class="dc-tab" aria-selected="true">Blue variant</button>
+        <button class="dc-tab">Small size</button>
+        <button class="dc-tab">15px</button>
+      </div>
+    </div>
+  </div>
+  <div class="dc-container">
+    <div class="dc-stage ti-stage">
+      <div class="dc-stage__panel is-active" id="p-shop" style="background:var(--dc-wash-lucy)"><span>Shopping</span></div>
+      <div class="dc-stage__panel" id="p-ads" style="background:var(--dc-wash-oasis)"><span>Advertising</span></div>
+      <div class="dc-stage__panel" id="p-stream" style="background:var(--dc-wash-statement)"><span>Live streaming</span></div>
+      <div class="dc-stage__panel" id="p-game" style="background:var(--dc-surface)"><span>Gaming</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="dc-section">
+  <div class="dc-container">
+    <div class="ti-head"><p class="dc-kicker">Accordion <i class="ti-badge ti-M">M</i> motion · <i class="ti-badge ti-I">I</i> dividers</p><h2 class="dc-h-l">FAQs</h2></div>
+    <div class="dc-accordion">
+      <div class="dc-accordion__item is-open">
+        <button class="dc-accordion__trigger">Why does real time matter?<svg class="dc-accordion__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4v12M4 10h12"/></svg></button>
+        <div class="dc-accordion__panel"><div><p>Real time turns video from a fixed asset into something that responds. Instead of deciding every pixel before publishing, you adapt it live.</p></div></div>
+      </div>
+      <div class="dc-accordion__item">
+        <button class="dc-accordion__trigger">Who is it for?<svg class="dc-accordion__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4v12M4 10h12"/></svg></button>
+        <div class="dc-accordion__panel"><div><p>Enterprises, brands and creators across retail, advertising, streaming and gaming.</p></div></div>
+      </div>
+      <div class="dc-accordion__item">
+        <button class="dc-accordion__trigger">What can it change?<svg class="dc-accordion__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4v12M4 10h12"/></svg></button>
+        <div class="dc-accordion__panel"><div><p>Characters, objects, attributes, backgrounds, styles and effects, all while the stream is running.</p></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="dc-section" style="padding-top:0">
+  <div class="dc-container">
+    <p class="dc-body" style="margin-bottom:1.5rem;color:#282828">Partners and customers <i class="ti-badge ti-M">M</i> label · <i class="ti-badge ti-X">X</i> 40s speed</p>
+    <div class="dc-marquee">
+      <div class="dc-marquee__track">
+        <span class="ti-mark" style="height:2.25rem">logo</span><span class="ti-mark" style="height:2.25rem">logo</span><span class="ti-mark" style="height:2.25rem">logo</span><span class="ti-mark" style="height:2.25rem">logo</span><span class="ti-mark" style="height:2.25rem">logo</span><span class="ti-mark" style="height:2.25rem">logo</span><span class="ti-mark" style="height:2.25rem">logo</span><span class="ti-mark" style="height:2.25rem">logo</span><span class="ti-mark" style="height:2.25rem">logo</span><span class="ti-mark" style="height:2.25rem">logo</span>
+      </div>
+    </div>
+    <p class="ti-spec" style="margin-top:1rem">Real logos are monochrome dark-grey SVGs, ~84×30, in one row. Use their supplied files, never redrawn.</p>
+  </div>
+</section>
+
+<!-- MOTION ============================================================== -->
+<section class="dc-section" id="motion">
+  <div class="dc-container">
+    <div class="ti-head">
+      <p class="dc-kicker">Motion</p>
+      <h2 class="dc-h-xl">Quick for controls. Slow for atmosphere.</h2>
+    </div>
+    <div style="overflow-x:auto">
+    <table class="ti-table">
+      <thead><tr><th>What moves</th><th>Property</th><th>Duration</th><th>Easing</th><th></th></tr></thead>
+      <tbody>
+        <tr><td>Every hover: pills, nav, tabs, links, dropdown rows</td><td>color, background-color, border-color</td><td>0.2s</td><td>ease</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Footer link hover</td><td>opacity → 0.7</td><td>0.2s</td><td>ease</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Dropdown chevron</td><td>rotate 180°</td><td>0.2s</td><td>ease</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Dropdown panel</td><td>display (no animation)</td><td>0</td><td>—</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Nav light ↔ dark over video</td><td>background, color</td><td>0.3s</td><td>ease</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Tab media crossfade</td><td>opacity</td><td>0.35s</td><td>ease</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Accordion open</td><td>grid-template-rows / height</td><td>0.35s</td><td>cubic-bezier(.39,.575,.565,1)</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Card image on hover <span class="ti-hover-zoom" style="display:inline-block;width:4rem;vertical-align:middle;margin-left:.5rem"><div></div></span></td><td>transform scale(1.03)</td><td>0.4s</td><td>ease</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Blurred backdrop swap</td><td>opacity</td><td>0.6s</td><td>ease</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Product-wash blobs</td><td>translate + scale; container rotate</td><td>9 / 11 / 13 / 16s; spin 54s</td><td>ease-in-out; linear</td><td><i class="ti-badge ti-M">M</i></td></tr>
+        <tr><td>Chat/message in</td><td>opacity 0→1, translateY 5px→0</td><td>not measured</td><td>—</td><td><i class="ti-badge ti-M">M</i> keyframes</td></tr>
+        <tr><td>Live dot</td><td>opacity 1 ↔ 0.25</td><td>1.2s here</td><td>ease-in-out</td><td><i class="ti-badge ti-M">M</i> keyframes · <i class="ti-badge ti-X">X</i> timing</td></tr>
+        <tr><td>Statement words on scroll</td><td>opacity + color, faint → grey → ink</td><td>scroll-linked</td><td>linear</td><td><i class="ti-badge ti-M">M</i> look · <i class="ti-badge ti-I">I</i> curve</td></tr>
+        <tr><td>Logo marquee</td><td>translateX(0 → -50%)</td><td>40s here</td><td>linear, infinite</td><td><i class="ti-badge ti-M">M</i> keyframes · <i class="ti-badge ti-X">X</i> speed</td></tr>
+        <tr><td>Reduced motion</td><td>marquee stops, becomes scrollable</td><td>—</td><td>—</td><td><i class="ti-badge ti-M">M</i></td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<!-- VOICE =============================================================== -->
+<section class="dc-section" id="voice">
+  <div class="dc-container">
+    <div class="ti-head">
+      <p class="dc-kicker">Voice</p>
+      <h2 class="dc-h-xl">Short claims. Present tense. A period when it's a statement.</h2>
+    </div>
+    <div class="ti-voice">
+      <div class="dc-card">
+        <h3 class="dc-card-title">Headlines <i class="ti-badge ti-M">M</i></h3>
+        <ul>
+          <li>4–8 words, declarative, present tense: "Edit reality as it happens", "What Live AI unlocks".</li>
+          <li>Full-sentence statements end with a period: "One stack powers every layer of Live AI."</li>
+          <li>Product names get a full stop when introduced: "Decart Optimization Stack."</li>
+          <li>"Live AI" is capitalized like a proper noun. "Speed of reality" is the recurring motif.</li>
+          <li>Numbers are concrete: "up to 100×", "30 FPS", "0.01–0.04% overhead".</li>
+        </ul>
+      </div>
+      <div class="dc-card">
+        <h3 class="dc-card-title">Buttons &amp; labels <i class="ti-badge ti-M">M</i></h3>
+        <ul>
+          <li>Verb first, 1–3 words: "Learn more", "Access demo", "Contact us", "Try Lucy 2.5".</li>
+          <li>Links read "Read more →" with a real arrow character.</li>
+          <li>Kickers are one word or a short phrase in grey: "Introducing", "The Live AI Lab".</li>
+          <li>Inline labels end with a colon: "Built across:".</li>
+          <li>Case drifts: home uses sentence case ("Learn more"), /lucy uses Title Case ("Talk To An Expert"). Use sentence case. <i class="ti-badge ti-I">I</i></li>
+        </ul>
+      </div>
+      <div class="dc-card">
+        <h3 class="dc-card-title">Body copy <i class="ti-badge ti-M">M</i></h3>
+        <ul>
+          <li>Two sentences: the claim, then a short reframe. "Run optimized workloads… Your workload shouldn't care what it runs on."</li>
+          <li>Staccato triplets for emphasis: "No new racks. No new contracts. New ceiling."</li>
+          <li>Second person ("you already have") over "users".</li>
+        </ul>
+      </div>
+      <div class="dc-card">
+        <h3 class="dc-card-title">Avoid <i class="ti-badge ti-I">I</i></h3>
+        <ul>
+          <li>Exclamation marks, emoji, questions as headlines (one exception on the blog: "What if video editing had a volume knob?").</li>
+          <li>Hedged claims ("may help", "aims to").</li>
+          <li>Uppercase anywhere but the footer and legal line.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DO / DON'T ========================================================== -->
+<section class="dc-section" id="dodont">
+  <div class="dc-container">
+    <div class="ti-head"><p class="dc-kicker">Do / Don't</p><h2 class="dc-h-xl">Check before you ship.</h2></div>
+    <div class="ti-dd">
+      <div class="dc-card" style="gap:1.25rem"><h3 class="dc-card-title">Do</h3>
+        <ul>
+          <li>One primary blue pill per view; pair it with a secondary outline pill.</li>
+          <li>Headlines at weight 400 with negative tracking.</li>
+          <li>Put a grey kicker above an ink title when a section needs a label.</li>
+          <li>Group things in #f5f5f5 fills with 24–56px radii.</li>
+          <li>Use white sections; let the blue-tint wash appear only behind a statement.</li>
+          <li>Keep hover changes to color/background at 0.2s ease.</li>
+        </ul>
+      </div>
+      <div class="dc-card" style="gap:1.25rem"><h3 class="dc-card-title">Don't</h3>
+        <ul>
+          <li>Bold headlines (600/700) or positive tracking on large type.</li>
+          <li>Hairline borders around cards, or drop shadows on cards.</li>
+          <li>Square or small-radius buttons.</li>
+          <li>A second accent hue for UI. Green and lavender exist only inside product washes.</li>
+          <li>Hover lifts, scale on buttons, bounce or spring easing.</li>
+          <li>Invent a dark theme — the site has none. Dark appears only as the footer and video heroes.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- FOOTER ============================================================== -->
+<footer class="dc-footer">
+  <div class="dc-footer__inner">
+    <div class="ti-footer-grid">
+      <span class="ti-mark" style="color:#8a8a8e;border-color:#3a3a3a;align-self:start">wordmark slot</span>
+      <ul><li><a class="dc-footer__link dc-caps" href="#color">Color</a></li><li><a class="dc-footer__link dc-caps" href="#type">Type</a></li><li><a class="dc-footer__link dc-caps" href="#shape">Shape</a></li></ul>
+      <ul><li><a class="dc-footer__link dc-caps" href="#buttons">Buttons</a></li><li><a class="dc-footer__link dc-caps" href="#cards">Cards</a></li><li><a class="dc-footer__link dc-caps" href="#patterns">Patterns</a></li></ul>
+      <ul><li><a class="dc-footer__link dc-caps" href="#motion">Motion</a></li><li><a class="dc-footer__link dc-caps" href="#voice">Voice</a></li><li><a class="dc-footer__link dc-caps" href="#dodont">Do / Don't</a></li></ul>
+    </div>
+    <div class="ti-footer-bottom">
+      <span class="dc-legal">Taste Index · measured 2026-10-27</span>
+      <div class="dc-footer__legal dc-legal"><a href="DESIGN.md">Design.md</a><a href="brand.css">brand.css</a><a href="brand.js">brand.js</a></div>
+    </div>
+  </div>
+</footer>
+
+<script src="brand.js"></script>
+</body>
+</html>

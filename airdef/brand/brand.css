@@ -1,0 +1,411 @@
+/* ==========================================================================
+   Decart Taste Index — brand.css
+   Source: decart.ai computed styles + the site's own :root custom properties,
+   measured 2026-10-27 at 1440×900 on /, /lucy, /about, /blog.
+
+   Tags in comments:
+     [M] measured (computed style or the site's own CSS variable)
+     [I] inferred from a repeated pattern — judgment, not a site value
+     [X] invented to fill a gap the site doesn't cover — replace when known
+   Site variable names are noted as (site: --name) so you can diff later.
+   ========================================================================== */
+
+/* Fonts ------------------------------------------------------------------- */
+/* Roobert (Displaay) is commercial. Figtree (Google Fonts, OFL) is the free
+   stand-in [I]. If you hold a Roobert licence, declare it as "Roobert" and it
+   wins automatically. Load Figtree 400/500 in your HTML <head>. */
+
+:root {
+  /* ---- Type families ---- */
+  --dc-font-sans: "Roobert", "roobert", "Figtree", Arial, sans-serif;   /* [M] site: --font-body / --font-heading-v2 (+ Figtree [I]) */
+
+  /* ---- Accent ---- */
+  --dc-blue:          #2548f6;  /* [M] site: --blue. Primary pill, CTA band, links, active blue tab */
+  --dc-blue-hover:    #0829cd;  /* [M] site: --medium-blue. Primary hover, "Read more" hover */
+  --dc-blue-pressed:  #061d94;  /* [M] site: --dark-blue (defined as --button-primary-pressed; pressed state not observed) */
+  --dc-blue-tint:     #eff7ff;  /* [M] site: --chip-tint. Statement-section wash */
+  --dc-blue-pale:     #e9f4ff;  /* [M] site: --pale-blue (defined, not seen on canonical pages) */
+  --dc-focus:         #2548f6;  /* [M] tabs use outline: 2px solid var(--blue); site also defines --focus-ring #4d65ff */
+
+  /* ---- Ink & text ---- */
+  --dc-ink:           #000000;  /* [M] site: --ink. Display titles (hero h1) */
+  --dc-ink-2:         #101010;  /* [M] site: --ink-2. Section headings, card titles */
+  --dc-dark:          #21222c;  /* [M] site: --dark. Default text colour, footer background */
+  --dc-text-body:     #333333;  /* [M] site: --text-body. Paragraphs */
+  --dc-text-sub:      #686868;  /* [M] site: --text-sub. Hero subheading */
+  --dc-text-nav:      #656565;  /* [M] site: --text-nav. Nav links, dropdown descriptions */
+  --dc-text-tab:      #5d5d5d;  /* [M] site: --text-tab. Inactive segmented tabs */
+  --dc-text-pill:     #505050;  /* [M] site: --text-pill. Hardware chips */
+  --dc-text-version:  #3a3a3a;  /* [M] site: --text-version. "Version 2.5" */
+  --dc-grey:          #8a8a8e;  /* [M] site: --medium-grey / --text-highlight. Kickers, dates, legal, unrevealed text */
+  --dc-on-blue:       #fdfcfc;  /* [M] site: --almost-white. Text on primary pill */
+  --dc-white:         #ffffff;  /* [M] */
+
+  /* ---- Surfaces ---- */
+  --dc-bg-page:       #ffffff;  /* [M] every section sets var(--white) */
+  --dc-bg-body:       #f4f3f3;  /* [M] site: --ghost-white. <body> bg, mostly hidden behind white sections */
+  --dc-surface:       #f5f5f5;  /* [M] site: --grey-card-2. Cards, media panels, tab tracks */
+  --dc-surface-hover: #f9f9f9;  /* [M] site: --grey-card. Ghost/nav hover fill, white-pill hover */
+  --dc-surface-chip:  #f6f6f6;  /* [M] site: --grey-pill. Hardware chips */
+  --dc-footer:        #21222c;  /* [M] */
+  --dc-line:          #e2e2e4;  /* [M] site: --light-grey / --border-tertiary. Dropdown border */
+  --dc-line-strong:   #c5c5c7;  /* [M] site: --grey / --border-secondary (defined; rarely visible) */
+
+  /* ---- Gradients (product washes) ---- */
+  --dc-wash-statement: linear-gradient(#fff 0%, #eff7ff 23%, #eff7ff 73%, #fff 100%);              /* [M] */
+  --dc-wash-lucy:      linear-gradient(160deg, #dee8f9 0%, #c4e0fc 45%, #b3c3ea 100%);              /* [M] */
+  --dc-wash-oasis:     linear-gradient(#eef4e6 0%, #dde9d2 50%, #c9dbbb 100%);                      /* [M] */
+  --dc-blob-lucy:      #6b8ae8, #9fd0ff, #cfd0ff;  /* [M] radial blob centres (reference list, not a usable value) */
+  --dc-blob-oasis:     #86b56f, #b9e0a5, #e6f2d2;  /* [M] */
+
+  /* ---- Live / status ---- */
+  --dc-live:          #ff3b30;  /* [M] recording dot on /lucy (with glow 0 0 14px rgba(255,59,48,.75)) */
+
+  /* ---- Type scale (desktop) ---- */
+  --dc-display-size:   4.0625rem;  /* 65px [M] site: --display-size */
+  --dc-display-lh:     1.12;       /* [M] */
+  --dc-display-ls:     -0.05em;    /* [M] */
+  --dc-h-xl-size:      3.25rem;    /* 52px [M] site: --heading-xl-size */
+  --dc-h-l-size:       3rem;       /* 48px [M] site: --heading-model-size / --heading-chip-size */
+  --dc-h-m-size:       2.5rem;     /* 40px [M] site: --heading-m-size (about timeline) */
+  --dc-h-ls:           -0.04em;    /* [M] */
+  --dc-h-lh:           1.12;       /* [M] 1.12 centred titles; 1.24 for 2-col titles */
+  --dc-statement-size: 2rem;       /* 32px [M] about statement */
+  --dc-cta-size:       2rem;       /* 32px [M] site: --heading-cta-size, weight 500 */
+  --dc-kicker-size:    1.5rem;     /* 24px [M] */
+  --dc-card-title:     1.375rem;   /* 22px [M] site: --card-title-size */
+  --dc-pub-title:      1.25rem;    /* 20px [M] */
+  --dc-body-l:         1.125rem;   /* 18px [M] site: --body-v2-size */
+  --dc-body:           1rem;       /* 16px [M] */
+  --dc-body-lh:        1.52;       /* [M] site: --body-v2-lh */
+  --dc-body-ls:        -0.02em;    /* [M] site: --body-v2-ls */
+  --dc-small:          0.875rem;   /* 14px [M] dates */
+  --dc-micro:          0.8125rem;  /* 13px [M] footer nav, dropdown desc */
+  --dc-legal:          0.6875rem;  /* 11px [M] copyright, legal */
+
+  /* ---- Radius ---- */
+  --dc-r-pill:   62.5rem;  /* 1000px [M] site: --radius-pill */
+  --dc-r-panel:  3.5rem;   /* 56px  [M] site: --radius-card-xl. Big media panels */
+  --dc-r-card:   2.5rem;   /* 40px  [M] site: --radius-card-40. Feature cards */
+  --dc-r-band:   1.5rem;   /* 24px  [M] site: --radius-card-24. CTA band, pub images */
+  --dc-r-menu:   1rem;     /* 16px  [M] dropdown list */
+  --dc-r-row:    0.75rem;  /* 12px  [M] dropdown rows, icon boxes */
+  --dc-r-icon:   0.5rem;   /* 8px   [M] dropdown icons */
+
+  /* ---- Shadow (only for floating things) ---- */
+  --dc-shadow-menu:  0 12px 32px rgba(33, 34, 44, 0.08);  /* [M] dropdown */
+  --dc-shadow-frame: 0 10px 58px rgba(0, 0, 0, 0.12);     /* [M] product UI frames inside panels (0.12–0.14) */
+
+  /* ---- Layout ---- */
+  --dc-container:    85rem;   /* 1360px [M] site: --container-v2 */
+  --dc-page-pad-x:   2.5rem;  /* 40px   [M] site: --page-pad-x-v2 */
+  --dc-section-pad:  5rem;    /* 80px   [M] site: --section-pad-v2 */
+  --dc-nav-h:        5rem;    /* 80px   [M] site: --nav-height */
+  --dc-gap-cards:    1.5rem;  /* 24px   [M] 3-up grids */
+  --dc-gap-split:    4rem;    /* 64px   [M] 2-col media/copy */
+
+  /* ---- Motion ---- */
+  --dc-dur-ui:      0.2s;   /* [M] hovers: colour, bg, border, opacity */
+  --dc-dur-nav:     0.3s;   /* [M] header bg/colour when switching light/dark */
+  --dc-dur-fade:    0.35s;  /* [M] tab media crossfade, mobile menu slide */
+  --dc-dur-zoom:    0.4s;   /* [M] card image hover zoom */
+  --dc-dur-slow:    0.6s;   /* [M] blurred backdrop crossfade */
+  --dc-ease:        ease;   /* [M] the default on ~all transitions */
+  --dc-ease-out:    cubic-bezier(0.39, 0.575, 0.565, 1); /* [M] accordion height on /lucy (easeOutSine) */
+}
+
+/* Breakpoints [M] (site media queries): 1199, 991, 767, 479 px — max-width. */
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+.dc, .dc-root {
+  font-family: var(--dc-font-sans);
+  font-size: var(--dc-body);
+  line-height: 1.4;               /* [M] site --body-lh 1.4em */
+  color: var(--dc-dark);
+  background: var(--dc-bg-page);
+  -webkit-font-smoothing: antialiased;
+}
+.dc *, .dc *::before, .dc *::after { box-sizing: border-box; }
+
+.dc-container {
+  max-width: calc(var(--dc-container) + 2 * var(--dc-page-pad-x));
+  padding-inline: var(--dc-page-pad-x);
+  margin-inline: auto;
+}
+.dc-section { background: var(--dc-bg-page); padding-block: var(--dc-section-pad); position: relative; }
+.dc-section--wash { background: var(--dc-wash-statement); }
+.dc-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--dc-gap-cards); }
+.dc-split  { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--dc-gap-split); align-items: center; }
+@media (max-width: 991px) { .dc-grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }  /* [I] */
+@media (max-width: 767px) {
+  .dc-grid-3, .dc-split { grid-template-columns: 1fr; gap: 2rem; }   /* [I] collapse to one column */
+  :root { --dc-page-pad-x: 1rem; --dc-section-pad: 3.5rem; }         /* [X] mobile values not measured */
+}
+
+/* ==========================================================================
+   Type
+   ========================================================================== */
+.dc-display {                     /* hero h1 [M] */
+  font-size: var(--dc-display-size); line-height: var(--dc-display-lh);
+  letter-spacing: var(--dc-display-ls); font-weight: 400; color: var(--dc-ink); margin: 0;
+}
+.dc-h-xl {                        /* section title, 52px [M] */
+  font-size: var(--dc-h-xl-size); line-height: var(--dc-h-lh);
+  letter-spacing: var(--dc-h-ls); font-weight: 400; color: var(--dc-ink-2); margin: 0;
+}
+.dc-h-l {                         /* model/statement title, 48px [M] */
+  font-size: var(--dc-h-l-size); line-height: 1.24;
+  letter-spacing: var(--dc-h-ls); font-weight: 400; color: var(--dc-ink-2); margin: 0;
+}
+.dc-h-m {                         /* timeline/feature title, 40px [M] */
+  font-size: var(--dc-h-m-size); line-height: 1.2;
+  letter-spacing: var(--dc-h-ls); font-weight: 400; color: var(--dc-ink-2); margin: 0;
+}
+.dc-statement {                   /* 32px running statement [M] */
+  font-size: var(--dc-statement-size); line-height: 1.3; letter-spacing: -0.02em;
+  font-weight: 400; color: var(--dc-ink); margin: 0;
+}
+.dc-kicker {                      /* grey line above a title [M] */
+  font-size: var(--dc-kicker-size); line-height: 1.2; letter-spacing: -0.02em;
+  color: var(--dc-grey); font-weight: 400; margin: 0;
+}
+.dc-card-title { font-size: var(--dc-card-title); line-height: 1.4; letter-spacing: -0.03em; font-weight: 400; color: var(--dc-ink-2); margin: 0; }
+.dc-pub-title  { font-size: var(--dc-pub-title); line-height: 1.4; letter-spacing: -0.03em; font-weight: 500; color: var(--dc-ink-2); margin: 0; }
+.dc-lede  { font-size: var(--dc-body-l); line-height: var(--dc-body-lh); letter-spacing: var(--dc-body-ls); color: var(--dc-text-body); margin: 0; }
+.dc-lede--soft { opacity: 0.7; }                                      /* [M] .sub / .lede use #333 at 0.7 */
+.dc-sub   { font-size: var(--dc-body-l); line-height: var(--dc-body-lh); letter-spacing: var(--dc-body-ls); color: var(--dc-text-sub); margin: 0; }  /* hero sub [M] */
+.dc-body  { font-size: var(--dc-body); line-height: var(--dc-body-lh); letter-spacing: var(--dc-body-ls); color: var(--dc-text-body); margin: 0; }
+.dc-meta  { font-size: var(--dc-small); line-height: 1.4; letter-spacing: 0.01em; color: var(--dc-grey); margin: 0; }  /* dates [M] */
+.dc-caps  { font-size: var(--dc-micro); line-height: 1.4; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 500; }  /* footer nav [M] */
+.dc-legal { font-size: var(--dc-legal); line-height: 2; letter-spacing: 0.02em; text-transform: uppercase; color: var(--dc-grey); }  /* [M] */
+
+/* ==========================================================================
+   Pill button  [M] — site: Pill-module
+   ========================================================================== */
+.dc-pill {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  max-width: 100%; white-space: nowrap; cursor: pointer; text-decoration: none;
+  font-family: var(--dc-font-sans); font-weight: 500; line-height: 1.5; letter-spacing: normal;
+  border: 1px solid transparent; border-radius: var(--dc-r-pill);
+  transition: background-color var(--dc-dur-ui) var(--dc-ease),
+              border-color var(--dc-dur-ui) var(--dc-ease),
+              color var(--dc-dur-ui) var(--dc-ease);
+}
+.dc-pill--lg { padding: 0.75rem 1.5rem; font-size: 1.125rem; }       /* 53px tall */
+.dc-pill--md { height: 3.25rem; padding: 0 2rem; font-size: 1.125rem; }
+.dc-pill--sm { padding: 0.5rem 1.1875rem; font-size: 1rem; }        /* nav CTA */
+
+.dc-pill--primary   { background: var(--dc-blue); border-color: var(--dc-blue); color: var(--dc-on-blue); }
+.dc-pill--primary:hover  { background: var(--dc-blue-hover); border-color: var(--dc-blue-hover); }
+.dc-pill--primary:active { background: var(--dc-blue-pressed); border-color: var(--dc-blue-pressed); }  /* [M] token, state not observed */
+.dc-pill--secondary { background: transparent; border-color: var(--dc-ink); color: var(--dc-ink); }
+.dc-pill--secondary:hover { background: var(--dc-ink); color: var(--dc-white); }
+.dc-pill--outline   { background: transparent; border-color: var(--dc-white); color: var(--dc-white); }   /* on dark/video */
+.dc-pill--outline:hover { background: var(--dc-white); color: var(--dc-ink); }
+.dc-pill--white     { background: var(--dc-white); border-color: var(--dc-white); color: var(--dc-ink); }  /* on blue band */
+.dc-pill--white:hover { background: var(--dc-surface-hover); border-color: var(--dc-surface-hover); }
+.dc-pill--ghost     { background: transparent; border-color: transparent; color: var(--dc-text-nav); }
+.dc-pill--ghost:hover { background: var(--dc-surface-hover); color: var(--dc-ink); }
+.dc-pill:focus-visible { outline: 2px solid var(--dc-focus); outline-offset: 2px; }  /* [M] from tabs, applied to pills [I] */
+.dc-pill[disabled], .dc-pill[aria-disabled="true"] { opacity: 0.4; pointer-events: none; }  /* [X] not on site */
+
+/* Text link with arrow  [M] "Read more →" */
+.dc-link { color: var(--dc-blue); text-decoration: none; transition: color var(--dc-dur-ui) var(--dc-ease); }
+.dc-link:hover { color: var(--dc-blue-hover); }
+
+/* ==========================================================================
+   Nav  [M] — fixed white bar, ghost pill links, sm primary CTA
+   ========================================================================== */
+.dc-nav {
+  position: sticky; top: 0; z-index: 50; height: var(--dc-nav-h);
+  background: var(--dc-white); color: var(--dc-ink);
+  transition: background-color var(--dc-dur-nav), color var(--dc-dur-nav);
+}
+.dc-nav__inner { height: 100%; display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  max-width: calc(var(--dc-container) + 2 * var(--dc-page-pad-x)); padding-inline: var(--dc-page-pad-x); margin-inline: auto; }
+.dc-nav__links { display: flex; align-items: center; gap: 0.375rem; }
+.dc-nav__link {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 6px 14px 6px 16px; border-radius: var(--dc-r-pill); border: 0; background: transparent; cursor: pointer;
+  font: 500 var(--dc-body)/1.5 var(--dc-font-sans); color: var(--dc-text-nav); text-decoration: none; white-space: nowrap;
+  transition: background-color var(--dc-dur-ui), color var(--dc-dur-ui);
+}
+.dc-nav__link:hover, .dc-nav__link[aria-current="page"], .dc-dropdown.is-open > .dc-nav__link {
+  background: var(--dc-surface-hover); color: var(--dc-ink);
+}
+.dc-nav__cta { margin-left: 0.5rem; }
+.dc-nav--on-dark { background: transparent; color: var(--dc-white); }
+.dc-nav--on-dark .dc-nav__link { color: rgba(255,255,255,0.85); }
+.dc-nav--on-dark .dc-nav__link:hover, .dc-nav--on-dark .dc-dropdown.is-open > .dc-nav__link { color: var(--dc-white); background: rgba(255,255,255,0.14); }
+
+.dc-chevron { width: 1rem; height: 1rem; display: inline-flex; transition: transform var(--dc-dur-ui); }
+.dc-dropdown { position: relative; }
+.dc-dropdown.is-open .dc-chevron { transform: rotate(180deg); }
+.dc-dropdown__list {               /* appears instantly — no fade on site [M] */
+  display: none; position: absolute; top: calc(100% + 0.5rem); left: 0; min-width: 16rem;
+  flex-direction: column; gap: 0.125rem; padding: 0.5rem;
+  background: var(--dc-white); border: 1px solid var(--dc-line); border-radius: var(--dc-r-menu);
+  box-shadow: var(--dc-shadow-menu);
+}
+.dc-dropdown.is-open .dc-dropdown__list { display: flex; }
+.dc-dropdown__item {
+  display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 0.75rem; border-radius: var(--dc-r-row);
+  color: var(--dc-ink); text-decoration: none; transition: background-color var(--dc-dur-ui);
+}
+.dc-dropdown__item:hover { background: var(--dc-surface-hover); }
+.dc-dropdown__icon { width: 2.25rem; height: 2.25rem; border-radius: var(--dc-r-icon); background: var(--dc-surface); flex: 0 0 auto; }
+.dc-dropdown__text { display: flex; flex-direction: column; line-height: 1.3; }
+.dc-dropdown__label { font-size: 1rem; font-weight: 500; }
+.dc-dropdown__desc  { font-size: var(--dc-micro); color: var(--dc-text-nav); }
+
+/* ==========================================================================
+   Segmented tabs  [M] — site: SegmentedTabs-module
+   ========================================================================== */
+.dc-tabs { display: inline-flex; gap: 0.5rem; padding: 0.5rem; max-width: 100%; overflow-x: auto; scrollbar-width: none;
+  background: var(--dc-surface); border-radius: var(--dc-r-pill); }
+.dc-tabs::-webkit-scrollbar { display: none; }
+.dc-tab { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1.25rem;
+  border: 0; background: transparent; border-radius: var(--dc-r-pill); cursor: pointer; white-space: nowrap;
+  font: 500 1rem/1.5 var(--dc-font-sans); color: var(--dc-text-tab);
+  transition: background-color var(--dc-dur-ui), color var(--dc-dur-ui); }
+.dc-tab:hover { color: var(--dc-text-body); }
+.dc-tab[aria-selected="true"] { background: var(--dc-white); color: var(--dc-text-body); }
+.dc-tabs--blue .dc-tab[aria-selected="true"] { background: var(--dc-blue); color: var(--dc-white); }
+.dc-tab:focus-visible { outline: 2px solid var(--dc-blue); outline-offset: 2px; }
+.dc-tabs--sm { gap: 0.25rem; padding: 0.375rem; }
+.dc-tabs--sm .dc-tab { padding: 0.5rem 1rem; font-size: 0.9375rem; }
+
+/* Crossfading tab panels [M] opacity .35s */
+.dc-stage { position: relative; }
+.dc-stage__panel { position: absolute; inset: 0; opacity: 0; transition: opacity var(--dc-dur-fade); pointer-events: none; }
+.dc-stage__panel.is-active { opacity: 1; pointer-events: auto; }
+
+/* ==========================================================================
+   Tags & chips
+   ========================================================================== */
+.dc-tag {                          /* product name tag "Lucy" [M] */
+  display: inline-flex; align-items: center; padding: 4px 16px; border: 1px solid var(--dc-ink);
+  border-radius: var(--dc-r-pill); background: rgba(255,255,255,0.1);
+  font: 500 1.125rem/1.5 var(--dc-font-sans); color: var(--dc-ink);
+}
+.dc-tag--on-dark { border-color: var(--dc-white); color: var(--dc-white); font-weight: 400; }  /* /lucy hero [M] */
+.dc-version { font: 500 1rem/1.5 var(--dc-font-sans); color: var(--dc-text-version); }       /* [M] */
+.dc-chip {                         /* "Google TPUs" hardware chip [M] */
+  display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1.25rem 0.5rem 1rem;
+  background: var(--dc-surface-chip); color: var(--dc-text-pill); border-radius: 3.25rem;
+  font: 500 0.9375rem/2.07 var(--dc-font-sans); white-space: nowrap;
+}
+
+/* ==========================================================================
+   Cards & panels
+   ========================================================================== */
+.dc-card {                         /* feature card [M] */
+  display: flex; flex-direction: column; gap: 3rem; padding: 1.5rem 1.5rem 2.5rem;
+  background: var(--dc-surface); border-radius: var(--dc-r-card);
+}
+.dc-card__text { display: flex; flex-direction: column; gap: 0.75rem; }  /* [I] gap not measured */
+.dc-icon-box {                     /* white 72px square in feature cards [M] */
+  width: 4.5rem; height: 4.5rem; display: grid; place-items: center;
+  background: var(--dc-white); border-radius: var(--dc-r-row); color: var(--dc-ink-2);
+}
+.dc-panel {                        /* big media panel [M] 56px radius, f5f5f5 */
+  position: relative; overflow: hidden; background: var(--dc-surface); border-radius: var(--dc-r-panel);
+  isolation: isolate;
+}
+.dc-panel--lucy  { background: var(--dc-wash-lucy); }
+.dc-panel--oasis { background: var(--dc-wash-oasis); }
+.dc-frame {                        /* product UI floating inside a panel [M] */
+  background: var(--dc-white); border-radius: 1.65rem; padding: 0.6rem; box-shadow: var(--dc-shadow-frame);
+}
+.dc-blobs { position: absolute; inset: 0; animation: dc-spin 54s linear infinite; z-index: -1; }  /* [M] */
+.dc-blob  { position: absolute; width: 70%; aspect-ratio: 1; border-radius: 50%; }
+.dc-blob:nth-child(1) { animation: dc-blobA 9s  ease-in-out infinite; top: 10%; left: 40%; }
+.dc-blob:nth-child(2) { animation: dc-blobB 13s ease-in-out infinite; top: 40%; left: -10%; }
+.dc-blob:nth-child(3) { animation: dc-blobC 11s ease-in-out infinite; top: 50%; left: 50%; }
+@keyframes dc-spin  { to { transform: rotate(360deg); } }
+@keyframes dc-blobA { 0%,100% { transform: translate(0) scale(1); } 25% { transform: translate(-34%,26%) scale(1.2); } 50% { transform: translate(-50%,64%) scale(.85); } 75% { transform: translate(-6%,44%) scale(1.1); } }
+@keyframes dc-blobB { 0%,100% { transform: translate(0) scale(1); } 30% { transform: translate(48%,-30%) scale(1.15); } 60% { transform: translate(70%,-70%) scale(.9); } }
+@keyframes dc-blobC { 0%,100% { transform: translate(0) scale(1); } 35% { transform: translate(-60%,-20%) scale(1.25); } 65% { transform: translate(-80%,-66%) scale(1); } }
+/* site uses cqw units inside a container; % here is the closest dependency-free equivalent [I] */
+
+/* Publication card [M] */
+.dc-pub { display: flex; flex-direction: column; gap: 1.25rem; color: inherit; text-decoration: none; height: 100%; }
+.dc-pub__image { aspect-ratio: 310 / 183; border-radius: var(--dc-r-band); background: var(--dc-surface); overflow: hidden; }
+.dc-pub__image > * { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform var(--dc-dur-zoom) var(--dc-ease); }
+.dc-pub:hover .dc-pub__image > * { transform: scale(1.03); }
+.dc-pub__body { display: flex; flex-direction: column; gap: 0.5rem; }   /* [I] */
+.dc-pub__title { -webkit-line-clamp: 3; -webkit-box-orient: vertical; display: -webkit-box; overflow: hidden; }
+.dc-pub__more { color: var(--dc-blue); padding-top: 0.5rem; transition: color var(--dc-dur-ui); }
+.dc-pub:hover .dc-pub__more { color: var(--dc-blue-hover); }
+
+/* CTA band [M] */
+.dc-band {
+  display: flex; align-items: center; justify-content: space-between; gap: 2rem;
+  padding: 1.8rem 2.5rem; background: var(--dc-blue); color: var(--dc-white);
+  border-radius: var(--dc-r-band); position: relative; overflow: hidden;
+}
+.dc-band__title { font-size: var(--dc-cta-size); font-weight: 500; line-height: 1.4; letter-spacing: -0.03em; max-width: 37.5rem; margin: 0; }
+@media (max-width: 767px) { .dc-band { flex-direction: column; align-items: flex-start; } }  /* [I] */
+
+/* ==========================================================================
+   Accordion (FAQ)  [M] grid-template-rows .35s easeOutSine on /lucy
+   ========================================================================== */
+.dc-accordion { border-top: 1px solid var(--dc-line); }                       /* [I] divider colour */
+.dc-accordion__item { border-bottom: 1px solid var(--dc-line); }              /* [I] */
+.dc-accordion__trigger { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+  padding: 1.5rem 0; background: none; border: 0; cursor: pointer; text-align: left;
+  font: 500 1.125rem/1.2 var(--dc-font-sans); letter-spacing: -0.02em; color: var(--dc-ink-2); }  /* [M] 18px w500 -0.36px */
+.dc-accordion__icon { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; transition: transform var(--dc-dur-ui); }
+.dc-accordion__item.is-open .dc-accordion__icon { transform: rotate(45deg); }  /* [I] */
+.dc-accordion__panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--dc-dur-fade) var(--dc-ease-out); }
+.dc-accordion__item.is-open .dc-accordion__panel { grid-template-rows: 1fr; }
+.dc-accordion__panel > div { overflow: hidden; }
+.dc-accordion__panel p { margin: 0 0 1.5rem; color: #6d6d6d; font-size: 1rem; line-height: 1.4; letter-spacing: -0.01em; max-width: 48rem; }  /* [M] /lucy grey */
+
+/* ==========================================================================
+   Scroll reveal  [M visual / I mechanism] — words sweep grey→ink with scroll
+   ========================================================================== */
+.dc-reveal .dc-word { display: inline-block; will-change: opacity, color; }
+.dc-reveal .dc-word { transition: color 0.12s linear, opacity 0.12s linear; } /* [X] smoothing only */
+
+/* ==========================================================================
+   Marquee  [M] translateX(-50%) linear infinite; duration not measured
+   ========================================================================== */
+.dc-marquee { overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+.dc-marquee__track { display: flex; width: max-content; gap: 2rem; animation: dc-marquee 40s linear infinite; } /* 40s [X] */
+@keyframes dc-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+/* Live dot  [M] recBlink opacity 1↔.25 */
+.dc-live { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--dc-live);
+  box-shadow: 0 0 14px rgba(255,59,48,0.75); animation: dc-blink 1.2s ease-in-out infinite; display: inline-block; }  /* 1.2s [X] */
+@keyframes dc-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+/* ==========================================================================
+   Footer  [M]
+   ========================================================================== */
+.dc-footer { background: var(--dc-footer); color: var(--dc-white); }
+.dc-footer__inner { max-width: calc(var(--dc-container) + 2 * var(--dc-page-pad-x)); margin-inline: auto;
+  padding: 4.5rem var(--dc-page-pad-x) 1.5rem; min-height: 33.625rem; display: flex; flex-direction: column; }
+.dc-footer__link { color: var(--dc-white); text-decoration: none; transition: opacity var(--dc-dur-ui); }
+.dc-footer__link:hover { opacity: 0.7; }
+.dc-footer__legal a { color: inherit; text-decoration: none; transition: color var(--dc-dur-ui); }
+.dc-footer__legal a:hover { color: var(--dc-white); }
+
+/* ==========================================================================
+   Responsive type  [X] — mobile sizes were not measured; ratios kept
+   ========================================================================== */
+@media (max-width: 991px) {
+  :root { --dc-display-size: 3.25rem; --dc-h-xl-size: 2.75rem; --dc-h-l-size: 2.5rem; --dc-h-m-size: 2.125rem; }
+}
+@media (max-width: 479px) {
+  :root { --dc-display-size: 2.5rem; --dc-h-xl-size: 2.125rem; --dc-h-l-size: 2rem; --dc-h-m-size: 1.75rem; --dc-cta-size: 1.5rem; }
+}
+
+/* Reduced motion  [M] site stops the marquee; extended to all loops [I] */
+@media (prefers-reduced-motion: reduce) {
+  .dc-marquee__track, .dc-blobs, .dc-blob, .dc-live { animation: none !important; }
+  .dc-marquee { overflow-x: auto; }
+  .dc-pub:hover .dc-pub__image > * { transform: none; }
+}
