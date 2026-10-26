@@ -221,7 +221,8 @@ class World:
             return
         act, e = opt.key.split(":")
         if act == "wait":
-            s.update(status="waiting", next=max(self.t + 1, min(opt.launch - planner.OPEN_S / 2, self.t + recheck)))
+            s.update(status="waiting", next=max(self.t + 1, min(opt.launch - planner.OPEN_S / 2, self.t + recheck)),
+                     wait_until=opt.launch)
             return
         bid = planner.windows(th, self.t, pol.stock, self.cfg)[e][0]
         shot = first_shot(th, bid, self.t + 4.0)
@@ -271,6 +272,27 @@ class World:
             return self.t
         nxt = [max(th.t0, th.first_launch - HORIZON_S) for th in self.threats if max(th.t0, th.first_launch - HORIZON_S) > self.t]
         return min(nxt + [self.end])
+
+    def next_event(self):
+        """Sim time of the next thing worth watching: a shot lands, a waited-for window opens, a held threat lands,
+        a missile launches, a threat enters the decision horizon. The live demo jumps the quiet time in between."""
+        ev = [self.end]
+        for th in self.threats:
+            if th.t0 > self.t:
+                ev.append(th.t0 if th.cls in "BR" else th.first_launch - HORIZON_S)
+                continue
+            for pol in self.policies.values():
+                s = pol.st[th.id]
+                if s["status"] in DONE:
+                    continue
+                ev.append(th.t0 + th.T)
+                if s["status"] == "inflight":
+                    ev.append(s["resolve"])
+                elif s["status"] == "waiting":
+                    ev.append(s.get("wait_until", self.t) - planner.OPEN_S)
+                elif s["status"] == "pending":
+                    ev.append(th.first_launch - HORIZON_S if not self.in_horizon(th) else self.t)
+        return max(self.t, min(ev))
 
     def set_config(self, patch):
         self.cfg.update(patch)

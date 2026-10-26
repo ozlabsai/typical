@@ -259,7 +259,7 @@ SCENARIOS = {
         title="Red Sea: Houthi long-range",
         blurb="3 Palestine-2 missiles and 8 drones towards Eilat and the centre. Small raid, every decision visible.",
         waves=[("palestine2", "yemen", ["tel_aviv", "eilat", "ben_gurion"], 3, 3, 0, 400),
-               ("shahed", "yemen", ["eilat"], 8, 2, 0, 600)]),
+               ("shahed", "yemen", ["eilat"], 8, 2, 35400, 36600)]),
 }
 
 

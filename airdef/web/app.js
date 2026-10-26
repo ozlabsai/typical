@@ -10,7 +10,7 @@ const DONE = ["killed", "leaked", "fell_open"];
 // ---------------------------------------------------------------- i18n
 const I18N = {
   en: {
-    brand: "Air Defence", busy: "deciding…", play: "Play", pause: "Pause", skip: "Skip transit", lang: "עברית",
+    brand: "Air Defence", busy: "deciding…", auto: "⏩ auto-skip", skipped: (x) => `skipped ${x}`, play: "Play", pause: "Pause", skip: "Skip transit", lang: "עברית",
     cls: { B: "ballistic missile", R: "rocket", C: "cruise missile", D: "drone" },
     to: "to", openGround: "open ground near", prio: "priority", secondary: "secondary", impactIn: "impact in",
     following: "Following the most urgent threat", pinned: "Pinned", followBtn: "follow most urgent",
@@ -36,7 +36,7 @@ const I18N = {
     note: "Posture, stock, damage weights and priorities feed all three lenses; Typical reads them as sentences, the planner as numbers.",
   },
   he: {
-    brand: "הגנה אווירית", busy: "מחליט…", play: "הפעל", pause: "השהה", skip: "דלג על מעבר", lang: "English",
+    brand: "הגנה אווירית", busy: "מחליט…", auto: "⏩ דילוג אוטומטי", skipped: (x) => `דולגו ${x}`, play: "הפעל", pause: "השהה", skip: "דלג על מעבר", lang: "English",
     cls: { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" },
     to: "לעבר", openGround: "שטח פתוח ליד", prio: "בעדיפות", secondary: "משני", impactIn: "פגיעה בעוד",
     following: "עוקב אחרי האיום הדחוף ביותר", pinned: "נעוץ", followBtn: "עקוב אחרי הדחוף",
@@ -90,6 +90,7 @@ async function init() {
   $("#speeds").onclick = (e) => e.target.dataset.x && api("/api/control", { action: "speed", speed: +e.target.dataset.x });
   $("#play").onclick = () => api("/api/control", { action: S?.running ? "pause" : "play" });
   $("#skip").onclick = () => api("/api/control", { action: "skip" });
+  $("#auto").onclick = () => api("/api/control", { action: "autoskip" });
   $("#gear").onclick = () => { $("#drawer").classList.toggle("open"); $("#gear").classList.toggle("on"); };
   $("#card").onclick = (e) => { if (e.target.id === "followBtn") { pinned = false; pickFollow(); } };
   $("#score").onclick = (e) => { if (e.target.id === "cmpBtn") { showPlanner = !showPlanner; renderScore(); } };
@@ -187,7 +188,7 @@ function frame() {
       getFillColor: (d) => (prio.has(d.id) ? [255, 181, 71, 34] : [240, 238, 235, 14]), stroked: true, lineWidthUnits: "pixels",
       getLineWidth: (d) => (prio.has(d.id) ? 1.4 : 0.5), getLineColor: (d) => (prio.has(d.id) ? [255, 181, 71, 190] : [240, 238, 235, 60]),
       updateTriggers: { getFillColor: [...prio].join(), getLineColor: [...prio].join(), getLineWidth: [...prio].join() } }),
-    new deck.TextLayer({ id: "siteNames", data: META.sites.filter((s) => prio.has(s.id) || map.getZoom() > 7.2), getPosition: (d) => [d.lon, d.lat],
+    new deck.TextLayer({ id: "siteNames", data: META.sites.filter((s) => (prio.has(s.id) && map.getZoom() > 6) || map.getZoom() > 7.2), getPosition: (d) => [d.lon, d.lat],
       getText: (d) => glyphs(nm(d)), getSize: 11, getColor: (d) => (prio.has(d.id) ? [255, 181, 71, 210] : [240, 238, 235, 120]), getPixelOffset: [0, -14],
       fontFamily: "Helvetica Neue, Arial, sans-serif", fontWeight: 500, characterSet: "auto", updateTriggers: { getText: LANG, getColor: [...prio].join() } }),
     new deck.ScatterplotLayer({ id: "batt", data: batts, getPosition: (d) => [d.lon, d.lat], radiusUnits: "pixels", getRadius: 2.5, getFillColor: [90, 209, 255, 170] }),
@@ -214,7 +215,12 @@ function renderTop() {
   $("#play").classList.toggle("on", S.running);
   document.querySelectorAll("#speeds button").forEach((b) => b.classList.toggle("on", +b.dataset.x === S.speed));
   document.querySelectorAll("#scen button").forEach((b) => b.classList.toggle("on", b.dataset.s === S.scenario));
-  $("#busy").style.visibility = S.backlog ? "visible" : "hidden";
+  $("#auto").textContent = T().auto;
+  $("#auto").classList.toggle("on", S.autoskip);
+  const showSkip = S.skipped > 0 && S.running && performance.now() - (renderTop.lastSkip?.at ?? -1e9) < 2500;
+  if (S.skipped !== renderTop.lastSkip?.v) renderTop.lastSkip = { v: S.skipped, at: performance.now() };
+  $("#busy").textContent = S.backlog ? T().busy : showSkip ? T().skipped(fmtT(S.skipped)) : "";
+  $("#busy").style.visibility = S.backlog || showSkip ? "visible" : "hidden";
 }
 
 function renderScore() {

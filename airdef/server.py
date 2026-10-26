@@ -27,7 +27,9 @@ BUDGET = 6             # Typical calls per tick; the sim slows down when decisio
 
 app = FastAPI()
 lock = threading.Lock()   # one lock for world + model (MPS crashes on concurrent calls)
-S = dict(world=None, running=False, speed=10.0, model=None, model_name="planner only", backlog=False)
+S = dict(world=None, running=False, speed=10.0, model=None, model_name="planner only", backlog=False, autoskip=True,
+         skipped=0.0)
+QUIET_S = 15           # auto-skip: jump when nothing happens for longer than this (sim seconds)
 
 
 def load_model():
@@ -55,6 +57,9 @@ def loop():
                 calls = w.step(0.0, BUDGET)          # decide + resolve at the current time...
                 S["backlog"] = calls.get("typical", 0) >= BUDGET
                 w.t = min(w.t + (min(dt, 1.0) if S["backlog"] else dt), w.end)   # ...then advance (slower when backed up)
+                if S["autoskip"] and not S["backlog"] and (nxt := w.next_event()) - w.t > QUIET_S:
+                    S["skipped"] = nxt - 5 - w.t       # the UI shows "skipped mm:ss"
+                    w.t = nxt - 5
         time.sleep(max(0.0, TICK_S - (time.perf_counter() - t0)))
 
 
@@ -109,6 +114,7 @@ def state(policy: str = "typical"):
                                conf=max(d.values()) if d else None, escalated=s["escalated"], tti=th.t0 + th.T - w.t,
                                impact=th.t0 + th.T, ipp=[round(plon, 4), round(plat, 4), round(sigma, 2)], site=s.get("site")))
         return dict(t=w.t, end=w.end, running=S["running"], speed=S["speed"], backlog=S["backlog"],
+                    autoskip=S["autoskip"], skipped=S["skipped"],
                     scenario=w.scenario, model=S["model_name"], cfg=w.cfg, tracks=tracks,
                     flights=[dict(b=f[1], th=f[2], t0=f[3], t1=f[4], lat=f[5], lon=f[6], alt=f[7] * 1000, hit=f[8])
                              for f in w.flights if f[0] == policy],
@@ -154,8 +160,10 @@ def control(c: Control):
             S["running"] = False
         elif c.action == "speed" and c.speed:
             S["speed"] = max(0.25, min(c.speed, 600))
-        elif c.action == "skip":   # fast-forward through transit to the next engagement opportunity
-            w.t = max(w.t, w.idle_until())
+        elif c.action == "skip":   # jump to just before the next thing worth watching
+            w.t = max(w.t, w.next_event() - 5)
+        elif c.action == "autoskip":
+            S["autoskip"] = not S["autoskip"]
         elif c.action == "reset":
             if c.scenario and c.scenario not in SCENARIOS:
                 raise HTTPException(400, "unknown scenario")
