@@ -1,0 +1,490 @@
+{
+  "company": "Northwind Freight",
+  "tuned": "local:co_f",
+  "n_cases": 200,
+  "n_answers": 800,
+  "score": {
+    "standard": 0.57625,
+    "yours": 0.78375
+  },
+  "decisions": [
+    {
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "type": "choice",
+      "labels": [
+        "Claims",
+        "Billing",
+        "Dispatch",
+        "Sales"
+      ],
+      "standard": 0.605,
+      "yours": 0.86
+    },
+    {
+      "key": "escalate",
+      "question": "Should we escalate this to a manager?",
+      "type": "noul",
+      "labels": [
+        "no",
+        "yes"
+      ],
+      "standard": 0.575,
+      "yours": 0.89
+    },
+    {
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "type": "score",
+      "labels": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "standard": 0.24,
+      "yours": 0.455
+    },
+    {
+      "key": "refund",
+      "question": "Can the agent refund this without approval?",
+      "type": "noul",
+      "labels": [
+        "no",
+        "yes"
+      ],
+      "standard": 0.885,
+      "yours": 0.93
+    }
+  ],
+  "fixed": 203,
+  "broken": 37,
+  "abstained": {
+    "standard": 127,
+    "yours": 0
+  },
+  "disagreements": [
+    {
+      "case": "Customer: Delta Retail (business plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $6,488, shipped 6 days ago.\n\nQuick favor: can address for ORD-2500385 be changed to the corrected delivery point?",
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "decided": "Dispatch",
+      "standard": {
+        "answer": "Sales",
+        "p": 0.91
+      },
+      "yours": {
+        "answer": "Dispatch",
+        "p": 1.0
+      }
+    },
+    {
+      "case": "Customer: Acme Outdoors (starter plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $1,038, shipped 14 days ago.\n\nQuick favor: can address for ORD-2500385 be changed to the corrected delivery point?",
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "decided": "Dispatch",
+      "standard": {
+        "answer": "Sales",
+        "p": 0.71
+      },
+      "yours": {
+        "answer": "Dispatch",
+        "p": 1.0
+      }
+    },
+    {
+      "case": "Customer: Foxglove Labs (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $8,066, shipped 4 days ago.\n\nQuick favor: can address for ORD-2500385 be changed to the corrected delivery point?",
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "decided": "Dispatch",
+      "standard": {
+        "answer": "Sales",
+        "p": 0.77
+      },
+      "yours": {
+        "answer": "Dispatch",
+        "p": 1.0
+      }
+    },
+    {
+      "case": "Customer: Foxglove Labs (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $8,066, shipped 4 days ago.\n\nQuick favor: can address for ORD-2500385 be changed to the corrected delivery point?",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "3",
+      "standard": {
+        "answer": "0",
+        "p": 0.48
+      },
+      "yours": {
+        "answer": "3",
+        "p": 0.44
+      }
+    },
+    {
+      "case": "Customer: Harbor Labs (enterprise plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $2,079, shipped 11 days ago.\n\nQuick favor: can address for ORD-2500385 be changed to the corrected delivery point?",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "3",
+      "standard": {
+        "answer": "0",
+        "p": 0.41
+      },
+      "yours": {
+        "answer": "3",
+        "p": 0.54
+      }
+    },
+    {
+      "case": "Customer: Cedar Retail (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $93, shipped 4 days ago.\n\nCan someone help? Need to change delivery for order ORD-2500368 to the backup facility upstate.",
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "decided": "Dispatch",
+      "standard": {
+        "answer": "Sales",
+        "p": 0.53
+      },
+      "yours": {
+        "answer": "Dispatch",
+        "p": 1.0
+      }
+    },
+    {
+      "case": "Customer: Cedar Retail (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $93, shipped 4 days ago.\n\nCan someone help? Need to change delivery for order ORD-2500368 to the backup facility upstate.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "2",
+      "standard": {
+        "answer": "0",
+        "p": 0.8
+      },
+      "yours": {
+        "answer": "2",
+        "p": 0.47
+      }
+    },
+    {
+      "case": "Customer: Everly Medical (business plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $167, shipped 18 days ago.\n\nStill waiting on TRK-9500931 (industrial machinery, order ORD-2000931). Expected it by now.",
+      "key": "refund",
+      "question": "Can the agent refund this without approval?",
+      "decided": "yes",
+      "standard": {
+        "answer": "no",
+        "p": 1.0
+      },
+      "yours": {
+        "answer": "yes",
+        "p": 0.57
+      }
+    },
+    {
+      "case": "Customer: Acme Retail (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $132, no shipment yet.\n\nQuote for textiles shipping \u2013 15 boxes to Boston. I'm on a timeline here. Please respond promptly.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "0",
+      "standard": {
+        "answer": "2",
+        "p": 0.41
+      },
+      "yours": {
+        "answer": "0",
+        "p": 0.57
+      }
+    },
+    {
+      "case": "Customer: Cedar Retail (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $5,445, shipped 1 days ago.\n\nStill waiting on TRK-9500931 (industrial machinery, order ORD-2000931). Expected it by now.",
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "decided": "Dispatch",
+      "standard": {
+        "answer": "Sales",
+        "p": 0.52
+      },
+      "yours": {
+        "answer": "Dispatch",
+        "p": 0.92
+      }
+    },
+    {
+      "case": "Customer: Cedar Retail (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $5,445, shipped 1 days ago.\n\nStill waiting on TRK-9500931 (industrial machinery, order ORD-2000931). Expected it by now.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "3",
+      "standard": {
+        "answer": "2",
+        "p": 0.44
+      },
+      "yours": {
+        "answer": "3",
+        "p": 0.44
+      }
+    },
+    {
+      "case": "Customer: Foxglove Foods (starter plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $50, no shipment yet.\n\nQuote for textiles shipping \u2013 15 boxes to Boston. I'm on a timeline here. Please respond promptly.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "0",
+      "standard": {
+        "answer": "2",
+        "p": 0.33
+      },
+      "yours": {
+        "answer": "0",
+        "p": 0.47
+      }
+    },
+    {
+      "case": "Customer: Borealis Labs (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $399, shipped 24 days ago.\n\nCan someone help? Need to change delivery for order ORD-2500368 to the backup facility upstate.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "2",
+      "standard": {
+        "answer": "0",
+        "p": 0.4
+      },
+      "yours": {
+        "answer": "2",
+        "p": 0.46
+      }
+    },
+    {
+      "case": "Customer: Delta Supply (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $2,575, shipped 5 days ago.\n\nUpdate needed NOW on TRK-9500869. Order ORD-2000869 industrial machinery is way behind schedule.",
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "decided": "Dispatch",
+      "standard": {
+        "answer": "Sales",
+        "p": 0.87
+      },
+      "yours": {
+        "answer": "Dispatch",
+        "p": 0.96
+      }
+    },
+    {
+      "case": "Customer: Acme Labs (starter plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $4,868, shipped 1 days ago.\n\nCan you PLEASE change ORD-2500323 address to the corrected delivery point? We've asked multiple times.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "3",
+      "standard": {
+        "answer": "2",
+        "p": 0.36
+      },
+      "yours": {
+        "answer": "3",
+        "p": 0.47
+      }
+    },
+    {
+      "case": "Customer: Acme Outdoors (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $4,875, shipped 9 days ago.\n\nCan someone help? Need to change delivery for order ORD-2500368 to the backup facility upstate.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "3",
+      "standard": {
+        "answer": "2",
+        "p": 0.37
+      },
+      "yours": {
+        "answer": "3",
+        "p": 0.51
+      }
+    },
+    {
+      "case": "Customer: Borealis Supply (starter plan, APAC). Tickets from this customer in the last 30 days: 4. Shipment value: $5,047, no shipment yet.\n\nQuote for textiles shipping \u2013 15 boxes to Boston. I'm on a timeline here. Please respond promptly.",
+      "key": "escalate",
+      "question": "Should we escalate this to a manager?",
+      "decided": "yes",
+      "standard": {
+        "answer": "no",
+        "p": 0.87
+      },
+      "yours": {
+        "answer": "yes",
+        "p": 0.99
+      }
+    },
+    {
+      "case": "Customer: Cedar Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $6,184, shipped 21 days ago.\n\nUpdate needed NOW on TRK-9500869. Order ORD-2000869 industrial machinery is way behind schedule.",
+      "key": "escalate",
+      "question": "Should we escalate this to a manager?",
+      "decided": "yes",
+      "standard": {
+        "answer": "no",
+        "p": 0.91
+      },
+      "yours": {
+        "answer": "yes",
+        "p": 0.51
+      }
+    },
+    {
+      "case": "Customer: Cedar Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $6,184, shipped 21 days ago.\n\nUpdate needed NOW on TRK-9500869. Order ORD-2000869 industrial machinery is way behind schedule.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "3",
+      "standard": {
+        "answer": "2",
+        "p": 0.39
+      },
+      "yours": {
+        "answer": "3",
+        "p": 0.35
+      }
+    },
+    {
+      "case": "Customer: Foxglove Retail (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $3,388, no shipment yet.\n\nQuote for textiles shipping \u2013 15 boxes to Boston. I'm on a timeline here. Please respond promptly.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "1",
+      "standard": {
+        "answer": "0",
+        "p": 0.44
+      },
+      "yours": {
+        "answer": "1",
+        "p": 0.41
+      }
+    },
+    {
+      "case": "Customer: Foxglove Outdoors (starter plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $1,230, shipped 3 days ago.\n\nUpdate needed NOW on TRK-9500869. Order ORD-2000869 industrial machinery is way behind schedule.",
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "decided": "Dispatch",
+      "standard": {
+        "answer": "Sales",
+        "p": 0.59
+      },
+      "yours": {
+        "answer": "Dispatch",
+        "p": 0.93
+      }
+    },
+    {
+      "case": "Customer: Everly Supply (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $1,862, shipped 8 days ago.\n\nCan someone help? Need to change delivery for order ORD-2500368 to the backup facility upstate.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "3",
+      "standard": {
+        "answer": "0",
+        "p": 0.81
+      },
+      "yours": {
+        "answer": "3",
+        "p": 0.56
+      }
+    },
+    {
+      "case": "Customer: Granite Labs (starter plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $62, no shipment yet.\n\nMy attorneys are filing against you! Furniture quote to Miami NOW or legal action follows! This is CRIMINAL!",
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "decided": "Sales",
+      "standard": {
+        "answer": "Claims",
+        "p": 0.53
+      },
+      "yours": {
+        "answer": "Sales",
+        "p": 0.99
+      }
+    },
+    {
+      "case": "Customer: Granite Labs (starter plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $62, no shipment yet.\n\nMy attorneys are filing against you! Furniture quote to Miami NOW or legal action follows! This is CRIMINAL!",
+      "key": "escalate",
+      "question": "Should we escalate this to a manager?",
+      "decided": "yes",
+      "standard": {
+        "answer": "no",
+        "p": 0.99
+      },
+      "yours": {
+        "answer": "yes",
+        "p": 0.8
+      }
+    },
+    {
+      "case": "Customer: Granite Labs (starter plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $62, no shipment yet.\n\nMy attorneys are filing against you! Furniture quote to Miami NOW or legal action follows! This is CRIMINAL!",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "0",
+      "standard": {
+        "answer": "2",
+        "p": 0.4
+      },
+      "yours": {
+        "answer": "0",
+        "p": 0.5
+      }
+    },
+    {
+      "case": "Customer: Foxglove Labs (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $77, shipped 14 days ago.\n\nCan you PLEASE change ORD-2500323 address to the corrected delivery point? We've asked multiple times.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "2",
+      "standard": {
+        "answer": "0",
+        "p": 0.6
+      },
+      "yours": {
+        "answer": "2",
+        "p": 0.47
+      }
+    },
+    {
+      "case": "Customer: Harbor Supply (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $11,570, shipped 22 days ago.\n\nUpdate needed NOW on TRK-9500869. Order ORD-2000869 industrial machinery is way behind schedule.",
+      "key": "escalate",
+      "question": "Should we escalate this to a manager?",
+      "decided": "yes",
+      "standard": {
+        "answer": "no",
+        "p": 0.94
+      },
+      "yours": {
+        "answer": "yes",
+        "p": 0.57
+      }
+    },
+    {
+      "case": "Customer: Harbor Supply (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $11,570, shipped 22 days ago.\n\nUpdate needed NOW on TRK-9500869. Order ORD-2000869 industrial machinery is way behind schedule.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "3",
+      "standard": {
+        "answer": "2",
+        "p": 0.41
+      },
+      "yours": {
+        "answer": "3",
+        "p": 0.38
+      }
+    },
+    {
+      "case": "Customer: Delta Retail (starter plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $50, shipped 19 days ago.\n\nCan you PLEASE change ORD-2500323 address to the corrected delivery point? We've asked multiple times.",
+      "key": "route",
+      "question": "Which team should handle this ticket?",
+      "decided": "Dispatch",
+      "standard": {
+        "answer": "Sales",
+        "p": 0.55
+      },
+      "yours": {
+        "answer": "Dispatch",
+        "p": 1.0
+      }
+    },
+    {
+      "case": "Customer: Foxglove Medical (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $8,598, shipped 16 days ago.\n\nCan someone help? Need to change delivery for order ORD-2500368 to the backup facility upstate.",
+      "key": "urgency",
+      "question": "How urgent is this ticket?",
+      "decided": "3",
+      "standard": {
+        "answer": "0",
+        "p": 0.7
+      },
+      "yours": {
+        "answer": "3",
+        "p": 0.54
+      }
+    }
+  ],
+  "measured": "200 Northwind Freight cases neither model saw while learning",
+  "source": "scripts/typically_reveal.py; base = OzLabs/typical-small, yours = local:co_f, eval file data_co_a/eval/a_oneliner.jsonl"
+}

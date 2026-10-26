@@ -1,0 +1,832 @@
+ticket,team,escalate,urgency,refund
+"Customer: Delta Retail (starter plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $167, shipped 21 days ago.
+
+URGENT ESCALATION NEEDED: ORD-2000939 is completely unacceptable. furniture parts. TRK-9500939. Fix immediately.",Claims,yes,0,no
+"Customer: Borealis Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $210, shipped 25 days ago.
+
+ENOUGH! The invoice NW-2024105 is a SCAM. Intentional overcharging? This is ridiculous. We're done with Northwind. Process a full refund IMMEDIATELY.",Sales,yes,2,no
+"Customer: Harbor Outdoors (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $28, shipped 11 days ago.
+
+This is criminal negligence. The industrial parts arrived totaled. Our legal team is filing a claim for full damages plus lost business. Expect litigation.",Claims,yes,2,yes
+"Customer: Acme Supply (starter plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $22, shipped 3 days ago.
+
+I noticed our recent shipment invoice seems overcharged. We need to reconcile the amount. Can someone from accounting review NW-2024105? Appreciate your help.",Billing,no,0,no
+"Customer: Delta Labs (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $431, shipped 14 days ago.
+
+I'm annoyed. NW-20243827-81611 (automotive parts) has been lost in your system for too long. Tracking is stuck and useless. What are you doing about it? Blue Ridge Distributors",Claims,no,1,no
+"Customer: Harbor Labs (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $1,110, shipped 21 days ago.
+
+NW-20246374-66161 came in today. The laboratory supplies are destroyed. Whoever packed this did a terrible job. I need a replacement shipped immediately. Summit Logistics",Claims,no,2,no
+"Customer: Delta Retail (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $152, shipped 15 days ago.
+
+frustrated - order ORD-2500221 should go to the updated shipping address in Brooklyn not the original. please change it and confirm",Dispatch,no,2,no
+"Customer: Foxglove Outdoors (business plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $8,048, shipped 23 days ago.
+
+Northwind Freight, We are writing to express our frustration regarding the ongoing delay of order ORD-2000818 containing textiles (tracking TRK-9500818). The scheduled delivery date has long passed, and the continued lack of resolution is impacting our business. We require an immediate status update and a confirmed delivery date.",Claims,yes,2,no
+"Customer: Delta Supply (enterprise plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $5,165, shipped 18 days ago.
+
+Order ORD-892341 (medical kits) – address change to 789 Harbor View Drive, Seattle, WA 98101 required per legal direction. Please don't mess this up.",Dispatch,yes,3,no
+"Customer: Foxglove Supply (business plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $414, no shipment yet.
+
+I NEED A QUOTE FOR WINE SHIPMENT NOW!!! 10 pallets to Los Angeles! Why is this impossible?! GET ME PRICING!",Sales,no,0,no
+"Customer: Everly Foods (starter plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $71, no shipment yet.
+
+Hi, we need a shipping quote for textiles – approximately 20 boxes, destination is Denver. Please send details when available.",Sales,no,0,no
+"Customer: Borealis Supply (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $580, no shipment yet.
+
+I need a quote for shipping wine, and I need it soon. 8 pallets to Portland. Don't take forever with this.",Sales,no,0,no
+"Customer: Granite Retail (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $742, shipped 11 days ago.
+
+I'm annoyed. NW-20243827-81611 (automotive parts) has been lost in your system for too long. Tracking is stuck and useless. What are you doing about it? Blue Ridge Distributors",Claims,no,2,no
+"Customer: Harbor Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $440, shipped 19 days ago.
+
+Hello Northwind, we received an invoice that appears to have incorrect charges. Our original quote was different. Could your billing team review order NW-2024101?",Sales,no,2,no
+"Customer: Granite Supply (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $11,136, shipped 20 days ago.
+
+ORD-2000767 is now LATE. medical kits. tracking TRK-9500767. seriously need this sorted",Claims,yes,2,no
+"Customer: Acme Supply (enterprise plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $1,102, shipped 23 days ago.
+
+Frustrated. Order ORD-D705195 (NW-20243537-32822) arrived damaged. medical diagnostic kits are unusable. What's taking so long on your end? Midwest Supply Co.",Claims,no,3,no
+"Customer: Cedar Supply (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $2,094, shipped 6 days ago.
+
+Hi there, shipment NW-20247966-14878 with consumer electronics doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,no,2,no
+"Customer: Cedar Outdoors (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $285, shipped 4 days ago.
+
+ENOUGH. Where is ORD-2000905?? wine (pallets)? Tracking TRK-9500905?? This delay is inexcusable and we are DONE waiting. Fix this immediately or face consequences.",Dispatch,yes,2,yes
+"Customer: Everly Supply (starter plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $23, shipped 14 days ago.
+
+UNACCEPTABLE! Shipment NW24-445829 going to WRONG ADDRESS 123 Commerce Street, Denver, CO 80202. My legal team will be contacting you. Fix this NOW!",Dispatch,yes,2,no
+"Customer: Foxglove Outdoors (enterprise plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $10,886, shipped 8 days ago.
+
+UNACCEPTABLE. ORD-2000956 (electronics, TRK-9500956) is LONG overdue. Immediate action required.",Dispatch,yes,3,no
+"Customer: Cedar Supply (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $6,034, no shipment yet.
+
+I NEED A QUOTE FOR WINE SHIPMENT NOW!!! 10 pallets to Los Angeles! Why is this impossible?! GET ME PRICING!",Sales,yes,0,no
+"Customer: Granite Foods (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $6,522, shipped 4 days ago.
+
+Frustrated. Order ORD-D705195 (NW-20243537-32822) arrived damaged. medical diagnostic kits are unusable. What's taking so long on your end? Midwest Supply Co.",Claims,yes,3,no
+"Customer: Delta Medical (enterprise plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $23, no shipment yet.
+
+I need a rate for shipping electronics. 2 pallets. Philadelphia. Can you send this quickly or should I call someone else?",Sales,no,1,no
+"Customer: Harbor Medical (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $40, no shipment yet.
+
+ARE YOU SERIOUS?! Medical equipment quote to Chicago – I'VE BEEN WAITING FOREVER! SEND ME NUMBERS NOW!",Sales,yes,1,no
+"Customer: Borealis Foods (starter plan, US). Tickets from this customer in the last 30 days: 4. Shipment value: $1,249, shipped 21 days ago.
+
+Hello, shipment NW-20243396-85804 (ORD-I157149) arrived but the office furniture are damaged. Please advise on the claims process. My legal department needs documentation for our records. Midwest Supply Co.",Claims,yes,1,no
+"Customer: Delta Retail (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $42, shipped 20 days ago.
+
+The consumer electronics in NW-20241784-55967 arrived damaged. We need a formal claim submitted and our legal team advised. Please send procedures. Midwest Supply Co.",Claims,yes,2,yes
+"Customer: Borealis Labs (starter plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $24, shipped 17 days ago.
+
+I'm annoyed. NW-20243827-81611 (automotive parts) has been lost in your system for too long. Tracking is stuck and useless. What are you doing about it? Blue Ridge Distributors",Claims,no,1,no
+"Customer: Foxglove Medical (business plan, EU). Tickets from this customer in the last 30 days: 4. Shipment value: $28, shipped 3 days ago.
+
+This is UNBELIEVABLE. NW-2024101 has outrageous charges we never agreed to. We're canceling all future shipments with Northwind.",Billing,yes,1,no
+"Customer: Acme Labs (enterprise plan, APAC). Tickets from this customer in the last 30 days: 4. Shipment value: $38, shipped 9 days ago.
+
+Your invoice for NW-2024101 is wrong. We agreed on one rate and you charged us more. This is getting old. Fix it now.",Sales,yes,2,no
+"Customer: Harbor Medical (starter plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $249, no shipment yet.
+
+Hi there, Can you provide a quote for shipping wine from our warehouse to retail locations across California?",Sales,no,0,no
+"Customer: Borealis Labs (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $280, no shipment yet.
+
+QUOTE FOR ELECTRONICS IMMEDIATELY! 5 pallets to Dallas! This is absolutely RIDICULOUS! I'm going to your competitors!",Sales,no,0,no
+"Customer: Foxglove Outdoors (enterprise plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $3,085, shipped 14 days ago.
+
+I'm FURIOUS. Shipment NW-2024-567890 – the address is 456 Industrial Boulevard, Phoenix, AZ 85001, NOT what I entered. FIX THIS IMMEDIATELY before it arrives at the wrong place!",Dispatch,yes,3,no
+"Customer: Granite Medical (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $21, shipped 18 days ago.
+
+UNACCEPTABLE. ORD-2000956 (electronics, TRK-9500956) is LONG overdue. Immediate action required.",Claims,no,1,yes
+"Customer: Delta Labs (starter plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $507, shipped 1 days ago.
+
+YOUR COMPANY DESTROYED OUR TEXTILES SHIPMENT! This is completely unacceptable. We're switching carriers immediately. You've lost our business.",Claims,no,1,no
+"Customer: Delta Foods (enterprise plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $9,906, shipped 16 days ago.
+
+Your invoice for NW-2024104 is wrong. We agreed on one rate and you charged us more. This is getting old. Fix it now.",Sales,yes,3,no
+"Customer: Borealis Foods (starter plan, EU). Tickets from this customer in the last 30 days: 4. Shipment value: $100, shipped 3 days ago.
+
+Hi, the pallets of vintage wine in shipment NW-20246459-14008 arrived damaged. Packaging was insufficient. Could you help process a claim? Jennifer Kim",Claims,yes,1,no
+"Customer: Harbor Foods (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $84, shipped 5 days ago.
+
+Hello, I'm inquiring about the status of shipment TRK-9500812 containing wine (pallets). It's running behind schedule. We'd appreciate an update when you have a moment. I've asked our legal department to review this matter given the timeline.",Dispatch,yes,1,yes
+"Customer: Cedar Foods (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $802, shipped 18 days ago.
+
+Northwind Freight, We are writing to reiterate our request to change the delivery address for order ORD-2500272 to the new address we provided last month. This request was submitted previously and we expect confirmation of its completion immediately.",Dispatch,no,2,no
+"Customer: Foxglove Labs (starter plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $47, no shipment yet.
+
+I need a quote for shipping wine, and I need it soon. 8 pallets to Portland. Don't take forever with this.",Sales,no,0,no
+"Customer: Granite Outdoors (business plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $73, shipped 9 days ago.
+
+Hello, Can we update the delivery address for order ORD-2500266? We need it sent to our new warehouse on 5th Ave instead. Please confirm if we can still make this change.",Dispatch,no,2,no
+"Customer: Harbor Labs (enterprise plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $741, shipped 15 days ago.
+
+FYI - could someone look into why our furniture parts (order ORD-2000846, tracking TRK-9500846) is behind? Originally promised delivery has passed.",Claims,no,2,no
+"Customer: Everly Labs (enterprise plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $145, no shipment yet.
+
+Hi, we need a shipping quote for textiles – approximately 20 boxes, destination is Denver. Please send details when available.",Sales,no,1,no
+"Customer: Granite Medical (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $851, shipped 7 days ago.
+
+The industrial parts arrived in PIECES. PIECES! Our entire production line is down because of your incompetence. Fix this or we're done with Northwind.",Claims,no,1,no
+"Customer: Granite Medical (enterprise plan, APAC). Tickets from this customer in the last 30 days: 4. Shipment value: $81, shipped 17 days ago.
+
+Hi, I'm writing regarding shipment NW-20243461-75973. The medical diagnostic kits shipped on our order was supposed to arrive but tracking hasn't updated in days. I need to resolve this quickly. My legal department is monitoring the situation, so please advise on next steps for recovery or liability. Thanks, Jennifer Kim",Claims,yes,3,yes
+"Customer: Delta Outdoors (business plan, APAC). Tickets from this customer in the last 30 days: 4. Shipment value: $21, no shipment yet.
+
+ARE YOU SERIOUS?! Medical equipment quote to Chicago – I'VE BEEN WAITING FOREVER! SEND ME NUMBERS NOW!",Sales,yes,0,no
+"Customer: Cedar Retail (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $1,930, shipped 20 days ago.
+
+The electronics arrived in PIECES. PIECES! Our entire production line is down because of your incompetence. Fix this or we're done with Northwind.",Claims,no,2,no
+"Customer: Harbor Outdoors (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $567, shipped 4 days ago.
+
+Hello, Where is shipment TRK-9500863 (electronics)? Order ORD-2000863 is delayed.",Dispatch,no,1,no
+"Customer: Acme Labs (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $767, shipped 15 days ago.
+
+Frustrated. Order ORD-D705195 (NW-20243537-32822) arrived damaged. medical diagnostic kits are unusable. What's taking so long on your end? Midwest Supply Co.",Claims,no,3,no
+"Customer: Cedar Foods (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $3,744, shipped 17 days ago.
+
+This is UNBELIEVABLE. NW-2024101 has outrageous charges we never agreed to. We're canceling all future shipments with Northwind.",Sales,yes,3,no
+"Customer: Delta Outdoors (business plan, EU). Tickets from this customer in the last 30 days: 4. Shipment value: $391, shipped 15 days ago.
+
+We've been billed incorrectly on NW-2024103. This is the second billing mistake this quarter. Can someone actually CHECK the invoice before sending it? Frustrated, Chen.",Billing,yes,1,no
+"Customer: Everly Outdoors (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $272, shipped 18 days ago.
+
+checking on ORD-2000897 - office equipment tracking TRK-9500897 - delivery window has passed, need immediate update",Claims,no,0,no
+"Customer: Delta Supply (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $83, no shipment yet.
+
+Hello, I'd like to request a quote for shipping 5 pallets of medical equipment to Seattle. Could you provide pricing and delivery timeline?",Sales,no,0,no
+"Customer: Foxglove Supply (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $1,120, shipped 9 days ago.
+
+Hello, shipment NW-20243396-85804 (ORD-I157149) arrived but the office furniture are damaged. Please advise on the claims process. My legal department needs documentation for our records. Midwest Supply Co.",Claims,yes,2,no
+"Customer: Granite Retail (starter plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $177, shipped 16 days ago.
+
+I'm FURIOUS. NW-20246330-70534 (consumer electronics) is GONE. You lost my entire order. This is the WORST shipping experience ever. I'm switching carriers immediately and telling everyone to avoid you. Chris Hayes",Claims,no,1,no
+"Customer: Acme Supply (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $59, shipped 7 days ago.
+
+Dear Northwind Freight, We respectfully request a modification to the delivery address for order ORD-2500334. Please deliver to the new address we provided last month instead of the originally specified address. Please confirm receipt and processing of this request at your earliest convenience.",Dispatch,no,2,no
+"Customer: Harbor Retail (starter plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $2,293, no shipment yet.
+
+I need a quote for shipping wine, and I need it soon. 8 pallets to Portland. Don't take forever with this.",Sales,no,0,no
+"Customer: Everly Labs (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $393, shipped 4 days ago.
+
+I'm through with Northwind. NW-20246960-13101 (my automotive parts) disappeared without a trace. Tracking shows NOTHING. This is a disaster. I will never use you again. Chris Hayes",Claims,no,2,no
+"Customer: Acme Foods (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $11,028, shipped 24 days ago.
+
+Frustrated. Order ORD-D705195 (NW-20243537-32822) arrived damaged. medical diagnostic kits are unusable. What's taking so long on your end? Midwest Supply Co.",Claims,yes,3,no
+"Customer: Delta Labs (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $1,280, shipped 21 days ago.
+
+I'm FURIOUS. Shipment NW24-445829 – the address is 123 Commerce Street, Denver, CO 80202, NOT what I entered. FIX THIS IMMEDIATELY before it arrives at the wrong place!",Dispatch,yes,3,no
+"Customer: Foxglove Foods (enterprise plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $1,298, shipped 14 days ago.
+
+FYI - could someone look into why our furniture parts (order ORD-2000846, tracking TRK-9500846) is behind? Originally promised delivery has passed.",Claims,no,2,no
+"Customer: Borealis Outdoors (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $93, shipped 25 days ago.
+
+Tracking NW-20240183-81070 shows my construction materials departed the origin facility but never arrived. It's been stuck. Can someone investigate? Jennifer Kim",Claims,no,2,yes
+"Customer: Foxglove Medical (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $6,842, no shipment yet.
+
+Hi, we need a shipping quote for textiles – approximately 20 boxes, destination is Denver. Please send details when available.",Sales,yes,1,no
+"Customer: Cedar Retail (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $546, shipped 21 days ago.
+
+Dear Northwind Freight, We are writing to inquire about the status of our shipment of textiles under order number ORD-2000880 with tracking reference TRK-9500880. The delivery date has passed, and we would appreciate a prompt update on the current location and revised estimated arrival time. Thank you.",Claims,no,1,no
+"Customer: Delta Supply (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $72, shipped 9 days ago.
+
+ARE YOU KIDDING ME?! Order SHP-9012-847 is WRONG ADDRESS! Change it to 654 Delivery Lane, Atlanta, GA 30303 RIGHT NOW! This is unacceptable!",Dispatch,no,2,no
+"Customer: Acme Outdoors (enterprise plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $3,706, shipped 6 days ago.
+
+Can we change the delivery address for order ORD-2500300 to facility B (not the original facility)? Please confirm if possible. Please confirm this change in writing for our records. Our legal department needs this documented before the change goes through.",Dispatch,yes,3,no
+"Customer: Harbor Retail (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $3,410, no shipment yet.
+
+Hello, I'd like to request a quote for shipping 5 pallets of medical equipment to Seattle. Could you provide pricing and delivery timeline?",Sales,no,1,no
+"Customer: Cedar Outdoors (enterprise plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $1,381, shipped 14 days ago.
+
+Invoice NW-2024105 contains charges we don't recognize. Our legal counsel recommended we request formal clarification before proceeding. Please respond to this ticket.",Sales,yes,2,no
+"Customer: Foxglove Supply (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $2,204, shipped 14 days ago.
+
+Tracking NW-20240183-81070 shows my construction materials departed the origin facility but never arrived. It's been stuck. Can someone investigate? Jennifer Kim",Claims,no,3,no
+"Customer: Cedar Foods (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $71, shipped 22 days ago.
+
+Getting annoyed - order ORD-2000784 with furniture parts (tracking TRK-9500784) is way overdue. Need immediate action.",Claims,no,0,no
+"Customer: Cedar Retail (business plan, EU). Tickets from this customer in the last 30 days: 4. Shipment value: $3,626, shipped 22 days ago.
+
+To Northwind Freight, Order ORD-2000973 for textiles (tracking TRK-9500973) represents a complete breach of your service agreement. The delay is unconscionable and we are considering terminating our relationship entirely. Immediate action is required.",Claims,yes,2,no
+"Customer: Granite Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $2,031, shipped 24 days ago.
+
+Hi there, shipment NW-20240285-78062 with pallets of vintage wine doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,yes,3,no
+"Customer: Cedar Retail (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $70, shipped 10 days ago.
+
+Frustrated with delay on ORD-2000801 (electronics, TRK-9500801). Need resolution.",Dispatch,no,1,yes
+"Customer: Everly Medical (enterprise plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $1,883, no shipment yet.
+
+ARE YOU SERIOUS?! Medical equipment quote to Chicago – I'VE BEEN WAITING FOREVER! SEND ME NUMBERS NOW!",Sales,yes,1,no
+"Customer: Delta Medical (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $138, shipped 17 days ago.
+
+Tired of incorrect invoices. NW-2024102 has wrong charges again. We need accurate billing or we're finding another carrier.",Billing,no,0,no
+"Customer: Acme Outdoors (starter plan, APAC). Tickets from this customer in the last 30 days: 4. Shipment value: $64, shipped 25 days ago.
+
+NW-20244163-69718 came in today. The consumer electronics are destroyed. Whoever packed this did a terrible job. I need a replacement shipped immediately. Midwest Supply Co.",Claims,yes,1,no
+"Customer: Harbor Medical (business plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $613, shipped 25 days ago.
+
+ABSOLUTELY UNACCEPTABLE. Shipment NW-20245426-83634 with laboratory supplies lost somewhere in your network. Zero updates. I NEED ACTION NOW or I'm escalating this everywhere. Coast Trade Partners",Claims,yes,2,no
+"Customer: Granite Labs (business plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $5,409, shipped 21 days ago.
+
+YOUR COMPANY OVERBILLED US ON NW-2024100! AGAIN! This is fraud at this point. Refund the overcharge NOW or we're switching carriers tomorrow.",Billing,yes,2,no
+"Customer: Everly Foods (business plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $820, shipped 7 days ago.
+
+THIS IS RIDICULOUS ORD-2000922 medical kits TRK-9500922 we are FURIOUS with your service",Dispatch,yes,1,no
+"Customer: Acme Medical (business plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $5,431, shipped 24 days ago.
+
+Tracking NW-20249202-96274 is stuck. My medical diagnostic kits went missing after leaving your facility. I need answers and I need them fast. Coast Trade Partners",Claims,yes,3,no
+"Customer: Everly Retail (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $60, shipped 8 days ago.
+
+Hi there, shipment NW-20240285-78062 with pallets of vintage wine doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,no,2,yes
+"Customer: Foxglove Labs (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $2,122, shipped 11 days ago.
+
+can we redirect order ORD-2500283 to the updated shipping address in Brooklyn? shipment should still be in transit",Dispatch,no,3,no
+"Customer: Acme Retail (business plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $20, no shipment yet.
+
+Quote request: medical equipment to Phoenix. I've asked other carriers – why is this taking so long? Give me pricing.",Sales,no,0,no
+"Customer: Granite Medical (starter plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $949, shipped 11 days ago.
+
+YOUR COMPANY OVERBILLED US ON NW-2024103! AGAIN! This is fraud at this point. Refund the overcharge NOW or we're switching carriers tomorrow.",Billing,no,0,no
+"Customer: Harbor Labs (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $7,259, shipped 22 days ago.
+
+checking on ORD-2000897 - office equipment tracking TRK-9500897 - delivery window has passed, need immediate update",Claims,yes,1,no
+"Customer: Borealis Supply (enterprise plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $1,957, shipped 7 days ago.
+
+frustrated - ORD-2500289 keep asking to change address to the revised location downtown please process it",Dispatch,yes,3,no
+"Customer: Delta Foods (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $26, no shipment yet.
+
+Good morning, I'm looking for a rate quote on transporting 3 pallets of electronics components. Destination: Chicago. What's your best offer?",Sales,no,1,no
+"Customer: Everly Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $112, shipped 15 days ago.
+
+This is RIDICULOUS. TRK-234-891 – address 321 Market Avenue, Chicago, IL 60601 – CHANGE IT NOW or I'm done with your company!",Dispatch,yes,3,no
+"Customer: Cedar Supply (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $139, shipped 19 days ago.
+
+ARE YOU KIDDING ME?! Order NW-2024-891234 is WRONG ADDRESS! Change it to 123 Commerce Street, Denver, CO 80202 RIGHT NOW! This is unacceptable!",Dispatch,no,2,no
+"Customer: Cedar Labs (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $602, shipped 22 days ago.
+
+frustrated - order ORD-2500221 should go to the updated shipping address in Brooklyn not the original. please change it and confirm",Dispatch,no,2,no
+"Customer: Harbor Outdoors (starter plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $8,334, shipped 24 days ago.
+
+I noticed our recent shipment invoice seems overcharged. We need to reconcile the amount. Can someone from accounting review NW-2024105? Appreciate your help.",Billing,yes,1,no
+"Customer: Granite Outdoors (enterprise plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $76, shipped 7 days ago.
+
+Hi Northwind, NW-20249806-78310 arrived today. Unfortunately, the construction materials are damaged. What should I do? Chris Hayes",Claims,no,3,yes
+"Customer: Everly Labs (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $3,410, no shipment yet.
+
+I need a quote ASAP for wine shipment. Our legal team is waiting. 6 pallets to Seattle. Hurry up.",Sales,yes,1,no
+"Customer: Acme Medical (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $360, shipped 18 days ago.
+
+YOUR COMPANY OVERBILLED US ON NW-2024100! AGAIN! This is fraud at this point. Refund the overcharge NOW or we're switching carriers tomorrow.",Sales,yes,2,no
+"Customer: Harbor Retail (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $9,789, no shipment yet.
+
+I NEED A QUOTE FOR WINE SHIPMENT NOW!!! 10 pallets to Los Angeles! Why is this impossible?! GET ME PRICING!",Sales,yes,0,no
+"Customer: Everly Retail (business plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $811, shipped 24 days ago.
+
+This is ridiculous. Shipment NW-20243196-26491 (ORD-Q871184) with automotive parts disappeared. Your tracking is useless. We need accountability NOW. Our legal team is already preparing a claim. Respond ASAP. Blue Ridge Distributors",Claims,yes,2,no
+"Customer: Cedar Supply (business plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $6,820, shipped 20 days ago.
+
+Tracking NW-20249650-97481 is stuck. My office furniture went missing after leaving your facility. I need answers and I need them fast. Chris Hayes",Claims,yes,3,no
+"Customer: Borealis Retail (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $113, shipped 14 days ago.
+
+Order ORD-892341 – WRONG ADDRESS. It's 789 Harbor View Drive, Seattle, WA 98101. If this isn't fixed, I'm taking my business ELSEWHERE!",Dispatch,no,2,no
+"Customer: Borealis Labs (business plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $10,724, shipped 9 days ago.
+
+Your invoice for NW-2024104 is wrong. We agreed on one rate and you charged us more. This is getting old. Fix it now.",Billing,yes,2,no
+"Customer: Delta Retail (starter plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $1,421, shipped 19 days ago.
+
+Hi there, shipment NW-20247966-14878 with consumer electronics doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,yes,1,no
+"Customer: Granite Retail (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $2,008, shipped 9 days ago.
+
+This is UNBELIEVABLE. NW-2024104 has outrageous charges we never agreed to. We're canceling all future shipments with Northwind.",Sales,yes,3,no
+"Customer: Harbor Retail (enterprise plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $952, shipped 6 days ago.
+
+CRIMINAL OVERBILLING on NW-2024102. We're suing for damages plus attorney fees. Our legal counsel is filing suit tomorrow.",Sales,yes,2,no
+"Customer: Borealis Foods (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $304, no shipment yet.
+
+I'm CALLING MY LAWYER RIGHT NOW! Electronics quote to Seattle – 3 pallets – IMMEDIATE RESPONSE REQUIRED!",Sales,yes,0,no
+"Customer: Acme Foods (starter plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $54, shipped 19 days ago.
+
+Hi there, shipment NW-20243469-43139 with construction materials doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Chris Hayes",Claims,no,1,no
+"Customer: Granite Medical (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $20, shipped 23 days ago.
+
+Tracking NW-20248960-17938 is stuck. My office furniture went missing after leaving your facility. I need answers and I need them fast. David Martinez",Claims,no,2,yes
+"Customer: Borealis Outdoors (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $3,537, shipped 14 days ago.
+
+Tracking NW-20247304-23275 is stuck. My textile bolts went missing after leaving your facility. I need answers and I need them fast. Sarah Chen",Claims,no,2,no
+"Customer: Acme Supply (business plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $114, shipped 24 days ago.
+
+Hi Northwind, NW-20243744-62367 arrived today. Unfortunately, the textile bolts are damaged. What should I do? James Wu",Claims,no,2,yes
+"Customer: Borealis Outdoors (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $5,378, shipped 1 days ago.
+
+YOUR COMPANY OVERBILLED US ON NW-2024103! AGAIN! This is fraud at this point. Refund the overcharge NOW or we're switching carriers tomorrow.",Billing,yes,2,no
+"Customer: Granite Foods (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $21, shipped 9 days ago.
+
+YOUR COMPANY OVERBILLED US ON NW-2024103! AGAIN! This is fraud at this point. Refund the overcharge NOW or we're switching carriers tomorrow.",Billing,no,1,no
+"Customer: Delta Supply (starter plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $6,549, shipped 9 days ago.
+
+Hello, I'm inquiring about the status of shipment TRK-9500812 containing wine (pallets). It's running behind schedule. We'd appreciate an update when you have a moment.",Dispatch,yes,1,no
+"Customer: Everly Retail (enterprise plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $10,966, shipped 6 days ago.
+
+I'm annoyed. NW-20243827-81611 (automotive parts) has been lost in your system for too long. Tracking is stuck and useless. What are you doing about it? Blue Ridge Distributors",Claims,yes,3,no
+"Customer: Acme Labs (business plan, US). Tickets from this customer in the last 30 days: 4. Shipment value: $65, shipped 19 days ago.
+
+Hello, Can we redirect ORD-2500317 to our alternate distribution center?",Dispatch,yes,2,no
+"Customer: Harbor Retail (enterprise plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $395, no shipment yet.
+
+TEXTILE SHIPMENT QUOTE TO ATLANTA – NOW! I'm FURIOUS at this service! If you don't respond today, I'm DONE!",Sales,yes,1,no
+"Customer: Acme Labs (business plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $2,496, no shipment yet.
+
+QUOTE FOR ELECTRONICS IMMEDIATELY! 5 pallets to Dallas! This is absolutely RIDICULOUS! I'm going to your competitors!",Sales,no,1,no
+"Customer: Cedar Retail (business plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $31, shipped 22 days ago.
+
+Good morning, order ORD-Z674949 (NW-20249689-50325) arrived with damaged specialty food products. Can we arrange a replacement or refund? Elena Rodriguez",Claims,no,2,yes
+"Customer: Harbor Labs (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $58, shipped 21 days ago.
+
+Hello, Where is shipment TRK-9500863 (electronics)? Order ORD-2000863 is delayed.",Claims,no,2,yes
+"Customer: Delta Outdoors (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $165, shipped 14 days ago.
+
+Really? The specialty food products in NW-20241554-58719 arrived completely damaged. I don't have time for this. Send a replacement ASAP. Michelle Anderson",Claims,no,2,yes
+"Customer: Delta Medical (starter plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $556, shipped 19 days ago.
+
+Hello, shipment NW-20241371-98910 (ORD-S629985) arrived but the medical diagnostic kits are damaged. Please advise on the claims process. My legal department needs documentation for our records. Patricia Lee",Claims,yes,1,no
+"Customer: Everly Supply (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $57, no shipment yet.
+
+I NEED A QUOTE FOR WINE SHIPMENT NOW!!! 10 pallets to Los Angeles! Why is this impossible?! GET ME PRICING!",Sales,yes,1,no
+"Customer: Cedar Retail (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $785, shipped 23 days ago.
+
+our medical kits shipment TRK-9500829 is running late. when should we expect delivery? order ORD-2000829.",Claims,no,2,no
+"Customer: Everly Outdoors (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $163, shipped 14 days ago.
+
+Tracking NW-20249202-96274 is stuck. My medical diagnostic kits went missing after leaving your facility. I need answers and I need them fast. Coast Trade Partners",Claims,no,3,yes
+"Customer: Everly Supply (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $88, shipped 10 days ago.
+
+The furniture shipment arrived destroyed. This is unacceptable. Our legal department is reviewing this incident for potential claims. Expect formal documentation shortly.",Claims,yes,2,yes
+"Customer: Granite Supply (starter plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $64, shipped 20 days ago.
+
+Your invoice for NW-2024101 is wrong. We agreed on one rate and you charged us more. This is getting old. Fix it now.",Billing,no,0,no
+"Customer: Harbor Labs (business plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $99, shipped 14 days ago.
+
+Hi there, shipment NW-20240285-78062 with pallets of vintage wine doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,no,2,yes
+"Customer: Delta Retail (enterprise plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $22, no shipment yet.
+
+I need a quote ASAP for wine shipment. Our legal team is waiting. 6 pallets to Seattle. Hurry up.",Sales,yes,1,no
+"Customer: Delta Labs (starter plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $11,029, shipped 1 days ago.
+
+Tracking NW-20248960-17938 is stuck. My office furniture went missing after leaving your facility. I need answers and I need them fast. David Martinez",Claims,yes,2,no
+"Customer: Harbor Retail (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $1,776, shipped 19 days ago.
+
+Good morning, order ORD-X178482 (NW-20241267-23806) arrived with damaged pallets of vintage wine. Can we arrange a replacement or refund? Midwest Supply Co.",Claims,no,3,no
+"Customer: Cedar Supply (enterprise plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $6,564, shipped 10 days ago.
+
+Getting annoyed - order ORD-2500238 address needs to be changed to facility B (not the original facility). Please make sure this is actually done.",Dispatch,yes,3,no
+"Customer: Foxglove Supply (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $3,243, shipped 23 days ago.
+
+Tracking NW-20240183-81070 shows my construction materials departed the origin facility but never arrived. It's been stuck. Can someone investigate? Jennifer Kim",Claims,no,2,no
+"Customer: Everly Outdoors (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $1,865, shipped 6 days ago.
+
+Tracking NW-20247304-23275 is stuck. My textile bolts went missing after leaving your facility. I need answers and I need them fast. Sarah Chen",Claims,no,2,no
+"Customer: Foxglove Retail (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $93, shipped 1 days ago.
+
+The wine shipment shipment arrived destroyed. This is unacceptable. Our legal department is reviewing this incident for potential claims. Expect formal documentation shortly.",Claims,yes,2,yes
+"Customer: Delta Retail (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $10,790, shipped 4 days ago.
+
+NW-20246374-66161 came in today. The laboratory supplies are destroyed. Whoever packed this did a terrible job. I need a replacement shipped immediately. Summit Logistics",Claims,yes,2,no
+"Customer: Foxglove Outdoors (business plan, EU). Tickets from this customer in the last 30 days: 4. Shipment value: $570, shipped 7 days ago.
+
+I'm frustrated with order NW-2024-891234. The address needs to change to 123 Commerce Street, Denver, CO 80202 immediately, per my legal department. This should not be difficult.",Dispatch,yes,2,no
+"Customer: Harbor Foods (starter plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $40, shipped 20 days ago.
+
+our medical kits shipment TRK-9500829 is running late. when should we expect delivery? order ORD-2000829.",Claims,no,0,no
+"Customer: Everly Labs (starter plan, EU). Tickets from this customer in the last 30 days: 4. Shipment value: $1,055, no shipment yet.
+
+I need a quote for shipping wine, and I need it soon. 8 pallets to Portland. Don't take forever with this.",Sales,yes,0,no
+"Customer: Borealis Supply (starter plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $4,547, shipped 7 days ago.
+
+I'm through with Northwind. NW-20246960-13101 (my automotive parts) disappeared without a trace. Tracking shows NOTHING. This is a disaster. I will never use you again. Chris Hayes",Claims,no,2,no
+"Customer: Delta Supply (starter plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $46, shipped 4 days ago.
+
+ENOUGH! The invoice NW-2024102 is a SCAM. Intentional overcharging? This is ridiculous. We're done with Northwind. Process a full refund IMMEDIATELY.",Billing,no,0,no
+"Customer: Cedar Labs (starter plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $4,086, shipped 20 days ago.
+
+I'm annoyed. NW-20243827-81611 (automotive parts) has been lost in your system for too long. Tracking is stuck and useless. What are you doing about it? Blue Ridge Distributors",Claims,no,2,no
+"Customer: Foxglove Labs (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $4,664, shipped 7 days ago.
+
+Frustrated. Order ORD-D705195 (NW-20243537-32822) arrived damaged. medical diagnostic kits are unusable. What's taking so long on your end? Midwest Supply Co.",Claims,no,2,no
+"Customer: Cedar Labs (enterprise plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $301, shipped 18 days ago.
+
+Hi there, shipment NW-20247966-14878 with consumer electronics doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,no,3,no
+"Customer: Cedar Retail (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $80, no shipment yet.
+
+Hi there, Can you provide a quote for shipping wine from our warehouse to retail locations across California?",Sales,no,0,no
+"Customer: Cedar Retail (enterprise plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $10,075, shipped 22 days ago.
+
+ENOUGH! The invoice NW-2024105 is a SCAM. Intentional overcharging? This is ridiculous. We're done with Northwind. Process a full refund IMMEDIATELY.",Sales,yes,3,no
+"Customer: Harbor Outdoors (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $45, shipped 16 days ago.
+
+Hi Northwind, NW-20249806-78310 arrived today. Unfortunately, the construction materials are damaged. What should I do? Chris Hayes",Claims,no,2,yes
+"Customer: Granite Medical (enterprise plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $1,413, shipped 1 days ago.
+
+Really? The specialty food products in NW-20241554-58719 arrived completely damaged. I don't have time for this. Send a replacement ASAP. Michelle Anderson",Claims,no,3,no
+"Customer: Granite Foods (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $276, shipped 4 days ago.
+
+I'm annoyed. NW-20243827-81611 (automotive parts) has been lost in your system for too long. Tracking is stuck and useless. What are you doing about it? Blue Ridge Distributors",Claims,no,3,yes
+"Customer: Everly Labs (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $24, shipped 25 days ago.
+
+Tired of incorrect invoices. NW-2024105 has wrong charges again. We need accurate billing or we're finding another carrier.",Billing,no,0,no
+"Customer: Delta Retail (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $31, shipped 16 days ago.
+
+ENOUGH. Where is ORD-2000905?? wine (pallets)? Tracking TRK-9500905?? This delay is inexcusable and we are DONE waiting. Fix this immediately or face consequences.",Claims,no,1,yes
+"Customer: Acme Supply (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $1,113, shipped 1 days ago.
+
+To Northwind Freight, Order ORD-2000973 for textiles (tracking TRK-9500973) represents a complete breach of your service agreement. The delay is unconscionable and we are considering terminating our relationship entirely. Immediate action is required.",Dispatch,no,1,no
+"Customer: Everly Supply (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $1,534, shipped 2 days ago.
+
+frustrated - order ORD-2500221 should go to the updated shipping address in Brooklyn not the original. please change it and confirm",Dispatch,no,2,no
+"Customer: Harbor Medical (enterprise plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $182, shipped 6 days ago.
+
+Hi there, shipment NW-20247045-13972 with specialty food products doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Robert Taylor",Claims,no,3,yes
+"Customer: Everly Outdoors (starter plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $401, shipped 2 days ago.
+
+Hello, I'm inquiring about the status of shipment TRK-9500812 containing wine (pallets). It's running behind schedule. We'd appreciate an update when you have a moment.",Dispatch,no,0,no
+"Customer: Granite Labs (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $103, shipped 7 days ago.
+
+Hi there, shipment NW-20247966-14878 with consumer electronics doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,no,2,yes
+"Customer: Foxglove Foods (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $390, no shipment yet.
+
+Hi, Quote request for electronics shipment to Boston. Our legal team needs this documented. Please provide detailed pricing.",Sales,yes,0,no
+"Customer: Harbor Supply (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $475, shipped 2 days ago.
+
+This overbilling is INTENTIONAL. NW-2024104 is a rip-off. We're pursuing legal action for fraud and damages against Northwind Freight.",Billing,yes,1,no
+"Customer: Borealis Outdoors (business plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $197, shipped 10 days ago.
+
+I noticed our recent shipment invoice seems overcharged. We need to reconcile the amount. Can someone from accounting review NW-2024105? Appreciate your help.",Billing,yes,1,no
+"Customer: Acme Outdoors (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $3,216, shipped 16 days ago.
+
+WHAT HAPPENED TO NW-20247885-73883?? textile bolts order ORD-X347372 is MISSING. Your tracking stopped updating DAYS AGO. GET IT BACK OR REFUND ME NOW. Coast Trade Partners",Claims,no,3,no
+"Customer: Harbor Outdoors (business plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $7,330, shipped 14 days ago.
+
+Northwind Freight, We are writing to reiterate our request to change the delivery address for order ORD-2500272 to the new address we provided last month. This request was submitted previously and we expect confirmation of its completion immediately.",Dispatch,yes,3,no
+"Customer: Cedar Medical (enterprise plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $1,601, shipped 11 days ago.
+
+Shipment NW-2024-567890 – I need the address changed to 456 Industrial Boulevard, Phoenix, AZ 85001 NOW. My lawyers are involved and I expect quick action.",Dispatch,yes,3,no
+"Customer: Acme Outdoors (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $11,659, shipped 21 days ago.
+
+Hello Northwind, we received an invoice that appears to have incorrect charges. Our original quote was different. Could your billing team review order NW-2024104?",Sales,yes,3,no
+"Customer: Everly Medical (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $9,656, shipped 15 days ago.
+
+Hello Northwind, we received an invoice that appears to have incorrect charges. Our original quote was different. Could your billing team review order NW-2024104?",Billing,yes,2,no
+"Customer: Acme Labs (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $25, shipped 17 days ago.
+
+WHAT HAPPENED TO NW-20247885-73883?? textile bolts order ORD-X347372 is MISSING. Your tracking stopped updating DAYS AGO. GET IT BACK OR REFUND ME NOW. Coast Trade Partners",Claims,no,1,no
+"Customer: Acme Outdoors (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $11,715, shipped 12 days ago.
+
+I'm through with Northwind. NW-20246960-13101 (my automotive parts) disappeared without a trace. Tracking shows NOTHING. This is a disaster. I will never use you again. Chris Hayes",Claims,yes,3,no
+"Customer: Borealis Supply (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $373, shipped 12 days ago.
+
+Hello, Can we redirect ORD-2500317 to our alternate distribution center?",Dispatch,no,2,no
+"Customer: Foxglove Foods (starter plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $232, shipped 3 days ago.
+
+THIS IS RIDICULOUS ORD-2000922 medical kits TRK-9500922 we are FURIOUS with your service",Dispatch,no,0,no
+"Customer: Granite Outdoors (starter plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $410, shipped 7 days ago.
+
+This is the THIRD damaged shipment from you in six months. The medical kits we ordered is destroyed. We're looking for a new shipping partner NOW.",Claims,no,1,no
+"Customer: Foxglove Labs (starter plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $4,362, shipped 11 days ago.
+
+URGENT ESCALATION NEEDED: ORD-2000939 is completely unacceptable. furniture parts. TRK-9500939. Fix immediately.",Claims,no,1,no
+"Customer: Harbor Labs (business plan, APAC). Tickets from this customer in the last 30 days: 4. Shipment value: $3,967, shipped 4 days ago.
+
+Good morning, order ORD-X178482 (NW-20241267-23806) arrived with damaged pallets of vintage wine. Can we arrange a replacement or refund? Midwest Supply Co.",Claims,yes,3,no
+"Customer: Granite Outdoors (business plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $1,370, shipped 4 days ago.
+
+Hi Northwind, NW-20243744-62367 arrived today. Unfortunately, the textile bolts are damaged. What should I do? James Wu",Claims,yes,2,no
+"Customer: Granite Supply (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $1,369, no shipment yet.
+
+Hello, I'd like to request a quote for shipping 5 pallets of medical equipment to Seattle. Could you provide pricing and delivery timeline?",Sales,no,0,no
+"Customer: Cedar Medical (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $932, shipped 6 days ago.
+
+YOUR COMPANY OVERBILLED US ON NW-2024100! AGAIN! This is fraud at this point. Refund the overcharge NOW or we're switching carriers tomorrow.",Billing,no,1,no
+"Customer: Delta Supply (business plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $9,391, shipped 11 days ago.
+
+FYI - could someone look into why our furniture parts (order ORD-2000846, tracking TRK-9500846) is behind? Originally promised delivery has passed.",Claims,yes,2,no
+"Customer: Everly Foods (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $83, shipped 23 days ago.
+
+Hi there, shipment NW-20243469-43139 with construction materials doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Chris Hayes",Claims,no,3,yes
+"Customer: Foxglove Foods (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $46, no shipment yet.
+
+I'm CALLING MY LAWYER RIGHT NOW! Electronics quote to Seattle – 3 pallets – IMMEDIATE RESPONSE REQUIRED!",Sales,yes,1,no
+"Customer: Granite Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $579, shipped 18 days ago.
+
+Order ORD-2500255 - change address to our alternate distribution center. Getting frustrated with delays.",Dispatch,no,3,no
+"Customer: Granite Retail (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $67, shipped 13 days ago.
+
+Hello, Can we update the delivery address for order ORD-2500266? We need it sent to our new warehouse on 5th Ave instead. Please confirm if we can still make this change.",Dispatch,no,2,no
+"Customer: Harbor Outdoors (enterprise plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $9,362, shipped 20 days ago.
+
+YOUR COMPANY OVERBILLED US ON NW-2024103! AGAIN! This is fraud at this point. Refund the overcharge NOW or we're switching carriers tomorrow.",Sales,yes,3,no
+"Customer: Acme Labs (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $282, shipped 1 days ago.
+
+Tracking NW-20249202-96274 is stuck. My medical diagnostic kits went missing after leaving your facility. I need answers and I need them fast. Coast Trade Partners",Claims,no,2,yes
+"Customer: Harbor Medical (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $56, shipped 3 days ago.
+
+ENOUGH! The invoice NW-2024105 is a SCAM. Intentional overcharging? This is ridiculous. We're done with Northwind. Process a full refund IMMEDIATELY.",Billing,no,1,no
+"Customer: Delta Foods (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $4,077, no shipment yet.
+
+My attorneys are filing against you! Furniture quote to Miami NOW or legal action follows! This is CRIMINAL!",Sales,yes,1,no
+"Customer: Cedar Labs (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $3,941, shipped 10 days ago.
+
+Really? The specialty food products in NW-20241554-58719 arrived completely damaged. I don't have time for this. Send a replacement ASAP. Michelle Anderson",Claims,no,3,no
+"Customer: Borealis Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $53, shipped 21 days ago.
+
+Hi, the pallets of vintage wine in shipment NW-20246459-14008 arrived damaged. Packaging was insufficient. Could you help process a claim? Jennifer Kim",Claims,no,3,yes
+"Customer: Foxglove Foods (starter plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $76, shipped 3 days ago.
+
+This is RIDICULOUS. TRK-234-891 – address 321 Market Avenue, Chicago, IL 60601 – CHANGE IT NOW or I'm done with your company!",Dispatch,no,2,no
+"Customer: Delta Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $126, shipped 18 days ago.
+
+NW-20244163-69718 came in today. The consumer electronics are destroyed. Whoever packed this did a terrible job. I need a replacement shipped immediately. Midwest Supply Co.",Claims,no,3,yes
+"Customer: Delta Retail (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $50, shipped 12 days ago.
+
+I'm FURIOUS. Shipment NW24-445829 – the address is 123 Commerce Street, Denver, CO 80202, NOT what I entered. FIX THIS IMMEDIATELY before it arrives at the wrong place!",Dispatch,yes,3,no
+"Customer: Cedar Supply (starter plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $181, shipped 2 days ago.
+
+can we redirect order ORD-2500283 to the updated shipping address in Brooklyn? shipment should still be in transit",Dispatch,no,2,no
+"Customer: Acme Foods (enterprise plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $91, shipped 10 days ago.
+
+Northwind Freight, We are writing to reiterate our request to change the delivery address for order ORD-2500272 to the new address we provided last month. This request was submitted previously and we expect confirmation of its completion immediately.",Dispatch,no,3,no
+"Customer: Harbor Supply (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $650, no shipment yet.
+
+I need a rate for shipping electronics. 2 pallets. Philadelphia. Can you send this quickly or should I call someone else?",Sales,no,1,no
+"Customer: Foxglove Outdoors (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $3,917, shipped 3 days ago.
+
+seriously frustrated. order ORD-2000835 office equipment TRK-9500835 should be here. immediate update needed",Dispatch,no,3,no
+"Customer: Cedar Supply (starter plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $5,437, shipped 19 days ago.
+
+Hi there, shipment NW-20247966-14878 with consumer electronics doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,yes,2,no
+"Customer: Cedar Foods (business plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $793, no shipment yet.
+
+Good morning, We're requesting a quote for transporting medical kits. Per our legal requirements, we need itemized pricing. Thank you.",Sales,yes,0,no
+"Customer: Borealis Labs (starter plan, APAC). Tickets from this customer in the last 30 days: 4. Shipment value: $5,287, shipped 16 days ago.
+
+The electronics arrived in PIECES. PIECES! Our entire production line is down because of your incompetence. Fix this or we're done with Northwind.",Claims,yes,2,no
+"Customer: Borealis Labs (business plan, EU). Tickets from this customer in the last 30 days: 4. Shipment value: $291, shipped 6 days ago.
+
+Can we change the delivery address for order ORD-2500300 to facility B (not the original facility)? Please confirm if possible. Please confirm this change in writing for our records. Our legal department needs this documented before the change goes through.",Dispatch,yes,2,no
+"Customer: Harbor Medical (enterprise plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $156, shipped 2 days ago.
+
+Tracking NW-20249202-96274 is stuck. My medical diagnostic kits went missing after leaving your facility. I need answers and I need them fast. Coast Trade Partners",Claims,no,3,yes
+"Customer: Harbor Medical (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $7,844, shipped 9 days ago.
+
+ENOUGH! The invoice NW-2024105 is a SCAM. Intentional overcharging? This is ridiculous. We're done with Northwind. Process a full refund IMMEDIATELY.",Billing,yes,2,no
+"Customer: Everly Medical (enterprise plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $130, shipped 2 days ago.
+
+I'm annoyed. NW-20244811-42640 (office furniture) has been lost in your system for too long. Tracking is stuck and useless. What are you doing about it? Michelle Anderson",Claims,yes,3,yes
+"Customer: Cedar Foods (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $75, shipped 8 days ago.
+
+URGENT ESCALATION NEEDED: ORD-2000939 is completely unacceptable. furniture parts. TRK-9500939. Fix immediately.",Dispatch,yes,2,yes
+"Customer: Borealis Medical (starter plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $832, shipped 21 days ago.
+
+ARE YOU KIDDING ME?! Order NW-2024-891234 is WRONG ADDRESS! Change it to 123 Commerce Street, Denver, CO 80202 RIGHT NOW! This is unacceptable!",Dispatch,no,2,no
+"Customer: Granite Foods (enterprise plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $594, shipped 17 days ago.
+
+I'm annoyed. NW-20244811-42640 (office furniture) has been lost in your system for too long. Tracking is stuck and useless. What are you doing about it? Michelle Anderson",Claims,no,3,no
+"Customer: Everly Supply (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $197, shipped 14 days ago.
+
+This is RIDICULOUS. TRK-234-891 – address 321 Market Avenue, Chicago, IL 60601 – CHANGE IT NOW or I'm done with your company!",Dispatch,no,2,no
+"Customer: Acme Medical (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $11,401, shipped 3 days ago.
+
+URGENT ESCALATION NEEDED: ORD-2000939 is completely unacceptable. furniture parts. TRK-9500939. Fix immediately.",Dispatch,yes,2,no
+"Customer: Foxglove Outdoors (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $92, shipped 15 days ago.
+
+Hello Northwind, we received an invoice that appears to have incorrect charges. Our original quote was different. Could your billing team review order NW-2024101?",Billing,no,0,no
+"Customer: Foxglove Outdoors (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $2,447, shipped 24 days ago.
+
+ARE YOU KIDDING ME?! Order SHP-9012-847 is WRONG ADDRESS! Change it to 654 Delivery Lane, Atlanta, GA 30303 RIGHT NOW! This is unacceptable!",Dispatch,yes,3,no
+"Customer: Delta Outdoors (business plan, EU). Tickets from this customer in the last 30 days: 4. Shipment value: $34, shipped 4 days ago.
+
+Frustrated with delay on ORD-2000801 (electronics, TRK-9500801). Need resolution.",Dispatch,yes,1,yes
+"Customer: Foxglove Labs (business plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $7,737, shipped 20 days ago.
+
+Tired of incorrect invoices. NW-2024105 has wrong charges again. We need accurate billing or we're finding another carrier.",Billing,yes,2,no
+"Customer: Foxglove Medical (starter plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $95, shipped 19 days ago.
+
+YOUR COMPANY DESTROYED OUR WINE SHIPMENT SHIPMENT! This is completely unacceptable. We're switching carriers immediately. You've lost our business.",Claims,no,1,no
+"Customer: Delta Retail (enterprise plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $321, no shipment yet.
+
+Hi there, Can you provide a quote for shipping wine from our warehouse to retail locations across California?",Sales,yes,1,no
+"Customer: Acme Retail (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $7,485, shipped 25 days ago.
+
+Hi, I'm reviewing our invoice for shipment NW-2024100 and noticed a discrepancy. The charges don't match our agreed rate. Could someone review and clarify? Thanks, John.",Billing,yes,2,no
+"Customer: Foxglove Labs (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $263, shipped 1 days ago.
+
+Repeated billing errors on NW-2024101. Unacceptable. Our lawyers are documenting this pattern of incorrect charges. Resolve immediately.",Sales,yes,2,no
+"Customer: Foxglove Medical (business plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $2,667, shipped 6 days ago.
+
+Tired of incorrect invoices. NW-2024102 has wrong charges again. We need accurate billing or we're finding another carrier.",Billing,no,2,no
+"Customer: Acme Outdoors (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $8,451, shipped 23 days ago.
+
+THIS IS RIDICULOUS ORD-2000922 medical kits TRK-9500922 we are FURIOUS with your service",Claims,yes,2,no
+"Customer: Harbor Labs (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $2,131, no shipment yet.
+
+I NEED A QUOTE FOR WINE SHIPMENT NOW!!! 10 pallets to Los Angeles! Why is this impossible?! GET ME PRICING!",Sales,yes,2,no
+"Customer: Everly Medical (business plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $37, shipped 2 days ago.
+
+THIS IS RIDICULOUS ORD-2000922 medical kits TRK-9500922 we are FURIOUS with your service",Dispatch,no,1,yes
+"Customer: Harbor Labs (starter plan, US). Tickets from this customer in the last 30 days: 4. Shipment value: $1,784, shipped 2 days ago.
+
+Tracking NW-20249202-96274 is stuck. My medical diagnostic kits went missing after leaving your facility. I need answers and I need them fast. Coast Trade Partners",Claims,yes,1,no
+"Customer: Acme Medical (starter plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $31, shipped 12 days ago.
+
+Order ORD-892341 – WRONG ADDRESS. It's 789 Harbor View Drive, Seattle, WA 98101. If this isn't fixed, I'm taking my business ELSEWHERE!",Dispatch,yes,2,no
+"Customer: Cedar Labs (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $293, shipped 16 days ago.
+
+I'm annoyed. NW-20244811-42640 (office furniture) has been lost in your system for too long. Tracking is stuck and useless. What are you doing about it? Michelle Anderson",Claims,no,1,no
+"Customer: Borealis Medical (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $364, no shipment yet.
+
+Hello, I'd like to request a quote for shipping 5 pallets of medical equipment to Seattle. Could you provide pricing and delivery timeline?",Sales,no,0,no
+"Customer: Granite Outdoors (starter plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $252, shipped 9 days ago.
+
+frustrated - ORD-2500289 keep asking to change address to the revised location downtown please process it",Dispatch,no,2,no
+"Customer: Everly Supply (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $9,979, shipped 16 days ago.
+
+We're done with billing errors. NW-2024102 is overcharged. Our legal department has been notified and will contact you formally.",Billing,yes,2,no
+"Customer: Cedar Outdoors (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $47, shipped 21 days ago.
+
+Hi there, shipment NW-20247966-14878 with consumer electronics doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,no,2,yes
+"Customer: Borealis Retail (starter plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $353, shipped 17 days ago.
+
+Hi there, shipment NW-20240285-78062 with pallets of vintage wine doesn't appear to have been delivered. The last update was days ago. Please advise. Thanks, Coast Trade Partners",Claims,no,1,no
+"Customer: Cedar Supply (business plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $152, shipped 9 days ago.
+
+We've been billed incorrectly on NW-2024103. This is the second billing mistake this quarter. Can someone actually CHECK the invoice before sending it? Frustrated, Chen.",Billing,yes,1,no
+"Customer: Everly Retail (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $36, shipped 17 days ago.
+
+Your invoice for NW-2024104 is wrong. We agreed on one rate and you charged us more. This is getting old. Fix it now.",Billing,no,1,no
+"Customer: Delta Supply (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $288, shipped 14 days ago.
+
+WHAT HAPPENED TO NW-20247885-73883?? textile bolts order ORD-X347372 is MISSING. Your tracking stopped updating DAYS AGO. GET IT BACK OR REFUND ME NOW. Coast Trade Partners",Claims,no,2,yes
+"Customer: Granite Labs (starter plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $35, shipped 7 days ago.
+
+WHAT HAPPENED TO NW-20243411-78495?? specialty food products order ORD-W697895 is MISSING. Your tracking stopped updating DAYS AGO. GET IT BACK OR REFUND ME NOW. Robert Taylor",Claims,no,1,no
+"Customer: Granite Outdoors (business plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $7,011, shipped 3 days ago.
+
+seriously frustrated. order ORD-2000835 office equipment TRK-9500835 should be here. immediate update needed",Dispatch,yes,2,no
+"Customer: Acme Labs (enterprise plan, APAC). Tickets from this customer in the last 30 days: 4. Shipment value: $23, shipped 3 days ago.
+
+YOUR INCOMPETENCE HAS CAUSED US SIGNIFICANT LOSSES. The furniture shipment is destroyed. We're suing for damages. Our legal counsel is on this NOW.",Claims,yes,3,yes
+"Customer: Borealis Foods (business plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $2,686, shipped 8 days ago.
+
+Your invoice for NW-2024104 is wrong. We agreed on one rate and you charged us more. This is getting old. Fix it now.",Billing,yes,2,no
+"Customer: Cedar Medical (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $166, shipped 6 days ago.
+
+THE TEXTILES SHIPMENT IS DESTROYED. Our legal department is preparing a lawsuit against Northwind Freight for negligent handling. You'll be hearing from our lawyers.",Claims,yes,2,yes
+"Customer: Delta Labs (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $3,931, shipped 20 days ago.
+
+Your invoice for NW-2024101 is wrong. We agreed on one rate and you charged us more. This is getting old. Fix it now.",Billing,no,2,no
+"Customer: Everly Medical (starter plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $117, shipped 13 days ago.
+
+Really? The pallets of vintage wine in NW-20249890-38541 arrived completely damaged. I don't have time for this. Send a replacement ASAP. Midwest Supply Co.",Claims,no,1,no
+"Customer: Granite Labs (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $405, no shipment yet.
+
+Hi, we need a shipping quote for textiles – approximately 20 boxes, destination is Denver. Please send details when available.",Sales,no,0,no
+"Customer: Granite Retail (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $1,041, shipped 17 days ago.
+
+Tired of incorrect invoices. NW-2024102 has wrong charges again. We need accurate billing or we're finding another carrier.",Billing,no,1,no
+"Customer: Borealis Foods (enterprise plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $201, shipped 16 days ago.
+
+can we redirect order ORD-2500283 to the updated shipping address in Brooklyn? shipment should still be in transit",Dispatch,yes,3,no
+"Customer: Everly Supply (business plan, EU). Tickets from this customer in the last 30 days: 2. Shipment value: $123, shipped 14 days ago.
+
+ARE YOU KIDDING ME?! Order SHP-9012-847 is WRONG ADDRESS! Change it to 654 Delivery Lane, Atlanta, GA 30303 RIGHT NOW! This is unacceptable!",Dispatch,no,2,no
+"Customer: Harbor Foods (starter plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $870, shipped 14 days ago.
+
+ENOUGH! The invoice NW-2024105 is a SCAM. Intentional overcharging? This is ridiculous. We're done with Northwind. Process a full refund IMMEDIATELY.",Billing,no,0,no
+"Customer: Acme Outdoors (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $139, shipped 21 days ago.
+
+ARE YOU KIDDING ME?! Order SHP-9012-847 is WRONG ADDRESS! Change it to 654 Delivery Lane, Atlanta, GA 30303 RIGHT NOW! This is unacceptable!",Dispatch,no,2,no
+"Customer: Foxglove Medical (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $6,968, shipped 2 days ago.
+
+Good morning, order ORD-Z674949 (NW-20249689-50325) arrived with damaged specialty food products. Can we arrange a replacement or refund? Elena Rodriguez",Claims,yes,3,no
+"Customer: Delta Foods (starter plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $35, shipped 13 days ago.
+
+Hi, I'm reviewing our invoice for shipment NW-2024103 and noticed a discrepancy. The charges don't match our agreed rate. Could someone review and clarify? Thanks, Chen.",Billing,no,0,no
+"Customer: Harbor Medical (enterprise plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $182, shipped 2 days ago.
+
+I'm through with Northwind. NW-20247250-64309 (my office furniture) disappeared without a trace. Tracking shows NOTHING. This is a disaster. I will never use you again. Coast Trade Partners",Claims,yes,3,yes
+"Customer: Harbor Labs (business plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $44, shipped 4 days ago.
+
+Your invoice for NW-2024104 is wrong. We agreed on one rate and you charged us more. This is getting old. Fix it now.",Billing,no,1,no
+"Customer: Delta Foods (enterprise plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $3,756, shipped 2 days ago.
+
+Hello Northwind, we received an invoice that appears to have incorrect charges. Our original quote was different. Could your billing team review order NW-2024104?",Sales,no,3,no
+"Customer: Foxglove Supply (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $420, no shipment yet.
+
+Furniture quote to Denver – LEGAL DEPARTMENT WAITING. Please expedite this estimate.",Sales,yes,0,no
+"Customer: Granite Supply (enterprise plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $20, shipped 11 days ago.
+
+checking on ORD-2000897 - office equipment tracking TRK-9500897 - delivery window has passed, need immediate update",Claims,no,2,yes
+"Customer: Harbor Outdoors (enterprise plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $3,960, shipped 9 days ago.
+
+Hello, Where is shipment TRK-9500863 (electronics)? Order ORD-2000863 is delayed.",Dispatch,yes,3,no
+"Customer: Borealis Labs (enterprise plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $596, shipped 4 days ago.
+
+Tracking NW-20248960-17938 is stuck. My office furniture went missing after leaving your facility. I need answers and I need them fast. David Martinez",Claims,no,3,no
+"Customer: Acme Retail (business plan, APAC). Tickets from this customer in the last 30 days: 3. Shipment value: $457, shipped 24 days ago.
+
+I noticed our recent shipment invoice seems overcharged. We need to reconcile the amount. Can someone from accounting review NW-2024102? Appreciate your help.",Billing,yes,1,no
+"Customer: Harbor Foods (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $572, shipped 19 days ago.
+
+Tracking NW-20249202-96274 is stuck. My medical diagnostic kits went missing after leaving your facility. I need answers and I need them fast. Coast Trade Partners",Claims,no,3,no
+"Customer: Foxglove Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $221, shipped 18 days ago.
+
+ENOUGH! The invoice NW-2024105 is a SCAM. Intentional overcharging? This is ridiculous. We're done with Northwind. Process a full refund IMMEDIATELY.",Sales,yes,2,no
+"Customer: Granite Medical (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $698, shipped 5 days ago.
+
+This is UNBELIEVABLE. NW-2024101 has outrageous charges we never agreed to. We're canceling all future shipments with Northwind.",Billing,no,1,no
+"Customer: Harbor Medical (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $48, shipped 4 days ago.
+
+YOUR COMPANY DESTROYED OUR WINE SHIPMENT SHIPMENT! This is completely unacceptable. We're switching carriers immediately. You've lost our business.",Claims,no,2,yes
+"Customer: Delta Medical (business plan, APAC). Tickets from this customer in the last 30 days: 0. Shipment value: $320, shipped 4 days ago.
+
+FYI - could someone look into why our furniture parts (order ORD-2000846, tracking TRK-9500846) is behind? Originally promised delivery has passed.",Dispatch,no,1,no
+"Customer: Delta Supply (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $1,416, shipped 1 days ago.
+
+Tracking NW-20243135-13660 shows my office furniture departed the origin facility but never arrived. It's been stuck. Can someone investigate? David Martinez",Claims,no,2,no
+"Customer: Borealis Supply (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $813, no shipment yet.
+
+Quote for textiles shipping – 15 boxes to Boston. I'm on a timeline here. Please respond promptly.",Sales,no,0,no
+"Customer: Delta Labs (starter plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $5,019, shipped 23 days ago.
+
+I'm through with Northwind. NW-20246960-13101 (my automotive parts) disappeared without a trace. Tracking shows NOTHING. This is a disaster. I will never use you again. Chris Hayes",Claims,yes,2,no
+"Customer: Foxglove Retail (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $628, shipped 22 days ago.
+
+Your handling of this textiles delivery was negligent. We've contacted our lawyer regarding liability. Please respond immediately with a resolution.",Claims,yes,2,no
+"Customer: Delta Retail (business plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $364, shipped 14 days ago.
+
+Good morning, order ORD-Z674949 (NW-20249689-50325) arrived with damaged specialty food products. Can we arrange a replacement or refund? Elena Rodriguez",Claims,no,2,no
+"Customer: Borealis Foods (starter plan, US). Tickets from this customer in the last 30 days: 3. Shipment value: $53, shipped 4 days ago.
+
+Tracking NW-20248960-17938 is stuck. My office furniture went missing after leaving your facility. I need answers and I need them fast. David Martinez",Claims,yes,1,no
+"Customer: Harbor Foods (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $1,685, shipped 16 days ago.
+
+Really? The medical diagnostic kits in NW-20241422-55571 arrived completely damaged. I don't have time for this. Send a replacement ASAP. Blue Ridge Distributors",Claims,no,3,no
+"Customer: Cedar Outdoors (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $974, no shipment yet.
+
+Quote request: medical equipment to Phoenix. I've asked other carriers – why is this taking so long? Give me pricing.",Sales,no,0,no
+"Customer: Delta Outdoors (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $1,099, shipped 6 days ago.
+
+We've identified a billing error on invoice NW-2024103. Before escalating to our legal department, we wanted to give you a chance to correct it. Please review promptly.",Sales,yes,2,no
+"Customer: Foxglove Supply (starter plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $811, no shipment yet.
+
+Good morning, I'm looking for a rate quote on transporting 3 pallets of electronics components. Destination: Chicago. What's your best offer?",Sales,no,0,no
+"Customer: Cedar Retail (starter plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $62, shipped 1 days ago.
+
+Order ORD-2500255 - change address to our alternate distribution center. Getting frustrated with delays.",Dispatch,no,2,no
+"Customer: Cedar Labs (business plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $2,250, shipped 13 days ago.
+
+Dear Northwind Freight, Order ORD-F575367 containing office furniture appears to be lost. Tracking NW-20244800-35098 is stuck. We're prepared to escalate this to our legal team if we don't get resolution within 48 hours. Please respond immediately. Blue Ridge Distributors",Claims,yes,3,no
+"Customer: Granite Medical (enterprise plan, US). Tickets from this customer in the last 30 days: 0. Shipment value: $533, shipped 20 days ago.
+
+Hi, the pallets of vintage wine in shipment NW-20246459-14008 arrived damaged. Packaging was insufficient. Could you help process a claim? Jennifer Kim",Claims,no,3,no
+"Customer: Borealis Retail (enterprise plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $80, no shipment yet.
+
+Quote request: medical equipment to Phoenix. I've asked other carriers – why is this taking so long? Give me pricing.",Sales,no,1,no
+"Customer: Delta Supply (business plan, EU). Tickets from this customer in the last 30 days: 1. Shipment value: $3,553, shipped 25 days ago.
+
+ENOUGH. Where is ORD-2000905?? wine (pallets)? Tracking TRK-9500905?? This delay is inexcusable and we are DONE waiting. Fix this immediately or face consequences.",Claims,no,2,no
+"Customer: Harbor Retail (starter plan, EU). Tickets from this customer in the last 30 days: 0. Shipment value: $191, shipped 19 days ago.
+
+Good morning, order ORD-X178482 (NW-20241267-23806) arrived with damaged pallets of vintage wine. Can we arrange a replacement or refund? Midwest Supply Co.",Claims,no,1,no
+"Customer: Harbor Retail (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $8,256, shipped 11 days ago.
+
+Tracking NW-20243135-13660 shows my office furniture departed the origin facility but never arrived. It's been stuck. Can someone investigate? David Martinez",Claims,yes,3,no
+"Customer: Foxglove Retail (enterprise plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $161, no shipment yet.
+
+I need a quote for shipping wine, and I need it soon. 8 pallets to Portland. Don't take forever with this.",Sales,no,1,no
+"Customer: Harbor Retail (business plan, US). Tickets from this customer in the last 30 days: 4. Shipment value: $565, shipped 24 days ago.
+
+Really? The specialty food products in NW-20241554-58719 arrived completely damaged. I don't have time for this. Send a replacement ASAP. Michelle Anderson",Claims,yes,2,no
+"Customer: Harbor Foods (business plan, APAC). Tickets from this customer in the last 30 days: 4. Shipment value: $4,098, no shipment yet.
+
+Quote request: medical equipment to Phoenix. I've asked other carriers – why is this taking so long? Give me pricing.",Sales,yes,1,no
+"Customer: Foxglove Supply (business plan, APAC). Tickets from this customer in the last 30 days: 1. Shipment value: $73, shipped 22 days ago.
+
+ENOUGH! The invoice NW-2024105 is a SCAM. Intentional overcharging? This is ridiculous. We're done with Northwind. Process a full refund IMMEDIATELY.",Billing,no,1,no
+"Customer: Harbor Medical (business plan, US). Tickets from this customer in the last 30 days: 1. Shipment value: $1,427, shipped 19 days ago.
+
+Tracking NW-20243135-13660 shows my office furniture departed the origin facility but never arrived. It's been stuck. Can someone investigate? David Martinez",Claims,no,2,no
+"Customer: Granite Medical (enterprise plan, EU). Tickets from this customer in the last 30 days: 3. Shipment value: $846, no shipment yet.
+
+Good morning, We're requesting a quote for transporting medical kits. Per our legal requirements, we need itemized pricing. Thank you.",Sales,yes,1,no
+"Customer: Cedar Foods (enterprise plan, APAC). Tickets from this customer in the last 30 days: 2. Shipment value: $1,046, shipped 19 days ago.
+
+Dear Northwind Freight, We are writing to inquire about the status of our shipment of textiles under order number ORD-2000880 with tracking reference TRK-9500880. The delivery date has passed, and we would appreciate a prompt update on the current location and revised estimated arrival time. Thank you.",Claims,no,2,no
+"Customer: Borealis Medical (business plan, US). Tickets from this customer in the last 30 days: 4. Shipment value: $1,973, shipped 14 days ago.
+
+YOUR COMPANY DESTROYED OUR TEXTILES SHIPMENT! This is completely unacceptable. We're switching carriers immediately. You've lost our business.",Claims,yes,2,no
+"Customer: Granite Labs (enterprise plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $355, no shipment yet.
+
+Hi, we need a shipping quote for textiles – approximately 20 boxes, destination is Denver. Please send details when available.",Sales,no,1,no
+"Customer: Everly Outdoors (enterprise plan, US). Tickets from this customer in the last 30 days: 2. Shipment value: $1,176, no shipment yet.
+
+Hi, we need a shipping quote for textiles – approximately 20 boxes, destination is Denver. Please send details when available.",Sales,no,1,no
