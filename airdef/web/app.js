@@ -6,6 +6,8 @@ const money = (m) => (m < 0.001 ? "<$1k" : m < 1 ? `$${Math.round(m * 1000)}k` :
 const BLUE = [37, 72, 246], GREY = [138, 138, 142], INK = [16, 16, 16], HIT = [255, 59, 48];
 const VIEWS = { theatre: [40.5, 31.2, 4.7, 48], north: [35.35, 32.95, 8.3, 50], south: [39.5, 24.5, 4.6, 45] };
 const SCEN_VIEW = { northern_barrage: "north", april_mixed: "theatre", october_saturation: "theatre", june_attrition: "theatre", houthi_eilat: "south" };
+const DRILL_VIEW = { wait_for_cheaper: "theatre", last_chance: "north", let_it_fall: "north", track_not_firm: "theatre", coverage_gap: "south", helicopter: "theatre" };
+const viewOf = (s) => (s.startsWith("drill:") ? DRILL_VIEW[s.split(":")[1]] : SCEN_VIEW[s]);
 const DONE = ["killed", "leaked", "fell_open"];
 
 // ---------------------------------------------------------------- copy (EN / HE)
@@ -41,6 +43,14 @@ const I18N = {
     agrees: "The planner agrees.", differs: (x) => `The planner would: ${x}.`,
     reads: "What Typical reads", notYet: "No interceptor can reach it yet. Typical decides once one can.",
     empty: "Press Play. The most urgent threat and Typical's call appear here.",
+    drills: "Drills", drill: { kicker: (n, k) => `Drill · case ${n} of ${k}`, played: "Each option played out to the end, 40 times. Average cost:",
+      best: "best", next: "Next case", thinking: "Typical is deciding…", who: { typical: "Typical", planner: "Planner", doctrine: "Doctrine" },
+      fam: { wait_for_cheaper: "Wait for cheaper", last_chance: "Last chance", let_it_fall: "Let it fall", track_not_firm: "Unclear track", coverage_gap: "Coverage gap", helicopter: "Helicopter" },
+      blurb: { wait_for_cheaper: "Arrow 3 can fire now; a cheaper layer reaches it later, and Arrow 3 is scarce.",
+        last_chance: "Seconds before impact, one battery still reaches it.", let_it_fall: "The rocket will land well clear of any defended site.",
+        track_not_firm: "Early in flight, the predicted impact straddles the edge of a city.",
+        coverage_gap: "A drone heads for Eilat, the Eilat battery is empty, and aircraft can still meet it.",
+        helicopter: "A drone heads north; the batteries are empty, the laser is clouded out, the fighters are busy." } },
     tonight: "Tonight", attacker: (x) => `Attacker spent ${x}`, spent: "Spent", hits: "Hits on sites", a3: "Arrow 3 left",
     vsNaive: (x) => `${x} by doctrine`, details: "Details", foot: (a, ms) => `Agrees with the planner ${a}% · ${ms} ms per call`, cmp: "Compare planner",
     planner: "Planner",
@@ -82,6 +92,14 @@ const I18N = {
     agrees: "המתכנן מסכים.", differs: (x) => `המתכנן היה בוחר: ${x}.`,
     reads: "מה Typical קורא (באנגלית)", notYet: "אף מיירט עדיין לא מגיע אליו. Typical יחליט כשיגיע.",
     empty: "לחצו הפעל. האיום הדחוף ביותר וההחלטה של Typical יופיעו כאן.",
+    drills: "תרגולים", drill: { kicker: (n, k) => `תרגול · מקרה ${n} מתוך ${k}`, played: "כל אפשרות הורצה עד הסוף, 40 פעמים. עלות ממוצעת:",
+      best: "הטוב ביותר", next: "המקרה הבא", thinking: "Typical מחליט…", who: { typical: "Typical", planner: "מתכנן", doctrine: "דוקטרינה" },
+      fam: { wait_for_cheaper: "להמתין לזול יותר", last_chance: "הזדמנות אחרונה", let_it_fall: "לתת לו ליפול", track_not_firm: "מסלול לא ברור", coverage_gap: "פער כיסוי", helicopter: "מסוק" },
+      blurb: { wait_for_cheaper: "חץ 3 יכול לירות עכשיו; שכבה זולה יותר תגיע אליו מאוחר יותר, וחץ 3 במחסור.",
+        last_chance: "שניות לפני הפגיעה, סוללה אחת עדיין מגיעה אליו.", let_it_fall: "הרקטה תיפול הרחק מכל אתר מוגן.",
+        track_not_firm: "בתחילת המעוף, נקודת הפגיעה החזויה על גבול עיר.",
+        coverage_gap: "כטב״ם בדרך לאילת, הסוללה באילת ריקה, וכלי טיס עוד יכולים לפגוש אותו.",
+        helicopter: "כטב״ם בדרך לצפון; הסוללות ריקות, הלייזר מוגבל בעננים, מטוסי הקרב תפוסים." } },
     tonight: "הלילה", attacker: (x) => `התוקף הוציא ${x}`, spent: "הוצאה", hits: "פגיעות באתרים", a3: "חץ 3 שנותרו",
     vsNaive: (x) => `${x} לפי התורה`, details: "פרטים", foot: (a, ms) => `הסכמה עם המתכנן ${a}% · ${ms} מ״ש להחלטה`, cmp: "השווה למתכנן",
     planner: "מתכנן",
@@ -132,7 +150,7 @@ async function init() {
   $("#speedMenu").onclick = (e) => { const x = e.target.closest("[data-x]")?.dataset.x; if (x) api("/api/control", { action: "speed", speed: +x }); };
   $("#scenMenu").onclick = async (e) => {
     const s = e.target.closest("[data-s]")?.dataset.s; if (!s) return;
-    selected = null; pinned = false; detail = null; await api("/api/control", { action: "reset", scenario: s }); flyTo(SCEN_VIEW[s]);
+    selected = null; pinned = false; detail = null; await api("/api/control", { action: "reset", scenario: s }); flyTo(viewOf(s));
   };
   $("#play").onclick = () => api("/api/control", { action: S?.running ? "pause" : "play" });
   $("#gear").onclick = () => { const o = $("#sheet").classList.toggle("open"); $("#gear").setAttribute("aria-expanded", o); };
@@ -143,7 +161,8 @@ async function init() {
   };
   await poll();
   applyLang();
-  flyTo(SCEN_VIEW[S.scenario]);
+  flyTo(viewOf(S.scenario));
+  $("#tonight").onclick = (e) => { if (e.target.closest("#nextCase")) { selected = null; pinned = false; detail = null; api("/api/control", { action: "reset", scenario: `drill:${S.drill.family}:${S.drill.case + 1}` }); } };
   setInterval(poll, 250);
   setInterval(loadDetail, 600);
   requestAnimationFrame(frame);
@@ -157,7 +176,8 @@ function applyLang() {
   $("#scenMenu").innerHTML = Object.entries(META.scenarios).map(([k, v]) => {
     const [title, blurb] = LANG === "he" ? [v.title_he, v.blurb_he] : [v.title, v.blurb];
     return `<button class="dc-dropdown__item" data-s="${k}"><span class="dc-dropdown__text"><span class="dc-dropdown__label">${esc(title)}</span><span class="dc-dropdown__desc">${esc(blurb)}</span></span></button>`;
-  }).join("");
+  }).join("") + `<p class="dc-dropdown__desc menuhead">${T().drills}</p>` + Object.entries(T().drill.fam).map(([k, title]) =>
+    `<button class="dc-dropdown__item" data-s="drill:${k}:0"><span class="dc-dropdown__text"><span class="dc-dropdown__label">${esc(title)}</span><span class="dc-dropdown__desc">${esc(T().drill.blurb[k])}</span></span></button>`).join("");
   renderBar(); renderTonight(); renderDecision(); renderStrip(); buildSheet();
 }
 
@@ -283,12 +303,13 @@ function renderBar() {
   if (!S) return;
   $("#play").textContent = S.running ? T().pause : T().play;
   $("#speedBtn").firstChild.textContent = `${T().speed} ${S.speed}× `;
-  if (renderBar.key === S.speed + LANG) return;
-  renderBar.key = S.speed + LANG;
-  $("#speedMenu").innerHTML = SPEEDS.map(([x, d]) => `<button class="dc-dropdown__item" role="menuitemradio" aria-checked="${x === S.speed}" data-x="${x}">
+  if (renderBar.key !== S.speed + LANG) {   // the menu only changes with speed or language; the rest below every poll
+    renderBar.key = S.speed + LANG;
+    $("#speedMenu").innerHTML = SPEEDS.map(([x, d]) => `<button class="dc-dropdown__item" role="menuitemradio" aria-checked="${x === S.speed}" data-x="${x}">
     <span class="dc-dropdown__text"><span class="dc-dropdown__label num">${x}×</span><span class="dc-dropdown__desc">${T().speedDesc[d]}</span></span></button>`).join("");
+  }
   const sc = META.scenarios[S.scenario];
-  $("#scenBtn").firstChild.textContent = (LANG === "he" ? sc.title_he : sc.title).split(":")[0] + " ";
+  $("#scenBtn").firstChild.textContent = (S.drill ? `${T().drills}: ${T().drill.fam[S.drill.family]}` : (LANG === "he" ? sc.title_he : sc.title).split(":")[0]) + " ";
   if (S.skipped !== lastSkip.v) lastSkip = { v: S.skipped, at: performance.now() };
   const skip = S.running && S.skipped > 0 && performance.now() - lastSkip.at < 2500;
   $("#note").textContent = skip ? T().skipped(fmtT(S.skipped)) : "";
@@ -351,8 +372,19 @@ function renderDecision() {
 }
 
 // ---------------------------------------------------------------- tonight
+function renderDrill() {   // the curated case's simulated outcomes, and who picked what
+  const D = S.drill, tt = T(), d = tt.drill, tol = Math.max(0.05, 0.02 * D.costs[0][1]);
+  const tags = (k) => ["typical", "planner", "doctrine"].filter((w) => D[w] === k).map((w) => `<span class="tag${w === "typical" ? " ty" : ""}">${d.who[w]}</span>`).join("");
+  $("#tonight").innerHTML = `<p class="kicker">${d.kicker(D.case + 1, D.cases)}</p><p class="dline">${esc(d.blurb[D.family])}</p>
+    <p class="dline">${d.played}</p>
+    ${D.costs.map(([k, c]) => `<div class="alt"><span>${c - D.costs[0][1] <= tol ? `<b>${esc(actLabel(k))}</b> · ${d.best}` : esc(actLabel(k))}${tags(k)}</span><span class="num">${money(c)}</span></div>`).join("")}
+    ${D.typical ? "" : `<p class="dline">${d.thinking}</p>`}
+    ${D.cases > 1 ? `<button id="nextCase" class="dc-pill dc-pill--secondary dc-pill--sm">${d.next}</button>` : ""}`;
+}
+
 function renderTonight() {
   if (!S) return;
+  if (S.drill) return renderDrill();
   const L = S.ledger, ty = L.typical, nv = L.doctrine, tt = T();
   if (!ty) return;
   $("#tonight").innerHTML = `<p class="kicker">${tt.tonight}</p><div class="stats">

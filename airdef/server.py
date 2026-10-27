@@ -2,6 +2,8 @@
 
     uv run --no-sync uvicorn --app-dir airdef server:app --port 8790        (AIRDEF_MODEL=none: planner only)
 """
+import copy
+import json
 import os
 import sys
 import threading
@@ -27,7 +29,8 @@ BUDGET = 6             # Typical calls per tick; the sim slows down when decisio
 
 app = FastAPI()
 lock = threading.Lock()   # one lock for world + model (MPS crashes on concurrent calls)
-S = dict(world=None, running=False, speed=10.0, model=None, model_name="planner only", backlog=False, skipped=0.0)
+S = dict(world=None, running=False, speed=10.0, model=None, model_name="planner only", backlog=False, skipped=0.0, drill=None)
+DRILL = ROOT.parent / ".context/airdef/drill_ui.jsonl"   # situations.py --instances 3 --rollouts 40 --out <this>
 QUIET_S = 15           # auto-skip: jump when nothing happens for longer than this (sim seconds)
 
 
@@ -43,7 +46,23 @@ def load_model():
 
 def new_world(scenario, seed=7, cfg=None):
     S["world"] = World(scenario, cfg or DEFAULT_CONFIG, S["model"], seed, async_model=True)
-    S["running"] = False
+    S["running"], S["drill"] = False, None
+
+
+def new_drill(fam, n):
+    """One curated situation (situations.py), frozen at its decision moment, with every option's simulated outcome."""
+    import situations
+    rows = [r for r in map(json.loads, DRILL.read_text().splitlines()) if r["meta"]["family"] == fam]
+    if not rows:
+        raise HTTPException(400, "unknown drill")
+    m = rows[n % len(rows)]["meta"]
+    w, th, t = situations.case(fam, m["inst"])
+    w.t, w.model, w.async_model, w.scenario = t, S["model"], True, f"drill:{fam}:{n % len(rows)}"
+    w.policies["typical"] = copy.deepcopy(w.policies["planner"])
+    w.policies["typical"].name = "typical"
+    S.update(world=w, running=False, drill=dict(family=fam, case=n % len(rows), cases=len(rows), threat=th.id,
+                                                costs=sorted(m["costs"].items(), key=lambda kv: kv[1]),
+                                                best=m["best"], planner=m["planner"], doctrine=m["doctrine"]))
 
 
 def loop():
@@ -54,7 +73,9 @@ def loop():
         real, last = min(t0 - last, 1.0), t0
         with lock:
             w = S["world"]
-            if S["running"] and w and w.t < w.end:
+            if S["drill"] and not S["running"] and w.t <= w.end:
+                w.step(0.0)                            # a paused drill still gets its calls made, at the frozen moment
+            elif S["running"] and w and w.t < w.end:
                 w.step(real * S["speed"])              # decide (from answers already in), resolve, fly aircraft, advance
                 if (nxt := w.next_event()) - w.t > QUIET_S:
                     S["skipped"] = nxt - 5 - w.t       # the UI shows "skipped mm:ss"
@@ -148,7 +169,8 @@ def state(policy: str = "typical"):
                                 goal=u.goal) for u in pol.units.values()],
                     killed={tid: s["killed_at"] for tid, s in pol.st.items() if s.get("killed_at")},
                     ledger=w.ledger(), attacker_cost=w.attacker_cost, launched=sum(th.t0 <= w.t for th in w.threats),
-                    total=len(w.threats))
+                    total=len(w.threats), drill=S["drill"] and dict(
+                        S["drill"], typical=next(iter(k for _, k in w.policies["typical"].st[S["drill"]["threat"]]["history"]), None)))
 
 
 @app.get("/api/track/{tid}")
@@ -191,6 +213,9 @@ def control(c: Control):
             S["speed"] = max(0.25, min(c.speed, 600))
         elif c.action == "skip":   # jump to just before the next thing worth watching
             w.t = max(w.t, w.next_event() - 5)
+        elif c.action == "reset" and (c.scenario or w.scenario).startswith("drill:"):   # drill:<family>:<case>
+            _, fam, n = (c.scenario or w.scenario).split(":")
+            new_drill(fam, int(n))
         elif c.action == "reset":
             if c.scenario and c.scenario not in SCENARIOS:
                 raise HTTPException(400, "unknown scenario")

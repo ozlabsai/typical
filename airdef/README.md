@@ -54,7 +54,13 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 4. **13 April, 20×.** Drones and cruise missiles first; about a minute in, *Fighter jets* and *Helicopter* take the
    drones over Jordan, then the ballistic wave: *Wait for cheaper* keeps the Arrow 3 stock for the threats that need
    it, and the congestion lens stops everyone waiting for the same layer.
-5. **Settings.** Switch *Magazine posture* to *Critical* or change a site's damage weight, and watch the live calls
+5. **Drills** (bottom of the scenario menu). One curated situation frozen at its decision moment: Typical's call in
+   the panel, and below it every option played out to the end 40 times, with the best marked and who picked what
+   (Typical / planner / doctrine). *Next case* steps through instances; *Play* continues the case. The panel's reason
+   is the planner's *estimate*; the drill card is the simulated outcome, and they can differ (coverage gap: the
+   estimate prefers jets, the outcomes tie). *Unclear track* is the honest weak spot: everyone fires early.
+   Cases: `situations.py --instances 3 --rollouts 40 --out .context/airdef/drill_ui.jsonl` (~30 s).
+6. **Settings.** Switch *Magazine posture* to *Critical* or change a site's damage weight, and watch the live calls
    change. *Escalate below* raises how often a threat is sent to the operator (human on the loop).
 
 ## What was measured

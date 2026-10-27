@@ -106,6 +106,11 @@ FAMILIES = {"wait_for_cheaper": fam_wait_for_cheaper, "last_chance": fam_last_ch
             "track_not_firm": fam_track_not_firm, "coverage_gap": fam_coverage_gap, "helicopter": fam_helicopter}
 
 
+def case(fam, inst):
+    """-> (world, threat, decision time) for instance `inst` of a family; the same case every run (the live drill reloads it)."""
+    return FAMILIES[fam](random.Random(f"{fam}:{inst}"))
+
+
 # ------------------------------------------------------------------------------- evaluation
 def options_at(w, th, t, pol_name="planner"):
     w.t = t
@@ -144,8 +149,7 @@ def rollout(w, th, t, key, seed):
 
 def one(job):
     fam, inst, n_roll = job
-    rng = random.Random(1000 * hash(fam) % 997 + inst)
-    w, th, t = FAMILIES[fam](rng)
+    w, th, t = case(fam, inst)
     opts, text, p_hit = options_at(w, th, t)
     if len(opts) < 2:
         return None
@@ -160,7 +164,7 @@ def one(job):
     z = sum(wts)
     row = {"state": text, "query": engine.Q_GLOBAL, "candidates": labels, "target": [x / z for x in wts], "p_null": 0.0,
            "task": "airdef_situation", "label": [o.key for o in opts].index(best),
-           "meta": {"qtype": "choice", "family": fam, "best": best, "costs": costs, "planner": pl, "doctrine": doc}}
+           "meta": {"qtype": "choice", "family": fam, "inst": inst, "best": best, "costs": costs, "planner": pl, "doctrine": doc}}
     return fam, best, pl, doc, costs, row
 
 
