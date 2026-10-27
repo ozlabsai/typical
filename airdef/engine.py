@@ -111,12 +111,15 @@ class Policy:
 
 class World:
     def __init__(self, scenario="houthi_eilat", cfg=None, model=None, seed=7, policies=("naive", "planner", "typical"),
-                 explore=0.0, record=None):
+                 explore=0.0, record=None, async_model=False):
         self.scenario, self.seed = scenario, seed
         self.cfg = copy.deepcopy(cfg or DEFAULT_CONFIG)
         self.cfg_version = 0
         self.model = model
         self.memo = {}       # state text + options -> Typical's answer
+        # async_model (live demo): the clock never waits for Typical. Threats needing a call are queued here, most urgent
+        # first; a worker thread scores them and fills memo. Until an answer lands, that threat simply has no new call.
+        self.async_model, self.requests = async_model, {}
         self.explore, self.record, self.rng = explore, record, random.Random(seed)
         self.threats = build_raid(scenario, seed)
         for th in self.threats:
@@ -190,12 +193,18 @@ class World:
         exp = self.expected(pol)
         inbound = {c: sum(1 for x in exp if x.cls == c) for c in CLASS_WORD}
         calls = 0
+        if pol.name == "typical" and self.async_model:
+            self.requests = {}   # rebuilt every tick: only situations that are still current get scored
         for th in due:
             s = pol.st[th.id]
             dmg = consequence(th, self.t, self.cfg)[0]
             opts = planner.option_values(th, self.t, pol.stock, self.cfg, pol.prices, dmg)
             text = verbalise(th, self.t, opts, pol.prices, left, inbound[th.cls] - 1, self.cfg)
-            if pol.name == "typical" and self.model is not None and text + "\n" + "|".join(label(o.key) for o in opts) not in self.memo:
+            key = text + "\n" + "|".join(label(o.key) for o in opts)
+            if pol.name == "typical" and self.model is not None and key not in self.memo:
+                if self.async_model:
+                    self.requests.setdefault(key, (text, [label(o.key) for o in opts]))
+                    continue
                 if calls >= budget:
                     break
                 calls += 1

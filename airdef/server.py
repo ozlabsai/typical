@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import planner
-from engine import DONE, World
+from engine import DONE, Q, World
 from sim import (BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, SITE_HE, SITES, THREAT_HE, THREATS,
                  consequence)
 
@@ -41,26 +41,48 @@ def load_model():
 
 
 def new_world(scenario, seed=7, cfg=None):
-    S["world"] = World(scenario, cfg or DEFAULT_CONFIG, S["model"], seed)
+    S["world"] = World(scenario, cfg or DEFAULT_CONFIG, S["model"], seed, async_model=True)
     S["running"] = False
 
 
 def loop():
+    """The sim clock: real elapsed time x speed, never paused for the model (a real battery won't wait either)."""
     last = time.perf_counter()
     while True:
         t0 = time.perf_counter()
-        real, last = min(t0 - last, 1.0), t0   # advance by real elapsed time: a slow tick must not slow the sim clock
+        real, last = min(t0 - last, 1.0), t0
         with lock:
             w = S["world"]
             if S["running"] and w and w.t < w.end:
-                calls = w.step(0.0, BUDGET)          # decide + resolve at the current time...
-                S["backlog"] = calls.get("typical", 0) >= BUDGET
-                dt = real * S["speed"]
-                w.t = min(w.t + (min(dt, 1.0) if S["backlog"] else dt), w.end)   # ...then advance (slower when backed up)
-                if not S["backlog"] and (nxt := w.next_event()) - w.t > QUIET_S:
+                w.step(0.0)                            # decide (from answers already in) + resolve at the current time
+                w.t = min(w.t + real * S["speed"], w.end)
+                if (nxt := w.next_event()) - w.t > QUIET_S:
                     S["skipped"] = nxt - 5 - w.t       # the UI shows "skipped mm:ss"
                     w.t = nxt - 5
+            S["backlog"] = len(w.requests) if w else 0
         time.sleep(max(0.0, TICK_S - (time.perf_counter() - t0)))
+
+
+def model_worker():
+    """Scores queued situations outside the world lock, most urgent first, and drops each answer into the memo."""
+    while True:
+        with lock:
+            w = S["world"]
+            job = next(iter(w.requests.items()), None) if w and S["model"] else None
+        if job is None:
+            time.sleep(0.02)
+            continue
+        key, (text, labels) = job
+        t0 = time.perf_counter()
+        d = S["model"].choice(text, Q, labels)
+        ms = (time.perf_counter() - t0) * 1000
+        with lock:
+            if S["world"] is w:
+                w.memo[key] = (d, ms)
+                w.requests.pop(key, None)
+                L = w.policies["typical"].L
+                L["calls"] += 1
+                L["ms"] += ms
 
 
 @app.on_event("startup")
@@ -68,6 +90,7 @@ def startup():
     load_model()
     new_world("houthi_eilat")
     threading.Thread(target=loop, daemon=True).start()
+    threading.Thread(target=model_worker, daemon=True).start()
 
 
 # ------------------------------------------------------------------ api

@@ -172,7 +172,7 @@ function simNow() {
   if (!S) return 0;
   const now = performance.now(), dtr = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
-  const live = S.running && !S.backlog;
+  const live = S.running;
   const target = live ? Math.min(S.end, S.t + ((now - fetchedAt) / 1000) * S.speed) : S.t;
   if (shown === null || !S.running || Math.abs(target - shown) > Math.max(30, 4 * S.speed)) return (shown = target);
   const step = live ? dtr * S.speed : 0;
@@ -261,7 +261,7 @@ function renderBar() {
   $("#scenBtn").firstChild.textContent = (LANG === "he" ? sc.title_he : sc.title).split(":")[0] + " ";
   if (S.skipped !== lastSkip.v) lastSkip = { v: S.skipped, at: performance.now() };
   const skip = S.running && S.skipped > 0 && performance.now() - lastSkip.at < 2500;
-  $("#note").textContent = S.backlog ? T().deciding : skip ? T().skipped(fmtT(S.skipped)) : "";
+  $("#note").textContent = skip ? T().skipped(fmtT(S.skipped)) : "";
 }
 
 // ---------------------------------------------------------------- decision panel
