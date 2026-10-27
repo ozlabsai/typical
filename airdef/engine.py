@@ -20,6 +20,7 @@ from sim import (AIR, AIR_KINDS, BATTERIES, EFFECTORS, ORIGINS, SCENARIOS, SITE,
 HORIZON_S = 300        # a threat is decided once some interceptor can launch at it within this horizon
 RECHECK_S = {"B": 8, "R": 6, "C": 20, "D": 30}
 PRICE_S = 10
+BUDGET_S = 1.0   # the model's latency budget in wall seconds (live demo): past it the planner's call stands in, flagged
 ORIGIN_NAME = {"iran_w": "western Iran", "iran_nw": "north-western Iran", "iran_c": "central Iran", "iraq": "Iraq",
                "yemen": "Yemen", "lebanon_s": "southern Lebanon", "lebanon_bq": "the Beqaa valley", "gaza": "Gaza"}
 CLASS_WORD = {"B": "ballistic missile", "R": "rocket", "C": "cruise missile", "D": "drone"}
@@ -147,7 +148,7 @@ class Policy:
                               escalated=False, choice=None, assign=None) for t in threats}
         self.prices, self.priced_at, self.priced_cfgv = {}, -1e9, -1
         self.L = dict(spent=0.0, rounds={}, kills=0, leaks=0, damage=0.0, fell_open=0, escalated=0, decisions=0,
-                      agree=0, calls=0, ms=0.0, local_decisions=0, local_agree=0, sorties=0)
+                      agree=0, calls=0, ms=0.0, local_decisions=0, local_agree=0, sorties=0, late=0)
 
     def type_left(self):
         left, init = {}, {}
@@ -200,7 +201,7 @@ class World:
         self.model = model
         self.memo = {}       # (question, state text, labels) -> Typical's answer
         # async_model (live demo): the clock never waits for Typical; a worker drains `requests`, most urgent first.
-        self.async_model, self.requests = async_model, {}
+        self.async_model, self.requests, self.focus = async_model, {}, None
         self.explore, self.record, self.rng = explore, record, random.Random(seed)
         self.threats = build_raid(scenario, seed)
         for th in self.threats:
@@ -232,12 +233,13 @@ class World:
         pol.priced_at, pol.priced_cfgv = self.t, self.cfg_version
 
     # ---------------------------------------------------------- the model, shared by both levels
-    def ask(self, pol, q, text, labels):
-        """-> (dist over labels, p_null, ms) or None while an async answer is pending."""
+    def ask(self, pol, q, text, labels, due=0.0, tid=None):
+        """-> (dist over labels, p_null, ms) or None while an async answer is pending; the threat on screen
+        (`focus`) goes first, then `due` orders the queue."""
         key = (q, text, tuple(labels))
         if key not in self.memo:
             if self.async_model:
-                self.requests.setdefault(key, (q, text, list(labels)))
+                self.requests.setdefault(key, (q, text, list(labels), (tid != self.focus, due)))
                 return None
             t0 = time.perf_counter()
             d = self.model.choice(text, q, list(labels))
@@ -246,6 +248,16 @@ class World:
             pol.L["ms"] += self.memo[key][1]
         d, ms = self.memo[key]
         return {lab: d[lab] for lab in labels}, d["p_null"], ms
+
+    def late(self, pol, s, level, urgent=False):
+        """The clock never waits for the model: past the latency budget, or at the last chance, the planner's call stands in."""
+        k = "asked_" + level
+        s.setdefault(k, time.perf_counter())
+        if urgent or time.perf_counter() - s[k] > BUDGET_S:
+            del s[k]
+            pol.L["late"] += 1
+            return True
+        return False
 
     def unsure(self, top_p, p_null):
         return top_p < self.cfg["conf_threshold"] or p_null > self.cfg["abstain_threshold"]
@@ -316,15 +328,20 @@ class World:
                     if calls >= budget:
                         break
                     calls += 1
-                ans = self.ask(pol, Q_GLOBAL, text, [label(o.key) for o in opts])
+                ans = self.ask(pol, Q_GLOBAL, text, [label(o.key) for o in opts], th.t0 + th.T, th.id)
                 if ans is None:
-                    continue
-                d, p_null, ms = ans
-                dist = {o.key: d[label(o.key)] for o in opts}
-                opt = max(opts, key=lambda o: dist[o.key])
-                info.update(dist=dist, p_null=p_null, ms=ms)
-                pol.L["agree"] += opt.key == top.key
-                if self.unsure(dist[opt.key], p_null):
+                    if not self.late(pol, s, "g"):
+                        continue
+                    opt = top
+                    info["late"] = True
+                else:
+                    s.pop("asked_g", None)
+                    d, p_null, ms = ans
+                    dist = {o.key: d[label(o.key)] for o in opts}
+                    opt = max(opts, key=lambda o: dist[o.key])
+                    info.update(dist=dist, p_null=p_null, ms=ms)
+                    pol.L["agree"] += opt.key == top.key
+                if ans and self.unsure(dist[opt.key], p_null):
                     info["escalated"] = True
                     opt = top
                     if not s["escalated"]:
@@ -453,15 +470,20 @@ class World:
                     if calls >= budget:
                         break
                     calls += 1
-                ans = self.ask(pol, Q_LOCAL, text, LEVELS)
+                ans = self.ask(pol, Q_LOCAL, text, LEVELS, shot[0], th.id)
                 if ans is None:
-                    continue
-                d, p_null, ms = ans
-                n = int(max(d, key=d.get))
-                info.update(dist={int(k): v for k, v in d.items()}, p_null=p_null, ms=ms,
-                            expected=sum(int(k) * v for k, v in d.items()) / max(sum(d.values()), 1e-9))
-                pol.L["local_agree"] += n == teach
-                if self.unsure(max(d.values()), p_null):
+                    if not self.late(pol, s, "l", urgent=f["last"]):
+                        continue
+                    n = teach
+                    info["late"] = True
+                else:
+                    s.pop("asked_l", None)
+                    d, p_null, ms = ans
+                    n = int(max(d, key=d.get))
+                    info.update(dist={int(k): v for k, v in d.items()}, p_null=p_null, ms=ms,
+                                expected=sum(int(k) * v for k, v in d.items()) / max(sum(d.values()), 1e-9))
+                    pol.L["local_agree"] += n == teach
+                if ans and self.unsure(max(d.values()), p_null):
                     info["escalated"] = True
                     n = teach
             cap = 1 if s["assign"]["kind"] == "air" else f["channels_free"]
@@ -565,8 +587,8 @@ class World:
                     ev.append(s["resolve"])
                 elif s["status"] == "assigned":
                     ev.append(s.get("eng_at", self.t) - planner.OPEN_S)
-                elif s["status"] == "waiting":
-                    ev.append(s.get("wait_until", s["next"]) - planner.OPEN_S if s.get("wait_until") else s["next"])
+                elif s["status"] == "waiting":   # a plain wait hours out is re-asked at ~10% of its remaining flight, not every recheck
+                    ev.append(s["wait_until"] - planner.OPEN_S if s.get("wait_until") else max(s["next"], self.t + 0.1 * (th.t0 + th.T - self.t)))
                 elif s["status"] == "pending":
                     ev.append(th.first_launch - HORIZON_S if not self.in_horizon(th) else self.t)
         return max(self.t, min(ev))

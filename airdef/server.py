@@ -37,6 +37,7 @@ def load_model():
     import scorer   # the training repo's decider; see scorer.py for why not inference/typical
     m = scorer.load(MODEL_ID)
     m.choice("warm up", "Is this a warm-up?", ["yes", "no"])
+    S["batch"] = 16 if "cuda" in str(m.d.device) else 1
     S["model"], S["model_name"] = m, ("typical-small · tuned" if MODEL_ID.endswith(".pt") else MODEL_ID.split("/")[-1])
 
 
@@ -63,25 +64,27 @@ def loop():
 
 
 def model_worker():
-    """Scores queued situations outside the world lock, most urgent first, and drops each answer into the memo."""
+    """Scores queued situations outside the world lock, most urgent first, and drops each answer into the memo.
+    On CUDA it scores the BATCH most urgent in one forward; on MPS batching measured no faster (150 ms/row either way),
+    so one at a time keeps the most urgent answer's latency low."""
     while True:
         with lock:
             w = S["world"]
-            job = next(iter(w.requests.items()), None) if w and S["model"] else None
-        if job is None:
+            jobs = sorted(w.requests.items(), key=lambda kv: kv[1][3])[:S["batch"]]   # (not on screen, due) if w and S["model"] else []
+        if not jobs:
             time.sleep(0.02)
             continue
-        key, (q, text, labels) = job
         t0 = time.perf_counter()
-        d = S["model"].choice(text, q, labels)
-        ms = (time.perf_counter() - t0) * 1000
+        ds = S["model"].choices([(text, q, labels) for _, (q, text, labels, _) in jobs])
+        ms = (time.perf_counter() - t0) * 1000 / len(jobs)
         with lock:
             if S["world"] is w:
-                w.memo[key] = (d, ms)
-                w.requests.pop(key, None)
                 L = w.policies["typical"].L
-                L["calls"] += 1
-                L["ms"] += ms
+                for (key, _), d in zip(jobs, ds):
+                    w.memo[key] = (d, ms)
+                    w.requests.pop(key, None)
+                    L["calls"] += 1
+                    L["ms"] += ms
 
 
 @app.on_event("startup")
@@ -156,6 +159,7 @@ def track(tid: str, policy: str = "typical"):
         if tid not in w.by_id:
             raise HTTPException(404)
         th, pol = w.by_id[tid], w.policies[policy]
+        w.focus = tid   # the threat on screen is scored first
         s = pol.st[tid]
         _, sid, _, _, dist, sigma = consequence(th, w.t, w.cfg)
         return dict(id=tid, kind=th.kind, cls=th.cls, status=s["status"], t=w.t, t0=th.t0, impact=th.t0 + th.T,

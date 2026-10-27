@@ -35,6 +35,8 @@ const I18N = {
       local: (r, d) => `${r} costs ${d} more for this threat, in interceptors and risk.` },
     status: { killed: "Intercepted", leaked: "Hit a defended site", fell_open: "Fell in open ground" },
     operator: "Sent to the operator, who took the planner's call",
+    late: "Typical did not answer in time, so the planner's call went out",
+    inTime: (p) => `Typical answered ${p}% of calls in time; the planner stood in for the rest`,
     unsure: (x, p) => `Typical was unsure: its top pick, ${x}, had ${p}%`,
     agrees: "The planner agrees.", differs: (x) => `The planner would: ${x}.`,
     reads: "What Typical reads", notYet: "No interceptor can reach it yet. Typical decides once one can.",
@@ -74,6 +76,8 @@ const I18N = {
       local: (r, d) => `${r} עולה ${d} יותר על האיום הזה, במיירטים ובסיכון.` },
     status: { killed: "יורט", leaked: "פגע באתר מוגן", fell_open: "נפל בשטח פתוח" },
     operator: "הועבר למפעיל, שביצע את החלטת המתכנן",
+    late: "Typical לא ענה בזמן, ולכן יצאה החלטת המתכנן",
+    inTime: (p) => `Typical ענה בזמן על ${p}% מההחלטות; המתכנן החליט בשאר`,
     unsure: (x, p) => `Typical לא היה בטוח: הבחירה המובילה שלו, ${x}, קיבלה ${p}%`,
     agrees: "המתכנן מסכים.", differs: (x) => `המתכנן היה בוחר: ${x}.`,
     reads: "מה Typical קורא (באנגלית)", notYet: "אף מיירט עדיין לא מגיע אליו. Typical יחליט כשיגיע.",
@@ -92,7 +96,7 @@ const I18N = {
 let LANG = localStorage.getItem("airdef-lang") || "en";
 const T = () => I18N[LANG];
 const nm = (o) => (LANG === "he" && o.name_he ? o.name_he : o.name);
-const glyphs = (s) => (LANG === "he" ? [...s].reverse().join("") : s);   // deck.gl TextLayer has no bidi
+const glyphs = (s) => (/[\u0590-\u05FF]/.test(s) ? [...s].reverse().join("") : s);   // deck.gl TextLayer has no bidi: flip Hebrew only
 const effName = (e) => nm(META.effectors[e]).replace("F-15/F-35 ", "").replace("F-16 laser-guided rocket (APKWS)", "APKWS").replace("GPS jamming (EW)", "EW jamming").replace(" laser", "");
 const actLabel = (key) => {
   if (!key) return "—";
@@ -332,7 +336,8 @@ function renderDecision() {
   }
   if (!i) { el.innerHTML = h + `<p class="empty">${tt.notYet}</p>`; return; }
   h += `<div class="what">${esc(actLabel(D.choice))}</div><p class="why">${esc(reason(i, D))}</p>${localLine(D)}`;
-  if (D.escalated) h += `<div class="op">${tt.operator}</div>`;
+  if (i.late) h += `<div class="op">${tt.late}</div>`;
+  else if (D.escalated) h += `<div class="op">${tt.operator}</div>`;
   // everything below the reason is detail: one closed disclosure
   const top = i.dist ? Object.keys(i.dist).sort((a, b) => i.dist[b] - i.dist[a]) : [];
   const conf = i.dist ? (D.escalated ? tt.unsure(actLabel(top[0]), Math.round(i.dist[top[0]] * 100)) : tt.conf(Math.round(i.dist[D.choice] * 100))) : "";
@@ -353,7 +358,7 @@ function renderTonight() {
   $("#tonight").innerHTML = `<p class="kicker">${tt.tonight}</p><div class="stats">
       <div class="stat"><div class="v num">${money(ty.spent)}</div><div class="l">${tt.spent}</div><div class="vs">${tt.vsNaive(money(nv.spent))}</div></div>
       <div class="stat"><div class="v num ${ty.leaks ? "hit" : ""}">${ty.leaks}</div><div class="l">${tt.hits}</div><div class="vs">${tt.vsNaive(nv.leaks)}</div></div>
-    </div>`;
+    </div>${ty.late ? `<p class="dline">${tt.inTime(Math.round(100 * (1 - ty.late / Math.max(ty.decisions + ty.local_decisions, 1))))}</p>` : ""}`;
 }
 
 // ---------------------------------------------------------------- flight strip (the threat's story over time)

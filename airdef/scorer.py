@@ -29,6 +29,17 @@ class Scorer:
         p = self.d._probs("native", state, question, labels).tolist()
         return {**dict(zip(labels, p[:-1])), "p_null": p[-1]}
 
+    def choices(self, items):
+        """[(state, question, labels)] -> one answer per item, in one forward (the training eval path, run_batch_native)."""
+        import torch
+        from mcq import collate_mcq
+        from native import run_batch_native
+        ex = [dict(state=s, query=q, candidates=list(c), target=[0.0] * len(c), p_null=0.0) for s, q, c in items]
+        r = self.d.native
+        with torch.inference_mode():
+            p = torch.softmax(run_batch_native(r["bb"], r["m"], collate_mcq(ex), ex, max_state=self.d.max_state).float(), -1).tolist()
+        return [{**dict(zip(c, row[:len(c)])), "p_null": row[-1]} for (_, _, c), row in zip(items, p)]
+
 
 def load(model_id, device="auto"):
     return Scorer(model_id, device)
