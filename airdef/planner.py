@@ -239,4 +239,4 @@ def local_teacher(f, cost, pk, v_after):
     n = 1
     while n < 3 and (1 - pk) ** n * pk * v_after > cost:   # another round still buys more than it costs
         n += 1
-    return n
+    return int(min(n, f["channels_free"], f["ready"], f["stock"]))   # never more than the unit can launch right now
