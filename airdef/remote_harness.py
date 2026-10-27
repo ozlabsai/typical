@@ -6,6 +6,7 @@ Reuses scripts/typically_job.Job for the pod lifecycle (create / ssh / delete-in
 .context/airdef/remote/<run id>/*.json; the pod log in .context/typically/jobs/airdef_eval/job.log.
 """
 import argparse
+import os
 import subprocess
 import sys
 import tarfile
@@ -15,6 +16,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+# own pod-name prefix: typically_job's reconcile (run before every training job) deletes "typically-job-*" pods it
+# doesn't own -- on 2026-10-27 it killed this eval pod a minute in. Must be set before the import reads it.
+os.environ["TYPICALLY_POD_PREFIX"] = "airdef-eval-"
 import typically_job as tj   # noqa: E402
 
 RUN_SH = """set -e
