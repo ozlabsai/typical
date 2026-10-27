@@ -43,9 +43,13 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 
 ## Five-minute demo script
 
-0. **The panel** lists every object: threats (status and countdown), aircraft and fire units (rounds ready / left,
-   channels, reload). Click a row, or the object on the map, to expand it; click it again to go back to following the
-   most urgent threat. On the map: filled = engaged, hollow = waiting, faint = let it fall, blue = in focus.
+0. **Two modes** (header). **Focus** (default) is autoplay: at each key moment (aircraft sent, a wait for a
+   cheaper layer and its payoff, a salvo let fall, a unit holding fire, a hit) the clock slows, the camera goes to
+   it, the rest of the map dims, and the panel tells it: the call, why, the fire unit's call, and every option
+   Typical weighed with its probability (the call highlighted). *Next moment* skips ahead; the markers on the
+   timeline replay any moment. **General** is the whole raid: every object in the panel (salvos, aircraft, fire units)
+   with its status; click one, or its map object, to expand it. Map: filled = engaged, hollow = waiting, faint = let
+   it fall, blue = in focus.
 1. **Red Sea, 5×.** Three ballistic missiles launch at once. Follow one in the right panel: the threat, its countdown,
    Typical's call in blue (e.g. *Arrow 3*, or *Wait for cheaper*) and one plain-language reason. When it is assigned,
    the line underneath is the fire unit's own call, e.g. "A3-C fires 1 · time to look before a second shot". The
@@ -54,7 +58,7 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
    Shaheds reach them: click one to see *Fighter jets* and the unit flying out to meet it.
 3. **Northern front, 20×.** Iron Dome calls from the first minute, a fighter for the Hezbollah drone (~20 s), then
    the barrage (~50 s): rockets heading for open ground get *Let it fall*. Watch the fire units hold when all channels
-   are busy, or when own aircraft are near the intercept point. **Tonight** compares spend and hits with doctrine.
+   are busy, or when own aircraft are near the intercept point. **Tonight** counts spend, intercepts and hits.
 4. **13 April, 20×.** Drones and cruise missiles first; about a minute in, *Fighter jets* and *Helicopter* take the
    drones over Jordan, then the ballistic wave: *Wait for cheaper* keeps the Arrow 3 stock for the threats that need
    it, and the congestion lens stops everyone waiting for the same layer.

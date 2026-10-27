@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -18,9 +19,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import planner
+from director import Director
 from engine import BAT, DONE, World, label
-from sim import (AIR_KINDS, BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, SITE_HE, SITES, THREAT_HE, THREATS,
-                 consequence)
+from sim import (AIR_KINDS, BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, ORIGINS, SCENARIOS, SITE_HE, SITES, THREAT_HE,
+                 THREATS, consequence)
 
 ROOT = Path(__file__).parent
 TUNED = ROOT.parent / ".context/typically/results/co_airdef_v3/best.pt"   # v3: v4 wins per decision but under-fires in saturation raids (README)
@@ -30,7 +32,8 @@ BUDGET = 6             # Typical calls per tick; the sim slows down when decisio
 
 app = FastAPI()
 lock = threading.Lock()   # one lock for world + model (MPS crashes on concurrent calls)
-S = dict(world=None, running=False, speed=10.0, model=None, model_name="planner only", backlog=False, skipped=0.0, drill=None)
+S = dict(world=None, running=False, speed=10.0, model=None, model_name="planner only", backlog=False, skipped=0.0, drill=None,
+         director=None, mode="focus")
 DRILL = ROOT.parent / ".context/airdef/drill_ui.jsonl"   # situations.py --instances 3 --rollouts 40 --out <this>
 QUIET_S = 15           # auto-skip: jump when nothing happens for longer than this (sim seconds)
 
@@ -47,7 +50,8 @@ def load_model():
 
 def new_world(scenario, seed=7, cfg=None):
     S["world"] = World(scenario, cfg or DEFAULT_CONFIG, S["model"], seed, async_model=True)
-    S["running"], S["drill"] = False, None
+    S["running"], S["drill"], S["director"] = False, None, Director()
+    S["director"].slow = S["mode"] == "focus"
 
 
 def new_drill(fam, n):
@@ -61,7 +65,7 @@ def new_drill(fam, n):
     w.t, w.model, w.async_model, w.scenario = t, S["model"], True, f"drill:{fam}:{n % len(rows)}"
     w.policies["typical"] = copy.deepcopy(w.policies["planner"])
     w.policies["typical"].name = "typical"
-    S.update(world=w, running=False, drill=dict(family=fam, case=n % len(rows), cases=len(rows), threat=th.id,
+    S.update(world=w, running=False, director=None, drill=dict(family=fam, case=n % len(rows), cases=len(rows), threat=th.id,
                                                 costs=sorted(m["costs"].items(), key=lambda kv: kv[1]),
                                                 best=m["best"], planner=m["planner"], doctrine=m["doctrine"]))
 
@@ -77,8 +81,16 @@ def loop():
             if S["drill"] and not S["running"] and w.t <= w.end:
                 w.step(0.0)                            # a paused drill still gets its calls made, at the frozen moment
             elif S["running"] and w and w.t < w.end:
-                w.step(real * S["speed"])              # decide (from answers already in), resolve, fly aircraft, advance
-                if (nxt := w.next_event()) - w.t > QUIET_S:
+                d = S["director"]
+                w.step(real * (d.speed(S["speed"]) if d else S["speed"]))   # decide, resolve, fly aircraft, advance
+                if d:
+                    try:
+                        d.tick()
+                        d.offer(w, d.scan(w))          # a key moment slows the clock and gets a caption
+                    except Exception:                  # the story layer must never stop the clock: log, play on without it
+                        traceback.print_exc()
+                        S["director"] = d = None
+                if (not d or not d.beat) and (nxt := w.next_event()) - w.t > QUIET_S:
                     S["skipped"] = nxt - 5 - w.t       # the UI shows "skipped mm:ss"
                     w.advance(nxt - 5 - w.t)
             S["backlog"] = len(w.requests) if w else 0
@@ -92,7 +104,8 @@ def model_worker():
     while True:
         with lock:
             w = S["world"]
-            jobs = sorted(w.requests.items(), key=lambda kv: kv[1][3])[:S["batch"]]   # (not on screen, due) if w and S["model"] else []
+            # most urgent first: the key is (not on screen, due)
+            jobs = sorted(w.requests.items(), key=lambda kv: kv[1][3])[:S["batch"]] if w and S["model"] else []
         if not jobs:
             time.sleep(0.02)
             continue
@@ -140,7 +153,8 @@ def paths():
     for th in w.threats:
         ts = np.linspace(th.t0, th.t0 + th.T, 48 if th.cls in "BR" else 96)
         lat, lon, alt = th.pos(ts)
-        out.append(dict(id=th.id, kind=th.kind, cls=th.cls, t0=th.t0, T=th.T,
+        origin = min(ORIGINS, key=lambda k: (ORIGINS[k][0] - th.origin[0]) ** 2 + (ORIGINS[k][1] - th.origin[1]) ** 2)
+        out.append(dict(id=th.id, kind=th.kind, cls=th.cls, t0=th.t0, T=th.T, origin=origin,
                         p=[[round(float(a), 4), round(float(b), 4), round(float(c) * 1000), round(float(t), 1)]
                            for a, b, c, t in zip(lon, lat, alt, ts)]))
     return dict(scenario=w.scenario, end=w.end, threats=out)
@@ -176,8 +190,8 @@ def state(policy: str = "typical"):
                                 goal=u.goal, weapons=u.weapons) for u in pol.units.values()],
                     batteries=[battery(w, pol, bid) for bid, eff, *_ in BATTERIES if w.cfg["allied"] or not EFFECTORS[eff].get("allied")],
                     killed={tid: s["killed_at"] for tid, s in pol.st.items() if s.get("killed_at")},
-                    ledger=w.ledger(), attacker_cost=w.attacker_cost, launched=sum(th.t0 <= w.t for th in w.threats),
-                    total=len(w.threats), drill=S["drill"] and dict(
+                    ledger=w.ledger(), attacker_cost=w.attacker_cost, **(S["director"].public() if S["director"] else {}), launched=sum(th.t0 <= w.t for th in w.threats),
+                    total=len(w.threats), mode=S["mode"], drill=S["drill"] and dict(
                         S["drill"], typical=next(iter(k for _, k in w.policies["typical"].st[S["drill"]["threat"]]["history"]), None)))
 
 
@@ -218,6 +232,8 @@ class Control(BaseModel):
     scenario: str | None = None
     speed: float | None = None
     seed: int | None = None
+    index: int | None = None
+    mode: str | None = None
 
 
 @app.post("/api/control")
@@ -230,6 +246,18 @@ def control(c: Control):
             S["running"] = False
         elif c.action == "speed" and c.speed:
             S["speed"] = max(0.25, min(c.speed, 600))
+        elif c.action == "mode" and c.mode in ("general", "focus"):
+            S["mode"] = c.mode
+            if S["director"]:
+                S["director"].slow = c.mode == "focus"
+                if c.mode == "general":
+                    S["director"].end_beat()
+        elif c.action == "next" and S["director"]:   # fast-forward to the next key moment
+            S["director"].next()
+            S["running"] = True
+        elif c.action == "moment" and S["director"] and c.index is not None and 0 <= c.index < len(S["director"].snaps):
+            S["world"] = S["director"].restore(c.index)   # replay from that moment
+            S["running"] = True
         elif c.action == "skip":   # jump to just before the next thing worth watching
             w.t = max(w.t, w.next_event() - 5)
         elif c.action == "reset" and (c.scenario or w.scenario).startswith("drill:"):   # drill:<family>:<case>

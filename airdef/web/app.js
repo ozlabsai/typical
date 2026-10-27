@@ -18,8 +18,7 @@ const I18N = {
     skipped: (x) => `Skipped ${x} of quiet`,
     cls: { B: "Ballistic missile", R: "Rocket", C: "Cruise missile", D: "Drone" },
     to: "to", openGround: "Open ground near", priority: "priority", impactIn: "Impact in", follow: "Follow the most urgent",
-    following: "In focus", pinned: "Pinned",
-    callBy: { typical: "Typical's call", planner: "The planner's call", doctrine: "Doctrine's call" },
+    following: "In focus",
     act: { hold: "Let it fall", wait: "Wait", cheaper: "Wait for cheaper", air: { fighter: "Fighter jets", helicopter: "Helicopter" } },
     whyAir: (u, m, pk) => `${u} can meet it in ${m} and ${pk}.`,
     whyTrack: "The track is not firm yet. Deciding later keeps every layer that still reaches it open.",
@@ -44,10 +43,23 @@ const I18N = {
     unit: { ground: "On alert", cap: "On patrol", tasked: "Intercepting", rtb: "Returning to base", rearm: "Rearming",
       weapons: "Weapons left", task: "Task", state: "State" },
     legend: { engaged: "Engaged", waiting: "Waiting", fall: "Let it fall", unit: "Fire unit" },
+    next: "Next moment", modes: { general: "General", focus: "Focus" }, showAll: "Show everything",
+    mom: { air: "Aircraft sent", cheaper: "Wait for cheaper", payoff: "The wait paid off", letfall: "Salvo let fall",
+      holdfire: "Holding fire", hit: "Hit" },
+    letfall: (n) => `${n} land in open ground. No interceptor spent on them.`,
+    salvoOf: (c, o) => `${c} from ${o}`,
+    holdfire: { friendly: (u) => `${u} holds fire: own aircraft are near the intercept point.`, debris: (u, s) => `${u} holds fire: the debris would fall on ${s}.` },
+    hitLine: (x, s) => `${x} hit ${s}.`, payoffLine: (e) => `${e} takes it now, as planned.`,
+    clsPl: { B: "ballistic missiles", R: "rockets", C: "cruise missiles", D: "drones" },
+    origin: { iran_w: "western Iran", iran_nw: "north-western Iran", iran_c: "central Iran", iraq: "Iraq", yemen: "Yemen",
+      lebanon_s: "southern Lebanon", lebanon_bq: "the Beqaa", gaza: "Gaza" },
+    salvo: (n, c, o) => `${n} ${c} from ${o}`,
+    tally: { fall: (n) => `${n} let fall`, engaged: (n) => `${n} engaged`, killed: (n) => `${n} intercepted`, hits: (n) => `${n} hit` },
+    intercepted: "Intercepted",
     reads: "What Typical reads", notYet: "No interceptor can reach it yet. Typical decides once one can.",
     empty: "Press Play. The most urgent threat and Typical's call appear here.",
     drills: "Drills", drill: { kicker: (n, k) => `Drill · case ${n} of ${k}`, played: "Each option played out to the end, 40 times. Average cost:",
-      best: "best", next: "Next case", thinking: "Typical is deciding…", who: { typical: "Typical", planner: "Planner", doctrine: "Doctrine" },
+      best: "best", next: "Next case", thinking: "Typical is deciding…", who: { typical: "Typical", planner: "Planner" },
       fam: { wait_for_cheaper: "Wait for cheaper", last_chance: "Last chance", let_it_fall: "Let it fall", track_not_firm: "Unclear track", coverage_gap: "Coverage gap", helicopter: "Helicopter" },
       blurb: { wait_for_cheaper: "Arrow 3 can fire now; a cheaper layer reaches it later, and Arrow 3 is scarce.",
         last_chance: "Seconds before impact, one battery still reaches it.", let_it_fall: "The rocket will land well clear of any defended site.",
@@ -55,7 +67,7 @@ const I18N = {
         coverage_gap: "A drone heads for Eilat, the Eilat battery is empty, and aircraft can still meet it.",
         helicopter: "A drone heads north; the batteries are empty, the laser is clouded out, the fighters are busy." } },
     tonight: "Tonight", attacker: (x) => `Attacker spent ${x}`, spent: "Spent", hits: "Hits on sites", a3: "Arrow 3 left",
-    vsNaive: (x) => `${x} by doctrine`, details: "Details", foot: (a, ms) => `Agrees with the planner ${a}% · ${ms} ms per call`, cmp: "Compare planner",
+    details: "Details",
     planner: "Planner",
     strip: (id, t, s) => `Flight of ${id} · ${t} to ${s}`, now: "now", impact: "impact", calls: "Calls", hit: "hit", miss: "miss",
     posture: "Magazine posture", postures: ["Healthy", "Conserve", "Critical"], prio: "Priority sites", assets: "Assets and conditions",
@@ -70,8 +82,7 @@ const I18N = {
     skipped: (x) => `דולגו ${x} שקטות`,
     cls: { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" },
     to: "לעבר", openGround: "שטח פתוח ליד", priority: "בעדיפות", impactIn: "פגיעה בעוד", follow: "עקוב אחרי הדחוף",
-    following: "בפוקוס", pinned: "נעוץ",
-    callBy: { typical: "ההחלטה של Typical", planner: "ההחלטה של המתכנן", doctrine: "ההחלטה לפי התורה" },
+    following: "בפוקוס",
     act: { hold: "לתת לו ליפול", wait: "להמתין", cheaper: "להמתין לזול יותר", air: { fighter: "מטוסי קרב", helicopter: "מסוק" } },
     whyAir: (u, m, pk) => `${u} יכולים לפגוש אותו בעוד ${m}, ו${pk}.`,
     whyTrack: "המסלול עוד לא יציב. החלטה מאוחרת יותר שומרת את כל השכבות שעוד מגיעות אליו.",
@@ -96,10 +107,23 @@ const I18N = {
     unit: { ground: "בכוננות", cap: "בסיור", tasked: "ביירוט", rtb: "חוזר לבסיס", rearm: "בחימוש",
       weapons: "חימוש שנותר", task: "משימה", state: "מצב" },
     legend: { engaged: "ביירוט", waiting: "בהמתנה", fall: "ליפול", unit: "יחידת אש" },
+    next: "הרגע הבא", modes: { general: "תמונה כללית", focus: "מיקוד" }, showAll: "הצג הכול",
+    mom: { air: "שיגור כלי טיס", cheaper: "להמתין לזול יותר", payoff: "ההמתנה השתלמה", letfall: "מטח שנופל בשטח פתוח",
+      holdfire: "עצירת אש", hit: "פגיעה" },
+    letfall: (n) => `${n} נופלים בשטח פתוח. אף מיירט לא נורה עליהם.`,
+    salvoOf: (c, o) => `${c} מ${o}`,
+    holdfire: { friendly: (u) => `${u} עוצר אש: מטוסים שלנו קרובים לנקודת היירוט.`, debris: (u, s) => `${u} עוצר אש: הרסיסים היו נופלים על ${s}.` },
+    hitLine: (x, s) => `${x} פגע ב${s}.`, payoffLine: (e) => `${e} מיירט אותו עכשיו, כמתוכנן.`,
+    clsPl: { B: "טילים בליסטיים", R: "רקטות", C: "טילי שיוט", D: "כטב״מים" },
+    origin: { iran_w: "מערב איראן", iran_nw: "צפון-מערב איראן", iran_c: "מרכז איראן", iraq: "עיראק", yemen: "תימן",
+      lebanon_s: "דרום לבנון", lebanon_bq: "הבקעה", gaza: "עזה" },
+    salvo: (n, c, o) => `${n} ${c} מ${o}`,
+    tally: { fall: (n) => `${n} נופלים`, engaged: (n) => `${n} ביירוט`, killed: (n) => `${n} יורטו`, hits: (n) => `${n} פגעו` },
+    intercepted: "יורטו",
     reads: "מה Typical קורא (באנגלית)", notYet: "אף מיירט עדיין לא מגיע אליו. Typical יחליט כשיגיע.",
     empty: "לחצו הפעל. האיום הדחוף ביותר וההחלטה של Typical יופיעו כאן.",
     drills: "תרגולים", drill: { kicker: (n, k) => `תרגול · מקרה ${n} מתוך ${k}`, played: "כל אפשרות הורצה עד הסוף, 40 פעמים. עלות ממוצעת:",
-      best: "הטוב ביותר", next: "המקרה הבא", thinking: "Typical מחליט…", who: { typical: "Typical", planner: "מתכנן", doctrine: "דוקטרינה" },
+      best: "הטוב ביותר", next: "המקרה הבא", thinking: "Typical מחליט…", who: { typical: "Typical", planner: "מתכנן" },
       fam: { wait_for_cheaper: "להמתין לזול יותר", last_chance: "הזדמנות אחרונה", let_it_fall: "לתת לו ליפול", track_not_firm: "מסלול לא ברור", coverage_gap: "פער כיסוי", helicopter: "מסוק" },
       blurb: { wait_for_cheaper: "חץ 3 יכול לירות עכשיו; שכבה זולה יותר תגיע אליו מאוחר יותר, וחץ 3 במחסור.",
         last_chance: "שניות לפני הפגיעה, סוללה אחת עדיין מגיעה אליו.", let_it_fall: "הרקטה תיפול הרחק מכל אתר מוגן.",
@@ -107,7 +131,7 @@ const I18N = {
         coverage_gap: "כטב״ם בדרך לאילת, הסוללה באילת ריקה, וכלי טיס עוד יכולים לפגוש אותו.",
         helicopter: "כטב״ם בדרך לצפון; הסוללות ריקות, הלייזר מוגבל בעננים, מטוסי הקרב תפוסים." } },
     tonight: "הלילה", attacker: (x) => `התוקף הוציא ${x}`, spent: "הוצאה", hits: "פגיעות באתרים", a3: "חץ 3 שנותרו",
-    vsNaive: (x) => `${x} לפי התורה`, details: "פרטים", foot: (a, ms) => `הסכמה עם המתכנן ${a}% · ${ms} מ״ש להחלטה`, cmp: "השווה למתכנן",
+    details: "פרטים",
     planner: "מתכנן",
     strip: (id, t, s) => `מסלול ${id} · ${t} לעבר ${s}`, now: "עכשיו", impact: "פגיעה", calls: "החלטות", hit: "פגע", miss: "החטיא",
     posture: "מצב מלאים", postures: ["תקין", "שימור", "קריטי"], prio: "אתרים בעדיפות", assets: "נכסים ותנאים",
@@ -139,6 +163,8 @@ let META, PATHS = {}, PATH_SCEN = null, S = null, fetchedAt = 0, pinned = false,
 let focus = null;            // the expanded object: {k: "t" threat | "b" fire unit | "u" aircraft, id}
 let selected = null;         // the threat on the map and the flight line: the focused threat, or the focused unit's target
 const collapsed = {};        // list sections the viewer folded
+const openGroups = new Set(); // salvos the viewer opened
+let caption = null;          // the moment on the caption card (stays while paused)
 const isFocus = (k, id) => focus && focus.k === k && focus.id === id;
 const viewPol = "typical";
 const flashSeen = new Map();
@@ -163,11 +189,20 @@ async function init() {
     focus = selected = null; pinned = false; detail = null; await api("/api/control", { action: "reset", scenario: s }); flyTo(viewOf(s));
   };
   $("#play").onclick = () => api("/api/control", { action: S?.running ? "pause" : "play" });
+  $("#next").onclick = () => { pinned = false; api("/api/control", { action: "next" }); };
+  $("#mode").onclick = (e) => { const b = e.target.closest("[data-mode]"); if (b) setMode(b.dataset.mode); };
+  $("#raid").onclick = (e) => {   // a moment on the timeline: replay it, in Focus
+    const m = e.target.closest("[data-m]"); if (!m) return;
+    if (S.mode !== "focus") setMode("focus");
+    pinned = false; detail = null; api("/api/control", { action: "moment", index: +m.dataset.m });
+  };
   $("#gear").onclick = () => { const o = $("#sheet").classList.toggle("open"); $("#gear").setAttribute("aria-expanded", o); };
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#sheet").classList.remove("open"); $("#gear").setAttribute("aria-expanded", false); } });
   $("#list").onclick = (e) => {
     if (e.target.closest("#followBtn")) { pinned = false; pickFollow(true); return; }
+    const md = e.target.closest("[data-mode]"); if (md) { setMode(md.dataset.mode); return; }
     const sec = e.target.closest("[data-sec]"); if (sec) { collapsed[sec.dataset.sec] = !collapsed[sec.dataset.sec]; renderList(); return; }
+    const g = e.target.closest("[data-g]"); if (g) { openGroups.has(g.dataset.g) ? openGroups.delete(g.dataset.g) : openGroups.add(g.dataset.g); renderList(); return; }
     const o = e.target.closest("[data-k]"); if (o && !e.target.closest("details")) select(o.dataset.k, o.dataset.id);
   };
   await poll();
@@ -199,11 +234,16 @@ async function poll() {
   if (S.scenario !== PATH_SCEN) {
     const P = await api("/api/paths");
     PATHS = Object.fromEntries(P.threats.map((t) => [t.id, t]));
-    PATH_SCEN = P.scenario; flashSeen.clear();
+    PATH_SCEN = P.scenario; flashSeen.clear(); openGroups.clear(); caption = null;
   }
-  if (!pinned) pickFollow(false);
+  const story = S.mode === "focus", beat = story && S.beat && S.moments?.[S.beat.id];
+  if (beat && caption?.id !== beat.id) flyToThreat(beat.tid);
+  if (beat) caption = beat; else if (S.running || !story) caption = null;
+  if (beat && !pinned && !isFocus("t", beat.tid)) focus = { k: "t", id: beat.tid };
+  else if (story && !pinned && !beat) pickFollow(false);
+  else if (!story && !pinned) focus = null;            // General: nothing is singled out until the viewer clicks
   syncSelected();
-  renderBar(); renderTonight(); renderList();
+  renderBar(); renderTonight(); renderList(); renderRaid();
 }
 
 function pickFollow(force) {   // the most urgent threat that already has a call, else the most urgent live one
@@ -214,6 +254,16 @@ function pickFollow(force) {   // the most urgent threat that already has a call
   if (cand && (force || stale)) { focus = { k: "t", id: cand.id }; syncSelected(); loadDetail(); scrollToFocus = true; }
 }
 let scrollToFocus = false;
+function setMode(m) {
+  pinned = false; focus = null; caption = null; renderList.last = null;
+  api("/api/control", { action: "mode", mode: m });
+  if (S) { S.mode = m; if (m === "general") flyTo(viewOf(S.scenario)); renderBar(); renderList(); }
+}
+function flyToThreat(tid) {   // Focus mode: the camera goes to the moment, close enough to see it, wide enough to keep its context
+  const path = PATHS[tid]; if (!path) return;
+  const [lon, lat] = posAt(path, S.t), zoom = path.cls === "R" ? 8.6 : path.cls === "D" ? 7.0 : 6.0;
+  map.flyTo({ center: [lon, lat], zoom, pitch: 45, duration: 1400 });
+}
 function select(k, id) {   // click a row or a map object: expand it; click the expanded one again: back to following
   if (isFocus(k, id)) { pinned = false; focus = null; pickFollow(true); }
   else { focus = { k, id }; pinned = true; }
@@ -261,15 +311,15 @@ function posAt(path, t) {
 function frame() {
   requestAnimationFrame(frame);
   if (!S || !META) return;
-  const t = (tNow = simNow()), prio = new Set(S.cfg.priority_sites);
+  const t = (tNow = simNow()), prio = new Set(S.cfg.priority_sites), dim = S.mode === "focus" && !!caption;
   const live = [], trails = [], futures = [];
   for (const tr of S.tracks) {
     const path = PATHS[tr.id]; if (!path) continue;
     if (t > Math.min(S.killed[tr.id] ?? Infinity, path.t0 + path.T)) continue;
     const cur = posAt(path, t), sel = tr.id === selected, col = sel ? BLUE : tr.status === "held" ? [200, 200, 204] : GREY;
     const past = path.p.filter((q) => q[3] < t).map((q) => q.slice(0, 3)); past.push(cur.slice(0, 3));
-    trails.push({ path: past, color: [...col, sel ? 255 : 150], w: sel ? 3 : 1.25 });
-    futures.push({ path: [cur.slice(0, 3), ...path.p.filter((q) => q[3] > t).map((q) => q.slice(0, 3))], color: [...col, sel ? 110 : 45], w: sel ? 2 : 1 });
+    trails.push({ path: past, color: [...col, sel ? 255 : dim ? 40 : 150], w: sel ? 3 : 1.25 });
+    futures.push({ path: [cur.slice(0, 3), ...path.p.filter((q) => q[3] > t).map((q) => q.slice(0, 3))], color: [...col, sel ? 110 : dim ? 15 : 45], w: sel ? 2 : 1 });
     live.push({ pos: cur.slice(0, 3), tr, sel });
   }
   const batt = Object.fromEntries(META.batteries.map((b) => [b.id, b]));
@@ -326,14 +376,16 @@ function frame() {
     new deck.PathLayer({ id: "shots", data: shots, getPath: (d) => d.path, getColor: (d) => (d.sel ? [...BLUE, 255] : [...INK, 110]), widthUnits: "pixels", getWidth: (d) => (d.sel ? 2.5 : 1) }),
     new deck.ScatterplotLayer({ id: "heads", data: live, getPosition: (d) => d.pos, radiusUnits: "pixels", pickable: true, onClick: (i) => select("t", i.object.tr.id),
       getRadius: (d) => (d.sel ? 7 : d.tr.status === "held" ? 2.5 : 4), stroked: true, lineWidthUnits: "pixels", getLineWidth: (d) => (d.sel ? 2.5 : 1.25),
-      getFillColor: (d) => (d.sel ? BLUE : ENGAGED.includes(d.tr.status) ? INK : d.tr.status === "held" ? [200, 200, 204] : [255, 255, 255]),
-      getLineColor: (d) => (d.sel ? [255, 255, 255] : d.tr.status === "held" ? [200, 200, 204] : [...INK, 220]) }),
+      getFillColor: (d) => (d.sel ? BLUE : [...(ENGAGED.includes(d.tr.status) ? INK : d.tr.status === "held" ? [200, 200, 204] : [255, 255, 255]), dim ? 70 : 255]),
+      getLineColor: (d) => (d.sel ? [255, 255, 255] : [...(d.tr.status === "held" ? [200, 200, 204] : INK), dim ? 60 : 220]) }),
     new deck.ScatterplotLayer({ id: "flash", data: flashes, getPosition: (d) => d.pos, radiusUnits: "pixels", getRadius: (d) => 5 + d.age * 22, filled: false,
       stroked: true, lineWidthUnits: "pixels", getLineWidth: 1.5, getLineColor: (d) => [...(d.hit ? INK : GREY), 255 * (1 - d.age / 1.6)] }),
     new deck.ScatterplotLayer({ id: "leaks", data: leaks, getPosition: (d) => [d[0], d[1]], radiusUnits: "pixels", getRadius: 6, getFillColor: [...HIT, 255],
       stroked: true, getLineColor: [...HIT, 70], lineWidthUnits: "pixels", getLineWidth: 7 }),
   ].filter(Boolean) });
   stripNow(t);
+  const nowLine = document.getElementById("raidnow");
+  if (nowLine && raidX) nowLine.setAttribute("transform", `translate(${raidX(t)},0)`);
 }
 
 // ---------------------------------------------------------------- bar
@@ -342,6 +394,12 @@ const SPEEDS = [[1, 0], [5, 1], [20, 2], [60, 3]];
 function renderBar() {
   if (!S) return;
   $("#play").textContent = S.running ? T().pause : T().play;
+  $("#next").textContent = T().next; $("#next").style.display = S.drill || S.mode !== "focus" ? "none" : "";
+  $("#mode").style.display = S.drill ? "none" : "";
+  if (renderBar.mode !== S.mode + LANG) {
+    renderBar.mode = S.mode + LANG;
+    $("#mode").innerHTML = ["general", "focus"].map((m) => `<button class="dc-tab" data-mode="${m}" aria-selected="${S.mode === m}">${T().modes[m]}</button>`).join("");
+  }
   $("#speedBtn").firstChild.textContent = `${T().speed} ${S.speed}× `;
   if (renderBar.key !== S.speed + LANG) {   // the menu only changes with speed or language; the rest below every poll
     renderBar.key = S.speed + LANG;
@@ -382,6 +440,38 @@ function localLine(D) {   // the fire unit's call, in one line: who, how many, a
   return `<p class="local"><b>${esc(L.fired ? tt.fires(who, L.fired) : tt.holds(who))}</b>${why ? " · " + esc(why) : ""}</p>`;
 }
 
+// ---------------------------------------------------------------- key moments: the caption card and the raid timeline
+function optionBars(dist, chosen) {   // every option Typical weighed, its probability as a bar, the call highlighted
+  if (!dist) return "";
+  const keys = Object.keys(dist).sort((a, b) => dist[b] - dist[a]);
+  return `<div class="opts"><p class="kicker">${T().options}</p>${keys.map((k) => `<div class="opt${k === chosen ? " on" : ""}">
+    <span class="opt-l">${esc(actLabel(k))}</span><span class="opt-bar"><i style="width:${Math.max(1, Math.round(dist[k] * 100))}%"></i></span>
+    <span class="opt-p num">${Math.round(dist[k] * 100)}%</span></div>`).join("")}</div>`;
+}
+function captionBody(m) {   // the moment in one or two plain sentences
+  const tt = T(), name = nm(META.threat_types[m.kind]).replace(/ (MRBM|SRBM)$/i, "");
+  if (m.type === "letfall") return `<p class="why">${esc(tt.letfall(m.count))}</p>`;
+  if (m.type === "hit") return `<p class="why">${esc(tt.hitLine(name, siteName(m.site)))}</p>`;
+  if (m.type === "holdfire") return `<p class="why">${esc(m.why === "friendly" ? tt.holdfire.friendly(m.unit) : tt.holdfire.debris(m.unit, siteName(m.debris)))}</p>`;
+  if (m.type === "payoff") return `<p class="why">${esc(tt.payoffLine(effName(m.key.split(":")[1])))}</p>`;
+  return m.info.opts.length ? `<p class="why">${esc(reason(m.info, { choice: m.key, open_ground: m.open }))}</p>` : "";
+}
+let raidX = null;
+function renderRaid() {   // the whole raid on one line: a marker per key moment, click one to replay from it
+  const el = $("#raid"); if (!S || !META) return;
+  const W = Math.max(el.clientWidth, 400), PAD = 8, x = (t) => PAD + (Math.min(Math.max(t, 0), S.end) / Math.max(S.end, 1)) * (W - 2 * PAD);
+  const ms = S.moments || [], tt = T();
+  const key = `${W}|${S.end}|${ms.length}|${S.beat?.id}|${LANG}`;
+  raidX = x;
+  if (key === renderRaid.last) return;
+  renderRaid.last = key;
+  el.innerHTML = `<svg viewBox="0 0 ${W} 30" width="${W}" height="30" direction="ltr">
+    <line x1="${PAD}" x2="${W - PAD}" y1="15" y2="15" stroke="#e2e2e4" stroke-width="2"/>
+    ${ms.map((m) => `<g data-m="${m.id}" class="mk${S.beat?.id === m.id ? " on" : ""}${m.type === "hit" ? " hit" : ""}" transform="translate(${x(m.t)},15)">
+      <circle r="9" class="hitbox"/><circle r="4.5"/><title>${esc(tt.mom[m.type])} · ${esc(nm(META.threat_types[m.kind]))}</title></g>`).join("")}
+    <g id="raidnow"><line x1="0" x2="0" y1="4" y2="26" stroke="#2548f6" stroke-width="2"/></g></svg>`;
+}
+
 // ---------------------------------------------------------------- the list: every object, its status, one expanded
 function trackStatus(tr) {   // -> [text, tone]: what is happening to this threat, in one operative phrase
   const st = T().st;
@@ -408,15 +498,68 @@ function row(k, id, name, sub, [status, tone], eta) {
     <span class="obj-st tone-${tone}">${esc(status)}</span>${eta == null ? "" : `<span class="obj-eta num eta" data-impact="${eta}"></span>`}</button>`;
 }
 
+function renderStory() {   // Focus mode: one object, its moment and its call -- the panel is the caption
+  const el = $("#list"), tt = T();
+  let h = "";
+  if (focus?.k === "t") {
+    const tr = S.tracks.find((x) => x.id === focus.id), m = caption && caption.tid === focus.id ? caption : null;
+    const src = tr || m;
+    if (src) {
+      const name = nm(META.threat_types[src.kind]).replace(/ (MRBM|SRBM)$/i, ""), site = tr ? tr.target : m.site, open = tr ? tr.open_ground : m.open;
+      const title = m?.type === "letfall" ? esc(tt.salvoOf(tt.clsPl[m.cls], tt.origin[PATHS[m.tid]?.origin] || "")).replace(/^./, (c) => c.toUpperCase()) : esc(name);
+      const dest = m?.type === "letfall" ? "" : site ? (open ? `${tt.openGround} ${esc(siteName(site))}` : `${tt.to} ${esc(siteName(site))}`) : "";
+      const live = tr && !DONE.includes(tr.status);
+      h = `<p class="kicker">${m ? tt.mom[m.type] : tt.cls[src.cls]}</p>
+        <div class="row"><div><h2 class="threat">${title}</h2><div class="target">${dest}</div></div>${live && m?.type !== "letfall" ? `<div class="eta num" data-impact="${tr.impact}"></div>` : ""}</div>`;
+      if (m) {
+        const call = m.type === "letfall" || m.type === "hit" || m.type === "holdfire" ? "" : `<div class="what">${esc(actLabel(m.key))}</div>`;
+        h += `<div class="story">${call}${captionBody(m)}${detail?.id === m.tid ? localLine(detail) : ""}${optionBars(m.info.dist, m.key)}</div>`;
+      } else {
+        h += threatDetail(true).replace('<div class="obj-detail">', '<div class="story">');
+        if (detail?.id === focus.id && detail.info?.dist && !DONE.includes(detail.status)) h += optionBars(detail.info.dist, detail.choice);
+      }
+    }
+  } else if (focus?.k === "b") {
+    const b = S.batteries.find((x) => x.id === focus.id);
+    if (b) h = `<p class="kicker">${esc(effName(b.eff))}</p><h2 class="threat">${esc(b.id)}</h2>${battDetail(b)}`;
+  } else if (focus?.k === "u") {
+    const u = S.units.find((x) => x.id === focus.id);
+    if (u) h = `<p class="kicker">${esc(T().act.air[u.kind])}</p><h2 class="threat">${esc(u.name)}</h2>${unitDetail(u)}`;
+  }
+  if (!h) h = `<p class="empty">${S.tracks.length ? tt.deciding : tt.empty}</p>`;
+  h += `<p class="showall"><button class="linkish" data-mode="general">${tt.showAll}</button></p>`;
+  if (h !== renderStory.last) { el.innerHTML = h; renderStory.last = h; stripNow(tNow); }
+  renderList.last = null;
+}
+
 function renderList() {
   const el = $("#list"); if (!S || !META) return;
+  if (S.mode === "focus" && !S.drill) return renderStory();
+  renderStory.last = null;
   const tt = T(), top = el.scrollTop;
   const tracks = [...S.tracks].sort((a, b) => DONE.includes(a.status) - DONE.includes(b.status) || a.impact - b.impact);
   const sec = (k, n, body) => `<section class="sec"><button class="sec-h" data-sec="${k}" aria-expanded="${!collapsed[k]}"><span>${tt.sec[k]}</span><span class="num">${n}</span></button>${collapsed[k] ? "" : body}</section>`;
-  const tRows = tracks.map((tr) => {
+  const tRow = (tr) => {
     const ty = META.threat_types[tr.kind], done = DONE.includes(tr.status);
     const dest = !tr.target ? tt.cls[tr.cls] : `${tt.cls[tr.cls]} · ${tr.open_ground ? `${tt.openGround} ${siteName(tr.target)}` : siteName(tr.target)}`;
     return row("t", tr.id, nm(ty).replace(/ (MRBM|SRBM)$/i, ""), dest, trackStatus(tr), done ? null : tr.impact) + (isFocus("t", tr.id) ? threatDetail() : "");
+  };
+  const groups = new Map();   // a salvo: same class, same origin, launched within 3 minutes
+  for (const tr of tracks) {
+    const g = `${PATHS[tr.id]?.origin}|${tr.cls}|${Math.floor(tr.t0 / 180)}`;
+    groups.set(g, [...(groups.get(g) || []), tr]);
+  }
+  const tRows = [...groups.entries()].map(([g, members]) => {
+    if (members.length < 3) return members.map(tRow).join("");
+    const n = (f) => members.filter(f).length, live = members.filter((x) => !DONE.includes(x.status));
+    const tally = [[tt.tally.fall, n((x) => x.status === "held" || x.status === "fell_open")], [tt.tally.engaged, n((x) => ENGAGED.includes(x.status))],
+      [tt.tally.killed, n((x) => x.status === "killed")]].filter(([, k]) => k).map(([f, k]) => f(k)).join(" · ");
+    const hits = n((x) => x.status === "leaked"), open = openGroups.has(g) || members.some((x) => isFocus("t", x.id));
+    const eta = live.length ? Math.min(...live.map((x) => x.impact)) : null;
+    return `<button class="obj grp${open ? " gopen" : ""}" data-g="${esc(g)}" aria-expanded="${open}">
+      <span class="obj-main"><span class="obj-name">${esc(tt.salvo(members.length, tt.clsPl[members[0].cls], tt.origin[PATHS[members[0].id]?.origin] || ""))}</span><span class="obj-sub">${esc(tally)}</span></span>
+      <span class="obj-st tone-${hits ? "hit" : "sub"}">${hits ? esc(tt.tally.hits(hits)) : ""}</span>${eta == null ? "" : `<span class="obj-eta num eta" data-impact="${eta}"></span>`}</button>`
+      + (open ? `<div class="grp-body">${members.map(tRow).join("")}</div>` : "");
   }).join("");
   const uRows = S.units.map((u) => row("u", u.id, u.name, `${T().act.air[u.kind]} · ${weaponsLine(u)}`,
     [u.state === "tasked" && u.task ? `${tt.unit.tasked} ${threatName(u.task)}` : tt.unit[u.state], u.state === "tasked" ? "ink" : "sub"]) + (isFocus("u", u.id) ? unitDetail(u) : "")).join("");
@@ -449,8 +592,9 @@ function unitDetail(u) {
   return `<div class="obj-detail">${facts([[t.state, esc(t[u.state])], [t.weapons, esc(weaponsLine(u))], [t.task, u.task ? link(u.task) : T().bat.none]])}</div>`;
 }
 
-function threatDetail() {   // the call on the expanded threat: what, why, the fire unit's line, then the detail disclosure
+function threatDetail(story = false) {   // the call on the expanded threat: what, why, the fire unit's line, then the detail disclosure
   const tt = T(), D = detail;
+  if (caption && caption.tid === focus.id && !pinned) return "";   // the caption card is explaining this one
   if (!D || D.id !== focus.id) return `<div class="obj-detail"><p class="empty">${tt.deciding}</p></div>`;
   const done = DONE.includes(D.status), i = D.info;
   let h = pinned ? `<p class="kicker"><button id="followBtn" class="linkish">${tt.follow}</button></p>` : "";
@@ -459,7 +603,7 @@ function threatDetail() {   // the call on the expanded threat: what, why, the f
   h += `<div class="what">${esc(actLabel(D.choice))}</div><p class="why">${esc(reason(i, D))}</p>${localLine(D)}`;
   const opts = i.dist ? Object.keys(i.dist).sort((a, b) => i.dist[b] - i.dist[a]) : [];
   h += `<details class="detail" ${detailOpen ? "open" : ""} ontoggle="detailOpen = this.open"><summary>${tt.details}</summary>
-    ${opts.length ? `<p class="dline">${tt.options}</p>${opts.map((k) => `<div class="alt${k === D.choice ? " chosen" : ""}"><span>${esc(actLabel(k))}</span><span class="num">${Math.round(i.dist[k] * 100)}%</span></div>`).join("")}` : ""}
+    ${opts.length && !story ? `<p class="dline">${tt.options}</p>${opts.map((k) => `<div class="alt${k === D.choice ? " chosen" : ""}"><span>${esc(actLabel(k))}</span><span class="num">${Math.round(i.dist[k] * 100)}%</span></div>`).join("")}` : ""}
     <p class="dline">${tt.reads}</p><pre>${esc(i.state)}</pre></details>`;
   return `<div class="obj-detail">${h}</div>`;
 }
@@ -468,7 +612,7 @@ let detailOpen = false;
 // ---------------------------------------------------------------- tonight
 function renderDrill() {   // the curated case's simulated outcomes, and who picked what
   const D = S.drill, tt = T(), d = tt.drill, tol = Math.max(0.05, 0.02 * D.costs[0][1]);
-  const tags = (k) => ["typical", "planner", "doctrine"].filter((w) => D[w] === k).map((w) => `<span class="tag${w === "typical" ? " ty" : ""}">${d.who[w]}</span>`).join("");
+  const tags = (k) => ["typical", "planner"].filter((w) => D[w] === k).map((w) => `<span class="tag${w === "typical" ? " ty" : ""}">${d.who[w]}</span>`).join("");
   $("#tonight").innerHTML = `<p class="kicker">${d.kicker(D.case + 1, D.cases)}</p><p class="dline">${esc(d.blurb[D.family])}</p>
     <p class="dline">${d.played}</p>
     ${D.costs.map(([k, c]) => `<div class="alt"><span>${c - D.costs[0][1] <= tol ? `<b>${esc(actLabel(k))}</b> · ${d.best}` : esc(actLabel(k))}${tags(k)}</span><span class="num">${money(c)}</span></div>`).join("")}
@@ -479,18 +623,19 @@ function renderDrill() {   // the curated case's simulated outcomes, and who pic
 function renderTonight() {
   if (!S) return;
   if (S.drill) return renderDrill();
-  const L = S.ledger, ty = L.typical, nv = L.doctrine, tt = T();
+  const L = S.ledger, ty = L.typical, tt = T();
   if (!ty) return;
-  $("#tonight").innerHTML = `<p class="kicker">${tt.tonight}</p><div class="stats">
-      <div class="stat"><div class="v num">${money(ty.spent)}</div><div class="l">${tt.spent}</div><div class="vs">${tt.vsNaive(money(nv.spent))}</div></div>
-      <div class="stat"><div class="v num ${ty.leaks ? "hit" : ""}">${ty.leaks}</div><div class="l">${tt.hits}</div><div class="vs">${tt.vsNaive(nv.leaks)}</div></div>
+  $("#tonight").innerHTML = `<p class="kicker">${tt.tonight}</p><div class="stats three">
+      <div class="stat"><div class="v num">${money(ty.spent)}</div><div class="l">${tt.spent}</div></div>
+      <div class="stat"><div class="v num">${ty.kills}</div><div class="l">${tt.intercepted}</div></div>
+      <div class="stat"><div class="v num ${ty.leaks ? "hit" : ""}">${ty.leaks}</div><div class="l">${tt.hits}</div></div>
     </div>`;
 }
 
 // ---------------------------------------------------------------- flight strip (the threat's story over time)
 let stripGeom = null;
 function renderStrip() {   // one lifeline per threat: launch -> impact, the calls on it, shots as ticks, now as a blue dot
-  const el = $("#strip"), tt = T();
+  const el = $("#life"), tt = T();
   if (!detail || !META) { el.innerHTML = ""; stripGeom = null; return; }
   const D = detail, W = Math.max(el.clientWidth - 48, 400), Y = 46, PAD = 8;
   const X = (t) => PAD + ((Math.min(Math.max(t, D.t0), D.impact) - D.t0) / Math.max(D.impact - D.t0, 1)) * (W - 2 * PAD - 70);
@@ -555,5 +700,5 @@ function buildSheet() {
   document.querySelectorAll("[data-sv]").forEach((inp) => (inp.onchange = () => set({ site_value: Object.fromEntries([...document.querySelectorAll("[data-sv]")].filter((x) => x.value !== "").map((x) => [x.dataset.sv, +x.value])) })));
 }
 
-window.addEventListener("resize", () => renderStrip());
+window.addEventListener("resize", () => { renderStrip(); renderRaid.last = null; renderRaid(); });
 init();
