@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+LIMIT_S = 150 * 60   # whole remote run, pod create to fetch
 sys.path.insert(0, str(ROOT / "scripts"))
 # own pod-name prefix: typically_job's reconcile (run before every training job) deletes "typically-job-*" pods it
 # doesn't own -- on 2026-10-27 it killed this eval pod a minute in. Must be set before the import reads it.
@@ -32,7 +33,7 @@ fi
 uv run --no-sync python -c "from huggingface_hub import snapshot_download, hf_hub_download; snapshot_download('Qwen/Qwen3-1.7B-Base'); hf_hub_download('OzLabs/typical-small', 'best.pt')"
 mkdir -p out
 for m in {models}; do for sc in {scenarios}; do echo "$m $sc"; done; done | \\
-  xargs -P 5 -L 1 bash -c 'uv run --no-sync python airdef/harness.py "$1" --model "$(cat ckpt/$0.path)" --seeds {seeds} --json out/$0__$1.json > out/$0__$1.log 2>&1'
+  xargs -P 10 -L 1 bash -c 'uv run --no-sync python airdef/harness.py "$1" --model "$(cat ckpt/$0.path)" --seeds {seeds} --json out/$0__$1.json > out/$0__$1.log 2>&1'
 touch /workspace/done
 """
 
@@ -78,8 +79,9 @@ def main():
             # launch on its own line: backgrounding a whole `a && b &` chain keeps ssh's stdout open until it ends
             j.ssh("setsid nohup bash /workspace/run.sh > /workspace/run.log 2>&1 < /dev/null & echo $! > /workspace/run.pid", 60)
             print(f"running on {j.gpu}; polling", flush=True)
-            deadline, bad = time.monotonic() + 120 * 60, 0
-            while time.monotonic() < deadline:
+            j.deadline = time.monotonic() + LIMIT_S   # this harness's own limit, not the training job's 75 min
+            bad = 0
+            while time.monotonic() < j.deadline - 300:   # leave time to fetch whatever finished
                 time.sleep(30)
                 try:   # a dropped ssh must not kill a long run (same rule as typically_job's poller)
                     state = j.ssh("test -f /workspace/done && echo DONE || (ls /workspace/pcdm/out 2>/dev/null | grep -c json || true)", 60)   # grep -c exits 1 on 0
@@ -94,11 +96,17 @@ def main():
                 if state.startswith("DONE"):
                     break
             else:
-                raise RuntimeError("remote harness did not finish in 120 minutes")
-            j.call([*scp, "-r", dest + "/workspace/pcdm/out/", str(out)], 600)
-            j.call([*scp, dest + "/workspace/run.log", str(out / "run.log")], 120)
-            print(f"results in {out}", flush=True)
+                print(f"not finished in {LIMIT_S // 60} minutes: fetching the runs that did", flush=True)
         finally:
+            if j.host:   # fetch before delete on every path: partial results are still results
+                j.deadline = max(j.deadline, time.monotonic() + 400)
+                scp, dest = ["scp", *tj.SSH_OPTS, "-P", j.host[1]], f"root@{j.host[0]}:"
+                try:
+                    j.call([*scp, "-r", dest + "/workspace/pcdm/out/", str(out)], 240)
+                    j.call([*scp, dest + "/workspace/run.log", str(out / "run.log")], 60)
+                    print(f"results in {out}", flush=True)
+                except Exception as e:
+                    print(f"fetch failed: {e}", flush=True)
             print("pod deleted" if j.delete() else "pod deletion unconfirmed: check runpodctl pod list", flush=True)
 
 
