@@ -86,18 +86,16 @@ def test_expand_state_cache_matches_deepcopy_and_does_not_alias():
 
 @pytest.mark.skipif(not os.environ.get("RUN_SLOW"), reason="downloads the real typical-small "
                      "checkpoint (Qwen3-1.7B-Base + LoRA); set RUN_SLOW=1 to run")
-def test_typical_matches_pcdm_decider():
+def _assert_parity(repo, filename):
+    """-> (orig, mine) after checking every ITEMS row, scored one call each, to 1e-4."""
     from huggingface_hub import hf_hub_download
 
     from pcdm_jev.decider import PCDMDecider
-    from typical import Typical, to_labels
+    from typical import Typical
 
-    local_best_pt = hf_hub_download(CKPT_REPO, CKPT_FILE)
-    run_dir = os.path.dirname(local_best_pt)
-
+    run_dir = os.path.dirname(hf_hub_download(repo, filename))
     orig = PCDMDecider(run_dir=run_dir, mode="native", device="auto")
-    mine = Typical.from_pretrained(CKPT_REPO, filename=CKPT_FILE, device=orig.device,
-                                   max_state=orig.max_state)
+    mine = Typical.from_pretrained(repo, filename=filename, device=orig.device, max_state=orig.max_state)
     assert orig.device == mine.device
 
     max_diff = 0.0
@@ -107,7 +105,21 @@ def test_typical_matches_pcdm_decider():
         diff = (p_orig.float().cpu() - p_mine.float().cpu()).abs().max().item()
         max_diff = max(max_diff, diff)
         assert diff < 1e-4, f"{query!r} {labels}: max abs diff {diff}"
-    print(f"[parity] {len(ITEMS)} items, max abs prob diff = {max_diff:.2e}")
+    print(f"[parity] {repo}: {len(ITEMS)} items, max abs prob diff = {max_diff:.2e}")
+    return orig, mine
+
+
+@pytest.mark.skipif(not os.environ.get("RUN_SLOW"), reason="downloads the released typical-small; set RUN_SLOW=1 to run")
+def test_release_semif_matches_pcdm_decider():
+    """The release renders semif. A call with no yes/no row used to get an eos tail the training path never adds
+    (2026-10-27: |dp| up to 0.09 at K>=3 on the release, 0.7 on an airdef fine-tune)."""
+    _assert_parity("OzLabs/typical-small", "best.pt")
+
+
+def test_typical_matches_pcdm_decider():
+    from typical import to_labels
+
+    orig, mine = _assert_parity(CKPT_REPO, CKPT_FILE)
 
     # noul reversed-label control: the checkpoint's noul_head is bern (query-only, position-
     # invariant by construction -- the rendered suffix never contains the candidate text, so

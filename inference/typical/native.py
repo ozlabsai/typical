@@ -522,7 +522,8 @@ def native_kv_decide(head, model, state, queries, chunk: int = 32, max_state: in
     non_bern, bern = [i for i, b in enumerate(is_bern) if not b], [i for i, b in enumerate(is_bern) if b]
     if base_render != "semif" or not bern:
         cache, Ls = state_cache if state_cache is not None else encode_state(head, model, state, max_state)
-        run_group(list(range(len(queries))), cache, Ls, [tok.eos_token_id])
+        # semif suffixes already end in the chat template's assistant-turn opening: no eos tail (training's _kv_score_group)
+        run_group(list(range(len(queries))), cache, Ls, [] if base_render == "semif" else [tok.eos_token_id])
     else:
         semif_cache, semif_Ls = state_cache if state_cache is not None else encode_state(head, model, state, max_state)
         run_group(non_bern, semif_cache, semif_Ls, [])
