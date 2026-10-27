@@ -69,8 +69,9 @@ def main():
             j.ssh("mkdir -p /workspace/pcdm")
             j.call([*scp, str(j.tar), dest + "/workspace/repo.tar.gz"], 900)
             j.call([*scp, str(tmp / "run.sh"), dest + "/workspace/run.sh"], 120)
-            j.ssh("tar xzf /workspace/repo.tar.gz -C /workspace/pcdm && rm -f /workspace/done && "
-                  "setsid nohup bash /workspace/run.sh > /workspace/run.log 2>&1 < /dev/null &", 300)
+            j.ssh("tar xzf /workspace/repo.tar.gz -C /workspace/pcdm && rm -f /workspace/done", 300)
+            # launch on its own line: backgrounding a whole `a && b &` chain keeps ssh's stdout open until it ends
+            j.ssh("setsid nohup bash /workspace/run.sh > /workspace/run.log 2>&1 < /dev/null & echo $! > /workspace/run.pid", 60)
             print(f"running on {j.gpu}; polling", flush=True)
             deadline = time.monotonic() + 90 * 60
             while time.monotonic() < deadline:
