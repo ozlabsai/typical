@@ -84,24 +84,31 @@ Typical (fine-tuned `typical-small`, v3) on held-out raids, scored as agreement 
 | Global, commit moments only | 13% | **70%** |
 | Local fire count (0–3) | 34% | **72%** |
 
-Whole raids, the v3 fine-tune playing every call (3 seeds, mean total · hits, scored on an H100 so the model is never
-late; `remote_harness.py`):
+Whole raids with Typical playing every call (3 seeds, mean total · hits; scored on an H100 so the model is never
+late; `remote_harness.py --ckpts v3=... v4=...`, engine as of 2026-10-27 evening):
 
-| scenario | doctrine | planner | Typical v3 |
-|---|---|---|---|
-| 13 April | 13,090 · 9.7 | 4,038 · 3.0 | **1,098 · 0.7** |
-| June attrition | 6,337 · 8.7 | **1,494 · 2.3** | 1,668 · 2.0 |
-| 1 October (saturation) | 40,027 · 21.3 | **30,023 · 15.3** | 36,392 · 19.3 |
-| Northern front | 210 · 3.3 | **112 · 1.3** | 129 · 1.3 |
-| Red Sea | 839 · 1.0 | **10 · 0** | **10 · 0** |
+| scenario | doctrine | planner | Typical v3 (demo) | Typical v4 |
+|---|---|---|---|---|
+| 13 April | 13,090 · 9.7 | 4,368 · 3.3 | **1,422 · 0.3** | 3,146 · 2.0 |
+| June attrition | 6,837 · 9.0 | **1,490 · 2.3** | 1,832 · 2.3 | 1,812 · 2.3 |
+| 1 October (saturation) | 40,527 · 21.7 | **30,523 · 15.7** | 34,413 · 17.7 | 46,359 · 21.3 |
+| Northern front | 210 · 3.3 | **117 · 1.3** | 129 · 1.3 | 166 · 1.7 |
+| Red Sea | 340 · 0.7 | **9 · 0** | **9 · 0** | **9 · 0** |
 
-Typical is at or near the planner everywhere except the October saturation, where it keeps about a third of the
-planner's gain over doctrine. Beating the planner on 13 April is 3 seeds and a handful of hits: do not quote it.
+v3 is near the planner everywhere and keeps about 60% of its gain over doctrine on the October saturation. Beating
+the planner on 13 April is 3 seeds and a handful of hits: do not quote it.
+
+**Why the demo runs v3, not v4.** v4 is trained on the fixed teacher (aircraft stay on their target, fire counts
+capped at what the unit can launch) and is better on every per-decision test: commit moments 78 → 81%, fire count
+73 → 80%, situation drill 75 → 84%, drill regret $0.97M → $0.44M per case. On whole raids it is worse: on October it
+loses to doctrine on all 3 seeds. It is more confident (sends 5–21 calls to the operator per October raid vs v3's
+43–46) and spends less, so its mistakes in a saturation raid are not caught. Per-decision accuracy did not predict
+whole-raid cost (v2 showed the same). Next lever: fewer steps or a calibrated escalation bar, gated on whole raids.
 
 Situation drill: 56 curated cases where every option was played out to the end (`situations.py`). Mean extra cost
-vs the best option, $M-equivalent: **Typical 0.40, planner 0.36, doctrine 1.79.** The best option is found on wait for
-cheaper, last chance and let it fall. Both planner and Typical are weak on an unfirm track: they wait too often
-(about 2.0 per case).
+vs the best option, $M-equivalent (`drill_regret.py`): **planner 0.14, Typical v4 0.44, Typical v3 0.97, doctrine
+1.52.** The planner is optimal on 5 of 6 families; on an unclear early track it waits too often (0.80 per case).
+v3's gap is the helicopter family (4.79; v4 1.84).
 
 ## Files
 
