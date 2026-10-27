@@ -89,19 +89,20 @@ Typical (fine-tuned `typical-small`, v3) on held-out raids, scored as agreement 
 | Global, commit moments only | 13% | **70%** |
 | Local fire count (0–3) | 34% | **72%** |
 
-Whole raids with Typical playing every call (3 seeds, mean total · hits; scored on an H100 so the model is never
-late; `remote_harness.py --ckpts v3=... v4=...`, engine as of 2026-10-27 evening):
+Whole raids with Typical playing every call (mean total · hits; scored on H100s so the model is never late;
+`remote_harness.py --ckpts v3=... v4=...`, compared seed by seed with `compare_runs.py`; engine as of 2026-10-27
+evening, before the A2-C/DS-C move):
 
-| scenario | doctrine | planner | Typical v3 (demo) | Typical v4 |
-|---|---|---|---|---|
-| 13 April | 13,090 · 9.7 | 4,368 · 3.3 | **1,422 · 0.3** | 3,146 · 2.0 |
-| June attrition | 6,837 · 9.0 | **1,490 · 2.3** | 1,832 · 2.3 | 1,812 · 2.3 |
-| 1 October (saturation) | 40,527 · 21.7 | **30,523 · 15.7** | 34,413 · 17.7 | 46,359 · 21.3 |
-| Northern front | 210 · 3.3 | **117 · 1.3** | 129 · 1.3 | 166 · 1.7 |
-| Red Sea | 340 · 0.7 | **9 · 0** | **9 · 0** | **9 · 0** |
+| scenario | seeds | doctrine | planner | Typical v3 (demo) | Typical v4 | v4 - v3 per raid (se) |
+|---|---|---|---|---|---|---|
+| 13 April | 6 | 14,506 · 10.5 | 5,209 · 3.7 | **4,191 · 2.7** | 5,566 · 3.7 | +1,375 (1,418) |
+| June attrition | 4 | 6,660 · 8.8 | **1,206 · 1.8** | 2,320 · 3.5 | 1,805 · 2.5 | -515 (539) |
+| 1 October (saturation) | 8 | 42,210 · 22.9 | **34,097 · 17.8** | 35,476 · 18.1 | 42,056 · 20.5 | +6,579 (1,557), v4 worse on 8/8 |
+| Northern front | 8 | 240 · 3.4 | **149 · 1.8** | 154 · 1.6 | 194 · 2.4 | +41 (23), v4 worse on 8/8 |
+| Red Sea | 8 | 618 · 1.1 | **10 · 0** | **10 · 0** | **10 · 0** | 0 |
 
-v3 is near the planner everywhere and keeps about 60% of its gain over doctrine on the October saturation. Beating
-the planner on 13 April is 3 seeds and a handful of hits: do not quote it.
+v3 is at or near the planner everywhere and keeps most of its gain over doctrine on the October saturation. April and
+June are within noise between v3 and v4 (fewer seeds: those raids are slow).
 
 **Why the demo runs v3, not v4.** v4 is trained on the fixed teacher (aircraft stay on their target, fire counts
 capped at what the unit can launch) and is better on every per-decision test: commit moments 78 → 81%, fire count
