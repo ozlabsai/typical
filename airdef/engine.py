@@ -109,7 +109,6 @@ def local_text(th, t, cfg, unit_line, f):
     """What the fire unit reads before it fires."""
     _, sid, p_hit, *_ = consequence(th, t, cfg)
     lines = [unit_line, threat_line(th), target_line(th, t, cfg), f"Impact in {in_words(th.t0 + th.T - t)}."]
-    lines.append("The track is firm." if f["firm"] else "The track is not firm yet.")
     if f["channels"] > 1:
         lines.append(f"Launch channels: {f['channels_free']} of {f['channels']} free." if f["channels_free"] else "All launch channels are busy.")
     if f["stock"] == math.inf:
@@ -293,6 +292,14 @@ class World:
             dmg, sid, p_hit, *_ = consequence(th, self.t, self.cfg)
             opts = planner.option_values(th, self.t, pol.stock, self.cfg, pol.prices, dmg, pol.units.values(),
                                          site_value(sid, th.kind, self.cfg), p_hit, free_at, bookings)
+            if s.get("ew_done"):   # jamming works or it doesn't: one attempt per threat
+                opts = [o for o in opts if o.eff != "ew"]
+            c = s.get("commit")   # a forced commitment (situations.py rollouts): the option keeps its meaning to the end
+            if c == "hold":
+                s["next"] = math.inf
+                continue
+            if c and c.startswith("cheaper:"):
+                opts = [o for o in opts if o.key == "hold" or o.key == "now:" + c.split(":")[1] or (o.key == "cheaper" and o.eff == c.split(":")[1])]
             if len(opts) == 1:   # nothing can reach it (yet)
                 s.update(status="pending", next=self.t + RECHECK_S[th.cls])
                 continue
@@ -485,6 +492,8 @@ class World:
                 pol.units[bid].weapons[e] -= 1
             pol.L["spent"] += EFFECTORS[e]["cost"]
             pol.L["rounds"][e] = pol.L["rounds"].get(e, 0) + 1
+            if e == "ew":
+                s["ew_done"] = True
             h = u01(self.seed, th.id, s["shots"]) < effective_pk(e, th, self.cfg)   # same draw for every policy's n-th shot
             s["shots"] += 1
             hit = hit or h
