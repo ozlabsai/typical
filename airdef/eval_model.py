@@ -14,7 +14,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "inference"))
-from typical import Typical   # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scorer   # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", default="OzLabs/typical-small")
@@ -23,7 +24,7 @@ ap.add_argument("--limit", type=int, default=400)
 ap.add_argument("--out", default="")
 a = ap.parse_args()
 
-m = Typical.from_pretrained(a.model, device="auto", max_states=4)
+m = scorer.load(a.model)
 report = {}
 for f in sorted(Path(a.data).glob("*.jsonl")):
     rows = [json.loads(x) for x in f.read_text().splitlines()][: a.limit]

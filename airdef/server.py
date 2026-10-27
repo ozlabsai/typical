@@ -34,9 +34,8 @@ QUIET_S = 15           # auto-skip: jump when nothing happens for longer than th
 def load_model():
     if MODEL_ID == "none":
         return
-    sys.path.insert(0, str(ROOT.parent / "inference"))
-    from typical import Typical
-    m = Typical.from_pretrained(MODEL_ID, device="auto", max_states=64)
+    import scorer   # the training repo's decider; see scorer.py for why not inference/typical
+    m = scorer.load(MODEL_ID)
     m.choice("warm up", "Is this a warm-up?", ["yes", "no"])
     S["model"], S["model_name"] = m, ("typical-small · tuned" if MODEL_ID.endswith(".pt") else MODEL_ID.split("/")[-1])
 

@@ -34,7 +34,7 @@ const I18N = {
     reads: "What Typical reads", notYet: "No interceptor can reach it yet. Typical decides once one can.",
     empty: "Press Play. The most urgent threat and Typical's call appear here.",
     tonight: "Tonight", attacker: (x) => `Attacker spent ${x}`, spent: "Spent", hits: "Hits on sites", a3: "Arrow 3 left",
-    greyIs: (p) => `Grey: ${p}`, naive: "firing at everything", plannerLow: "the planner", foot: (a, ms) => `Agrees with the planner ${a}% · ${ms} ms per call`, cmp: "Compare planner",
+    vsNaive: (x) => `${x} firing at everything`, details: "Details", foot: (a, ms) => `Agrees with the planner ${a}% · ${ms} ms per call`, cmp: "Compare planner",
     planner: "Planner",
     strip: (id, t, s) => `Flight of ${id} · ${t} to ${s}`, now: "now", impact: "impact", calls: "Calls", hit: "hit", miss: "miss",
     posture: "Magazine posture", postures: ["Healthy", "Conserve", "Critical"], prio: "Priority sites", assets: "Assets and conditions",
@@ -67,7 +67,7 @@ const I18N = {
     reads: "מה Typical קורא (באנגלית)", notYet: "אף מיירט עדיין לא מגיע אליו. Typical יחליט כשיגיע.",
     empty: "לחצו הפעל. האיום הדחוף ביותר וההחלטה של Typical יופיעו כאן.",
     tonight: "הלילה", attacker: (x) => `התוקף הוציא ${x}`, spent: "הוצאה", hits: "פגיעות באתרים", a3: "חץ 3 שנותרו",
-    greyIs: (p) => `באפור: ${p}`, naive: "יורים על הכול", plannerLow: "המתכנן", foot: (a, ms) => `הסכמה עם המתכנן ${a}% · ${ms} מ״ש להחלטה`, cmp: "השווה למתכנן",
+    vsNaive: (x) => `${x} ביריות על הכול`, details: "פרטים", foot: (a, ms) => `הסכמה עם המתכנן ${a}% · ${ms} מ״ש להחלטה`, cmp: "השווה למתכנן",
     planner: "מתכנן",
     strip: (id, t, s) => `מסלול ${id} · ${t} לעבר ${s}`, now: "עכשיו", impact: "פגיעה", calls: "החלטות", hit: "פגע", miss: "החטיא",
     posture: "מצב מלאים", postures: ["תקין", "שימור", "קריטי"], prio: "אתרים בעדיפות", assets: "נכסים ותנאים",
@@ -103,18 +103,20 @@ const api = (p, body) => fetch(p, body ? { method: "POST", headers: { "content-t
 async function init() {
   META = await api("/api/meta");
   $("#lang").onclick = () => { LANG = LANG === "en" ? "he" : "en"; localStorage.setItem("airdef-lang", LANG); applyLang(); };
-  $("#scen").onclick = async (e) => { const s = e.target.closest("[data-s]")?.dataset.s; if (!s) return; selected = null; pinned = false; detail = null; await api("/api/control", { action: "reset", scenario: s }); flyTo(SCEN_VIEW[s]); };
-  $("#speeds").innerHTML = [1, 5, 20, 60].map((x) => `<button class="dc-tab" data-x="${x}" role="tab">${x}×</button>`).join("");
-  $("#speeds").onclick = (e) => { const x = e.target.closest("[data-x]")?.dataset.x; if (x) api("/api/control", { action: "speed", speed: +x }); };
+  $("#scenBtn").onclick = (e) => { e.stopPropagation(); $("#scenDrop").classList.toggle("is-open"); };
+  document.addEventListener("click", () => $("#scenDrop").classList.remove("is-open"));
+  $("#scenMenu").onclick = async (e) => {
+    const s = e.target.closest("[data-s]")?.dataset.s; if (!s) return;
+    selected = null; pinned = false; detail = null; await api("/api/control", { action: "reset", scenario: s }); flyTo(SCEN_VIEW[s]);
+  };
+  $("#speed").onclick = () => { const v = [1, 5, 20, 60]; api("/api/control", { action: "speed", speed: v[(v.indexOf(S.speed) + 1) % v.length] || 5 }); };
   $("#play").onclick = () => api("/api/control", { action: S?.running ? "pause" : "play" });
-  $("#skip").onclick = () => api("/api/control", { action: "skip" });
   $("#gear").onclick = () => { const o = $("#sheet").classList.toggle("open"); $("#gear").setAttribute("aria-expanded", o); };
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#sheet").classList.remove("open"); $("#gear").setAttribute("aria-expanded", false); } });
   $("#decision").onclick = (e) => {
     if (e.target.closest("#followBtn")) { pinned = false; pickFollow(true); }
     if (e.target.closest(".dc-accordion__trigger")) e.target.closest(".dc-accordion__item").classList.toggle("is-open");
   };
-  $("#tonight").onclick = (e) => { if (e.target.closest("#cmpBtn")) { showPlanner = !showPlanner; renderTonight(); } };
   await poll();
   applyLang();
   flyTo(SCEN_VIEW[S.scenario]);
@@ -128,9 +130,9 @@ function applyLang() {
   document.documentElement.dir = LANG === "he" ? "rtl" : "ltr";
   document.querySelectorAll("[data-i18n]").forEach((el) => (el.textContent = T()[el.dataset.i18n]));
   $("#lang").textContent = T().lang;
-  $("#scen").innerHTML = Object.entries(META.scenarios).map(([k, v]) => {
+  $("#scenMenu").innerHTML = Object.entries(META.scenarios).map(([k, v]) => {
     const [title, blurb] = LANG === "he" ? [v.title_he, v.blurb_he] : [v.title, v.blurb];
-    return `<button class="dc-tab" role="tab" data-s="${k}" title="${esc(blurb)}">${esc(title.split(":")[0])}</button>`;
+    return `<button class="dc-dropdown__item" data-s="${k}"><span class="dc-dropdown__text"><span class="dc-dropdown__label">${esc(title)}</span><span class="dc-dropdown__desc">${esc(blurb)}</span></span></button>`;
   }).join("");
   renderBar(); renderTonight(); renderDecision(); renderStrip(); buildSheet();
 }
@@ -234,8 +236,9 @@ let lastSkip = { v: 0, at: -1e9 };
 function renderBar() {
   if (!S) return;
   $("#play").textContent = S.running ? T().pause : T().play;
-  document.querySelectorAll("#speeds .dc-tab").forEach((b) => b.setAttribute("aria-selected", +b.dataset.x === S.speed));
-  document.querySelectorAll("#scen .dc-tab").forEach((b) => b.setAttribute("aria-selected", b.dataset.s === S.scenario));
+  $("#speed").textContent = `${S.speed}×`;
+  const sc = META.scenarios[S.scenario];
+  $("#scenBtn").firstChild.textContent = (LANG === "he" ? sc.title_he : sc.title).split(":")[0] + " ";
   if (S.skipped !== lastSkip.v) lastSkip = { v: S.skipped, at: performance.now() };
   const skip = S.running && S.skipped > 0 && performance.now() - lastSkip.at < 2500;
   $("#note").textContent = S.backlog ? T().deciding : skip ? T().skipped(fmtT(S.skipped)) : "";
@@ -261,94 +264,70 @@ function renderDecision() {
   const el = $("#decision"), tt = T();
   if (!detail || !META) { el.innerHTML = `<p class="empty">${tt.empty}</p>`; return; }
   const D = detail, ty = META.threat_types[D.kind], done = DONE.includes(D.status);
-  const target = D.open_ground ? `${tt.openGround} <b>${esc(siteName(D.site))}</b>`
-    : `${tt.to} <b>${esc(siteName(D.site))}</b>${D.priority ? `<span class="tag">${tt.priority}</span>` : ""}`;
-  let h = `<div class="row"><p class="kicker">${pinned ? tt.pinned : tt.following} · <span class="num">${D.id}</span> · ${tt.cls[D.cls]}</p>
-      ${pinned ? `<button id="followBtn" class="dc-pill dc-pill--ghost dc-pill--sm">${tt.follow}</button>` : ""}</div>
-    <div class="row"><div><h2 class="threat">${esc(nm(ty).replace(/ (MRBM|SRBM)$/i, ""))}</h2><div class="target">${target}</div></div>
-      <div class="eta"><p class="kicker">${done ? "" : tt.impactIn}</p><div class="v num">${done ? "" : fmtT(D.impact - D.t)}</div></div></div>`;
+  const dest = D.open_ground ? `${tt.openGround} ${esc(siteName(D.site))}` : `${tt.to} ${esc(siteName(D.site))}${D.priority ? `<span class="tag">${tt.priority}</span>` : ""}`;
+  let h = `<p class="kicker">${tt.cls[D.cls]}${pinned ? ` · <button id="followBtn" class="linkish">${tt.follow}</button>` : ""}</p>
+    <div class="row"><div><h2 class="threat">${esc(nm(ty).replace(/ (MRBM|SRBM)$/i, ""))}</h2><div class="target">${dest}</div></div>
+      <div class="eta num">${done ? "" : fmtT(D.impact - D.t)}</div></div>`;
   const i = D.info;
   if (done) {
-    el.innerHTML = h + `<div class="call"><p class="kicker">${tt.callBy[viewPol]}</p><div class="what" style="color:${D.status === "leaked" ? "var(--hit)" : "var(--dc-ink-2)"}">${tt.status[D.status]}</div></div>`;
+    el.innerHTML = h + `<div class="what" style="color:${D.status === "leaked" ? "var(--hit)" : "var(--dc-ink-2)"}">${tt.status[D.status]}</div>`;
     return;
   }
   if (!i) { el.innerHTML = h + `<p class="empty">${tt.notYet}</p>`; return; }
-  const top = i.dist ? Object.keys(i.dist).sort((a, b) => i.dist[b] - i.dist[a])[0] : null;
-  const conf = !i.dist ? null : D.escalated ? tt.unsure(actLabel(top), Math.round(i.dist[top] * 100)) : tt.conf(Math.round(i.dist[D.choice] * 100));
-  h += `<div class="call"><p class="kicker">${tt.callBy[viewPol]}</p><div class="what">${esc(actLabel(D.choice))}</div>
-      ${conf ? `<span class="conf">${esc(conf)}</span>` : ""}<p class="why">${esc(reason(i, D))}</p>
-      ${D.escalated ? `<div class="op">${tt.operator}</div>` : ""}</div>`;
-  const order = i.dist ? Object.keys(i.dist).sort((a, b) => i.dist[b] - i.dist[a]) : i.opts.map((o) => o[0]);
-  const rest = order.filter((k) => k !== D.choice).slice(0, 3);
-  if (rest.length) h += `<div class="alts">${rest.map((k) => `<div class="alt"><span>${esc(actLabel(k))}</span><span class="num">${i.dist ? Math.round(i.dist[k] * 100) + "%" : ""}</span></div>`).join("")}</div>`;
-  if (i.planner) h += `<p class="agree">${i.planner === D.choice ? tt.agrees : esc(tt.differs(actLabel(i.planner)))}</p>`;
-  const open = el.querySelector(".reads .dc-accordion__item")?.classList.contains("is-open");
-  h += `<div class="reads dc-accordion"><div class="dc-accordion__item ${open ? "is-open" : ""}"><button class="dc-accordion__trigger">${tt.reads}<span>${open ? "−" : "+"}</span></button>
-      <div class="dc-accordion__panel"><div><pre>${esc(i.state)}</pre></div></div></div></div>`;
+  h += `<div class="what">${esc(actLabel(D.choice))}</div><p class="why">${esc(reason(i, D))}</p>`;
+  if (D.escalated) h += `<div class="op">${tt.operator}</div>`;
+  // everything below the reason is detail: one closed disclosure
+  const top = i.dist ? Object.keys(i.dist).sort((a, b) => i.dist[b] - i.dist[a]) : [];
+  const conf = i.dist ? (D.escalated ? tt.unsure(actLabel(top[0]), Math.round(i.dist[top[0]] * 100)) : tt.conf(Math.round(i.dist[D.choice] * 100))) : "";
+  const open = el.querySelector("details.detail")?.open;
+  h += `<details class="detail" ${open ? "open" : ""}><summary>${tt.details}</summary>
+    ${conf ? `<p class="dline">${esc(conf)}</p>` : ""}
+    ${top.filter((k) => k !== D.choice).slice(0, 3).map((k) => `<div class="alt"><span>${esc(actLabel(k))}</span><span class="num">${Math.round(i.dist[k] * 100)}%</span></div>`).join("")}
+    ${i.planner ? `<p class="dline">${i.planner === D.choice ? tt.agrees : esc(tt.differs(actLabel(i.planner)))}</p>` : ""}
+    <p class="dline">${tt.reads}</p><pre>${esc(i.state)}</pre></details>`;
   el.innerHTML = h;
 }
 
 // ---------------------------------------------------------------- tonight
 function renderTonight() {
   if (!S) return;
-  const L = S.ledger, ty = L.typical, nv = L.naive, pl = L.planner, tt = T();
+  const L = S.ledger, ty = L.typical, nv = L.naive, tt = T();
   if (!ty) return;
-  const a3 = (x) => (x.init.arrow3 ? `${Math.round(x.left.arrow3)}/${x.init.arrow3}` : "—");
-  const other = showPlanner && pl ? pl : nv, cmp = (f) => f(other);
-  const d = Math.max(ty.decisions, 1);
-  $("#tonight").innerHTML = `<div class="row"><p class="kicker">${tt.tonight}</p><p class="kicker num">${tt.attacker(money(S.attacker_cost))}</p></div>
-    <div class="stats">
-      <div class="stat"><div class="l">${tt.spent}</div><div class="v num">${money(ty.spent)}</div><div class="vs num">${cmp((x) => money(x.spent))}</div></div>
-      <div class="stat"><div class="l">${tt.hits}</div><div class="v num ${ty.leaks ? "hit" : ""}">${ty.leaks}</div><div class="vs num">${cmp((x) => x.leaks)}</div></div>
-      <div class="stat"><div class="l">${tt.a3}</div><div class="v num">${a3(ty)}</div><div class="vs num">${cmp(a3)}</div></div>
-    </div>
-    <div class="legend"><i></i>${tt.greyIs(showPlanner && pl ? tt.plannerLow : tt.naive)}</div>
-    <div class="tfoot"><span>${S.model !== "planner only" ? tt.foot(Math.round((ty.agree / d) * 100), Math.round(ty.ms / Math.max(ty.calls, 1))) : ""}</span>
-      <button id="cmpBtn" class="chip" aria-pressed="${showPlanner}">${tt.cmp}</button></div>`;
+  $("#tonight").innerHTML = `<p class="kicker">${tt.tonight}</p><div class="stats">
+      <div class="stat"><div class="v num">${money(ty.spent)}</div><div class="l">${tt.spent}</div><div class="vs">${tt.vsNaive(money(nv.spent))}</div></div>
+      <div class="stat"><div class="v num ${ty.leaks ? "hit" : ""}">${ty.leaks}</div><div class="l">${tt.hits}</div><div class="vs">${tt.vsNaive(nv.leaks)}</div></div>
+    </div>`;
 }
 
 // ---------------------------------------------------------------- flight strip (the threat's story over time)
 let stripGeom = null;
-function renderStrip() {
+function renderStrip() {   // one lifeline per threat: launch -> impact, the calls on it, shots as ticks, now as a blue dot
   const el = $("#strip"), tt = T();
   if (!detail || !META) { el.innerHTML = ""; stripGeom = null; return; }
-  const D = detail, W = Math.max(el.clientWidth - 48, 400), H = Math.max(el.clientHeight - 44, 100), LW = 128, PW = W - LW - 64;
-  const hist0 = D.history.length ? D.history[0][0] : D.t;
-  const x0 = Math.max(D.t0, Math.min(D.t, hist0) - 0.1 * (D.impact - Math.min(D.t, hist0))), span = Math.max(D.impact - x0, 1);
-  const X = (t) => LW + ((Math.min(Math.max(t, x0), D.impact) - x0) / span) * PW;
-  const effs = [...new Set([...Object.keys(D.windows), ...D.shots.map((s) => s.eff)])].sort((a, b) => META.effectors[b].layer - META.effectors[a].layer).slice(0, 6);
-  const top = 34, RH = Math.min(22, (H - top - 22) / Math.max(effs.length, 1)), yb = top + effs.length * RH;
-  const callEff = D.choice && D.choice !== "hold" ? D.choice.split(":")[1] : null;
-  let g = `<text x="0" y="14">${tt.calls}</text>`;
-  D.history.forEach(([t, key], n) => {   // labelled call markers, alternating rows so neighbours don't collide
-    const x = X(t), y = n % 2 ? 28 : 14, last = n === D.history.length - 1;
-    g += `<circle cx="${x}" cy="${y - 4}" r="4" fill="${last ? "#2548f6" : "#8a8a8e"}"/><text class="call-l" x="${x + 8}" y="${y}" ${last ? 'style="fill:#2548f6"' : ""}>${esc(actLabel(key))}</text>`;
+  const D = detail, W = Math.max(el.clientWidth - 48, 400), Y = 46, PAD = 8;
+  const X = (t) => PAD + ((Math.min(Math.max(t, D.t0), D.impact) - D.t0) / Math.max(D.impact - D.t0, 1)) * (W - 2 * PAD - 70);
+  let g = `<line x1="${X(D.t0)}" x2="${X(D.impact)}" y1="${Y}" y2="${Y}" stroke="#e2e2e4" stroke-width="4" stroke-linecap="round"/>
+    <line id="pastline" x1="${X(D.t0)}" x2="${X(D.t0)}" y1="${Y}" y2="${Y}" stroke="#101010" stroke-width="4" stroke-linecap="round"/>`;
+  let lastX = -1e9, row = 0;
+  D.history.forEach(([t, key], n) => {   // calls above the line; alternate height only when labels would collide
+    const x = X(t), last = n === D.history.length - 1;
+    row = x - lastX < 150 ? 1 - row : 0; lastX = x;
+    const y = Y - 14 - row * 16, col = last ? "#2548f6" : "#5d5d5d";
+    g += `<line x1="${x}" x2="${x}" y1="${y + 3}" y2="${Y}" stroke="${col}" stroke-width="1"/><text x="${x}" y="${y}" style="fill:${col};font-size:13px${last ? ";font-weight:500" : ""}">${esc(actLabel(key))}</text>`;
   });
-  effs.forEach((e, k) => {
-    const y = top + k * RH, w = D.windows[e], on = e === callEff;
-    g += `<text class="lane-l ${on ? "on" : ""}" x="0" y="${y + RH * 0.65}">${esc(effName(e))}</text>`;
-    g += `<rect x="${LW}" y="${y + RH * 0.2}" width="${PW}" height="${RH * 0.6}" rx="${RH * 0.3}" fill="#f5f5f5"/>`;
-    if (w) g += `<rect x="${X(w[0])}" y="${y + RH * 0.2}" width="${Math.max(4, X(w[1]) - X(w[0]))}" height="${RH * 0.6}" rx="${RH * 0.3}" fill="${on ? "#2548f6" : "#c5c5c7"}"/>`;
-    for (const s of D.shots.filter((x) => x.eff === e)) {
-      const fin = D.t >= s.t1;
-      g += `<line x1="${X(s.t0)}" x2="${X(fin ? s.t1 : D.t)}" y1="${y + RH / 2}" y2="${y + RH / 2}" stroke="#101010" stroke-width="2.5" stroke-linecap="round"/>`;
-      if (fin) g += `<text x="${X(s.t1) + 6}" y="${y + RH * 0.7}" style="fill:${s.hit ? "#101010" : "#8a8a8e"};font-size:13px">${s.hit ? "✓ " + tt.hit : "✕ " + tt.miss}</text>`;
-    }
-  });
-  const step = [10, 30, 60, 120, 300, 600, 1800, 3600, 7200].find((s) => span / s <= 8) || 7200;
-  for (let tm = step; D.impact - tm >= x0; tm += step) g += `<text x="${X(D.impact - tm)}" y="${yb + 16}" text-anchor="middle">−${fmtT(tm)}</text>`;
-  g += `<line x1="${X(D.impact)}" x2="${X(D.impact)}" y1="${top}" y2="${yb}" stroke="#101010" stroke-width="1.5"/>`;
-  g += `<text x="${X(D.impact) + 6}" y="${top + 12}" style="fill:#101010">${tt.impact}</text>`;
-  g += `<g id="nowline"><line x1="0" x2="0" y1="${top - 2}" y2="${yb + 2}" stroke="#2548f6" stroke-width="2"/><text x="0" y="${yb + 16}" text-anchor="middle" style="fill:#2548f6;font-weight:500">${tt.now}</text></g>`;
-  const ty = META.threat_types[D.kind];
-  const dest = D.open_ground ? `${tt.openGround} ${siteName(D.site)}` : siteName(D.site);
-  el.innerHTML = `<p class="kicker" style="margin:0 0 .25rem">${esc(tt.strip(D.id, nm(ty), dest))}</p><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" direction="ltr">${g}</svg>`;
-  stripGeom = { X };
+  for (const s of D.shots) {   // shots below the line
+    const fin = D.t >= s.t1;
+    g += `<text x="${X(fin ? s.t1 : s.t0)}" y="${Y + 22}" text-anchor="middle" style="fill:${fin ? (s.hit ? "#101010" : "#8a8a8e") : "#2548f6"};font-size:13px">${fin ? (s.hit ? "✓" : "✕") : "↑"} ${esc(effName(s.eff))}</text>`;
+  }
+  g += `<text x="${X(D.impact) + 10}" y="${Y + 4}" style="fill:#101010;font-size:13px">${tt.impact}</text>`;
+  g += `<circle id="nowdot" cx="0" cy="${Y}" r="6" fill="#2548f6" stroke="#fff" stroke-width="2"/>`;
+  el.innerHTML = `<svg viewBox="0 0 ${W} 80" width="${W}" height="80" direction="ltr">${g}</svg>`;
+  stripGeom = { X, t0: D.t0 };
   stripNow(simNow());
 }
-function stripNow(t) {   // the playhead moves every frame, between strip re-renders
-  const g = document.getElementById("nowline");
-  if (g && stripGeom) g.setAttribute("transform", `translate(${stripGeom.X(t)},0)`);
+function stripNow(t) {   // the now dot and the flown part move every frame, between strip re-renders
+  const d = document.getElementById("nowdot"), p = document.getElementById("pastline");
+  if (d && stripGeom) { d.setAttribute("cx", stripGeom.X(t)); p.setAttribute("x2", stripGeom.X(t)); }
 }
 
 // ---------------------------------------------------------------- settings sheet

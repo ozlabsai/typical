@@ -17,8 +17,8 @@ ap.add_argument("--model", default="OzLabs/typical-small")
 ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2])
 a = ap.parse_args()
 
-from typical import Typical   # noqa: E402
-m = Typical.from_pretrained(a.model, device="auto", max_states=64)
+import scorer   # noqa: E402
+m = scorer.load(a.model)
 grand = {}
 for sc in a.scenarios:
     for seed in a.seeds:

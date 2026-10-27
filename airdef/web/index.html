@@ -16,7 +16,7 @@
 /* Extensions to the taste index, tagged like brand.css:
    [X] --hit: the site's own live red (#ff3b30), reused for "a threat hit a defended site" — the one alarm state the brand lacks.
    [X] --lane: a lane fill one step darker than --dc-surface so windows read on a white strip. */
-:root { --hit: #ff3b30; --lane: #ececee; --aside-w: 440px; --strip-h: 200px; --bar-h: 68px; }
+:root { --hit: #ff3b30; --lane: #ececee; --aside-w: 420px; --strip-h: 96px; --bar-h: 68px; }
 html[lang=he] { --dc-font-sans: "Heebo", "Figtree", Arial, sans-serif; }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; overflow: hidden; }
@@ -51,8 +51,18 @@ aside { grid-column: 2; grid-row: 2 / 4; background: var(--dc-white); display: f
 .target { font-size: 1.0625rem; color: var(--dc-text-sub); letter-spacing: -.02em; }
 .target b { font-weight: 400; color: var(--dc-ink-2); }
 .tag { display: inline-flex; padding: .0625rem .625rem; border: 1px solid var(--dc-ink); border-radius: var(--dc-r-pill); font-size: .8125rem; font-weight: 500; color: var(--dc-ink); margin-inline-start: .375rem; vertical-align: 2px; }
-.eta { text-align: end; }
-.eta .v { font-size: 2.5rem; line-height: 1; letter-spacing: -.04em; color: var(--dc-ink-2); }
+.eta { font-size: 2.5rem; line-height: 1; letter-spacing: -.04em; color: var(--dc-ink-2); }
+.what { font-size: 2.25rem; line-height: 1.15; letter-spacing: -.04em; color: var(--dc-blue); margin: 2.25rem 0 .75rem; font-weight: 400; }
+.linkish { border: 0; background: none; padding: 0; font: inherit; color: var(--dc-blue); cursor: pointer; }
+details.detail { margin-top: 2rem; }
+details.detail summary { cursor: pointer; font-size: .9375rem; color: var(--dc-text-nav); list-style: none; }
+details.detail summary::after { content: " +"; }
+details.detail[open] summary::after { content: " −"; }
+details.detail .alt { padding: .375rem 0; font-size: .9375rem; }
+.dline { font-size: .9375rem; color: var(--dc-grey); margin: .875rem 0 .25rem; }
+details.detail pre { margin: 0; white-space: pre-wrap; font: .8125rem/1.6 var(--dc-font-sans); color: var(--dc-text-sub); direction: ltr; text-align: left; background: var(--dc-surface); border-radius: var(--dc-r-row); padding: .75rem 1rem; }
+#scenDrop .dc-dropdown__list { z-index: 6; min-width: 22rem; }
+#scenDrop .dc-dropdown__item { width: 100%; border: 0; background: none; text-align: start; cursor: pointer; font-family: inherit; }
 .call { margin-top: 2rem; }
 .call .what { font-size: 2.125rem; line-height: 1.15; letter-spacing: -.04em; color: var(--dc-blue); margin: .375rem 0 .5rem; font-weight: 400; }
 .call .conf { font-size: 1rem; color: var(--dc-grey); }
@@ -68,9 +78,9 @@ aside { grid-column: 2; grid-row: 2 / 4; background: var(--dc-white); display: f
 .reads pre { margin: 0 0 1rem; white-space: pre-wrap; font: .8125rem/1.6 var(--dc-font-sans); color: var(--dc-text-sub); direction: ltr; text-align: left; }
 .empty { color: var(--dc-grey); font-size: 1.0625rem; line-height: 1.5; margin-top: 2rem; }
 .tonight { padding: 1.25rem 1.75rem 1.5rem; background: var(--dc-surface); margin: 0 1rem 1rem; border-radius: var(--dc-r-band); }
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: .875rem; }
+.stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.25rem; margin-top: .75rem; }
 .stat .l { font-size: .875rem; color: var(--dc-grey); }
-.stat .v { font-size: 1.75rem; letter-spacing: -.04em; color: var(--dc-ink-2); line-height: 1.2; margin-top: .125rem; }
+.stat .v { font-size: 2.25rem; letter-spacing: -.04em; color: var(--dc-ink-2); line-height: 1.1; }
 .stat .v.hit { color: var(--hit); }
 .stat .vs { font-size: .9375rem; color: var(--dc-grey); margin-top: .125rem; }
 .legend { margin-top: .75rem; font-size: .8125rem; color: var(--dc-grey); display: flex; align-items: center; gap: .375rem; }
@@ -78,7 +88,7 @@ aside { grid-column: 2; grid-row: 2 / 4; background: var(--dc-white); display: f
 .tfoot { display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; font-size: .8125rem; color: var(--dc-grey); }
 
 /* ---------- flight strip ---------- */
-#strip { grid-column: 1; grid-row: 3; background: var(--dc-white); padding: .875rem 1.5rem .5rem; display: flex; flex-direction: column; min-height: 0; }
+#strip { grid-column: 1; grid-row: 3; background: var(--dc-white); padding: .5rem 1.5rem 0; display: flex; flex-direction: column; min-height: 0; }
 #strip svg { flex: 1; width: 100%; display: block; overflow: visible; }
 #strip svg text { font-family: var(--dc-font-sans); font-size: 12px; fill: var(--dc-grey); }
 #strip svg .lane-l { fill: var(--dc-text-body); font-size: 13px; }
@@ -110,13 +120,15 @@ details.more summary { cursor: pointer; font-size: .9375rem; color: var(--dc-tex
 <body>
 <header>
   <div class="mark"><b>Typical</b> <span data-i18n="brand">Air defence</span></div>
-  <div class="dc-tabs dc-tabs--sm" id="scen" role="tablist"></div>
+  <div class="dc-dropdown" id="scenDrop">
+    <button id="scenBtn" class="dc-pill dc-pill--ghost dc-pill--sm" aria-haspopup="menu">… <span aria-hidden="true">▾</span></button>
+    <div class="dc-dropdown__list" id="scenMenu" role="menu"></div>
+  </div>
   <div class="bar-end">
     <span id="note"></span>
     <span id="clock" class="num">T+00:00</span>
     <button id="play" class="dc-pill dc-pill--primary dc-pill--sm"></button>
-    <div class="dc-tabs dc-tabs--sm" id="speeds"></div>
-    <button id="skip" class="dc-pill dc-pill--ghost dc-pill--sm" data-i18n="skip">Skip ahead</button>
+    <button id="speed" class="dc-pill dc-pill--ghost dc-pill--sm num" title="speed"></button>
     <button id="lang" class="dc-pill dc-pill--ghost dc-pill--sm"></button>
     <button id="gear" class="dc-pill dc-pill--secondary dc-pill--sm" data-i18n="settings" aria-expanded="false" aria-controls="sheet">Settings</button>
   </div>
