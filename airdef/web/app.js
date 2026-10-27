@@ -8,7 +8,7 @@ const VIEWS = { theatre: [40.5, 31.2, 4.7, 48], north: [35.35, 32.95, 8.3, 50], 
 const SCEN_VIEW = { northern_barrage: "north", april_mixed: "theatre", october_saturation: "theatre", june_attrition: "theatre", houthi_eilat: "south" };
 const DRILL_VIEW = { wait_for_cheaper: "theatre", last_chance: "north", let_it_fall: "north", track_not_firm: "theatre", coverage_gap: "south", helicopter: "theatre" };
 const viewOf = (s) => (s.startsWith("drill:") ? DRILL_VIEW[s.split(":")[1]] : SCEN_VIEW[s]);
-const DONE = ["killed", "leaked", "fell_open"];
+const DONE = ["killed", "leaked", "fell_open"], ENGAGED = ["assigned", "inflight"];
 
 // ---------------------------------------------------------------- copy (EN / HE)
 const I18N = {
@@ -18,9 +18,8 @@ const I18N = {
     skipped: (x) => `Skipped ${x} of quiet`,
     cls: { B: "Ballistic missile", R: "Rocket", C: "Cruise missile", D: "Drone" },
     to: "to", openGround: "Open ground near", priority: "priority", impactIn: "Impact in", follow: "Follow the most urgent",
-    following: "Most urgent threat", pinned: "Pinned",
+    following: "In focus", pinned: "Pinned",
     callBy: { typical: "Typical's call", planner: "The planner's call", doctrine: "Doctrine's call" },
-    conf: (p) => `${p}% confident`,
     act: { hold: "Let it fall", wait: "Wait", cheaper: "Wait for cheaper", air: { fighter: "Fighter jets", helicopter: "Helicopter" } },
     whyAir: (u, m, pk) => `${u} can meet it in ${m} and ${pk}.`,
     whyTrack: "The track is not firm yet. Deciding later keeps every layer that still reaches it open.",
@@ -36,11 +35,15 @@ const I18N = {
     vs: { raid: (r) => `${r} would spend interceptors tonight's raid still needs.`, campaign: (r) => `${r} would spend stock the campaign has to keep.`,
       local: (r, d) => `${r} costs ${d} more for this threat, in interceptors and risk.` },
     status: { killed: "Intercepted", leaked: "Hit a defended site", fell_open: "Fell in open ground" },
-    operator: "Sent to the operator, who took the planner's call",
-    late: "Typical did not answer in time, so the planner's call went out",
-    inTime: (p) => `Typical answered ${p}% of calls in time; the planner stood in for the rest`,
-    unsure: (x, p) => `Typical was unsure: its top pick, ${x}, had ${p}%`,
-    agrees: "The planner agrees.", differs: (x) => `The planner would: ${x}.`,
+    sec: { t: "Threats", u: "Aircraft", b: "Fire units" }, options: "Options weighed",
+    st: { out: "Tracking", wait: "Wait", cheaper: (e) => `Wait for ${e}`, hold: "Let it fall", ground: (e, u) => `${e} · ${u}`,
+      air: (u) => `${u} en route`, fired: (u, n) => `${u} fired ${n}`, hit: (s) => `Hit ${s}` },
+    bat: { ready: "Ready", engaging: (n) => `Engaging ${n}`, reloading: "Reloading", empty: "Empty", unlimited: "Unlimited",
+      onLaunchers: "Ready on launchers", left: "Rounds left", channels: "Channels in use", reload: "Next reload", firedTonight: "Fired tonight",
+      targets: "Engaging", none: "—", sub: (r, l) => `${r} ready · ${l} left` },
+    unit: { ground: "On alert", cap: "On patrol", tasked: "Intercepting", rtb: "Returning to base", rearm: "Rearming",
+      weapons: "Weapons left", task: "Task", state: "State" },
+    legend: { engaged: "Engaged", waiting: "Waiting", fall: "Let it fall", unit: "Fire unit" },
     reads: "What Typical reads", notYet: "No interceptor can reach it yet. Typical decides once one can.",
     empty: "Press Play. The most urgent threat and Typical's call appear here.",
     drills: "Drills", drill: { kicker: (n, k) => `Drill · case ${n} of ${k}`, played: "Each option played out to the end, 40 times. Average cost:",
@@ -67,9 +70,8 @@ const I18N = {
     skipped: (x) => `דולגו ${x} שקטות`,
     cls: { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" },
     to: "לעבר", openGround: "שטח פתוח ליד", priority: "בעדיפות", impactIn: "פגיעה בעוד", follow: "עקוב אחרי הדחוף",
-    following: "האיום הדחוף ביותר", pinned: "נעוץ",
+    following: "בפוקוס", pinned: "נעוץ",
     callBy: { typical: "ההחלטה של Typical", planner: "ההחלטה של המתכנן", doctrine: "ההחלטה לפי התורה" },
-    conf: (p) => `ביטחון ${p}%`,
     act: { hold: "לתת לו ליפול", wait: "להמתין", cheaper: "להמתין לזול יותר", air: { fighter: "מטוסי קרב", helicopter: "מסוק" } },
     whyAir: (u, m, pk) => `${u} יכולים לפגוש אותו בעוד ${m}, ו${pk}.`,
     whyTrack: "המסלול עוד לא יציב. החלטה מאוחרת יותר שומרת את כל השכבות שעוד מגיעות אליו.",
@@ -85,11 +87,15 @@ const I18N = {
     vs: { raid: (r) => `${r} ינצל מיירטים שהמתקפה הלילה עוד צריכה.`, campaign: (r) => `${r} ינצל מלאי שהמערכה חייבת לשמור.`,
       local: (r, d) => `${r} עולה ${d} יותר על האיום הזה, במיירטים ובסיכון.` },
     status: { killed: "יורט", leaked: "פגע באתר מוגן", fell_open: "נפל בשטח פתוח" },
-    operator: "הועבר למפעיל, שביצע את החלטת המתכנן",
-    late: "Typical לא ענה בזמן, ולכן יצאה החלטת המתכנן",
-    inTime: (p) => `Typical ענה בזמן על ${p}% מההחלטות; המתכנן החליט בשאר`,
-    unsure: (x, p) => `Typical לא היה בטוח: הבחירה המובילה שלו, ${x}, קיבלה ${p}%`,
-    agrees: "המתכנן מסכים.", differs: (x) => `המתכנן היה בוחר: ${x}.`,
+    sec: { t: "איומים", u: "כלי טיס", b: "יחידות אש" }, options: "האפשרויות שנשקלו",
+    st: { out: "במעקב", wait: "להמתין", cheaper: (e) => `להמתין ל${e}`, hold: "לתת לו ליפול", ground: (e, u) => `${e} · ${u}`,
+      air: (u) => `${u} בדרך`, fired: (u, n) => `${u} ירה ${n}`, hit: (s) => `פגע ב${s}` },
+    bat: { ready: "מוכנה", engaging: (n) => `מיירטת ${n}`, reloading: "בטעינה", empty: "ריקה", unlimited: "ללא הגבלה",
+      onLaunchers: "מוכנים במשגרים", left: "מיירטים שנותרו", channels: "ערוצים בשימוש", reload: "טעינה הבאה", firedTonight: "נורו הלילה",
+      targets: "מיירטת את", none: "—", sub: (r, l) => `${r} מוכנים · ${l} נותרו` },
+    unit: { ground: "בכוננות", cap: "בסיור", tasked: "ביירוט", rtb: "חוזר לבסיס", rearm: "בחימוש",
+      weapons: "חימוש שנותר", task: "משימה", state: "מצב" },
+    legend: { engaged: "ביירוט", waiting: "בהמתנה", fall: "ליפול", unit: "יחידת אש" },
     reads: "מה Typical קורא (באנגלית)", notYet: "אף מיירט עדיין לא מגיע אליו. Typical יחליט כשיגיע.",
     empty: "לחצו הפעל. האיום הדחוף ביותר וההחלטה של Typical יופיעו כאן.",
     drills: "תרגולים", drill: { kicker: (n, k) => `תרגול · מקרה ${n} מתוך ${k}`, played: "כל אפשרות הורצה עד הסוף, 40 פעמים. עלות ממוצעת:",
@@ -129,7 +135,11 @@ const fmtT = (s) => { const neg = s < 0; s = Math.abs(s); const h = Math.floor(s
 const mins = (s) => (LANG === "he" ? (s < 90 ? `${Math.round(s)} שניות` : `${Math.round(s / 60)} דקות`) : (s < 90 ? `${Math.round(s)} seconds` : `${Math.round(s / 60)} minutes`));
 const pkIdx = (p) => (p >= 0.95 ? 0 : p >= 0.85 ? 1 : p >= 0.7 ? 2 : p >= 0.5 ? 3 : 4);
 
-let META, PATHS = {}, PATH_SCEN = null, S = null, fetchedAt = 0, selected = null, pinned = false, detail = null, showPlanner = false;
+let META, PATHS = {}, PATH_SCEN = null, S = null, fetchedAt = 0, pinned = false, detail = null;
+let focus = null;            // the expanded object: {k: "t" threat | "b" fire unit | "u" aircraft, id}
+let selected = null;         // the threat on the map and the flight line: the focused threat, or the focused unit's target
+const collapsed = {};        // list sections the viewer folded
+const isFocus = (k, id) => focus && focus.k === k && focus.id === id;
 const viewPol = "typical";
 const flashSeen = new Map();
 
@@ -150,19 +160,20 @@ async function init() {
   $("#speedMenu").onclick = (e) => { const x = e.target.closest("[data-x]")?.dataset.x; if (x) api("/api/control", { action: "speed", speed: +x }); };
   $("#scenMenu").onclick = async (e) => {
     const s = e.target.closest("[data-s]")?.dataset.s; if (!s) return;
-    selected = null; pinned = false; detail = null; await api("/api/control", { action: "reset", scenario: s }); flyTo(viewOf(s));
+    focus = selected = null; pinned = false; detail = null; await api("/api/control", { action: "reset", scenario: s }); flyTo(viewOf(s));
   };
   $("#play").onclick = () => api("/api/control", { action: S?.running ? "pause" : "play" });
   $("#gear").onclick = () => { const o = $("#sheet").classList.toggle("open"); $("#gear").setAttribute("aria-expanded", o); };
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#sheet").classList.remove("open"); $("#gear").setAttribute("aria-expanded", false); } });
-  $("#decision").onclick = (e) => {
-    if (e.target.closest("#followBtn")) { pinned = false; pickFollow(true); }
-    if (e.target.closest(".dc-accordion__trigger")) e.target.closest(".dc-accordion__item").classList.toggle("is-open");
+  $("#list").onclick = (e) => {
+    if (e.target.closest("#followBtn")) { pinned = false; pickFollow(true); return; }
+    const sec = e.target.closest("[data-sec]"); if (sec) { collapsed[sec.dataset.sec] = !collapsed[sec.dataset.sec]; renderList(); return; }
+    const o = e.target.closest("[data-k]"); if (o && !e.target.closest("details")) select(o.dataset.k, o.dataset.id);
   };
   await poll();
   applyLang();
   flyTo(viewOf(S.scenario));
-  $("#tonight").onclick = (e) => { if (e.target.closest("#nextCase")) { selected = null; pinned = false; detail = null; api("/api/control", { action: "reset", scenario: `drill:${S.drill.family}:${S.drill.case + 1}` }); } };
+  $("#tonight").onclick = (e) => { if (e.target.closest("#nextCase")) { focus = selected = null; pinned = false; detail = null; api("/api/control", { action: "reset", scenario: `drill:${S.drill.family}:${S.drill.case + 1}` }); } };
   setInterval(poll, 250);
   setInterval(loadDetail, 600);
   requestAnimationFrame(frame);
@@ -172,13 +183,15 @@ function applyLang() {
   document.documentElement.lang = LANG;
   document.documentElement.dir = LANG === "he" ? "rtl" : "ltr";
   document.querySelectorAll("[data-i18n]").forEach((el) => (el.textContent = T()[el.dataset.i18n]));
+  const lg = T().legend;
+  $("#legend").innerHTML = `<span><i class="dot ink"></i>${lg.engaged}</span><span><i class="dot hollow"></i>${lg.waiting}</span><span><i class="dot faint"></i>${lg.fall}</span><span><i class="dot blue"></i>${T().following}</span>`;
   $("#lang").textContent = T().lang;
   $("#scenMenu").innerHTML = Object.entries(META.scenarios).map(([k, v]) => {
     const [title, blurb] = LANG === "he" ? [v.title_he, v.blurb_he] : [v.title, v.blurb];
     return `<button class="dc-dropdown__item" data-s="${k}"><span class="dc-dropdown__text"><span class="dc-dropdown__label">${esc(title)}</span><span class="dc-dropdown__desc">${esc(blurb)}</span></span></button>`;
   }).join("") + `<p class="dc-dropdown__desc menuhead">${T().drills}</p>` + Object.entries(T().drill.fam).map(([k, title]) =>
     `<button class="dc-dropdown__item" data-s="drill:${k}:0"><span class="dc-dropdown__text"><span class="dc-dropdown__label">${esc(title)}</span><span class="dc-dropdown__desc">${esc(T().drill.blurb[k])}</span></span></button>`).join("");
-  renderBar(); renderTonight(); renderDecision(); renderStrip(); buildSheet();
+  renderBar(); renderTonight(); renderList(); renderStrip(); buildSheet();
 }
 
 async function poll() {
@@ -189,21 +202,35 @@ async function poll() {
     PATH_SCEN = P.scenario; flashSeen.clear();
   }
   if (!pinned) pickFollow(false);
-  renderBar(); renderTonight();
+  syncSelected();
+  renderBar(); renderTonight(); renderList();
 }
 
 function pickFollow(force) {   // the most urgent threat that already has a call, else the most urgent live one
   const live = S.tracks.filter((x) => !DONE.includes(x.status));
   const cand = live.filter((x) => x.choice).sort((a, b) => a.tti - b.tti)[0] || [...live].sort((a, b) => a.tti - b.tti)[0];
-  const cur = S.tracks.find((x) => x.id === selected);
+  const cur = focus?.k === "t" && S.tracks.find((x) => x.id === focus.id);
   const stale = !cur || (DONE.includes(cur.status) && S.t - cur.impact > 4 * Math.max(1, S.speed));   // let an outcome show briefly
-  if (cand && (force || stale)) { selected = cand.id; loadDetail(); }
+  if (cand && (force || stale)) { focus = { k: "t", id: cand.id }; syncSelected(); loadDetail(); scrollToFocus = true; }
 }
-function select(id) { selected = id; pinned = true; loadDetail(); }
+let scrollToFocus = false;
+function select(k, id) {   // click a row or a map object: expand it; click the expanded one again: back to following
+  if (isFocus(k, id)) { pinned = false; focus = null; pickFollow(true); }
+  else { focus = { k, id }; pinned = true; }
+  syncSelected(); detail = null; loadDetail(); renderList();
+}
+function syncSelected() {
+  const prev = selected;
+  if (!focus) selected = null;
+  else if (focus.k === "t") selected = focus.id;
+  else if (focus.k === "b") selected = (S.batteries.find((b) => b.id === focus.id)?.tasks || [])[0] || null;
+  else selected = S.units.find((u) => u.id === focus.id)?.task || null;
+  if (selected !== prev) loadDetail();
+}
 async function loadDetail() {
-  if (!selected) { detail = null; renderDecision(); renderStrip(); return; }
+  if (!selected) { detail = null; renderList(); renderStrip(); return; }
   try { detail = await api(`/api/track/${selected}?policy=${viewPol}`); } catch { return; }
-  renderDecision(); renderStrip();
+  renderList(); renderStrip();
 }
 
 // One display clock per frame: eases toward the server's (extrapolated) time, never runs backwards, snaps only on
@@ -239,7 +266,7 @@ function frame() {
   for (const tr of S.tracks) {
     const path = PATHS[tr.id]; if (!path) continue;
     if (t > Math.min(S.killed[tr.id] ?? Infinity, path.t0 + path.T)) continue;
-    const cur = posAt(path, t), sel = tr.id === selected, col = sel ? BLUE : GREY;
+    const cur = posAt(path, t), sel = tr.id === selected, col = sel ? BLUE : tr.status === "held" ? [200, 200, 204] : GREY;
     const past = path.p.filter((q) => q[3] < t).map((q) => q.slice(0, 3)); past.push(cur.slice(0, 3));
     trails.push({ path: past, color: [...col, sel ? 255 : 150], w: sel ? 3 : 1.25 });
     futures.push({ path: [cur.slice(0, 3), ...path.p.filter((q) => q[3] > t).map((q) => q.slice(0, 3))], color: [...col, sel ? 110 : 45], w: sel ? 2 : 1 });
@@ -261,7 +288,9 @@ function frame() {
   }
   const selTr = S.tracks.find((x) => x.id === selected);
   const leaks = S.tracks.filter((x) => x.status === "leaked").map((x) => PATHS[x.id]?.p.at(-1)).filter(Boolean);
-  const batts = META.batteries.filter((b) => S.cfg.allied || !META.effectors[b.eff].allied);
+  const batts = S.batteries.map((b) => ({ ...b, ...META.batteries.find((m) => m.id === b.id) }));
+  const fb = focus?.k === "b" && batts.find((b) => b.id === focus.id);
+  const links = fb ? fb.tasks.map((tid) => live.find((l) => l.tr.id === tid)).filter(Boolean).map((l) => ({ path: [[fb.lon, fb.lat, 0], l.pos] })) : [];
   overlay.setProps({ layers: [
     new deck.ScatterplotLayer({ id: "sites", data: META.sites, getPosition: (d) => [d.lon, d.lat], getRadius: (d) => d.r * 1000,
       getFillColor: (d) => (prio.has(d.id) ? [16, 16, 16, 14] : [0, 0, 0, 0]), stroked: true, lineWidthUnits: "pixels",
@@ -273,21 +302,32 @@ function frame() {
     new deck.PathLayer({ id: "airtask", data: (S.units || []).filter((u) => u.state === "tasked" && u.goal),
       getPath: (u) => [[u.lon, u.lat], [u.goal[1], u.goal[0]]], getColor: [...INK, 90], widthUnits: "pixels", getWidth: 1 }),
     new deck.ScatterplotLayer({ id: "air", data: S.units || [], getPosition: (u) => [u.lon, u.lat], radiusUnits: "pixels",
-      getRadius: (u) => (u.state === "ground" || u.state === "rearm" ? 3 : 5), filled: true, stroked: true,
-      getFillColor: (u) => (u.state === "tasked" ? BLUE : [255, 255, 255]), getLineColor: [...INK, 220], lineWidthUnits: "pixels", getLineWidth: 1.5,
-      updateTriggers: { getFillColor: (S.units || []).map((u) => u.state).join() } }),
-    new deck.TextLayer({ id: "airNames", data: (S.units || []).filter((u) => u.state !== "ground" && u.state !== "rearm"),
+      getRadius: (u) => (isFocus("u", u.id) ? 7 : u.state === "ground" || u.state === "rearm" ? 3 : 5), filled: true, stroked: true,
+      getFillColor: (u) => (isFocus("u", u.id) ? BLUE : u.state === "tasked" ? INK : [255, 255, 255]), getLineColor: (u) => (isFocus("u", u.id) ? [255, 255, 255] : [...INK, 220]),
+      lineWidthUnits: "pixels", getLineWidth: 1.5, pickable: true, onClick: (i) => select("u", i.object.id),
+      updateTriggers: { getFillColor: [(S.units || []).map((u) => u.state).join(), focus?.id], getRadius: focus?.id, getLineColor: focus?.id } }),
+    new deck.TextLayer({ id: "airNames", data: (S.units || []).filter((u) => (u.state !== "ground" && u.state !== "rearm") || isFocus("u", u.id)),
       getPosition: (u) => [u.lon, u.lat], getText: (u) => glyphs(u.name), getSize: 11, getColor: [...INK, 200], getPixelOffset: [0, 14],
       fontFamily: "Figtree, Heebo, Arial, sans-serif", characterSet: "auto", outlineWidth: 3, outlineColor: [255, 255, 255, 230], fontSettings: { sdf: true } }),
-    new deck.ScatterplotLayer({ id: "batt", data: batts, getPosition: (d) => [d.lon, d.lat], radiusUnits: "pixels", getRadius: 2.25, getFillColor: [80, 80, 80, 200] }),
+    new deck.PathLayer({ id: "battlinks", data: links, getPath: (d) => d.path, getColor: [...BLUE, 160], widthUnits: "pixels", getWidth: 1.5 }),
+    new deck.ScatterplotLayer({ id: "batt", data: batts, getPosition: (d) => [d.lon, d.lat], radiusUnits: "pixels", pickable: true, onClick: (i) => select("b", i.object.id),
+      getRadius: (d) => (isFocus("b", d.id) ? 7 : 4), stroked: true, lineWidthUnits: "pixels", getLineWidth: (d) => (isFocus("b", d.id) ? 2.5 : 1.25),
+      getFillColor: (d) => (isFocus("b", d.id) ? BLUE : d.tasks.length || d.busy ? INK : d.stock === 0 ? [226, 226, 228] : d.reload ? [180, 180, 184] : [255, 255, 255]),
+      getLineColor: (d) => (isFocus("b", d.id) ? [255, 255, 255] : d.stock === 0 ? [180, 180, 184] : [...INK, 220]),
+      updateTriggers: { getFillColor: [batts.map((b) => `${b.tasks.length}${b.busy}${b.stock}${!!b.reload}`).join(), focus?.id], getRadius: focus?.id, getLineColor: focus?.id, getLineWidth: focus?.id } }),
+    new deck.TextLayer({ id: "battNames", data: batts.filter((b) => isFocus("b", b.id) || map.getZoom() > 7.5), getPosition: (d) => [d.lon, d.lat],
+      getText: (d) => d.id, getSize: 11, getColor: (d) => (isFocus("b", d.id) ? [...BLUE, 255] : [...INK, 170]), getPixelOffset: [0, 14],
+      fontFamily: "Figtree, Heebo, Arial, sans-serif", characterSet: "auto", outlineWidth: 3, outlineColor: [255, 255, 255, 230], fontSettings: { sdf: true },
+      updateTriggers: { getColor: focus?.id } }),
     selTr && !DONE.includes(selTr.status) && new deck.ScatterplotLayer({ id: "ipp", data: [selTr], getPosition: (d) => [d.ipp[0], d.ipp[1]],
       getRadius: (d) => Math.max(d.ipp[2], 0.6) * 1000, filled: true, stroked: true, getFillColor: [...BLUE, 22], getLineColor: [...BLUE, 220], lineWidthUnits: "pixels", getLineWidth: 1.5 }),
     new deck.PathLayer({ id: "future", data: futures, getPath: (d) => d.path, getColor: (d) => d.color, widthUnits: "pixels", getWidth: (d) => d.w }),
     new deck.PathLayer({ id: "trail", data: trails, getPath: (d) => d.path, getColor: (d) => d.color, widthUnits: "pixels", getWidth: (d) => d.w }),
     new deck.PathLayer({ id: "shots", data: shots, getPath: (d) => d.path, getColor: (d) => (d.sel ? [...BLUE, 255] : [...INK, 110]), widthUnits: "pixels", getWidth: (d) => (d.sel ? 2.5 : 1) }),
-    new deck.ScatterplotLayer({ id: "heads", data: live, getPosition: (d) => d.pos, radiusUnits: "pixels", getRadius: (d) => (d.sel ? 7 : 3.5),
-      getFillColor: (d) => (d.sel ? BLUE : [110, 110, 114]), stroked: true, getLineColor: [255, 255, 255], lineWidthUnits: "pixels", getLineWidth: (d) => (d.sel ? 2.5 : 1),
-      pickable: true, onClick: (i) => select(i.object.tr.id) }),
+    new deck.ScatterplotLayer({ id: "heads", data: live, getPosition: (d) => d.pos, radiusUnits: "pixels", pickable: true, onClick: (i) => select("t", i.object.tr.id),
+      getRadius: (d) => (d.sel ? 7 : d.tr.status === "held" ? 2.5 : 4), stroked: true, lineWidthUnits: "pixels", getLineWidth: (d) => (d.sel ? 2.5 : 1.25),
+      getFillColor: (d) => (d.sel ? BLUE : ENGAGED.includes(d.tr.status) ? INK : d.tr.status === "held" ? [200, 200, 204] : [255, 255, 255]),
+      getLineColor: (d) => (d.sel ? [255, 255, 255] : d.tr.status === "held" ? [200, 200, 204] : [...INK, 220]) }),
     new deck.ScatterplotLayer({ id: "flash", data: flashes, getPosition: (d) => d.pos, radiusUnits: "pixels", getRadius: (d) => 5 + d.age * 22, filled: false,
       stroked: true, lineWidthUnits: "pixels", getLineWidth: 1.5, getLineColor: (d) => [...(d.hit ? INK : GREY), 255 * (1 - d.age / 1.6)] }),
     new deck.ScatterplotLayer({ id: "leaks", data: leaks, getPosition: (d) => [d[0], d[1]], radiusUnits: "pixels", getRadius: 6, getFillColor: [...HIT, 255],
@@ -342,34 +382,88 @@ function localLine(D) {   // the fire unit's call, in one line: who, how many, a
   return `<p class="local"><b>${esc(L.fired ? tt.fires(who, L.fired) : tt.holds(who))}</b>${why ? " · " + esc(why) : ""}</p>`;
 }
 
-function renderDecision() {
-  const el = $("#decision"), tt = T();
-  if (!detail || !META) { el.innerHTML = `<p class="empty">${tt.empty}</p>`; return; }
-  const D = detail, ty = META.threat_types[D.kind], done = DONE.includes(D.status);
-  const dest = D.open_ground ? `${tt.openGround} ${esc(siteName(D.site))}` : `${tt.to} ${esc(siteName(D.site))}${D.priority ? `<span class="tag">${tt.priority}</span>` : ""}`;
-  let h = `<p class="kicker">${tt.cls[D.cls]}${pinned ? ` · <button id="followBtn" class="linkish">${tt.follow}</button>` : ""}</p>
-    <div class="row"><div><h2 class="threat">${esc(nm(ty).replace(/ (MRBM|SRBM)$/i, ""))}</h2><div class="target">${dest}</div></div>
-      <div class="eta num" id="eta" data-impact="${D.impact}">${done ? "" : fmtT(D.impact - tNow)}</div></div>`;
-  const i = D.info;
-  if (done) {
-    el.innerHTML = h + `<div class="what" style="color:${D.status === "leaked" ? "var(--hit)" : "var(--dc-ink-2)"}">${tt.status[D.status]}</div>`;
-    return;
-  }
-  if (!i) { el.innerHTML = h + `<p class="empty">${tt.notYet}</p>`; return; }
-  h += `<div class="what">${esc(actLabel(D.choice))}</div><p class="why">${esc(reason(i, D))}</p>${localLine(D)}`;
-  if (i.late) h += `<div class="op">${tt.late}</div>`;
-  else if (D.escalated) h += `<div class="op">${tt.operator}</div>`;
-  // everything below the reason is detail: one closed disclosure
-  const top = i.dist ? Object.keys(i.dist).sort((a, b) => i.dist[b] - i.dist[a]) : [];
-  const conf = i.dist ? (D.escalated ? tt.unsure(actLabel(top[0]), Math.round(i.dist[top[0]] * 100)) : tt.conf(Math.round(i.dist[D.choice] * 100))) : "";
-  const open = el.querySelector("details.detail")?.open;
-  h += `<details class="detail" ${open ? "open" : ""}><summary>${tt.details}</summary>
-    ${conf ? `<p class="dline">${esc(conf)}</p>` : ""}
-    ${top.filter((k) => k !== D.choice).slice(0, 3).map((k) => `<div class="alt"><span>${esc(actLabel(k))}</span><span class="num">${Math.round(i.dist[k] * 100)}%</span></div>`).join("")}
-    ${i.planner ? `<p class="dline">${i.planner === D.choice ? tt.agrees : esc(tt.differs(actLabel(i.planner)))}</p>` : ""}
-    <p class="dline">${tt.reads}</p><pre>${esc(i.state)}</pre></details>`;
-  el.innerHTML = h;
+// ---------------------------------------------------------------- the list: every object, its status, one expanded
+function trackStatus(tr) {   // -> [text, tone]: what is happening to this threat, in one operative phrase
+  const st = T().st;
+  if (tr.status === "killed") return [T().status.killed, "ink"];
+  if (tr.status === "leaked") return [st.hit(siteName(tr.site)), "hit"];
+  if (tr.status === "fell_open") return [T().status.fell_open, "grey"];
+  if (tr.status === "inflight") return [st.fired(tr.unit, tr.fired || 1), "ink"];
+  if (tr.status === "assigned") return [META.effectors[tr.eff]?.air ? st.air(unitName(tr.unit)) : st.ground(effName(tr.eff), tr.unit), "ink"];
+  if (tr.status === "held") return [st.hold, "grey"];
+  if (tr.status === "waiting") return [tr.wait_eff ? st.cheaper(effName(tr.wait_eff)) : st.wait, "sub"];
+  return [tr.choice ? actLabel(tr.choice) : st.out, "grey"];
 }
+function battStatus(b) {
+  const t = T().bat;
+  return b.tasks.length || b.busy ? [t.engaging(Math.max(b.tasks.length, b.busy)), "ink"] : b.stock === 0 ? [t.empty, "grey"] : b.reload ? [t.reloading, "sub"] : [t.ready, "sub"];
+}
+const weaponsLine = (u) => Object.entries(u.weapons).map(([w, n]) => `${effName(w)} ${n}`).join(" · ");
+const threatName = (tid) => { const tr = S.tracks.find((x) => x.id === tid); return tr ? nm(META.threat_types[tr.kind]).replace(/ (MRBM|SRBM)$/i, "") : tid; };
+
+function row(k, id, name, sub, [status, tone], eta) {
+  const open = isFocus(k, id);
+  return `<button class="obj${open ? " open" : ""}" data-k="${k}" data-id="${esc(id)}" aria-expanded="${open}">
+    <span class="obj-main"><span class="obj-name">${esc(name)}</span><span class="obj-sub">${esc(sub)}</span></span>
+    <span class="obj-st tone-${tone}">${esc(status)}</span>${eta == null ? "" : `<span class="obj-eta num eta" data-impact="${eta}"></span>`}</button>`;
+}
+
+function renderList() {
+  const el = $("#list"); if (!S || !META) return;
+  const tt = T(), top = el.scrollTop;
+  const tracks = [...S.tracks].sort((a, b) => DONE.includes(a.status) - DONE.includes(b.status) || a.impact - b.impact);
+  const sec = (k, n, body) => `<section class="sec"><button class="sec-h" data-sec="${k}" aria-expanded="${!collapsed[k]}"><span>${tt.sec[k]}</span><span class="num">${n}</span></button>${collapsed[k] ? "" : body}</section>`;
+  const tRows = tracks.map((tr) => {
+    const ty = META.threat_types[tr.kind], done = DONE.includes(tr.status);
+    const dest = !tr.target ? tt.cls[tr.cls] : `${tt.cls[tr.cls]} · ${tr.open_ground ? `${tt.openGround} ${siteName(tr.target)}` : siteName(tr.target)}`;
+    return row("t", tr.id, nm(ty).replace(/ (MRBM|SRBM)$/i, ""), dest, trackStatus(tr), done ? null : tr.impact) + (isFocus("t", tr.id) ? threatDetail() : "");
+  }).join("");
+  const uRows = S.units.map((u) => row("u", u.id, u.name, `${T().act.air[u.kind]} · ${weaponsLine(u)}`,
+    [u.state === "tasked" && u.task ? `${tt.unit.tasked} ${threatName(u.task)}` : tt.unit[u.state], u.state === "tasked" ? "ink" : "sub"]) + (isFocus("u", u.id) ? unitDetail(u) : "")).join("");
+  const bRows = S.batteries.map((b) => row("b", b.id, b.id, `${effName(b.eff)} · ${b.stock == null ? tt.bat.unlimited : tt.bat.sub(b.ready, b.stock)}`, battStatus(b)) + (isFocus("b", b.id) ? battDetail(b) : "")).join("");
+  const live = tracks.filter((x) => !DONE.includes(x.status)).length;
+  const html = (tracks.length ? sec("t", live, tRows) : `<p class="empty">${tt.empty}</p>`) + sec("u", S.units.length, uRows) + sec("b", S.batteries.length, bRows);
+  if (html === renderList.last) return;   // re-render only on change: countdowns tick per frame (stripNow), clicks survive
+  renderList.last = html;
+  el.innerHTML = html;
+  el.scrollTop = top;
+  stripNow(tNow);
+  if (scrollToFocus) { el.querySelector(".obj.open")?.scrollIntoView({ block: "nearest" }); scrollToFocus = false; }
+}
+
+const facts = (pairs) => `<dl class="facts">${pairs.map(([k, v]) => `<dt>${esc(k)}</dt><dd class="num">${v}</dd>`).join("")}</dl>`;
+const link = (tid) => `<button class="linkish" data-k="t" data-id="${esc(tid)}">${esc(threatName(tid))}</button>`;
+
+function battDetail(b) {
+  const t = T().bat;
+  return `<div class="obj-detail">${facts([
+    [t.onLaunchers, b.ready == null ? t.unlimited : `${b.ready} / ${b.cap ?? "—"}`],
+    [t.left, b.stock == null ? t.unlimited : `${b.stock} / ${b.init}`],
+    [t.channels, `${b.busy} / ${b.channels}`],
+    [t.reload, b.reload ? fmtT(b.reload) : t.none],
+    [t.firedTonight, b.fired],
+    [t.targets, b.tasks.length ? b.tasks.map(link).join(", ") : t.none]])}</div>`;
+}
+function unitDetail(u) {
+  const t = T().unit;
+  return `<div class="obj-detail">${facts([[t.state, esc(t[u.state])], [t.weapons, esc(weaponsLine(u))], [t.task, u.task ? link(u.task) : T().bat.none]])}</div>`;
+}
+
+function threatDetail() {   // the call on the expanded threat: what, why, the fire unit's line, then the detail disclosure
+  const tt = T(), D = detail;
+  if (!D || D.id !== focus.id) return `<div class="obj-detail"><p class="empty">${tt.deciding}</p></div>`;
+  const done = DONE.includes(D.status), i = D.info;
+  let h = pinned ? `<p class="kicker"><button id="followBtn" class="linkish">${tt.follow}</button></p>` : "";
+  if (done) return `<div class="obj-detail">${h}<div class="what" style="color:${D.status === "leaked" ? "var(--hit)" : "var(--dc-ink-2)"}">${tt.status[D.status]}</div></div>`;
+  if (!i) return `<div class="obj-detail">${h}<p class="empty">${tt.notYet}</p></div>`;
+  h += `<div class="what">${esc(actLabel(D.choice))}</div><p class="why">${esc(reason(i, D))}</p>${localLine(D)}`;
+  const opts = i.dist ? Object.keys(i.dist).sort((a, b) => i.dist[b] - i.dist[a]) : [];
+  h += `<details class="detail" ${detailOpen ? "open" : ""} ontoggle="detailOpen = this.open"><summary>${tt.details}</summary>
+    ${opts.length ? `<p class="dline">${tt.options}</p>${opts.map((k) => `<div class="alt${k === D.choice ? " chosen" : ""}"><span>${esc(actLabel(k))}</span><span class="num">${Math.round(i.dist[k] * 100)}%</span></div>`).join("")}` : ""}
+    <p class="dline">${tt.reads}</p><pre>${esc(i.state)}</pre></details>`;
+  return `<div class="obj-detail">${h}</div>`;
+}
+let detailOpen = false;
 
 // ---------------------------------------------------------------- tonight
 function renderDrill() {   // the curated case's simulated outcomes, and who picked what
@@ -390,7 +484,7 @@ function renderTonight() {
   $("#tonight").innerHTML = `<p class="kicker">${tt.tonight}</p><div class="stats">
       <div class="stat"><div class="v num">${money(ty.spent)}</div><div class="l">${tt.spent}</div><div class="vs">${tt.vsNaive(money(nv.spent))}</div></div>
       <div class="stat"><div class="v num ${ty.leaks ? "hit" : ""}">${ty.leaks}</div><div class="l">${tt.hits}</div><div class="vs">${tt.vsNaive(nv.leaks)}</div></div>
-    </div>${ty.late ? `<p class="dline">${tt.inTime(Math.round(100 * (1 - ty.late / Math.max(ty.decisions + ty.local_decisions, 1))))}</p>` : ""}`;
+    </div>`;
 }
 
 // ---------------------------------------------------------------- flight strip (the threat's story over time)
@@ -405,7 +499,7 @@ function renderStrip() {   // one lifeline per threat: launch -> impact, the cal
   let lastX = -1e9, row = 0;
   D.history.forEach(([t, key], n) => {   // calls above the line; alternate height only when labels would collide
     const x = X(t), last = n === D.history.length - 1;
-    row = x - lastX < 150 ? 1 - row : 0; lastX = x;
+    row = x - lastX < 150 ? (row + 1) % 3 : 0; lastX = x;
     const y = Y - 14 - row * 16, col = last ? "#2548f6" : "#5d5d5d";
     g += `<line x1="${x}" x2="${x}" y1="${y + 3}" y2="${Y}" stroke="${col}" stroke-width="1"/><text x="${x}" y="${y}" style="fill:${col};font-size:13px${last ? ";font-weight:500" : ""}">${esc(actLabel(key))}</text>`;
   });
@@ -420,9 +514,9 @@ function renderStrip() {   // one lifeline per threat: launch -> impact, the cal
   stripNow(tNow);
 }
 function stripNow(t) {   // the now dot, the flown part and the countdown move every frame, between re-renders
-  const d = document.getElementById("nowdot"), p = document.getElementById("pastline"), eta = document.getElementById("eta");
+  const d = document.getElementById("nowdot"), p = document.getElementById("pastline");
   if (d && stripGeom) { d.setAttribute("cx", stripGeom.X(t)); p.setAttribute("x2", stripGeom.X(t)); }
-  if (eta && eta.textContent) eta.textContent = fmtT(Math.max(0, +eta.dataset.impact - t));
+  for (const e of document.querySelectorAll(".eta[data-impact]")) e.textContent = fmtT(Math.max(0, +e.dataset.impact - t));
 }
 
 // ---------------------------------------------------------------- settings sheet
@@ -438,7 +532,6 @@ function buildSheet() {
     <div class="field"><p class="kicker">${tt.assets}</p><div class="chips"><button class="chip" id="allied" aria-pressed="${c.allied}">${tt.allied}</button><button class="chip" id="weather" aria-pressed="${c.iron_beam_weather === "cloudy"}">${tt.weather}</button></div></div>
     <div class="field"><p class="kicker">${tt.knobs}</p>
       ${rng('id="pk" min="0.6" max="1.1" step="0.05"', tt.pkScale, c.pk_scale, c.pk_scale)}
-      ${rng('id="thr" min="0.2" max="0.9" step="0.02"', tt.escTop, c.conf_threshold, c.conf_threshold)}
       ${rng('id="warn" min="0" max="30" step="1"', tt.warn, Math.round(c.forecast_s / 60), Math.round(c.forecast_s / 60))}</div>
     <div class="field"><p class="kicker">${tt.dmg}</p>
       ${Object.keys(c.tier_value).map((k) => rng(`data-tier="${k}" min="0" max="5000" step="50"`, tt.tier[k], Math.round(c.tier_value[k]), `$${Math.round(c.tier_value[k])}M`)).join("")}
@@ -455,7 +548,6 @@ function buildSheet() {
   const slide = (el, fmt, patch) => (el.onchange = () => { el.nextElementSibling.textContent = fmt(el.value); set(patch()); });
   const all = (sel, key) => Object.fromEntries([...document.querySelectorAll(sel)].map((x) => [x.dataset[key], +x.value]));
   slide($("#pk"), (v) => v, () => ({ pk_scale: +$("#pk").value }));
-  slide($("#thr"), (v) => v, () => ({ conf_threshold: +$("#thr").value }));
   slide($("#warn"), (v) => v, () => ({ forecast_s: 60 * +$("#warn").value }));
   slide($("#pmul"), (v) => `×${v}`, () => ({ priority_multiplier: +$("#pmul").value }));
   document.querySelectorAll("[data-tier]").forEach((r) => slide(r, (v) => `$${v}M`, () => ({ tier_value: all("[data-tier]", "tier") })));

@@ -4,6 +4,7 @@
 """
 import copy
 import json
+import math
 import os
 import sys
 import threading
@@ -17,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import planner
-from engine import DONE, World, label
+from engine import BAT, DONE, World, label
 from sim import (AIR_KINDS, BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, SITE_HE, SITES, THREAT_HE, THREATS,
                  consequence)
 
@@ -157,20 +158,38 @@ def state(policy: str = "typical"):
                 continue
             plat, plon, sigma = th.predicted_impact(w.t)
             d = (s["info"] or {}).get("dist")
+            a = s.get("assign")
+            _, sid, _, _, dist, sig = consequence(th, w.t, w.cfg)
             tracks.append(dict(id=th.id, kind=th.kind, cls=th.cls, status=s["status"], choice=s.get("choice"),
-                               conf=max(d.values()) if d else None, escalated=s["escalated"], tti=th.t0 + th.T - w.t,
-                               impact=th.t0 + th.T, ipp=[round(plon, 4), round(plat, 4), round(sigma, 2)], site=s.get("site")))
+                               conf=max(d.values()) if d else None, tti=th.t0 + th.T - w.t, t0=th.t0,
+                               impact=th.t0 + th.T, ipp=[round(plon, 4), round(plat, 4), round(sigma, 2)], site=s.get("site"),
+                               target=sid, open_ground=bool(dist > sig), unit=a and a["unit"], eff=a and a["eff"],
+                               wait_eff=s.get("wait_eff") if s["status"] == "waiting" else None,
+                               wait_until=s.get("wait_until") if s["status"] == "waiting" else None,
+                               fired=(s.get("local") or {}).get("fired")))
         return dict(t=w.t, end=w.end, running=S["running"], speed=S["speed"], backlog=S["backlog"],
                     skipped=S["skipped"],
                     scenario=w.scenario, model=S["model_name"], cfg=w.cfg, tracks=tracks,
                     flights=[dict(b=f[1], th=f[2], t0=f[3], t1=f[4], lat=f[5], lon=f[6], alt=f[7] * 1000, hit=f[8],
                                   slat=f[9], slon=f[10], eff=f[11]) for f in w.flights if f[0] == policy],
                     units=[dict(id=u.id, kind=u.kind, name=u.name, lat=u.lat, lon=u.lon, state=u.state, task=u.task,
-                                goal=u.goal) for u in pol.units.values()],
+                                goal=u.goal, weapons=u.weapons) for u in pol.units.values()],
+                    batteries=[battery(w, pol, bid) for bid, eff, *_ in BATTERIES if w.cfg["allied"] or not EFFECTORS[eff].get("allied")],
                     killed={tid: s["killed_at"] for tid, s in pol.st.items() if s.get("killed_at")},
                     ledger=w.ledger(), attacker_cost=w.attacker_cost, launched=sum(th.t0 <= w.t for th in w.threats),
                     total=len(w.threats), drill=S["drill"] and dict(
                         S["drill"], typical=next(iter(k for _, k in w.policies["typical"].st[S["drill"]["threat"]]["history"]), None)))
+
+
+def battery(w, pol, bid):
+    """A fire unit's live status for the panel and the map (inf -> None for the unlimited laser / EW)."""
+    eff = BAT[bid][1]
+    fin = lambda x: None if x == math.inf else x
+    rl = pol.reload_until[bid]
+    return dict(id=bid, eff=eff, stock=fin(pol.stock[bid]), init=fin(pol.stock_init[bid]), ready=fin(pol.ready_n(bid)),
+                cap=fin(pol.capacity(bid)), channels=EFFECTORS[eff].get("channels", 2), busy=EFFECTORS[eff].get("channels", 2) - pol.channels_free(bid, w.t),
+                reload=rl - w.t if rl and rl > w.t else None, fired=sum(1 for f in w.flights if f[0] == pol.name and f[1] == bid),
+                tasks=[tid for tid, s in pol.st.items() if s["status"] in ("assigned", "inflight") and s.get("assign") and s["assign"]["unit"] == bid])
 
 
 @app.get("/api/track/{tid}")

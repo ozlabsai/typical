@@ -94,6 +94,41 @@ details.detail pre { margin: 0; white-space: pre-wrap; font: .8125rem/1.6 var(--
 .legend i { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; background: var(--dc-grey); }
 .tfoot { display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; font-size: .8125rem; color: var(--dc-grey); }
 
+/* ---------- the object list ---------- */
+.scroll#list { padding: .75rem 1rem 1rem; }
+.sec { margin-bottom: .5rem; }
+.sec-h { width: 100%; display: flex; justify-content: space-between; border: 0; background: none; padding: .75rem .75rem .375rem; cursor: pointer;
+  font-size: .875rem; color: var(--dc-grey); letter-spacing: -.01em; }
+.sec-h::before { content: "▾"; margin-inline-end: .375rem; font-size: .75rem; }
+.sec-h[aria-expanded="false"]::before { content: "▸"; }
+.sec-h span:first-child { margin-inline-end: auto; }
+.obj { width: 100%; display: grid; grid-template-columns: 1fr auto 4.25rem; align-items: center; gap: .75rem; border: 0; background: none;
+  text-align: start; cursor: pointer; padding: .5625rem .75rem; border-radius: var(--dc-r-row); font-family: inherit; color: inherit;
+  transition: background-color var(--dc-dur-ui) var(--dc-ease); }
+.obj:hover { background: var(--dc-surface); }
+.obj.open { background: var(--dc-surface); border-end-start-radius: 0; border-end-end-radius: 0; }
+.obj-main { display: flex; flex-direction: column; min-width: 0; }
+.obj-name { font-size: 1rem; letter-spacing: -.02em; color: var(--dc-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.obj.open .obj-name { color: var(--dc-blue); }
+.obj-sub { font-size: .8125rem; color: var(--dc-grey); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.obj-st { font-size: .875rem; text-align: end; white-space: nowrap; max-width: 11rem; overflow: hidden; text-overflow: ellipsis; }
+.tone-ink { color: var(--dc-ink-2); font-weight: 500; } .tone-sub { color: var(--dc-text-sub); } .tone-grey { color: var(--dc-grey); } .tone-hit { color: var(--hit); font-weight: 500; }
+.obj-eta { font-size: .9375rem; text-align: end; color: var(--dc-ink-2); }
+.obj:not(:has(.obj-eta)) { grid-template-columns: 1fr auto; }
+.obj-detail { background: var(--dc-surface); border-radius: 0 0 var(--dc-r-row) var(--dc-r-row); padding: .25rem 1rem 1.25rem; margin-bottom: .375rem; }
+.obj-detail .what { margin: .5rem 0 .25rem; font-size: 1.875rem; }
+.obj-detail .empty { margin: .5rem 0 0; font-size: .9375rem; }
+.obj-detail details.detail { margin-top: 1.25rem; }
+.obj-detail pre { background: var(--dc-white) !important; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: .375rem 1.25rem; margin: .75rem 0 0; font-size: .9375rem; }
+.facts dt { color: var(--dc-grey); } .facts dd { margin: 0; color: var(--dc-ink-2); text-align: end; }
+.alt.chosen span:first-child { color: var(--dc-blue); font-weight: 500; }
+#legend { position: absolute; inset-block-end: 2.25rem; inset-inline-start: 1rem; display: flex; gap: .875rem; padding: .375rem .875rem; background: var(--dc-white);
+  box-shadow: 0 0 0 1px var(--dc-line); border-radius: var(--dc-r-pill); font-size: .8125rem; color: var(--dc-text-sub); z-index: 3; pointer-events: none; }
+#legend span { display: inline-flex; align-items: center; gap: .375rem; }
+.dot { width: .5625rem; height: .5625rem; border-radius: 50%; display: inline-block; border: 1.25px solid var(--dc-ink); }
+.dot.ink { background: var(--dc-ink); } .dot.hollow { background: #fff; } .dot.faint { background: #c8c8cc; border-color: #c8c8cc; width: .4rem; height: .4rem; } .dot.blue { background: var(--dc-blue); border-color: var(--dc-blue); }
+
 /* ---------- flight strip ---------- */
 #strip { grid-column: 1; grid-row: 3; background: var(--dc-white); padding: .5rem 1.5rem 0; display: flex; flex-direction: column; min-height: 0; }
 #strip svg { flex: 1; width: 100%; display: block; overflow: visible; }
@@ -142,9 +177,9 @@ details.more summary { cursor: pointer; font-size: .9375rem; color: var(--dc-tex
     <button id="gear" class="dc-pill dc-pill--secondary dc-pill--sm" data-i18n="settings" aria-expanded="false" aria-controls="sheet">Settings</button>
   </div>
 </header>
-<div id="mapwrap"><div id="map"></div></div>
+<div id="mapwrap"><div id="map"></div><div id="legend"></div></div>
 <section id="strip" aria-label="flight timeline"></section>
-<aside><div class="scroll" id="decision"></div><div class="tonight" id="tonight"></div></aside>
+<aside><div class="scroll" id="list"></div><div class="tonight" id="tonight"></div></aside>
 <div id="sheet" role="dialog" aria-label="Settings"></div>
 <script src="/web/app.js"></script>
 </body>

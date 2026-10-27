@@ -35,13 +35,17 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 - The map tiles need internet. maplibre and deck.gl are vendored.
 - The clock never waits for the model. Typical runs in a worker thread over a queue: the threat on screen first,
   then by urgency. An answer that misses its 1 s budget (or a fire unit's last chance) is replaced by the planner's
-  call, flagged in the panel ("did not answer in time"), and **Tonight** shows the share answered in time. On a Mac
-  (MPS, ~150 ms per call) that share is high at 1-5x and drops in the 20x bursts; on CUDA the worker scores 16 at once.
+  call. The screen does not annotate this; the ledger counts it (`late` in `/api/state`). On a Mac (MPS, ~150 ms per
+  call) nearly every call is the model's at 1-5x, far fewer in the 20x bursts; on CUDA the worker scores 16 at once.
+  Low-confidence calls likewise take the planner's call (`conf_threshold`, `escalated`), unannotated on screen.
 - Quiet stretches are skipped automatically; a plain *Wait* on a drone hours out is re-asked at ~10% of its remaining
   flight. Whole scenarios at 20x: Red Sea ~50 s, northern ~70 s, October ~70 s, June ~100 s, April ~2 min.
 
 ## Five-minute demo script
 
+0. **The panel** lists every object: threats (status and countdown), aircraft and fire units (rounds ready / left,
+   channels, reload). Click a row, or the object on the map, to expand it; click it again to go back to following the
+   most urgent threat. On the map: filled = engaged, hollow = waiting, faint = let it fall, blue = in focus.
 1. **Red Sea, 5×.** Three ballistic missiles launch at once. Follow one in the right panel: the threat, its countdown,
    Typical's call in blue (e.g. *Arrow 3*, or *Wait for cheaper*) and one plain-language reason. When it is assigned,
    the line underneath is the fire unit's own call, e.g. "A3-C fires 1 · time to look before a second shot". The
@@ -61,7 +65,7 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
    estimate prefers jets, the outcomes tie). *Unclear track* is the honest weak spot: everyone fires early.
    Cases: `situations.py --instances 3 --rollouts 40 --out .context/airdef/drill_ui.jsonl` (~30 s).
 6. **Settings.** Switch *Magazine posture* to *Critical* or change a site's damage weight, and watch the live calls
-   change. *Escalate below* raises how often a threat is sent to the operator (human on the loop).
+   change.
 
 ## What was measured
 
