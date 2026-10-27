@@ -11,6 +11,7 @@ const DONE = ["killed", "leaked", "fell_open"];
 // ---------------------------------------------------------------- copy (EN / HE)
 const I18N = {
   en: {
+    speed: "Speed", speedDesc: ["Real time", "Calm walkthrough", "A raid in a few minutes", "Fast-forward"],
     brand: "Air defence", skip: "Skip ahead", settings: "Settings", lang: "עברית", play: "Play", pause: "Pause", deciding: "Deciding…",
     skipped: (x) => `Skipped ${x} of quiet`,
     cls: { B: "Ballistic missile", R: "Rocket", C: "Cruise missile", D: "Drone" },
@@ -44,6 +45,7 @@ const I18N = {
     note: "Posture, stock, damage weights and priorities feed every lens. Typical reads them as sentences; the planner reads numbers.",
   },
   he: {
+    speed: "מהירות", speedDesc: ["זמן אמת", "הדגמה רגועה", "מתקפה בכמה דקות", "הרצה מהירה"],
     brand: "הגנה אווירית", skip: "דלג קדימה", settings: "הגדרות", lang: "English", play: "הפעל", pause: "השהה", deciding: "מחליט…",
     skipped: (x) => `דולגו ${x} שקטות`,
     cls: { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" },
@@ -104,12 +106,13 @@ async function init() {
   META = await api("/api/meta");
   $("#lang").onclick = () => { LANG = LANG === "en" ? "he" : "en"; localStorage.setItem("airdef-lang", LANG); applyLang(); };
   $("#scenBtn").onclick = (e) => { e.stopPropagation(); $("#scenDrop").classList.toggle("is-open"); };
-  document.addEventListener("click", () => $("#scenDrop").classList.remove("is-open"));
+  $("#speedBtn").onclick = (e) => { e.stopPropagation(); $("#speedDrop").classList.toggle("is-open"); };
+  document.addEventListener("click", () => document.querySelectorAll(".dc-dropdown").forEach((d) => d.classList.remove("is-open")));
+  $("#speedMenu").onclick = (e) => { const x = e.target.closest("[data-x]")?.dataset.x; if (x) api("/api/control", { action: "speed", speed: +x }); };
   $("#scenMenu").onclick = async (e) => {
     const s = e.target.closest("[data-s]")?.dataset.s; if (!s) return;
     selected = null; pinned = false; detail = null; await api("/api/control", { action: "reset", scenario: s }); flyTo(SCEN_VIEW[s]);
   };
-  $("#speed").onclick = () => { const v = [1, 5, 20, 60]; api("/api/control", { action: "speed", speed: v[(v.indexOf(S.speed) + 1) % v.length] || 5 }); };
   $("#play").onclick = () => api("/api/control", { action: S?.running ? "pause" : "play" });
   $("#gear").onclick = () => { const o = $("#sheet").classList.toggle("open"); $("#gear").setAttribute("aria-expanded", o); };
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#sheet").classList.remove("open"); $("#gear").setAttribute("aria-expanded", false); } });
@@ -227,16 +230,20 @@ function frame() {
     new deck.ScatterplotLayer({ id: "leaks", data: leaks, getPosition: (d) => [d[0], d[1]], radiusUnits: "pixels", getRadius: 6, getFillColor: [...HIT, 255],
       stroked: true, getLineColor: [...HIT, 70], lineWidthUnits: "pixels", getLineWidth: 7 }),
   ].filter(Boolean) });
-  $("#clock").textContent = "T+" + fmtT(t);
   stripNow(t);
 }
 
 // ---------------------------------------------------------------- bar
 let lastSkip = { v: 0, at: -1e9 };
+const SPEEDS = [[1, 0], [5, 1], [20, 2], [60, 3]];
 function renderBar() {
   if (!S) return;
   $("#play").textContent = S.running ? T().pause : T().play;
-  $("#speed").textContent = `${S.speed}×`;
+  $("#speedBtn").firstChild.textContent = `${T().speed} ${S.speed}× `;
+  if (renderBar.key === S.speed + LANG) return;
+  renderBar.key = S.speed + LANG;
+  $("#speedMenu").innerHTML = SPEEDS.map(([x, d]) => `<button class="dc-dropdown__item" role="menuitemradio" aria-checked="${x === S.speed}" data-x="${x}">
+    <span class="dc-dropdown__text"><span class="dc-dropdown__label num">${x}×</span><span class="dc-dropdown__desc">${T().speedDesc[d]}</span></span></button>`).join("");
   const sc = META.scenarios[S.scenario];
   $("#scenBtn").firstChild.textContent = (LANG === "he" ? sc.title_he : sc.title).split(":")[0] + " ";
   if (S.skipped !== lastSkip.v) lastSkip = { v: S.skipped, at: performance.now() };

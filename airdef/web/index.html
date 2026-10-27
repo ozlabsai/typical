@@ -62,7 +62,9 @@ details.detail .alt { padding: .375rem 0; font-size: .9375rem; }
 .dline { font-size: .9375rem; color: var(--dc-grey); margin: .875rem 0 .25rem; }
 details.detail pre { margin: 0; white-space: pre-wrap; font: .8125rem/1.6 var(--dc-font-sans); color: var(--dc-text-sub); direction: ltr; text-align: left; background: var(--dc-surface); border-radius: var(--dc-r-row); padding: .75rem 1rem; }
 #scenDrop .dc-dropdown__list { z-index: 6; min-width: 22rem; }
-#scenDrop .dc-dropdown__item { width: 100%; border: 0; background: none; text-align: start; cursor: pointer; font-family: inherit; }
+#speedDrop .dc-dropdown__list { z-index: 6; min-width: 13rem; inset-inline-start: auto; inset-inline-end: 0; left: auto; }
+.dc-dropdown__item { width: 100%; border: 0; background: none; text-align: start; cursor: pointer; font-family: inherit; }
+.dc-dropdown__item[aria-checked="true"] .dc-dropdown__label { color: var(--dc-blue); }
 .call { margin-top: 2rem; }
 .call .what { font-size: 2.125rem; line-height: 1.15; letter-spacing: -.04em; color: var(--dc-blue); margin: .375rem 0 .5rem; font-weight: 400; }
 .call .conf { font-size: 1rem; color: var(--dc-grey); }
@@ -126,9 +128,11 @@ details.more summary { cursor: pointer; font-size: .9375rem; color: var(--dc-tex
   </div>
   <div class="bar-end">
     <span id="note"></span>
-    <span id="clock" class="num">T+00:00</span>
     <button id="play" class="dc-pill dc-pill--primary dc-pill--sm"></button>
-    <button id="speed" class="dc-pill dc-pill--ghost dc-pill--sm num" title="speed"></button>
+    <div class="dc-dropdown" id="speedDrop">
+      <button id="speedBtn" class="dc-pill dc-pill--ghost dc-pill--sm" aria-haspopup="menu">… <span aria-hidden="true">▾</span></button>
+      <div class="dc-dropdown__list" id="speedMenu" role="menu"></div>
+    </div>
     <button id="lang" class="dc-pill dc-pill--ghost dc-pill--sm"></button>
     <button id="gear" class="dc-pill dc-pill--secondary dc-pill--sm" data-i18n="settings" aria-expanded="false" aria-controls="sheet">Settings</button>
   </div>
