@@ -569,6 +569,9 @@ class World:
         if any(s["status"] in ("inflight", "waiting", "held", "assigned") for p in self.policies.values() for s in p.st.values()):
             return self.t
         nxt = [max(th.t0, th.first_launch - HORIZON_S) for th in self.threats if max(th.t0, th.first_launch - HORIZON_S) > self.t]
+        # a live "pending" threat (nothing reaches it yet) still has its recheck and its impact to resolve: never jump past those
+        nxt += [max(self.t, min(p.st[th.id]["next"], th.t0 + th.T)) for p in self.policies.values() for th in self.threats
+                if th.t0 <= self.t and p.st[th.id]["status"] == "pending"]
         return min(nxt + [self.end])
 
     def next_event(self):

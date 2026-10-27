@@ -124,7 +124,7 @@ def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit
     for kind in AIR_KINDS:   # the best free unit of each kind
         best = None
         for u in units:
-            if u.kind != kind or not u.available():
+            if u.kind != kind or not (u.available() or (u.state == "tasked" and u.task == th.id)):   # incl. the unit already on it
                 continue
             r = u.reach(th, t, cfg)
             if r:
