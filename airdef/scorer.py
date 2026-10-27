@@ -2,8 +2,9 @@
 
 Why not inference/typical: on 2026-10-27 its native_kv_decide port disagreed with the training path on this task --
 max |dp| 0.004-0.09 on the released typical-small and up to 0.7 on the airdef fine-tune whenever K >= 3
-(training-path eval 88% vs port 3% on the same rows; .context/airdef/dbg_row*.py). Until that port is fixed, score
-the way the checkpoint was trained and evaluated.
+(training-path eval 88% vs port 3% on the same rows). Cause: for a semif checkpoint the port appended an eos the
+training path never adds, whenever a call had no yes/no row. Fixed in inference/typical/native.py with a parity test
+on the release (inference/test_parity.py); this demo keeps the training path, which also batches (choices).
 """
 import os
 import sys

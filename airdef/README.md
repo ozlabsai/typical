@@ -30,8 +30,8 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 
 - The server loads `.context/typically/results/co_airdef_v3/best.pt` (the v3 fine-tune) when it exists, otherwise
   `typical-small`.
-- Scoring goes through the training repo's decider (`scorer.py`). The public `inference/typical` port disagrees with it
-  when there are 3 or more options; see the note in `scorer.py`.
+- Scoring goes through the training repo's decider (`scorer.py`). The public `inference/typical` port used to disagree
+  with it on semif checkpoints (an extra eos); fixed, with a parity test on the release.
 - The map tiles need internet. maplibre and deck.gl are vendored.
 - The clock never waits for the model. Typical runs in a worker thread over a queue: the threat on screen first,
   then by urgency. An answer that misses its 1 s budget (or a fire unit's last chance) is replaced by the planner's
