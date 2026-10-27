@@ -35,27 +35,30 @@ MANOEUVRING = {"fattah"}   # Pk penalty + late-converging impact prediction
 # pk vs class, cost $M per shot. ponytail: notional envelopes from public ranges; tune live via config.pk_scale.
 EFFECTORS = {
     "arrow3": dict(name="Arrow 3", rmin=50, rmax=900, hmin=100, hmax=600, v=3.0, cost=2.5,
-                   pk={"B": 0.85}, layer=4),
+                   pk={"B": 0.85}, layer=4, channels=14, launchers=4, per_launcher=6, reload=1800, sector=True),
     "thaad":  dict(name="THAAD", rmin=10, rmax=200, hmin=40, hmax=150, v=2.8, cost=12.7,
-                   pk={"B": 0.85}, layer=3, allied=True),
+                   pk={"B": 0.85}, layer=3, allied=True, channels=5, launchers=6, per_launcher=8, reload=1800, sector=True),
     "sm3":    dict(name="SM-3", rmin=50, rmax=700, hmin=100, hmax=600, v=3.0, cost=12.0,
-                   pk={"B": 0.8}, layer=4, allied=True),
+                   pk={"B": 0.8}, layer=4, allied=True, channels=3, launchers=0, per_launcher=0, reload=0, sector=False),
     "arrow2": dict(name="Arrow 2", rmin=5, rmax=100, hmin=10, hmax=60, v=2.5, cost=1.5,
-                   pk={"B": 0.85}, layer=3),
+                   pk={"B": 0.85}, layer=3, channels=14, launchers=4, per_launcher=6, reload=1800, sector=True),
     "sm6":    dict(name="SM-6", rmin=5, rmax=300, hmin=0, hmax=30, v=1.2, cost=4.0,
-                   pk={"B": 0.6, "C": 0.85, "D": 0.85}, layer=2, allied=True),
+                   pk={"B": 0.6, "C": 0.85, "D": 0.85}, layer=2, allied=True, channels=6, launchers=0, per_launcher=0, reload=0, sector=False),
     "dsling": dict(name="David's Sling", rmin=5, rmax=200, hmin=0.05, hmax=30, v=1.5, cost=1.0,
-                   pk={"B": 0.65, "R": 0.85, "C": 0.85, "D": 0.8}, layer=2),
+                   pk={"B": 0.65, "R": 0.85, "C": 0.85, "D": 0.8}, layer=2, channels=5, launchers=2, per_launcher=12, reload=1200, sector=True),
     "ironDome": dict(name="Iron Dome", rmin=4, rmax=70, hmin=0, hmax=10, v=0.7, cost=0.05,
-                   pk={"B": 0.3, "R": 0.9, "C": 0.85, "D": 0.85}, layer=1),
+                   pk={"B": 0.3, "R": 0.9, "C": 0.85, "D": 0.85}, layer=1, channels=7, launchers=3, per_launcher=20, reload=900, sector=True),
     "ironBeam": dict(name="Iron Beam laser", rmin=0, rmax=10, hmin=0, hmax=5, v=0, cost=0.000003,
-                   pk={"R": 0.6, "D": 0.75}, layer=0, dwell=6, unlimited=True),
-    "aim9x":  dict(name="F-15/F-35 AIM-9X", rmin=0, rmax=300, hmin=0, hmax=12, v=0.3, cost=0.42,
-                   pk={"C": 0.85, "D": 0.9}, layer=2),
-    "apkws":  dict(name="F-16 laser-guided rocket (APKWS)", rmin=0, rmax=250, hmin=0, hmax=5, v=0.25,
-                   cost=0.035, pk={"D": 0.8}, layer=1),
+                   pk={"R": 0.6, "D": 0.75}, layer=0, dwell=6, unlimited=True, channels=1, launchers=0, per_launcher=0, reload=0, sector=False),
+    # air weapons: carried by AIR_UNITS (air.py); arange = weapon reach from the aircraft, km
+    "aim9x":  dict(name="AIM-9X", rmin=0, rmax=0, hmin=0, hmax=12, v=0, cost=0.42, pk={"C": 0.85, "D": 0.9}, layer=2,
+                   air=True, arange=25),
+    "apkws":  dict(name="APKWS rocket", rmin=0, rmax=0, hmin=0, hmax=5, v=0, cost=0.035, pk={"D": 0.8}, layer=1,
+                   air=True, arange=5),
+    "heli_gun": dict(name="helicopter cannon", rmin=0, rmax=0, hmin=0, hmax=3, v=0, cost=0.005, pk={"D": 0.7}, layer=0,
+                   air=True, arange=2),
     "ew":     dict(name="GPS jamming (EW)", rmin=0, rmax=40, hmin=0, hmax=5, v=0, cost=0.0,
-                   pk={"D": 0.35}, layer=0, dwell=20, unlimited=True),
+                   pk={"D": 0.35}, layer=0, dwell=20, unlimited=True, channels=4, launchers=0, per_launcher=0, reload=0, sector=False),
 }
 
 # Defended sites (public places, approximate centres). tier: strategic | city | infra
@@ -84,7 +87,8 @@ THREAT_HE = {"emad": "עמאד", "ghadr": "קדר", "kheibar": "ח׳ייבר ש�
              "fateh110": "פאתח-110", "grad": "גראד 122 מ״מ", "fajr5": "פג׳ר-5", "burkan": "בורקאן", "paveh": "טיל שיוט פאווה",
              "shahed": "שאהד-136", "uav_lb": "כטב״ם תקיפה של חזבאללה"}
 EFFECTOR_HE = {"arrow3": "חץ 3", "thaad": "THAAD", "sm3": "SM-3", "arrow2": "חץ 2", "sm6": "SM-6", "dsling": "קלע דוד",
-               "ironDome": "כיפת ברזל", "ironBeam": "מגן אור", "aim9x": "AIM-9X", "apkws": "APKWS", "ew": "שיבוש GPS"}
+               "ironDome": "כיפת ברזל", "ironBeam": "מגן אור", "aim9x": "AIM-9X", "apkws": "APKWS", "ew": "שיבוש GPS",
+               "heli_gun": "תותח מסוק"}
 SITE_HE = {"tel_aviv": "גוש דן", "jerusalem": "ירושלים", "haifa": "חיפה", "haifa_bay": "בתי הזיקוק במפרץ חיפה",
            "beer_sheva": "באר שבע", "ashdod": "נמל אשדוד", "ashkelon": "אשקלון", "ben_gurion": "נמל התעופה בן גוריון",
            "nevatim": "בסיס נבטים", "ramat_david": "בסיס רמת דוד", "dimona": "קריית המחקר בדימונה", "eilat": "אילת",
@@ -96,18 +100,40 @@ BATTERIES = [
     ("A3-C", "arrow3", 31.90, 34.90, 10), ("A3-S", "arrow3", 30.90, 34.80, 8),
     ("A2-C", "arrow2", 32.35, 35.00, 12),
     ("DS-C", "dsling", 32.10, 35.00, 16), ("DS-N", "dsling", 32.75, 35.20, 16),
-    ("ID-N", "ironDome", 33.00, 35.30, 60), ("ID-H", "ironDome", 32.75, 35.05, 60),
-    ("ID-TA", "ironDome", 32.05, 34.85, 60), ("ID-AS", "ironDome", 31.75, 34.70, 60),
-    ("ID-BS", "ironDome", 31.30, 34.85, 60), ("ID-E", "ironDome", 29.62, 34.95, 40),
-    ("ID-G", "ironDome", 31.50, 34.55, 60), ("ID-J", "ironDome", 31.75, 35.15, 40),
-    ("ID-NV", "ironDome", 31.15, 35.00, 40),
+    ("ID-N", "ironDome", 33.00, 35.30, 100), ("ID-H", "ironDome", 32.75, 35.05, 100),   # stock beyond launcher
+    ("ID-TA", "ironDome", 32.05, 34.85, 100), ("ID-AS", "ironDome", 31.75, 34.70, 100),  # capacity is the reserve
+    ("ID-BS", "ironDome", 31.30, 34.85, 100), ("ID-E", "ironDome", 29.62, 34.95, 60),    # reloaded launcher by launcher
+    ("ID-G", "ironDome", 31.50, 34.55, 100), ("ID-J", "ironDome", 31.75, 35.15, 60),
+    ("ID-NV", "ironDome", 31.15, 35.00, 60),
     ("IB-N", "ironBeam", 33.05, 35.40, 0), ("IB-H", "ironBeam", 32.78, 35.05, 0),
     ("EW-N", "ew", 32.95, 35.40, 0), ("EW-S", "ew", 31.20, 34.90, 0),
-    ("CAP-E", "aim9x", 31.90, 36.80, 16), ("CAP-E2", "apkws", 31.90, 36.80, 28),
-    ("CAP-S", "aim9x", 29.50, 35.20, 8), ("CAP-S2", "apkws", 29.50, 35.20, 14),
     ("THAAD", "thaad", 31.25, 34.95, 48),
     ("DDG", "sm3", 32.60, 33.90, 8), ("DDG6", "sm6", 32.60, 33.90, 24),
 ]
+
+# Notional radar facing for sector radars (a staring radar covers +-60 deg; turning to a threat outside costs TURN_S).
+RADAR_FACING = {"north": (33.30, 35.50), "east": (31.50, 38.50), "gaza": (31.45, 34.40), "south": (28.00, 35.50)}
+BATTERY_FACING = {"ID-N": "north", "ID-H": "north", "DS-N": "north", "IB-N": "north", "IB-H": "north", "EW-N": "north",
+                  "ID-G": "gaza", "ID-AS": "gaza", "ID-E": "south"}   # everything else faces east
+TURN_S = 10.0
+SECTOR_HALF = 60.0
+
+# Mobile air units -- notional. kind -> performance; units start on ground alert at a base or airborne on a CAP station.
+AIR_KINDS = {
+    "fighter": dict(label="Fighter jets", speed=0.28, scramble=420, sortie=3 * 3600, hour_cost=0.03,
+                    weapons={"apkws": 14, "aim9x": 4}, max_threat_speed=0.4),
+    "helicopter": dict(label="Helicopter", speed=0.075, scramble=240, sortie=2.5 * 3600, hour_cost=0.008,
+                       weapons={"heli_gun": 12}, max_threat_speed=0.12),
+}
+AIR_UNITS = [   # id, kind, name, base lat/lon, CAP station lat/lon or None (None = ground alert)
+    ("F-N", "fighter", "Fighters north", 32.67, 35.18, None),
+    ("F-S", "fighter", "Fighters south", 31.21, 35.01, None),
+    ("F-E", "fighter", "CAP east", 31.21, 35.01, (31.60, 36.90)),
+    ("F-R", "fighter", "CAP Red Sea", 29.56, 34.95, (28.80, 35.10)),
+    ("H-N", "helicopter", "Apaches north", 32.60, 35.25, None),
+    ("H-S", "helicopter", "Apaches south", 31.25, 34.75, None),
+]
+AIR = {u[0]: u for u in AIR_UNITS}
 
 ORIGINS = {
     "iran_w": (34.3, 47.1, 1.2), "iran_nw": (38.0, 46.3, 1.0), "iran_c": (32.6, 51.6, 1.0),
@@ -467,3 +493,21 @@ def plan_score(plan, damage, type_left, type_init, cfg):
 def naive_pick(plans):
     """Baseline: engage everything with the most reliable plan, cost be damned."""
     return max(plans[1:], key=lambda p: (round(p.pk, 2), -p.exp_cost)) if len(plans) > 1 else plans[0]
+
+
+def bearing(lat1, lon1, lat2, lon2):
+    """Initial bearing, degrees clockwise from north."""
+    p1, p2, dl = np.radians(lat1), np.radians(lat2), np.radians(lon2 - lon1)
+    y = np.sin(dl) * np.cos(p2)
+    x = np.cos(p1) * np.sin(p2) - np.sin(p1) * np.cos(p2) * np.cos(dl)
+    return float(np.degrees(np.arctan2(y, x)) % 360)
+
+
+def radar_turn(bid, eff, lat, lon):
+    """True when a sector radar is staring away from (lat, lon) and must turn first."""
+    if not EFFECTORS[eff].get("sector"):
+        return False
+    b = next(x for x in BATTERIES if x[0] == bid)
+    face = bearing(b[2], b[3], *RADAR_FACING[BATTERY_FACING.get(bid, "east")])
+    off = abs((bearing(b[2], b[3], lat, lon) - face + 180) % 360 - 180)
+    return off > SECTOR_HALF
