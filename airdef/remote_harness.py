@@ -1,6 +1,6 @@
 """Run harness.py for base and tuned Typical over every scenario x seed on one rented H100, fetch the ledgers, delete the pod.
 
-    uv run --no-project python airdef/remote_harness.py [--tuned .context/typically/results/co_airdef_t/best.pt] [--seeds 1 2 3]
+    uv run --no-project python airdef/remote_harness.py [--ckpts v3=.context/typically/results/co_airdef_v3/best.pt v4=...] [--models v3 v4] [--seeds 1 2 3]
 
 Reuses scripts/typically_job.Job for the pod lifecycle (create / ssh / delete-in-finally). Results land in
 .context/airdef/remote/<run id>/*.json; the pod log in .context/typically/jobs/airdef_eval/job.log.
@@ -39,7 +39,8 @@ touch /workspace/done
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tuned", default=str(ROOT / ".context/typically/results/co_airdef_t/best.pt"))
+    ap.add_argument("--ckpts", nargs="+", default=[f"tuned={ROOT / '.context/typically/results/co_airdef_t/best.pt'}"],
+                    help="name=path/to/best.pt ... (base = the release, always available)")
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
     ap.add_argument("--models", nargs="+", default=["base", "tuned"])
     ap.add_argument("--scenarios", nargs="+", default=["northern_barrage", "april_mixed", "october_saturation", "june_attrition", "houthi_eilat"])
@@ -57,8 +58,11 @@ def main():
                 for f in files:
                     if not f.startswith(tj.NOT_SHIPPED) and (ROOT / f).is_file():
                         t.add(ROOT / f, arcname=f)
-                t.add(a.tuned, arcname="ckpt/tuned/best.pt")
-                for name, path in (("base", "OzLabs/typical-small"), ("tuned", "ckpt/tuned/best.pt")):
+                ckpts = [("base", "OzLabs/typical-small")]
+                for name, path in (c.split("=", 1) for c in a.ckpts):
+                    t.add(path, arcname=f"ckpt/{name}/best.pt")
+                    ckpts.append((name, f"ckpt/{name}/best.pt"))
+                for name, path in ckpts:
                     (tmp / f"{name}.path").write_text(path)
                     t.add(tmp / f"{name}.path", arcname=f"ckpt/{name}.path")
             (tmp / "run.sh").write_text(RUN_SH.format(models=" ".join(a.models), scenarios=" ".join(a.scenarios), seeds=" ".join(map(str, a.seeds))))

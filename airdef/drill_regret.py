@@ -2,7 +2,7 @@ import json, sys, statistics as st
 sys.path.insert(0, "airdef")   # run from the repo root
 import scorer
 rows = [json.loads(l) for l in open(".context/airdef/situations.jsonl")]
-m = scorer.load(".context/typically/results/co_airdef_v3/best.pt")
+m = scorer.load(sys.argv[1] if len(sys.argv) > 1 else ".context/typically/results/co_airdef_v4/best.pt")
 key_of = lambda r, lab: [k for k in r["meta"]["costs"]][r["candidates"].index(lab)]
 fams = {}
 for r in rows:
