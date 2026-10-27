@@ -20,7 +20,7 @@ from sim import (BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, S
                  consequence)
 
 ROOT = Path(__file__).parent
-TUNED = ROOT.parent / ".context/typically/results/co_airdef_t/best.pt"   # scripts/typically_job.py airdef_t ... lands here
+TUNED = ROOT.parent / ".context/typically/results/co_airdef_t2/best.pt"   # v2: ballistic-weighted pass (typically_job.py airdef_t2)
 MODEL_ID = os.environ.get("AIRDEF_MODEL") or (str(TUNED) if TUNED.exists() else "OzLabs/typical-small")
 TICK_S = 0.25          # real seconds per loop tick
 BUDGET = 6             # Typical calls per tick; the sim slows down when decisions back up

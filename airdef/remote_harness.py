@@ -32,7 +32,7 @@ fi
 uv run --no-sync python -c "from huggingface_hub import snapshot_download, hf_hub_download; snapshot_download('Qwen/Qwen3-1.7B-Base'); hf_hub_download('OzLabs/typical-small', 'best.pt')"
 mkdir -p out
 for m in {models}; do for sc in {scenarios}; do echo "$m $sc"; done; done | \\
-  xargs -P 8 -L 1 bash -c 'uv run --no-sync python airdef/harness.py "$1" --model "$(cat ckpt/$0.path)" --seeds {seeds} --json out/$0__$1.json > out/$0__$1.log 2>&1'
+  xargs -P 5 -L 1 bash -c 'uv run --no-sync python airdef/harness.py "$1" --model "$(cat ckpt/$0.path)" --seeds {seeds} --json out/$0__$1.json > out/$0__$1.log 2>&1'
 touch /workspace/done
 """
 
@@ -41,6 +41,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tuned", default=str(ROOT / ".context/typically/results/co_airdef_t/best.pt"))
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
+    ap.add_argument("--models", nargs="+", default=["base", "tuned"])
     ap.add_argument("--scenarios", nargs="+", default=["northern_barrage", "april_mixed", "october_saturation", "june_attrition", "houthi_eilat"])
     a = ap.parse_args()
     run_id = time.strftime("%Y%m%d-%H%M%S")
@@ -60,7 +61,7 @@ def main():
                 for name, path in (("base", "OzLabs/typical-small"), ("tuned", "ckpt/tuned/best.pt")):
                     (tmp / f"{name}.path").write_text(path)
                     t.add(tmp / f"{name}.path", arcname=f"ckpt/{name}.path")
-            (tmp / "run.sh").write_text(RUN_SH.format(models="base tuned", scenarios=" ".join(a.scenarios), seeds=" ".join(map(str, a.seeds))))
+            (tmp / "run.sh").write_text(RUN_SH.format(models=" ".join(a.models), scenarios=" ".join(a.scenarios), seeds=" ".join(map(str, a.seeds))))
             print(f"tarball {j.tar.stat().st_size / 1e6:.0f} MB; asking RunPod for an H100", flush=True)
             j.create()
             j.wait_ssh()
@@ -73,15 +74,23 @@ def main():
             # launch on its own line: backgrounding a whole `a && b &` chain keeps ssh's stdout open until it ends
             j.ssh("setsid nohup bash /workspace/run.sh > /workspace/run.log 2>&1 < /dev/null & echo $! > /workspace/run.pid", 60)
             print(f"running on {j.gpu}; polling", flush=True)
-            deadline = time.monotonic() + 90 * 60
+            deadline, bad = time.monotonic() + 120 * 60, 0
             while time.monotonic() < deadline:
                 time.sleep(30)
-                state = j.ssh("test -f /workspace/done && echo DONE || (tail -n 2 /workspace/run.log; ls /workspace/pcdm/out 2>/dev/null | grep -c json)", 60)
-                print(state.strip().splitlines()[-1] if state.strip() else "", flush=True)
+                try:   # a dropped ssh must not kill a long run (same rule as typically_job's poller)
+                    state = j.ssh("test -f /workspace/done && echo DONE || (ls /workspace/pcdm/out 2>/dev/null | grep -c json || true)", 60)   # grep -c exits 1 on 0
+                    bad = 0
+                except RuntimeError as e:
+                    bad += 1
+                    print(f"poll failed ({bad}/3): {e}", flush=True)
+                    if bad >= 3:
+                        raise
+                    continue
+                print(f"finished runs: {state.strip()}", flush=True)
                 if state.startswith("DONE"):
                     break
             else:
-                raise RuntimeError("remote harness did not finish in 90 minutes")
+                raise RuntimeError("remote harness did not finish in 120 minutes")
             j.call([*scp, "-r", dest + "/workspace/pcdm/out/", str(out)], 600)
             j.call([*scp, dest + "/workspace/run.log", str(out / "run.log")], 120)
             print(f"results in {out}", flush=True)
