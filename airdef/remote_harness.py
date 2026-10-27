@@ -32,8 +32,9 @@ if [[ "$(nvidia-smi)" == *"CUDA Version: 12.8"* ]]; then
 fi
 uv run --no-sync python -c "from huggingface_hub import snapshot_download, hf_hub_download; snapshot_download('Qwen/Qwen3-1.7B-Base'); hf_hub_download('OzLabs/typical-small', 'best.pt')"
 mkdir -p out
-for m in {models}; do for sc in {scenarios}; do echo "$m $sc"; done; done | \\
-  xargs -P 10 -L 1 bash -c 'uv run --no-sync python airdef/harness.py "$1" --model "$(cat ckpt/$0.path)" --seeds {seeds} --json out/$0__$1.json > out/$0__$1.log 2>&1'
+# one job per (scenario, seed, model), longest scenarios first, so 10 parallel jobs stay busy to the end
+for sc in {scenarios}; do for sd in {seeds}; do for m in {models}; do echo "$m $sc $sd"; done; done; done | \\
+  xargs -P 10 -L 1 bash -c 'uv run --no-sync python airdef/harness.py "$1" --model "$(cat ckpt/$0.path)" --seeds $2 --json out/$0__$1__$2.json > out/$0__$1__$2.log 2>&1'
 touch /workspace/done
 """
 
