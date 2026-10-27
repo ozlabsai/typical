@@ -211,7 +211,7 @@ class World:
         self.t = 0.0
         self.end = max(t.t0 + t.T for t in self.threats) + 5
         self.attacker_cost = sum(THREATS[t.kind][2] for t in self.threats)
-        self.flights = []   # (policy, shooter, threat, launch, intercept, lat, lon, alt, hit, shooter lat, shooter lon)
+        self.flights = []   # (policy, shooter, threat, launch, intercept, lat, lon, alt, hit, shooter lat, shooter lon, weapon)
 
     def live(self, pol, th):
         return pol.st[th.id]["status"] not in DONE and th.t0 <= self.t < th.t0 + th.T
@@ -442,7 +442,8 @@ class World:
             teach = planner.local_teacher(f, EFFECTORS[eff]["cost"] + max(pol.prices.get(eff, (0, 0))),
                                           effective_pk(eff, th, self.cfg), v_after)
             text = local_text(th, self.t, self.cfg, line, f)
-            info = dict(teacher=teach, state=text, t=self.t)
+            info = dict(teacher=teach, state=text, t=self.t, unit=s["assign"]["unit"],
+                        facts={k: (None if v == math.inf else v) for k, v in f.items()})
             if pol.name == "doctrine":
                 n = 1 if f["channels_free"] >= 1 and f["stock"] >= 1 else 0
             elif pol.name == "planner" or self.model is None:
@@ -497,7 +498,7 @@ class World:
             h = u01(self.seed, th.id, s["shots"]) < effective_pk(e, th, self.cfg)   # same draw for every policy's n-th shot
             s["shots"] += 1
             hit = hit or h
-            self.flights.append((pol.name, bid, th.id, shot[0], shot[1], shot[2], shot[3], shot[4], h, src[0], src[1]))
+            self.flights.append((pol.name, bid, th.id, shot[0], shot[1], shot[2], shot[3], shot[4], h, src[0], src[1], e))
         s.update(status="inflight", resolve=shot[1], hit=hit)
 
     # ---------------------------------------------------------- time

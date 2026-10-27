@@ -15,12 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import planner
-from engine import DONE, Q, World
-from sim import (BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, SITE_HE, SITES, THREAT_HE, THREATS,
+from engine import DONE, World, label
+from sim import (AIR_KINDS, BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, SCENARIOS, SITE_HE, SITES, THREAT_HE, THREATS,
                  consequence)
 
 ROOT = Path(__file__).parent
-TUNED = ROOT.parent / ".context/typically/results/co_airdef_t/best.pt"   # v1: wins full raids (v2 better per decision, worse over raids; 2026-10-27)
+TUNED = ROOT.parent / ".context/typically/results/co_airdef_v3/best.pt"   # v3: both decision levels (typically_job.py airdef_v3)
 MODEL_ID = os.environ.get("AIRDEF_MODEL") or (str(TUNED) if TUNED.exists() else "OzLabs/typical-small")
 TICK_S = 0.25          # real seconds per loop tick
 BUDGET = 6             # Typical calls per tick; the sim slows down when decisions back up
@@ -54,11 +54,10 @@ def loop():
         with lock:
             w = S["world"]
             if S["running"] and w and w.t < w.end:
-                w.step(0.0)                            # decide (from answers already in) + resolve at the current time
-                w.t = min(w.t + real * S["speed"], w.end)
+                w.step(real * S["speed"])              # decide (from answers already in), resolve, fly aircraft, advance
                 if (nxt := w.next_event()) - w.t > QUIET_S:
                     S["skipped"] = nxt - 5 - w.t       # the UI shows "skipped mm:ss"
-                    w.t = nxt - 5
+                    w.advance(nxt - 5 - w.t)
             S["backlog"] = len(w.requests) if w else 0
         time.sleep(max(0.0, TICK_S - (time.perf_counter() - t0)))
 
@@ -72,9 +71,9 @@ def model_worker():
         if job is None:
             time.sleep(0.02)
             continue
-        key, (text, labels) = job
+        key, (q, text, labels) = job
         t0 = time.perf_counter()
-        d = S["model"].choice(text, Q, labels)
+        d = S["model"].choice(text, q, labels)
         ms = (time.perf_counter() - t0) * 1000
         with lock:
             if S["world"] is w:
@@ -101,8 +100,9 @@ def meta():
                    for k, v in SCENARIOS.items()},
         sites=[dict(id=s[0], name=s[1], name_he=SITE_HE[s[0]], lat=s[2], lon=s[3], r=s[4], tier=s[5]) for s in SITES],
         batteries=[dict(id=b[0], eff=b[1], lat=b[2], lon=b[3]) for b in BATTERIES],
-        effectors={k: dict(name=e["name"], name_he=EFFECTOR_HE[k], cost=e["cost"], layer=e["layer"],
-                           allied=e.get("allied", False)) for k, e in EFFECTORS.items()},
+        effectors={k: dict(name=e["name"], name_he=EFFECTOR_HE.get(k, e["name"]), cost=e["cost"], layer=e["layer"],
+                           allied=e.get("allied", False), air=e.get("air", False)) for k, e in EFFECTORS.items()},
+        air_kinds={k: dict(label=v["label"]) for k, v in AIR_KINDS.items()},
         threat_types={k: dict(name=v[0], name_he=THREAT_HE[k], cls=v[1], cost=v[2]) for k, v in THREATS.items()},
         config=DEFAULT_CONFIG, model=S["model_name"])
 
@@ -139,8 +139,10 @@ def state(policy: str = "typical"):
         return dict(t=w.t, end=w.end, running=S["running"], speed=S["speed"], backlog=S["backlog"],
                     skipped=S["skipped"],
                     scenario=w.scenario, model=S["model_name"], cfg=w.cfg, tracks=tracks,
-                    flights=[dict(b=f[1], th=f[2], t0=f[3], t1=f[4], lat=f[5], lon=f[6], alt=f[7] * 1000, hit=f[8])
-                             for f in w.flights if f[0] == policy],
+                    flights=[dict(b=f[1], th=f[2], t0=f[3], t1=f[4], lat=f[5], lon=f[6], alt=f[7] * 1000, hit=f[8],
+                                  slat=f[9], slon=f[10], eff=f[11]) for f in w.flights if f[0] == policy],
+                    units=[dict(id=u.id, kind=u.kind, name=u.name, lat=u.lat, lon=u.lon, state=u.state, task=u.task,
+                                goal=u.goal) for u in pol.units.values()],
                     killed={tid: s["killed_at"] for tid, s in pol.st.items() if s.get("killed_at")},
                     ledger=w.ledger(), attacker_cost=w.attacker_cost, launched=sum(th.t0 <= w.t for th in w.threats),
                     total=len(w.threats))
@@ -159,9 +161,9 @@ def track(tid: str, policy: str = "typical"):
         return dict(id=tid, kind=th.kind, cls=th.cls, status=s["status"], t=w.t, t0=th.t0, impact=th.t0 + th.T,
                     site=sid, open_ground=bool(dist > sigma), priority=sid in w.cfg["priority_sites"],
                     windows=planner.spans(th, w.t, pol.stock, w.cfg),
-                    shots=[dict(b=f[1], eff=next(b[1] for b in BATTERIES if b[0] == f[1]), t0=f[3], t1=f[4], hit=f[8])
-                           for f in w.flights if f[0] == policy and f[2] == tid],
-                    history=s["history"], info=s["info"], escalated=s["escalated"], choice=s.get("choice"),
+                    shots=[dict(b=f[1], eff=f[11], t0=f[3], t1=f[4], hit=f[8]) for f in w.flights if f[0] == policy and f[2] == tid],
+                    history=s["history"], info=s["info"], local=s.get("local"), assign=s.get("assign"),
+                    escalated=s["escalated"], choice=s.get("choice"),
                     others={n: p.st[tid].get("choice") for n, p in w.policies.items()},
                     labels={o[0]: o[1] for o in (s["info"] or {}).get("opts", [])})
 

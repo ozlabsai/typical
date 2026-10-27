@@ -17,9 +17,14 @@ const I18N = {
     cls: { B: "Ballistic missile", R: "Rocket", C: "Cruise missile", D: "Drone" },
     to: "to", openGround: "Open ground near", priority: "priority", impactIn: "Impact in", follow: "Follow the most urgent",
     following: "Most urgent threat", pinned: "Pinned",
-    callBy: { typical: "Typical's call", planner: "The planner's call", naive: "Fire at everything" },
+    callBy: { typical: "Typical's call", planner: "The planner's call", doctrine: "Doctrine's call" },
     conf: (p) => `${p}% confident`,
-    act: { hold: "Let it fall", fire: (e) => `Fire ${e} now`, fire2: (e) => `Fire two ${e} now`, wait: (e) => `Wait for ${e}` },
+    act: { hold: "Let it fall", wait: "Wait", cheaper: "Wait for cheaper", air: { fighter: "Fighter jets", helicopter: "Helicopter" } },
+    whyAir: (u, m, pk) => `${u} can meet it in ${m} and ${pk}.`,
+    whyTrack: "The track is not firm yet. Deciding later keeps every layer that still reaches it open.",
+    local: { fires: (u, n) => `${u} fires ${n}`, holds: (u) => `${u} holds`, busy: "all launch channels are busy", reload: "its launchers are reloading",
+      friendly: "own aircraft are near the intercept point", debris: (s) => `a later intercept keeps the debris off ${s}`,
+      last: "the last chance to engage it", nolook: "no time for a second look", look: "time to look before a second shot" },
     pk: ["is almost certain to stop it", "is very likely to stop it", "is likely to stop it", "may stop it", "is unlikely to stop it"],
     whyFire: (e, pk) => `${e} can engage now and ${pk}.`,
     whyFire2: (e, pk) => `Two ${e} together: the pair ${pk}.`,
@@ -35,7 +40,7 @@ const I18N = {
     reads: "What Typical reads", notYet: "No interceptor can reach it yet. Typical decides once one can.",
     empty: "Press Play. The most urgent threat and Typical's call appear here.",
     tonight: "Tonight", attacker: (x) => `Attacker spent ${x}`, spent: "Spent", hits: "Hits on sites", a3: "Arrow 3 left",
-    vsNaive: (x) => `${x} firing at everything`, details: "Details", foot: (a, ms) => `Agrees with the planner ${a}% · ${ms} ms per call`, cmp: "Compare planner",
+    vsNaive: (x) => `${x} by doctrine`, details: "Details", foot: (a, ms) => `Agrees with the planner ${a}% · ${ms} ms per call`, cmp: "Compare planner",
     planner: "Planner",
     strip: (id, t, s) => `Flight of ${id} · ${t} to ${s}`, now: "now", impact: "impact", calls: "Calls", hit: "hit", miss: "miss",
     posture: "Magazine posture", postures: ["Healthy", "Conserve", "Critical"], prio: "Priority sites", assets: "Assets and conditions",
@@ -51,9 +56,14 @@ const I18N = {
     cls: { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" },
     to: "לעבר", openGround: "שטח פתוח ליד", priority: "בעדיפות", impactIn: "פגיעה בעוד", follow: "עקוב אחרי הדחוף",
     following: "האיום הדחוף ביותר", pinned: "נעוץ",
-    callBy: { typical: "ההחלטה של Typical", planner: "ההחלטה של המתכנן", naive: "יורים על הכול" },
+    callBy: { typical: "ההחלטה של Typical", planner: "ההחלטה של המתכנן", doctrine: "ההחלטה לפי התורה" },
     conf: (p) => `ביטחון ${p}%`,
-    act: { hold: "לתת לו ליפול", fire: (e) => `לירות ${e} עכשיו`, fire2: (e) => `לירות שני ${e} עכשיו`, wait: (e) => `להמתין ל${e}` },
+    act: { hold: "לתת לו ליפול", wait: "להמתין", cheaper: "להמתין לזול יותר", air: { fighter: "מטוסי קרב", helicopter: "מסוק" } },
+    whyAir: (u, m, pk) => `${u} יכולים לפגוש אותו בעוד ${m}, ו${pk}.`,
+    whyTrack: "המסלול עוד לא יציב. החלטה מאוחרת יותר שומרת את כל השכבות שעוד מגיעות אליו.",
+    local: { fires: (u, n) => `${u} יורה ${n}`, holds: (u) => `${u} ממתין`, busy: "כל ערוצי השיגור תפוסים", reload: "המשגרים בטעינה",
+      friendly: "מטוסים שלנו קרובים לנקודת היירוט", debris: (s) => `יירוט מאוחר יותר ירחיק את הרסיסים מ${s}`,
+      last: "ההזדמנות האחרונה", nolook: "אין זמן לבדוק לפני ירי נוסף", look: "יש זמן לבדוק לפני ירי נוסף" },
     pk: ["כמעט בטוח שיעצור אותו", "סביר מאוד שיעצור אותו", "סביר שיעצור אותו", "עשוי לעצור אותו", "לא סביר שיעצור אותו"],
     whyFire: (e, pk) => `${e} יכול ליירט עכשיו, ו${pk}.`,
     whyFire2: (e, pk) => `שני ${e} יחד: ${pk}.`,
@@ -69,7 +79,7 @@ const I18N = {
     reads: "מה Typical קורא (באנגלית)", notYet: "אף מיירט עדיין לא מגיע אליו. Typical יחליט כשיגיע.",
     empty: "לחצו הפעל. האיום הדחוף ביותר וההחלטה של Typical יופיעו כאן.",
     tonight: "הלילה", attacker: (x) => `התוקף הוציא ${x}`, spent: "הוצאה", hits: "פגיעות באתרים", a3: "חץ 3 שנותרו",
-    vsNaive: (x) => `${x} ביריות על הכול`, details: "פרטים", foot: (a, ms) => `הסכמה עם המתכנן ${a}% · ${ms} מ״ש להחלטה`, cmp: "השווה למתכנן",
+    vsNaive: (x) => `${x} לפי התורה`, details: "פרטים", foot: (a, ms) => `הסכמה עם המתכנן ${a}% · ${ms} מ״ש להחלטה`, cmp: "השווה למתכנן",
     planner: "מתכנן",
     strip: (id, t, s) => `מסלול ${id} · ${t} לעבר ${s}`, now: "עכשיו", impact: "פגיעה", calls: "החלטות", hit: "פגע", miss: "החטיא",
     posture: "מצב מלאים", postures: ["תקין", "שימור", "קריטי"], prio: "אתרים בעדיפות", assets: "נכסים ותנאים",
@@ -84,7 +94,14 @@ const T = () => I18N[LANG];
 const nm = (o) => (LANG === "he" && o.name_he ? o.name_he : o.name);
 const glyphs = (s) => (LANG === "he" ? [...s].reverse().join("") : s);   // deck.gl TextLayer has no bidi
 const effName = (e) => nm(META.effectors[e]).replace("F-15/F-35 ", "").replace("F-16 laser-guided rocket (APKWS)", "APKWS").replace("GPS jamming (EW)", "EW jamming").replace(" laser", "");
-const actLabel = (key) => { if (!key) return "—"; if (key === "hold") return T().act.hold; const [a, e] = key.split(":"); return T().act[a](effName(e)); };
+const actLabel = (key) => {
+  if (!key) return "—";
+  if (key in T().act && typeof T().act[key] === "string") return T().act[key];
+  const [a, x] = key.split(":");
+  return a === "air" ? T().act.air[x] : effName(x);
+};
+const unitName = (id) => (S?.units || []).find((u) => u.id === id)?.name || id;
+const batEff = (id) => META.batteries.find((b) => b.id === id)?.eff;
 const siteName = (sid) => { const s = META.sites.find((x) => x.id === sid); return s ? nm(s) : ""; };
 const fmtT = (s) => { const neg = s < 0; s = Math.abs(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.floor(s % 60); return (neg ? "−" : "") + (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(x).padStart(2, "0"); };
 const mins = (s) => (LANG === "he" ? (s < 90 ? `${Math.round(s)} שניות` : `${Math.round(s / 60)} דקות`) : (s < 90 ? `${Math.round(s)} seconds` : `${Math.round(s / 60)} minutes`));
@@ -208,8 +225,8 @@ function frame() {
   const shots = [], flashes = [], nowMs = performance.now();
   for (const f of S.flights) {
     if (t < f.t0) continue;
-    const b = batt[f.b], g = Math.min(1, (t - f.t0) / Math.max(1, f.t1 - f.t0)), pts = [];
-    for (let k = 0; k <= 24 * g; k++) { const s = k / 24; pts.push([b.lon + (f.lon - b.lon) * s, b.lat + (f.lat - b.lat) * s, f.alt * Math.pow(s, 0.6)]); }
+    const g = Math.min(1, (t - f.t0) / Math.max(1, f.t1 - f.t0)), pts = [];
+    for (let k = 0; k <= 24 * g; k++) { const s = k / 24; pts.push([f.slon + (f.lon - f.slon) * s, f.slat + (f.lat - f.slat) * s, f.alt * Math.pow(s, 0.6)]); }
     if (g < 1) shots.push({ path: pts, sel: f.th === selected });
     else {
       const key = `${f.b}${f.th}${f.t1}`;
@@ -229,6 +246,15 @@ function frame() {
     new deck.TextLayer({ id: "siteNames", data: META.sites.filter((s) => prio.has(s.id) && map.getZoom() > 5.6), getPosition: (d) => [d.lon, d.lat],
       getText: (d) => glyphs(nm(d)), getSize: 12, getColor: [...INK, 220], getPixelOffset: [0, -16], fontFamily: "Figtree, Heebo, Arial, sans-serif",
       fontWeight: 500, characterSet: "auto", outlineWidth: 3, outlineColor: [255, 255, 255, 230], fontSettings: { sdf: true }, updateTriggers: { getText: LANG } }),
+    new deck.PathLayer({ id: "airtask", data: (S.units || []).filter((u) => u.state === "tasked" && u.goal),
+      getPath: (u) => [[u.lon, u.lat], [u.goal[1], u.goal[0]]], getColor: [...INK, 90], widthUnits: "pixels", getWidth: 1 }),
+    new deck.ScatterplotLayer({ id: "air", data: S.units || [], getPosition: (u) => [u.lon, u.lat], radiusUnits: "pixels",
+      getRadius: (u) => (u.state === "ground" || u.state === "rearm" ? 3 : 5), filled: true, stroked: true,
+      getFillColor: (u) => (u.state === "tasked" ? BLUE : [255, 255, 255]), getLineColor: [...INK, 220], lineWidthUnits: "pixels", getLineWidth: 1.5,
+      updateTriggers: { getFillColor: (S.units || []).map((u) => u.state).join() } }),
+    new deck.TextLayer({ id: "airNames", data: (S.units || []).filter((u) => u.state !== "ground" && u.state !== "rearm"),
+      getPosition: (u) => [u.lon, u.lat], getText: (u) => glyphs(u.name), getSize: 11, getColor: [...INK, 200], getPixelOffset: [0, 14],
+      fontFamily: "Figtree, Heebo, Arial, sans-serif", characterSet: "auto", outlineWidth: 3, outlineColor: [255, 255, 255, 230], fontSettings: { sdf: true } }),
     new deck.ScatterplotLayer({ id: "batt", data: batts, getPosition: (d) => [d.lon, d.lat], radiusUnits: "pixels", getRadius: 2.25, getFillColor: [80, 80, 80, 200] }),
     selTr && !DONE.includes(selTr.status) && new deck.ScatterplotLayer({ id: "ipp", data: [selTr], getPosition: (d) => [d.ipp[0], d.ipp[1]],
       getRadius: (d) => Math.max(d.ipp[2], 0.6) * 1000, filled: true, stroked: true, getFillColor: [...BLUE, 22], getLineColor: [...BLUE, 220], lineWidthUnits: "pixels", getLineWidth: 1.5 }),
@@ -266,11 +292,13 @@ function renderBar() {
 
 // ---------------------------------------------------------------- decision panel
 function reason(i, D) {
-  const tt = T(), o = Object.fromEntries(i.opts.map(([k, , total, lenses, pk, launch]) => [k, { total, lenses, pk, launch }]));
+  const tt = T(), o = Object.fromEntries(i.opts.map(([k, , total, lenses, pk, launch, unit]) => [k, { total, lenses, pk, launch, unit }]));
   const c = o[D.choice]; if (!c) return "";
-  const [act, e] = D.choice.split(":");
-  let s = act === "fire" ? tt.whyFire(effName(e), tt.pk[pkIdx(c.pk)]) : act === "fire2" ? tt.whyFire2(effName(e), tt.pk[pkIdx(c.pk)])
-    : act === "wait" ? tt.whyWait(effName(e), mins(Math.max(0, c.launch - i.t)), tt.pk[pkIdx(c.pk)]) : D.open_ground ? tt.whyHoldOpen : tt.whyHold;
+  const [act, x] = D.choice.split(":"), pk = tt.pk[pkIdx(c.pk)];
+  let s = act === "now" ? tt.whyFire(effName(x), pk)
+    : act === "air" ? tt.whyAir(unitName(c.unit), mins(Math.max(0, c.launch - i.t)), pk)
+    : act === "cheaper" ? tt.whyWait(effName(batEff(c.unit)), mins(Math.max(0, c.launch - i.t)), pk)
+    : act === "wait" ? tt.whyTrack : D.open_ground ? tt.whyHoldOpen : tt.whyHold;
   const runner = Object.keys(o).filter((k) => k !== D.choice).sort((a, b) => o[a].total - o[b].total)[0];
   if (runner) {   // why not the runner-up: the lens where it loses most
     const r = o[runner], d = Object.fromEntries(["local", "raid", "campaign"].map((k) => [k, (r.lenses[k] || 0) - (c.lenses[k] || 0)]));
@@ -278,6 +306,15 @@ function reason(i, D) {
     if (d[k] > 0.0005) s += " " + (k === "local" ? tt.vs.local(actLabel(runner), money(d[k])) : tt.vs[k](actLabel(runner)));
   }
   return s;
+}
+
+function localLine(D) {   // the fire unit's call, in one line: who, how many, and the fact that decided it
+  const L = D.local, tt = T().local;
+  if (!L || D.status !== "assigned" && D.status !== "inflight") return "";
+  const f = L.facts || {}, who = D.assign?.kind === "air" ? unitName(L.unit) : L.unit;
+  const why = L.fired ? (f.last ? tt.last : f.look ? tt.look : tt.nolook)
+    : f.channels_free < 1 ? tt.busy : f.ready < 1 ? tt.reload : f.friendly ? tt.friendly : f.debris ? tt.debris(siteName(f.debris)) : "";
+  return `<p class="local"><b>${esc(L.fired ? tt.fires(who, L.fired) : tt.holds(who))}</b>${why ? " · " + esc(why) : ""}</p>`;
 }
 
 function renderDecision() {
@@ -294,7 +331,7 @@ function renderDecision() {
     return;
   }
   if (!i) { el.innerHTML = h + `<p class="empty">${tt.notYet}</p>`; return; }
-  h += `<div class="what">${esc(actLabel(D.choice))}</div><p class="why">${esc(reason(i, D))}</p>`;
+  h += `<div class="what">${esc(actLabel(D.choice))}</div><p class="why">${esc(reason(i, D))}</p>${localLine(D)}`;
   if (D.escalated) h += `<div class="op">${tt.operator}</div>`;
   // everything below the reason is detail: one closed disclosure
   const top = i.dist ? Object.keys(i.dist).sort((a, b) => i.dist[b] - i.dist[a]) : [];
@@ -311,7 +348,7 @@ function renderDecision() {
 // ---------------------------------------------------------------- tonight
 function renderTonight() {
   if (!S) return;
-  const L = S.ledger, ty = L.typical, nv = L.naive, tt = T();
+  const L = S.ledger, ty = L.typical, nv = L.doctrine, tt = T();
   if (!ty) return;
   $("#tonight").innerHTML = `<p class="kicker">${tt.tonight}</p><div class="stats">
       <div class="stat"><div class="v num">${money(ty.spent)}</div><div class="l">${tt.spent}</div><div class="vs">${tt.vsNaive(money(nv.spent))}</div></div>
