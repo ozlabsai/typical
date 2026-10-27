@@ -165,7 +165,20 @@ async function loadDetail() {
   renderDecision(); renderStrip();
 }
 
-function simNow() { if (!S) return 0; if (!S.running || S.backlog) return S.t; return Math.min(S.end, S.t + ((performance.now() - fetchedAt) / 1000) * S.speed); }
+// One display clock per frame: eases toward the server's (extrapolated) time, never runs backwards, snaps only on
+// real jumps (auto-skip, reset). Polls arrive every 250 ms with server time that wobbles; showing it raw jitters.
+let shown = null, lastFrame = performance.now(), tNow = 0;
+function simNow() {
+  if (!S) return 0;
+  const now = performance.now(), dtr = Math.min(0.1, (now - lastFrame) / 1000);
+  lastFrame = now;
+  const live = S.running && !S.backlog;
+  const target = live ? Math.min(S.end, S.t + ((now - fetchedAt) / 1000) * S.speed) : S.t;
+  if (shown === null || !S.running || Math.abs(target - shown) > Math.max(30, 4 * S.speed)) return (shown = target);
+  const step = live ? dtr * S.speed : 0;
+  shown = Math.max(shown, shown + step + (target - shown - step) * Math.min(1, dtr * 3));
+  return shown;
+}
 function posAt(path, t) {
   const p = path.p;
   if (t <= p[0][3]) return p[0];
@@ -180,7 +193,7 @@ function posAt(path, t) {
 function frame() {
   requestAnimationFrame(frame);
   if (!S || !META) return;
-  const t = simNow(), prio = new Set(S.cfg.priority_sites);
+  const t = (tNow = simNow()), prio = new Set(S.cfg.priority_sites);
   const live = [], trails = [], futures = [];
   for (const tr of S.tracks) {
     const path = PATHS[tr.id]; if (!path) continue;
@@ -274,7 +287,7 @@ function renderDecision() {
   const dest = D.open_ground ? `${tt.openGround} ${esc(siteName(D.site))}` : `${tt.to} ${esc(siteName(D.site))}${D.priority ? `<span class="tag">${tt.priority}</span>` : ""}`;
   let h = `<p class="kicker">${tt.cls[D.cls]}${pinned ? ` · <button id="followBtn" class="linkish">${tt.follow}</button>` : ""}</p>
     <div class="row"><div><h2 class="threat">${esc(nm(ty).replace(/ (MRBM|SRBM)$/i, ""))}</h2><div class="target">${dest}</div></div>
-      <div class="eta num">${done ? "" : fmtT(D.impact - D.t)}</div></div>`;
+      <div class="eta num" id="eta" data-impact="${D.impact}">${done ? "" : fmtT(D.impact - tNow)}</div></div>`;
   const i = D.info;
   if (done) {
     el.innerHTML = h + `<div class="what" style="color:${D.status === "leaked" ? "var(--hit)" : "var(--dc-ink-2)"}">${tt.status[D.status]}</div>`;
@@ -330,11 +343,12 @@ function renderStrip() {   // one lifeline per threat: launch -> impact, the cal
   g += `<circle id="nowdot" cx="0" cy="${Y}" r="6" fill="#2548f6" stroke="#fff" stroke-width="2"/>`;
   el.innerHTML = `<svg viewBox="0 0 ${W} 80" width="${W}" height="80" direction="ltr">${g}</svg>`;
   stripGeom = { X, t0: D.t0 };
-  stripNow(simNow());
+  stripNow(tNow);
 }
-function stripNow(t) {   // the now dot and the flown part move every frame, between strip re-renders
-  const d = document.getElementById("nowdot"), p = document.getElementById("pastline");
+function stripNow(t) {   // the now dot, the flown part and the countdown move every frame, between re-renders
+  const d = document.getElementById("nowdot"), p = document.getElementById("pastline"), eta = document.getElementById("eta");
   if (d && stripGeom) { d.setAttribute("cx", stripGeom.X(t)); p.setAttribute("x2", stripGeom.X(t)); }
+  if (eta && eta.textContent) eta.textContent = fmtT(Math.max(0, +eta.dataset.impact - t));
 }
 
 // ---------------------------------------------------------------- settings sheet

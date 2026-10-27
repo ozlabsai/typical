@@ -46,14 +46,16 @@ def new_world(scenario, seed=7, cfg=None):
 
 
 def loop():
+    last = time.perf_counter()
     while True:
         t0 = time.perf_counter()
+        real, last = min(t0 - last, 1.0), t0   # advance by real elapsed time: a slow tick must not slow the sim clock
         with lock:
             w = S["world"]
             if S["running"] and w and w.t < w.end:
-                dt = TICK_S * S["speed"]
                 calls = w.step(0.0, BUDGET)          # decide + resolve at the current time...
                 S["backlog"] = calls.get("typical", 0) >= BUDGET
+                dt = real * S["speed"]
                 w.t = min(w.t + (min(dt, 1.0) if S["backlog"] else dt), w.end)   # ...then advance (slower when backed up)
                 if not S["backlog"] and (nxt := w.next_event()) - w.t > QUIET_S:
                     S["skipped"] = nxt - 5 - w.t       # the UI shows "skipped mm:ss"

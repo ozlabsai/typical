@@ -82,17 +82,20 @@ def cell(r):
     return ("fire" if a.startswith("fire") else a, r["meta"]["cls"])
 
 
-def balance(rows, n, rng):
-    """Cap each (action, threat class) cell: firing, waiting and letting fall all get real weight, for every class."""
+def balance(rows, n, rng, weight=None):
+    """Cap each (action, threat class) cell: firing, waiting and letting fall all get real weight, for every class.
+    weight: threat class -> cap multiplier (e.g. {"ballistic missile": 2.5} to lean on a weak spot)."""
+    weight = weight or {}
     rng.shuffle(rows)
     cells = Counter(cell(r) for r in rows)
+    w = lambda c: weight.get(c[1], 1.0)
     cap = max(1, n // max(len(cells), 1))
-    while sum(min(c, cap) for c in cells.values()) < min(n, len(rows)) and cap < n:
+    while sum(min(k, cap * w(c)) for c, k in cells.items()) < min(n, len(rows)) and cap < n:
         cap += max(1, cap // 10)
     used, out = Counter(), []
     for r in rows:
         c = cell(r)
-        if used[c] < cap and len(out) < n:
+        if used[c] < cap * w(c) and len(out) < n:
             used[c] += 1
             out.append(r)
     return out
@@ -102,6 +105,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / ".context/typically/jobs/airdef_t"))
     ap.add_argument("--train", type=int, default=30000)
+    ap.add_argument("--ballistic_weight", type=float, default=1.0, help="cap multiplier for ballistic-missile cells")
     a = ap.parse_args()
     out = Path(a.out)
     (out / "eval").mkdir(parents=True, exist_ok=True)
@@ -111,7 +115,9 @@ if __name__ == "__main__":
         recs = collect(seeds, explore=0.15 if split == "train" else 0.0)
         data[split] = [to_row(r, rng) for r in recs]
         print(f"{split}: {len(recs)} distinct decision points from {len(seeds) * len(SCENARIOS)} raids")
-    train = balance(data["train"], a.train, rng)
+    with (out / "pool_train.jsonl").open("w") as f:   # the full unbalanced pool: reweight later without regenerating
+        f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in data["train"])
+    train = balance(data["train"], a.train, rng, {"ballistic missile": a.ballistic_weight})
     val = balance(data["val"], 1500, rng)
     rng.shuffle(data["eval"])
     files = {"train": train, "val": val}
