@@ -98,8 +98,8 @@ SITE_HE = {"tel_aviv": "גוש דן", "jerusalem": "ירושלים", "haifa": "�
 # Notional batteries -- NOT real deployments.
 BATTERIES = [
     ("A3-C", "arrow3", 31.90, 34.90, 10), ("A3-S", "arrow3", 30.90, 34.80, 8),
-    ("A2-C", "arrow2", 32.35, 35.00, 12),
-    ("DS-C", "dsling", 32.10, 35.00, 16), ("DS-N", "dsling", 32.75, 35.20, 16),
+    ("A2-C", "arrow2", 32.35, 34.90, 12),   # notional; kept west of the Green Line
+    ("DS-C", "dsling", 32.10, 34.92, 16), ("DS-N", "dsling", 32.75, 35.20, 16),
     ("ID-N", "ironDome", 33.00, 35.30, 100), ("ID-H", "ironDome", 32.75, 35.05, 100),   # stock beyond launcher
     ("ID-TA", "ironDome", 32.05, 34.85, 100), ("ID-AS", "ironDome", 31.75, 34.70, 100),  # capacity is the reserve
     ("ID-BS", "ironDome", 31.30, 34.85, 100), ("ID-E", "ironDome", 29.62, 34.95, 60),    # reloaded launcher by launcher
@@ -134,6 +134,8 @@ AIR_UNITS = [   # id, kind, name, base lat/lon, CAP station lat/lon or None (Non
     ("H-S", "helicopter", "Apaches south", 31.25, 34.75, None),
 ]
 AIR = {u[0]: u for u in AIR_UNITS}
+AIR_HE = {"F-N": "מטוסי קרב צפון", "F-S": "מטוסי קרב דרום", "F-E": "סיור מזרח", "F-R": "סיור ים סוף", "H-N": "אפאצ'י צפון",
+          "H-S": "אפאצ'י דרום"}
 
 ORIGINS = {
     "iran_w": (34.3, 47.1, 1.2), "iran_nw": (38.0, 46.3, 1.0), "iran_c": (32.6, 51.6, 1.0),

@@ -43,33 +43,30 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 
 ## Five-minute demo script
 
-0. **Two modes** (header). **Focus** (default) is autoplay: at each key moment (aircraft sent, a wait for a
-   cheaper layer and its payoff, a salvo let fall, a unit holding fire, a hit) the clock slows, the camera goes to
-   it, the rest of the map dims, and the panel tells it: the call, why, the fire unit's call, and every option
-   Typical weighed with its probability (the call highlighted). *Next moment* skips ahead; the markers on the
-   timeline replay any moment. **General** is the whole raid: every object in the panel (salvos, aircraft, fire units)
-   with its status; click one, or its map object, to expand it. Map: filled = engaged, hollow = waiting, faint = let
-   it fall, blue = in focus.
-1. **Red Sea, 5×.** Three ballistic missiles launch at once. Follow one in the right panel: the threat, its countdown,
-   Typical's call in blue (e.g. *Arrow 3*, or *Wait for cheaper*) and one plain-language reason. When it is assigned,
-   the line underneath is the fire unit's own call, e.g. "A3-C fires 1 · time to look before a second shot". The
-   flight line at the bottom shows each call where it was made, the shots (✓/✕) and *now*.
-2. **The drones that follow, 20×.** The jets on patrol over the Red Sea are marked on the map. About 40 s in, the
-   Shaheds reach them: click one to see *Fighter jets* and the unit flying out to meet it.
-3. **Northern front, 20×.** Iron Dome calls from the first minute, a fighter for the Hezbollah drone (~20 s), then
-   the barrage (~50 s): rockets heading for open ground get *Let it fall*. Watch the fire units hold when all channels
-   are busy, or when own aircraft are near the intercept point. **Tonight** counts spend, intercepts and hits.
-4. **13 April, 20×.** Drones and cruise missiles first; about a minute in, *Fighter jets* and *Helicopter* take the
-   drones over Jordan, then the ballistic wave: *Wait for cheaper* keeps the Arrow 3 stock for the threats that need
-   it, and the congestion lens stops everyone waiting for the same layer.
-5. **Drills** (bottom of the scenario menu). One curated situation frozen at its decision moment: Typical's call in
-   the panel, and below it every option played out to the end 40 times, with the best marked and who picked what
-   (Typical / planner). *Next case* steps through instances; *Play* continues the case. The panel's reason
-   is the planner's *estimate*; the drill card is the simulated outcome, and they can differ (coverage gap: the
-   estimate prefers jets, the outcomes tie). *Unclear track* is the honest weak spot: everyone fires early.
-   Cases: `situations.py --instances 3 --rollouts 40 --out .context/airdef/drill_ui.jsonl` (~30 s).
-6. **Settings.** Switch *Magazine posture* to *Critical* or change a site's damage weight, and watch the live calls
-   change.
+The panel has two modes (header). **Focus** (default) autoplays key moments: aircraft sent, a wait for a cheaper
+interceptor and its payoff (only when that interceptor is the one that fires), a salvo let fall, a unit holding fire, a
+hit (with what was fired). The clock slows, the camera frames the decision (the threat, where it lands, who takes it),
+the rest of the map dims, and the panel tells it: the call, why, the fire unit's call, every option with its
+probability. Between moments it fast-forwards. *Next moment* skips; the markers on the timeline replay any moment; at
+the end, *Raid over* lists every moment. **General** is the whole raid: salvos, aircraft and fire units with their
+status; click one, or its map object, to expand it. Map: circle = threat (filled engaged, hollow waiting, ring with a
+dashed path = let it fall), square = fire unit (filled = firing, grey = reloading or empty), triangle = aircraft,
+× = an intercept, red = a hit.
+
+1. **0:00 Northern front, Focus, 20x, paused.** The panel reads "Every threat, one question: which interceptor, and
+   when." Press Play.
+2. **0:30 The moments arrive.** Hezbollah drone, *Fighter jets*; the wait for Iron Beam pays off; a salvo let fall
+   (no interceptor spent); a unit holding fire. *Next moment* between them.
+3. **1:30 13 April, Focus, 20x.** Helicopters and jets over Jordan; *Wait for cheaper* and its payoff; holding fire for
+   own aircraft. **Tonight** shows the magazines and the held-back line (let fall, waits, $ kept).
+4. **2:30 Drills, Wait for cheaper.** Every option played out to the end 40 times: Typical's pick is the best.
+   *Next case*, then *Helicopter*.
+5. **3:30 Settings.** Magazine posture to *Critical*, a priority site; watch the calls change. Press עברית for a
+   few seconds.
+6. **4:15 General** on the finished raid: salvos, fire units, aircraft; close on **Tonight**.
+
+Keep October for questions (the stress case). Notional positions: A2-C and DS-C were moved west on 2026-10-28, after
+the measurements below.
 
 ## What was measured
 

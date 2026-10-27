@@ -4,7 +4,7 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const money = (m) => (m < 0.001 ? "<$1k" : m < 1 ? `$${Math.round(m * 1000)}k` : m < 1000 ? `$${m.toFixed(1)}M` : `$${(m / 1000).toFixed(2)}B`);
 const BLUE = [37, 72, 246], GREY = [138, 138, 142], INK = [16, 16, 16], HIT = [255, 59, 48];
-const VIEWS = { theatre: [40.5, 31.2, 4.7, 48], north: [35.35, 32.95, 8.3, 50], south: [39.5, 24.5, 4.6, 45] };
+const VIEWS = { theatre: [40.0, 31.9, 5.1, 30], north: [35.35, 32.85, 8.3, 40], south: [39.5, 24.5, 4.8, 30] };
 const SCEN_VIEW = { northern_barrage: "north", april_mixed: "theatre", october_saturation: "theatre", june_attrition: "theatre", houthi_eilat: "south" };
 const DRILL_VIEW = { wait_for_cheaper: "theatre", last_chance: "north", let_it_fall: "north", track_not_firm: "theatre", coverage_gap: "south", helicopter: "theatre" };
 const viewOf = (s) => (s.startsWith("drill:") ? DRILL_VIEW[s.split(":")[1]] : SCEN_VIEW[s]);
@@ -42,7 +42,14 @@ const I18N = {
       targets: "Engaging", none: "—", sub: (r, l) => `${r} ready · ${l} left` },
     unit: { ground: "On alert", cap: "On patrol", tasked: "Intercepting", rtb: "Returning to base", rearm: "Rearming",
       weapons: "Weapons left", task: "Task", state: "State" },
-    legend: { engaged: "Engaged", waiting: "Waiting", fall: "Let it fall", unit: "Fire unit" },
+    legend: { engaged: "Engaged", waiting: "Waiting", fall: "Let it fall", unit: "Fire unit", air: "Aircraft" },
+    intro: "Every threat, one question: which interceptor, and when.", pressPlay: "Press Play.",
+    seeking: "On to the next moment", raidOver: "Raid over", recap: "Tonight's moments", restart: "Restart", backStory: "Back to the story",
+    shotsLine: (e, n) => `${e} fired ${n}; missed.`, noShot: "Nothing could reach it in time.",
+    inAir: (n, total) => `${n} in the air · ${total}`, mags: "Magazines",
+    held: (f, c, k) => `Held back: ${f} let fall · ${c} waited for a cheaper interceptor · ${k} kept`,
+    markShort: { air: "Aircraft", cheaper: "Wait", payoff: "Paid off", letfall: "Fall", holdfire: "Hold", hit: "Hit" },
+    raidLine: "Raid", threatLine: "This threat",
     next: "Next moment", modes: { general: "General", focus: "Focus" }, showAll: "Show everything",
     mom: { air: "Aircraft sent", cheaper: "Wait for cheaper", payoff: "The wait paid off", letfall: "Salvo let fall",
       holdfire: "Holding fire", hit: "Hit" },
@@ -106,7 +113,14 @@ const I18N = {
       targets: "מיירטת את", none: "—", sub: (r, l) => `${r} מוכנים · ${l} נותרו` },
     unit: { ground: "בכוננות", cap: "בסיור", tasked: "ביירוט", rtb: "חוזר לבסיס", rearm: "בחימוש",
       weapons: "חימוש שנותר", task: "משימה", state: "מצב" },
-    legend: { engaged: "ביירוט", waiting: "בהמתנה", fall: "ליפול", unit: "יחידת אש" },
+    legend: { engaged: "ביירוט", waiting: "בהמתנה", fall: "ליפול", unit: "יחידת אש", air: "כלי טיס" },
+    intro: "לכל איום, שאלה אחת: איזה מיירט, ומתי.", pressPlay: "לחצו הפעל.",
+    seeking: "ממשיכים לרגע הבא", raidOver: "המתקפה הסתיימה", recap: "הרגעים של הלילה", restart: "מההתחלה", backStory: "חזרה לסיפור",
+    shotsLine: (e, n) => `${e} ירה ${n}; החטיא.`, noShot: "שום מיירט לא הגיע אליו בזמן.",
+    inAir: (n, total) => `${n} באוויר · ${total}`, mags: "מלאים",
+    held: (f, c, k) => `נחסך: ${f} נפלו בשטח פתוח · ${c} המתינו למיירט זול יותר · ${k} נשמרו`,
+    markShort: { air: "כלי טיס", cheaper: "המתנה", payoff: "השתלם", letfall: "נפילה", holdfire: "עצירה", hit: "פגיעה" },
+    raidLine: "המתקפה", threatLine: "האיום",
     next: "הרגע הבא", modes: { general: "תמונה כללית", focus: "מיקוד" }, showAll: "הצג הכול",
     mom: { air: "שיגור כלי טיס", cheaper: "להמתין לזול יותר", payoff: "ההמתנה השתלמה", letfall: "מטח שנופל בשטח פתוח",
       holdfire: "עצירת אש", hit: "פגיעה" },
@@ -152,7 +166,7 @@ const actLabel = (key) => {
   const [a, x] = key.split(":");
   return a === "air" ? T().act.air[x] : effName(x);
 };
-const unitName = (id) => (S?.units || []).find((u) => u.id === id)?.name || id;
+const unitName = (id) => { const u = (S?.units || []).find((x) => x.id === id); return u ? nm(u) : id; };
 const batEff = (id) => META.batteries.find((b) => b.id === id)?.eff;
 const siteName = (sid) => { const s = META.sites.find((x) => x.id === sid); return s ? nm(s) : ""; };
 const fmtT = (s) => { const neg = s < 0; s = Math.abs(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = Math.floor(s % 60); return (neg ? "−" : "") + (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(x).padStart(2, "0"); };
@@ -173,6 +187,26 @@ const flashSeen = new Map();
 const map = new maplibregl.Map({ container: "map", style: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
   center: [35.0, 31.6], zoom: 6.6, pitch: 45, maxPitch: 75, attributionControl: { compact: true } });
 const overlay = new deck.MapboxOverlay({ interleaved: false, layers: [] });
+map.on("load", () => {   // the basemap is a quiet canvas: no labels of its own (we label countries and defended sites), grey borders
+  for (const l of map.getStyle().layers) {
+    if (l.type === "symbol") map.setLayoutProperty(l.id, "visibility", "none");
+    else if (l.id.startsWith("boundary")) map.setPaintProperty(l.id, "line-color", "#cfcfd3");
+  }
+  map.setPaintProperty("water", "fill-color", "#e6e9eb");
+});
+const COUNTRIES = [["Lebanon", "לבנון", 34.05, 35.95], ["Syria", "סוריה", 34.9, 38.4], ["Jordan", "ירדן", 30.9, 36.9], ["Iraq", "עיראק", 32.8, 43.6],
+  ["Iran", "איראן", 32.4, 53.2], ["Saudi Arabia", "ערב הסעודית", 25.2, 44.2], ["Yemen", "תימן", 15.6, 47.2], ["Egypt", "מצרים", 27.2, 30.6],
+  ["Israel", "ישראל", 30.75, 34.85], ["Cyprus", "קפריסין", 35.1, 33.2], ["Turkey", "טורקיה", 38.6, 35.2]].map(([en, he, lat, lon]) => ({ name: en, name_he: he, lat, lon }));
+const ATLAS = (() => {   // two mask icons: a square (fire unit) and a chevron (aircraft); colour comes from the layer
+  const c = document.createElement("canvas"); c.width = 128; c.height = 64; const g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(6, 6, 52, 52);
+  g.beginPath(); g.moveTo(96, 4); g.lineTo(122, 60); g.lineTo(96, 46); g.lineTo(70, 60); g.closePath(); g.fill();
+  return c.toDataURL();
+})();
+const ICONS = { sq: { x: 0, y: 0, width: 64, height: 64, mask: true }, tri: { x: 64, y: 0, width: 64, height: 64, mask: true } };
+const LABEL = { fontFamily: "Figtree, Heebo, Arial, sans-serif", characterSet: "auto", outlineWidth: 3, outlineColor: [255, 255, 255, 235],
+  fontSettings: { sdf: true }, extensions: [new deck.CollisionFilterExtension()], collisionGroup: "labels" };
+const bearing = (u) => (u.goal ? (Math.atan2((u.goal[1] - u.lon) * Math.cos(u.lat * Math.PI / 180), u.goal[0] - u.lat) * 180) / Math.PI : 0);
 map.addControl(overlay);
 const flyTo = (v) => { const [lon, lat, zoom, pitch] = VIEWS[v]; map.flyTo({ center: [lon, lat], zoom, pitch, duration: 1600 }); };
 const api = (p, body) => fetch(p, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}).then((r) => r.json());
@@ -186,9 +220,9 @@ async function init() {
   $("#speedMenu").onclick = (e) => { const x = e.target.closest("[data-x]")?.dataset.x; if (x) api("/api/control", { action: "speed", speed: +x }); };
   $("#scenMenu").onclick = async (e) => {
     const s = e.target.closest("[data-s]")?.dataset.s; if (!s) return;
-    focus = selected = null; pinned = false; detail = null; await api("/api/control", { action: "reset", scenario: s }); flyTo(viewOf(s));
+    focus = selected = null; pinned = false; detail = null; detailOpen = false; await api("/api/control", { action: "reset", scenario: s }); flyTo(viewOf(s));
   };
-  $("#play").onclick = () => api("/api/control", { action: S?.running ? "pause" : "play" });
+  $("#play").onclick = () => api("/api/control", raidOver() ? { action: "reset" } : { action: S?.running ? "pause" : "play" });
   $("#next").onclick = () => { pinned = false; api("/api/control", { action: "next" }); };
   $("#mode").onclick = (e) => { const b = e.target.closest("[data-mode]"); if (b) setMode(b.dataset.mode); };
   $("#raid").onclick = (e) => {   // a moment on the timeline: replay it, in Focus
@@ -199,7 +233,9 @@ async function init() {
   $("#gear").onclick = () => { const o = $("#sheet").classList.toggle("open"); $("#gear").setAttribute("aria-expanded", o); };
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#sheet").classList.remove("open"); $("#gear").setAttribute("aria-expanded", false); } });
   $("#list").onclick = (e) => {
-    if (e.target.closest("#followBtn")) { pinned = false; pickFollow(true); return; }
+    if (e.target.closest("#followBtn")) { pinned = false; focus = null; renderList(); return; }
+    if (e.target.closest("#nextCase")) { focus = selected = null; pinned = false; detail = null; api("/api/control", { action: "reset", scenario: `drill:${S.drill.family}:${S.drill.case + 1}` }); return; }
+    const mm = e.target.closest("[data-m]"); if (mm) { pinned = false; detail = null; api("/api/control", { action: "moment", index: +mm.dataset.m }); return; }
     const md = e.target.closest("[data-mode]"); if (md) { setMode(md.dataset.mode); return; }
     const sec = e.target.closest("[data-sec]"); if (sec) { collapsed[sec.dataset.sec] = !collapsed[sec.dataset.sec]; renderList(); return; }
     const g = e.target.closest("[data-g]"); if (g) { openGroups.has(g.dataset.g) ? openGroups.delete(g.dataset.g) : openGroups.add(g.dataset.g); renderList(); return; }
@@ -208,7 +244,6 @@ async function init() {
   await poll();
   applyLang();
   flyTo(viewOf(S.scenario));
-  $("#tonight").onclick = (e) => { if (e.target.closest("#nextCase")) { focus = selected = null; pinned = false; detail = null; api("/api/control", { action: "reset", scenario: `drill:${S.drill.family}:${S.drill.case + 1}` }); } };
   setInterval(poll, 250);
   setInterval(loadDetail, 600);
   requestAnimationFrame(frame);
@@ -219,7 +254,8 @@ function applyLang() {
   document.documentElement.dir = LANG === "he" ? "rtl" : "ltr";
   document.querySelectorAll("[data-i18n]").forEach((el) => (el.textContent = T()[el.dataset.i18n]));
   const lg = T().legend;
-  $("#legend").innerHTML = `<span><i class="dot ink"></i>${lg.engaged}</span><span><i class="dot hollow"></i>${lg.waiting}</span><span><i class="dot faint"></i>${lg.fall}</span><span><i class="dot blue"></i>${T().following}</span>`;
+  $("#legend").innerHTML = `<span><i class="dot ink"></i>${lg.engaged}</span><span><i class="dot hollow"></i>${lg.waiting}</span><span><i class="dot faint"></i>${lg.fall}</span>
+    <span><i class="sq"></i>${lg.unit}</span><span><i class="tri"></i>${lg.air}</span><span><i class="dot blue"></i>${T().following}</span>`;
   $("#lang").textContent = T().lang;
   $("#scenMenu").innerHTML = Object.entries(META.scenarios).map(([k, v]) => {
     const [title, blurb] = LANG === "he" ? [v.title_he, v.blurb_he] : [v.title, v.blurb];
@@ -235,38 +271,64 @@ async function poll() {
     const P = await api("/api/paths");
     PATHS = Object.fromEntries(P.threats.map((t) => [t.id, t]));
     PATH_SCEN = P.scenario; flashSeen.clear(); openGroups.clear(); caption = null;
+    if (S.drill) setTimeout(() => flyToThreat(S.drill.threat), 300);
   }
   const story = S.mode === "focus", beat = story && S.beat && S.moments?.[S.beat.id];
-  if (beat && caption?.id !== beat.id) flyToThreat(beat.tid);
-  if (beat) caption = beat; else if (S.running || !story) caption = null;
-  if (beat && !pinned && !isFocus("t", beat.tid)) focus = { k: "t", id: beat.tid };
-  else if (story && !pinned && !beat) pickFollow(false);
+  if (beat && caption?.id !== beat.id) { pinned = false; flyToMoment(beat); }   // a new moment always takes the panel
+  if (beat) caption = beat;                            // and stays (greyed) until the next one
+  if (!story || (S.moments || []).length === 0 && !beat) caption = story ? caption : null;
+  if (S.drill && !pinned) focus = { k: "t", id: S.drill.threat };
+  else if (story && !pinned) focus = caption ? { k: "t", id: caption.tid } : null;
   else if (!story && !pinned) focus = null;            // General: nothing is singled out until the viewer clicks
   syncSelected();
   renderBar(); renderTonight(); renderList(); renderRaid();
 }
 
-function pickFollow(force) {   // the most urgent threat that already has a call, else the most urgent live one
-  const live = S.tracks.filter((x) => !DONE.includes(x.status));
-  const cand = live.filter((x) => x.choice).sort((a, b) => a.tti - b.tti)[0] || [...live].sort((a, b) => a.tti - b.tti)[0];
-  const cur = focus?.k === "t" && S.tracks.find((x) => x.id === focus.id);
-  const stale = !cur || (DONE.includes(cur.status) && S.t - cur.impact > 4 * Math.max(1, S.speed));   // let an outcome show briefly
-  if (cand && (force || stale)) { focus = { k: "t", id: cand.id }; syncSelected(); loadDetail(); scrollToFocus = true; }
-}
 let scrollToFocus = false;
 function setMode(m) {
   pinned = false; focus = null; caption = null; renderList.last = null;
   api("/api/control", { action: "mode", mode: m });
   if (S) { S.mode = m; if (m === "general") flyTo(viewOf(S.scenario)); renderBar(); renderList(); }
 }
-function flyToThreat(tid) {   // Focus mode: the camera goes to the moment, close enough to see it, wide enough to keep its context
-  const path = PATHS[tid]; if (!path) return;
-  const [lon, lat] = posAt(path, S.t), zoom = path.cls === "R" ? 8.6 : path.cls === "D" ? 7.0 : 6.0;
-  map.flyTo({ center: [lon, lat], zoom, pitch: 45, duration: 1400 });
+const raidOver = () => S && !S.drill && S.t >= S.end - 0.5;
+const gkey = (tr) => `${PATHS[tr.id]?.origin}|${tr.cls}|${Math.floor(tr.t0 / 180)}`;   // a salvo: same origin, class, 3 minutes
+const salvoOf = (m) => { const tr = S.tracks.find((x) => x.id === m.tid), g = tr && gkey(tr);
+  return g ? S.tracks.filter((x) => gkey(x) === g && (x.status === "held" || x.status === "fell_open")) : []; };
+function fitTo(points, cls) {   // fit the camera to a set of [lon, lat] points; zoom capped per threat class
+  const lons = points.map((p) => p[0]), lats = points.map((p) => p[1]);
+  // frame from straight above, then tilt with a little less zoom: a pitched fitBounds pushes the far side off screen
+  const cam = map.cameraForBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+    { padding: { top: 100, bottom: 110, left: 100, right: 100 }, maxZoom: { R: 9, D: 8 }[cls] ?? 6.5 });
+  if (cam) map.flyTo({ center: cam.center, zoom: cam.zoom - 0.35, pitch: 30, bearing: 0, duration: 1400 });
 }
-function select(k, id) {   // click a row or a map object: expand it; click the expanded one again: back to following
-  if (isFocus(k, id)) { pinned = false; focus = null; pickFollow(true); }
-  else { focus = { k, id }; pinned = true; }
+function flyToThreat(tid) {
+  const path = PATHS[tid]; if (!path) return;
+  fitTo([posAt(path, S.t).slice(0, 2), path.p.at(-1).slice(0, 2)], path.cls);
+}
+function flyToMoment(m) {   // Focus: frame the decision, not just the threat -- its head, where it will land, and who takes it
+  const path = PATHS[m.tid]; if (!path) return;
+  const pts = [posAt(path, S.t).slice(0, 2)], tr = S.tracks.find((x) => x.id === m.tid);
+  if (tr) pts.push([tr.ipp[0], tr.ipp[1]]);
+  if (m.type === "letfall") for (const x of salvoOf(m)) pts.push(posAt(PATHS[x.id], S.t).slice(0, 2));
+  const waited = m.info.opts.find((o) => o[0] === "cheaper")?.[6];
+  for (const id of [tr?.unit, m.unit, waited].filter(Boolean)) {
+    const b = META.batteries.find((x) => x.id === id), u = S.units.find((x) => x.id === id);
+    if (b) pts.push([b.lon, b.lat]); if (u) pts.push([u.lon, u.lat]);
+  }
+  fitTo(pts, path.cls);
+}
+function objectPos(k, id) {
+  if (k === "t") { const p = PATHS[id]; return p && posAt(p, tNow).slice(0, 2); }
+  const o = k === "b" ? META.batteries.find((x) => x.id === id) : S.units.find((x) => x.id === id);
+  return o && [o.lon, o.lat];
+}
+function select(k, id) {   // click a row or a map object: expand it; click the expanded one again: let go
+  if (isFocus(k, id)) { pinned = false; focus = null; }
+  else {
+    focus = { k, id }; pinned = true;
+    const at = objectPos(k, id);
+    if (at && !map.getBounds().contains(at)) map.easeTo({ center: at, duration: 900 });   // the selected object is on screen
+  }
   syncSelected(); detail = null; loadDetail(); renderList();
 }
 function syncSelected() {
@@ -312,18 +374,21 @@ function frame() {
   requestAnimationFrame(frame);
   if (!S || !META) return;
   const t = (tNow = simNow()), prio = new Set(S.cfg.priority_sites), dim = S.mode === "focus" && !!caption;
-  const live = [], trails = [], futures = [];
+  const hl = S.mode === "focus" && caption?.type === "letfall" ? new Set(salvoOf(caption).map((x) => x.id)) : null;   // the whole salvo
+  const live = [], trails = [], futures = [], falls = [];
   for (const tr of S.tracks) {
     const path = PATHS[tr.id]; if (!path) continue;
     if (t > Math.min(S.killed[tr.id] ?? Infinity, path.t0 + path.T)) continue;
-    const cur = posAt(path, t), sel = tr.id === selected, col = sel ? BLUE : tr.status === "held" ? [200, 200, 204] : GREY;
+    const held = tr.status === "held", sel = tr.id === selected || !!hl?.has(tr.id);
+    const cur = posAt(path, t), col = sel ? BLUE : held ? [170, 170, 174] : GREY;
     const past = path.p.filter((q) => q[3] < t).map((q) => q.slice(0, 3)); past.push(cur.slice(0, 3));
     trails.push({ path: past, color: [...col, sel ? 255 : dim ? 40 : 150], w: sel ? 3 : 1.25 });
-    futures.push({ path: [cur.slice(0, 3), ...path.p.filter((q) => q[3] > t).map((q) => q.slice(0, 3))], color: [...col, sel ? 110 : dim ? 15 : 45], w: sel ? 2 : 1 });
-    live.push({ pos: cur.slice(0, 3), tr, sel });
+    const fut = { path: [cur.slice(0, 3), ...path.p.filter((q) => q[3] > t).map((q) => q.slice(0, 3))], color: [...col, sel ? 110 : dim ? 25 : held ? 120 : 45], w: sel ? 2 : 1 };
+    (held ? falls : futures).push(fut);
+    live.push({ pos: cur.slice(0, 3), tr, sel, held });
   }
   const batt = Object.fromEntries(META.batteries.map((b) => [b.id, b]));
-  const shots = [], flashes = [], nowMs = performance.now();
+  const shots = [], flashes = [], kills = [], nowMs = performance.now();
   for (const f of S.flights) {
     if (t < f.t0) continue;
     const g = Math.min(1, (t - f.t0) / Math.max(1, f.t1 - f.t0)), pts = [];
@@ -334,6 +399,7 @@ function frame() {
       if (!flashSeen.has(key)) flashSeen.set(key, nowMs);
       const age = (nowMs - flashSeen.get(key)) / 1000;
       if (age < 1.6) flashes.push({ pos: [f.lon, f.lat, f.alt], age, hit: f.hit });
+      if (f.hit && age < 8) kills.push({ pos: [f.lon, f.lat, 0], a: 1 - age / 8 });   // an intercept leaves a mark for a while
     }
   }
   const selTr = S.tracks.find((x) => x.id === selected);
@@ -346,38 +412,49 @@ function frame() {
       getFillColor: (d) => (prio.has(d.id) ? [16, 16, 16, 14] : [0, 0, 0, 0]), stroked: true, lineWidthUnits: "pixels",
       getLineWidth: (d) => (prio.has(d.id) ? 1.5 : 0.75), getLineColor: (d) => (prio.has(d.id) ? [...INK, 200] : [197, 197, 199, 255]),
       updateTriggers: { getFillColor: [...prio].join(), getLineColor: [...prio].join(), getLineWidth: [...prio].join() } }),
-    new deck.TextLayer({ id: "siteNames", data: META.sites.filter((s) => prio.has(s.id) && map.getZoom() > 5.6), getPosition: (d) => [d.lon, d.lat],
-      getText: (d) => glyphs(nm(d)), getSize: 12, getColor: [...INK, 220], getPixelOffset: [0, -16], fontFamily: "Figtree, Heebo, Arial, sans-serif",
-      fontWeight: 500, characterSet: "auto", outlineWidth: 3, outlineColor: [255, 255, 255, 230], fontSettings: { sdf: true }, updateTriggers: { getText: LANG } }),
+    new deck.TextLayer({ id: "countries", data: COUNTRIES, getPosition: (d) => [d.lon, d.lat], getText: (d) => glyphs(nm(d)), getSize: 13,
+      getColor: [150, 150, 154, 200], ...LABEL, extensions: [], updateTriggers: { getText: LANG } }),
+    new deck.TextLayer({ id: "siteNames", data: META.sites.filter((s) => prio.has(s.id) || map.getZoom() > 6.2), getPosition: (d) => [d.lon, d.lat],
+      getText: (d) => glyphs(nm(d)), getSize: (d) => (prio.has(d.id) ? 13 : 12), getColor: (d) => (prio.has(d.id) ? [...INK, 230] : [104, 104, 104, 220]),
+      getPixelOffset: [0, -16], fontWeight: 500, ...LABEL, extensions: [],   // few sites, no overlap: always labelled
+      updateTriggers: { getText: LANG, getSize: [...prio].join(), getColor: [...prio].join() } }),
     new deck.PathLayer({ id: "airtask", data: (S.units || []).filter((u) => u.state === "tasked" && u.goal),
       getPath: (u) => [[u.lon, u.lat], [u.goal[1], u.goal[0]]], getColor: [...INK, 90], widthUnits: "pixels", getWidth: 1 }),
-    new deck.ScatterplotLayer({ id: "air", data: S.units || [], getPosition: (u) => [u.lon, u.lat], radiusUnits: "pixels",
-      getRadius: (u) => (isFocus("u", u.id) ? 7 : u.state === "ground" || u.state === "rearm" ? 3 : 5), filled: true, stroked: true,
-      getFillColor: (u) => (isFocus("u", u.id) ? BLUE : u.state === "tasked" ? INK : [255, 255, 255]), getLineColor: (u) => (isFocus("u", u.id) ? [255, 255, 255] : [...INK, 220]),
-      lineWidthUnits: "pixels", getLineWidth: 1.5, pickable: true, onClick: (i) => select("u", i.object.id),
-      updateTriggers: { getFillColor: [(S.units || []).map((u) => u.state).join(), focus?.id], getRadius: focus?.id, getLineColor: focus?.id } }),
+    new deck.IconLayer({ id: "air", data: S.units || [], getPosition: (u) => [u.lon, u.lat], iconAtlas: ATLAS, iconMapping: ICONS, getIcon: () => "tri",
+      sizeUnits: "pixels", getSize: (u) => (isFocus("u", u.id) ? 20 : u.state === "ground" || u.state === "rearm" ? 11 : 15), getAngle: (u) => -bearing(u),
+      getColor: (u) => (isFocus("u", u.id) ? BLUE : u.state === "tasked" ? INK : [...GREY, dim ? 90 : 230]), pickable: true, onClick: (i) => select("u", i.object.id),
+      updateTriggers: { getColor: [(S.units || []).map((u) => u.state).join(), focus?.id, dim], getSize: focus?.id } }),
     new deck.TextLayer({ id: "airNames", data: (S.units || []).filter((u) => (u.state !== "ground" && u.state !== "rearm") || isFocus("u", u.id)),
-      getPosition: (u) => [u.lon, u.lat], getText: (u) => glyphs(u.name), getSize: 11, getColor: [...INK, 200], getPixelOffset: [0, 14],
-      fontFamily: "Figtree, Heebo, Arial, sans-serif", characterSet: "auto", outlineWidth: 3, outlineColor: [255, 255, 255, 230], fontSettings: { sdf: true } }),
+      getPosition: (u) => [u.lon, u.lat], getText: (u) => glyphs(nm(u)), getSize: 12, getColor: (u) => (isFocus("u", u.id) ? [...BLUE, 255] : [...INK, 200]),
+      getPixelOffset: [0, 16], ...LABEL, extensions: [],   // six aircraft at most: always labelled
+      updateTriggers: { getText: LANG, getColor: focus?.id } }),
     new deck.PathLayer({ id: "battlinks", data: links, getPath: (d) => d.path, getColor: [...BLUE, 160], widthUnits: "pixels", getWidth: 1.5 }),
-    new deck.ScatterplotLayer({ id: "batt", data: batts, getPosition: (d) => [d.lon, d.lat], radiusUnits: "pixels", pickable: true, onClick: (i) => select("b", i.object.id),
-      getRadius: (d) => (isFocus("b", d.id) ? 7 : 4), stroked: true, lineWidthUnits: "pixels", getLineWidth: (d) => (isFocus("b", d.id) ? 2.5 : 1.25),
-      getFillColor: (d) => (isFocus("b", d.id) ? BLUE : d.tasks.length || d.busy ? INK : d.stock === 0 ? [226, 226, 228] : d.reload ? [180, 180, 184] : [255, 255, 255]),
-      getLineColor: (d) => (isFocus("b", d.id) ? [255, 255, 255] : d.stock === 0 ? [180, 180, 184] : [...INK, 220]),
-      updateTriggers: { getFillColor: [batts.map((b) => `${b.tasks.length}${b.busy}${b.stock}${!!b.reload}`).join(), focus?.id], getRadius: focus?.id, getLineColor: focus?.id, getLineWidth: focus?.id } }),
-    new deck.TextLayer({ id: "battNames", data: batts.filter((b) => isFocus("b", b.id) || map.getZoom() > 7.5), getPosition: (d) => [d.lon, d.lat],
-      getText: (d) => d.id, getSize: 11, getColor: (d) => (isFocus("b", d.id) ? [...BLUE, 255] : [...INK, 170]), getPixelOffset: [0, 14],
-      fontFamily: "Figtree, Heebo, Arial, sans-serif", characterSet: "auto", outlineWidth: 3, outlineColor: [255, 255, 255, 230], fontSettings: { sdf: true },
-      updateTriggers: { getColor: focus?.id } }),
+    new deck.IconLayer({ id: "battEdge", data: batts, getPosition: (d) => [d.lon, d.lat], iconAtlas: ATLAS, iconMapping: ICONS, getIcon: () => "sq",
+      sizeUnits: "pixels", getSize: (d) => (isFocus("b", d.id) ? 17 : 12), pickable: true, onClick: (i) => select("b", i.object.id),
+      getColor: (d) => (isFocus("b", d.id) ? BLUE : d.stock === 0 ? [190, 190, 194, 255] : [...INK, dim ? 90 : 230]),
+      updateTriggers: { getColor: [batts.map((b) => b.stock === 0).join(), focus?.id, dim], getSize: focus?.id } }),
+    new deck.IconLayer({ id: "battFill", data: batts, getPosition: (d) => [d.lon, d.lat], iconAtlas: ATLAS, iconMapping: ICONS, getIcon: () => "sq",
+      sizeUnits: "pixels", getSize: (d) => (isFocus("b", d.id) ? 11 : 8),
+      getColor: (d) => (isFocus("b", d.id) ? [255, 255, 255] : d.tasks.length || d.busy ? INK : d.stock === 0 ? [236, 236, 238] : d.reload ? [180, 180, 184] : [255, 255, 255]),
+      updateTriggers: { getColor: [batts.map((b) => `${b.tasks.length}${b.busy}${b.stock}${!!b.reload}`).join(), focus?.id], getSize: focus?.id } }),
+    new deck.TextLayer({ id: "battNames", data: batts.filter((b) => isFocus("b", b.id) || map.getZoom() > 8.5), getPosition: (d) => [d.lon, d.lat],
+      getText: (d) => d.id, getSize: 12, getColor: (d) => (isFocus("b", d.id) ? [...BLUE, 255] : [...INK, 170]), getPixelOffset: [10, 0], getTextAnchor: "start",
+      ...LABEL, getCollisionPriority: (d) => (isFocus("b", d.id) ? 200 : d.tasks.length ? 50 : 5), updateTriggers: { getColor: focus?.id } }),
     selTr && !DONE.includes(selTr.status) && new deck.ScatterplotLayer({ id: "ipp", data: [selTr], getPosition: (d) => [d.ipp[0], d.ipp[1]],
       getRadius: (d) => Math.max(d.ipp[2], 0.6) * 1000, filled: true, stroked: true, getFillColor: [...BLUE, 22], getLineColor: [...BLUE, 220], lineWidthUnits: "pixels", getLineWidth: 1.5 }),
     new deck.PathLayer({ id: "future", data: futures, getPath: (d) => d.path, getColor: (d) => d.color, widthUnits: "pixels", getWidth: (d) => d.w }),
+    new deck.PathLayer({ id: "falls", data: falls, getPath: (d) => d.path, getColor: (d) => d.color, widthUnits: "pixels", getWidth: (d) => d.w,
+      getDashArray: [3, 3], dashJustified: true, extensions: [new deck.PathStyleExtension({ dash: true })] }),
+    new deck.TextLayer({ id: "fallPts", data: falls, getPosition: (d) => d.path.at(-1), getText: () => "×", getSize: 14, getColor: (d) => d.color,
+      fontFamily: "Figtree, Arial, sans-serif", characterSet: "×" }),
     new deck.PathLayer({ id: "trail", data: trails, getPath: (d) => d.path, getColor: (d) => d.color, widthUnits: "pixels", getWidth: (d) => d.w }),
     new deck.PathLayer({ id: "shots", data: shots, getPath: (d) => d.path, getColor: (d) => (d.sel ? [...BLUE, 255] : [...INK, 110]), widthUnits: "pixels", getWidth: (d) => (d.sel ? 2.5 : 1) }),
     new deck.ScatterplotLayer({ id: "heads", data: live, getPosition: (d) => d.pos, radiusUnits: "pixels", pickable: true, onClick: (i) => select("t", i.object.tr.id),
-      getRadius: (d) => (d.sel ? 7 : d.tr.status === "held" ? 2.5 : 4), stroked: true, lineWidthUnits: "pixels", getLineWidth: (d) => (d.sel ? 2.5 : 1.25),
-      getFillColor: (d) => (d.sel ? BLUE : [...(ENGAGED.includes(d.tr.status) ? INK : d.tr.status === "held" ? [200, 200, 204] : [255, 255, 255]), dim ? 70 : 255]),
-      getLineColor: (d) => (d.sel ? [255, 255, 255] : [...(d.tr.status === "held" ? [200, 200, 204] : INK), dim ? 60 : 220]) }),
+      getRadius: (d) => (d.sel ? 8 : 5), stroked: true, lineWidthUnits: "pixels", getLineWidth: (d) => (d.sel ? 2.5 : 1.5),
+      getFillColor: (d) => (d.sel ? BLUE : [...(ENGAGED.includes(d.tr.status) ? INK : [255, 255, 255]), d.held ? 0 : dim ? 70 : 255]),
+      getLineColor: (d) => (d.sel ? [255, 255, 255] : [...(d.held ? [150, 150, 154] : INK), dim ? 60 : 225]) }),
+    new deck.TextLayer({ id: "kills", data: kills, getPosition: (d) => d.pos, getText: () => "×", getSize: 16, getColor: (d) => [...INK, 200 * d.a],
+      fontFamily: "Figtree, Arial, sans-serif", characterSet: "×" }),
     new deck.ScatterplotLayer({ id: "flash", data: flashes, getPosition: (d) => d.pos, radiusUnits: "pixels", getRadius: (d) => 5 + d.age * 22, filled: false,
       stroked: true, lineWidthUnits: "pixels", getLineWidth: 1.5, getLineColor: (d) => [...(d.hit ? INK : GREY), 255 * (1 - d.age / 1.6)] }),
     new deck.ScatterplotLayer({ id: "leaks", data: leaks, getPosition: (d) => [d[0], d[1]], radiusUnits: "pixels", getRadius: 6, getFillColor: [...HIT, 255],
@@ -386,6 +463,7 @@ function frame() {
   stripNow(t);
   const nowLine = document.getElementById("raidnow");
   if (nowLine && raidX) nowLine.setAttribute("transform", `translate(${raidX(t)},0)`);
+  if (raidX && Math.floor(t * 120 / Math.max(S.end, 1)) !== renderRaid.bin) renderRaid();   // the launch histogram fills as the raid goes
 }
 
 // ---------------------------------------------------------------- bar
@@ -393,14 +471,15 @@ let lastSkip = { v: 0, at: -1e9 };
 const SPEEDS = [[1, 0], [5, 1], [20, 2], [60, 3]];
 function renderBar() {
   if (!S) return;
-  $("#play").textContent = S.running ? T().pause : T().play;
+  $("#play").textContent = raidOver() ? T().restart : S.running ? T().pause : T().play;
+  $("#play").className = `dc-pill dc-pill--sm ${S.running ? "dc-pill--secondary" : "dc-pill--primary"}`;   // one blue: Play only when it is the next thing to do
   $("#next").textContent = T().next; $("#next").style.display = S.drill || S.mode !== "focus" ? "none" : "";
   $("#mode").style.display = S.drill ? "none" : "";
   if (renderBar.mode !== S.mode + LANG) {
     renderBar.mode = S.mode + LANG;
     $("#mode").innerHTML = ["general", "focus"].map((m) => `<button class="dc-tab" data-mode="${m}" aria-selected="${S.mode === m}">${T().modes[m]}</button>`).join("");
   }
-  $("#speedBtn").firstChild.textContent = `${T().speed} ${S.speed}× `;
+  $("#speedBtn").innerHTML = `${T().speed} <span class="num">${S.speed}×</span> <span aria-hidden="true">▾</span>`;
   if (renderBar.key !== S.speed + LANG) {   // the menu only changes with speed or language; the rest below every poll
     renderBar.key = S.speed + LANG;
     $("#speedMenu").innerHTML = SPEEDS.map(([x, d]) => `<button class="dc-dropdown__item" role="menuitemradio" aria-checked="${x === S.speed}" data-x="${x}">
@@ -446,30 +525,44 @@ function optionBars(dist, chosen) {   // every option Typical weighed, its proba
   const keys = Object.keys(dist).sort((a, b) => dist[b] - dist[a]);
   return `<div class="opts"><p class="kicker">${T().options}</p>${keys.map((k) => `<div class="opt${k === chosen ? " on" : ""}">
     <span class="opt-l">${esc(actLabel(k))}</span><span class="opt-bar"><i style="width:${Math.max(1, Math.round(dist[k] * 100))}%"></i></span>
-    <span class="opt-p num">${Math.round(dist[k] * 100)}%</span></div>`).join("")}</div>`;
+    <span class="opt-p num">${dist[k] < 0.005 ? "<1" : Math.round(dist[k] * 100)}%</span></div>`).join("")}</div>`;
 }
 function captionBody(m) {   // the moment in one or two plain sentences
   const tt = T(), name = nm(META.threat_types[m.kind]).replace(/ (MRBM|SRBM)$/i, "");
   if (m.type === "letfall") return `<p class="why">${esc(tt.letfall(m.count))}</p>`;
-  if (m.type === "hit") return `<p class="why">${esc(tt.hitLine(name, siteName(m.site)))}</p>`;
+  if (m.type === "hit") {
+    const tried = {}; for (const [e] of m.shots || []) tried[e] = (tried[e] || 0) + 1;
+    const lines = Object.entries(tried).map(([e, n]) => tt.shotsLine(effName(e), n));
+    return `<p class="why">${esc(tt.hitLine(name, siteName(m.site)))} ${esc(lines.length ? lines.join(" ") : tt.noShot)}</p>`;
+  }
   if (m.type === "holdfire") return `<p class="why">${esc(m.why === "friendly" ? tt.holdfire.friendly(m.unit) : tt.holdfire.debris(m.unit, siteName(m.debris)))}</p>`;
   if (m.type === "payoff") return `<p class="why">${esc(tt.payoffLine(effName(m.key.split(":")[1])))}</p>`;
   return m.info.opts.length ? `<p class="why">${esc(reason(m.info, { choice: m.key, open_ground: m.open }))}</p>` : "";
 }
 let raidX = null;
-function renderRaid() {   // the whole raid on one line: a marker per key moment, click one to replay from it
+function renderRaid() {   // the whole raid on one line: launches as a histogram (the raid's shape), a labelled marker per key moment
   const el = $("#raid"); if (!S || !META) return;
-  const W = Math.max(el.clientWidth, 400), PAD = 8, x = (t) => PAD + (Math.min(Math.max(t, 0), S.end) / Math.max(S.end, 1)) * (W - 2 * PAD);
-  const ms = S.moments || [], tt = T();
-  const key = `${W}|${S.end}|${ms.length}|${S.beat?.id}|${LANG}`;
-  raidX = x;
+  const W = Math.max(el.clientWidth, 400), L = 92, R = 12, end = Math.max(S.end, 1), x = (t) => L + (Math.min(Math.max(t, 0), end) / end) * (W - L - R);
+  const ms = S.moments || [], tt = T(), NB = 120, bin = Math.floor(tNow * NB / end);
+  const key = `${W}|${end}|${ms.length}|${S.beat?.id}|${LANG}|${bin}|${PATH_SCEN}`;
+  raidX = x; renderRaid.bin = bin;
   if (key === renderRaid.last) return;
   renderRaid.last = key;
-  el.innerHTML = `<svg viewBox="0 0 ${W} 30" width="${W}" height="30" direction="ltr">
-    <line x1="${PAD}" x2="${W - PAD}" y1="15" y2="15" stroke="#e2e2e4" stroke-width="2"/>
-    ${ms.map((m) => `<g data-m="${m.id}" class="mk${S.beat?.id === m.id ? " on" : ""}${m.type === "hit" ? " hit" : ""}" transform="translate(${x(m.t)},15)">
-      <circle r="9" class="hitbox"/><circle r="4.5"/><title>${esc(tt.mom[m.type])} · ${esc(nm(META.threat_types[m.kind]))}</title></g>`).join("")}
-    <g id="raidnow"><line x1="0" x2="0" y1="4" y2="26" stroke="#2548f6" stroke-width="2"/></g></svg>`;
+  const counts = new Array(NB).fill(0);
+  for (const p of Object.values(PATHS)) counts[Math.min(NB - 1, Math.floor(p.t0 * NB / end))]++;
+  const top = Math.max(1, ...counts), bw = (W - L - R) / NB;
+  const bars = counts.map((c, i) => c ? `<rect x="${(L + i * bw).toFixed(1)}" y="${(34 - 12 * c / top).toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${(12 * c / top).toFixed(1)}" fill="${i <= bin ? "#101010" : "#d9d9dc"}" opacity="${i <= bin ? 0.55 : 1}"/>` : "").join("");
+  let lastX = -1e9;
+  const marks = ms.map((m) => {
+    const mx = x(m.t), show = mx - lastX > 58; if (show) lastX = mx;
+    return `<g data-m="${m.id}" class="mk${S.beat?.id === m.id ? " on" : ""}${m.type === "hit" ? " hit" : ""}" transform="translate(${mx},34)">
+      <circle r="10" class="hitbox"/><circle r="4.5"/>${show ? `<text y="-10" text-anchor="middle">${esc(tt.markShort[m.type])}</text>` : ""}
+      <title>${esc(tt.mom[m.type])} · ${esc(nm(META.threat_types[m.kind]))}</title></g>`;
+  }).join("");
+  el.innerHTML = `<svg viewBox="0 0 ${W} 42" width="${W}" height="42" direction="ltr">
+    <text x="4" y="38" class="cap">${tt.raidLine}</text>${bars}
+    <line x1="${L}" x2="${W - R}" y1="34" y2="34" stroke="#c9c9cd" stroke-width="1.5"/>${marks}
+    <g id="raidnow"><line x1="0" x2="0" y1="14" y2="40" stroke="#101010" stroke-width="1.5"/></g></svg>`;
 }
 
 // ---------------------------------------------------------------- the list: every object, its status, one expanded
@@ -501,7 +594,8 @@ function row(k, id, name, sub, [status, tone], eta) {
 function renderStory() {   // Focus mode: one object, its moment and its call -- the panel is the caption
   const el = $("#list"), tt = T();
   let h = "";
-  if (focus?.k === "t") {
+  if (raidOver()) h = recap();
+  else if (focus?.k === "t") {
     const tr = S.tracks.find((x) => x.id === focus.id), m = caption && caption.tid === focus.id ? caption : null;
     const src = tr || m;
     if (src) {
@@ -509,14 +603,18 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
       const title = m?.type === "letfall" ? esc(tt.salvoOf(tt.clsPl[m.cls], tt.origin[PATHS[m.tid]?.origin] || "")).replace(/^./, (c) => c.toUpperCase()) : esc(name);
       const dest = m?.type === "letfall" ? "" : site ? (open ? `${tt.openGround} ${esc(siteName(site))}` : `${tt.to} ${esc(siteName(site))}`) : "";
       const live = tr && !DONE.includes(tr.status);
-      h = `<p class="kicker">${m ? tt.mom[m.type] : tt.cls[src.cls]}</p>
-        <div class="row"><div><h2 class="threat">${title}</h2><div class="target">${dest}</div></div>${live && m?.type !== "letfall" ? `<div class="eta num" data-impact="${tr.impact}"></div>` : ""}</div>`;
+      const kick = m && tt.mom[m.type] !== actLabel(m.key) ? tt.mom[m.type] : tt.cls[src.cls];   // never the call twice
+      const past = m && S.beat?.id !== m.id;
+      h = `<div class="${past ? "past" : ""}"><p class="kicker">${kick}</p>
+        <div class="row"><div><h2 class="threat">${title}</h2><div class="target">${dest}</div></div>${live && m?.type !== "letfall" ? `<div class="etabox"><span class="kicker">${tt.impactIn}</span><div class="eta num" data-impact="${tr.impact}"></div></div>` : ""}</div>`;
       if (m) {
         const call = m.type === "letfall" || m.type === "hit" || m.type === "holdfire" ? "" : `<div class="what">${esc(actLabel(m.key))}</div>`;
-        h += `<div class="story">${call}${captionBody(m)}${detail?.id === m.tid ? localLine(detail) : ""}${optionBars(m.info.dist, m.key)}</div>`;
+        const unitLine = m.type !== "holdfire" && detail?.id === m.tid ? localLine(detail) : "";
+        h += `<div class="story">${call}${captionBody(m)}${unitLine}${m.type === "letfall" || m.type === "hit" ? "" : optionBars(m.info.dist, m.key)}</div></div>`;
       } else {
         h += threatDetail(true).replace('<div class="obj-detail">', '<div class="story">');
         if (detail?.id === focus.id && detail.info?.dist && !DONE.includes(detail.status)) h += optionBars(detail.info.dist, detail.choice);
+        h += "</div>";
       }
     }
   } else if (focus?.k === "b") {
@@ -524,20 +622,34 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
     if (b) h = `<p class="kicker">${esc(effName(b.eff))}</p><h2 class="threat">${esc(b.id)}</h2>${battDetail(b)}`;
   } else if (focus?.k === "u") {
     const u = S.units.find((x) => x.id === focus.id);
-    if (u) h = `<p class="kicker">${esc(T().act.air[u.kind])}</p><h2 class="threat">${esc(u.name)}</h2>${unitDetail(u)}`;
+    if (u) h = `<p class="kicker">${esc(T().act.air[u.kind])}</p><h2 class="threat">${esc(nm(u))}</h2>${unitDetail(u)}`;
   }
-  if (!h) h = `<p class="empty">${S.tracks.length ? tt.deciding : tt.empty}</p>`;
-  h += `<p class="showall"><button class="linkish" data-mode="general">${tt.showAll}</button></p>`;
+  if (S.drill) h += drillCard();
+  else if (!h) h = (S.moments || []).length || S.running ? "" : `<p class="kicker">${esc(scenTitle())}</p><h2 class="intro">${tt.intro}</h2><p class="why">${tt.pressPlay}</p>`;
+  if (!S.drill && !raidOver() && S.running && !S.beat) h += `<p class="seek">${tt.seeking}…</p>`;
+  if (!S.drill) h += `<p class="showall"><button class="linkish" data-mode="general">${tt.showAll}</button></p>`;
+  el.classList.add("story-mode");
   if (h !== renderStory.last) { el.innerHTML = h; renderStory.last = h; stripNow(tNow); }
   renderList.last = null;
 }
 
+const scenTitle = () => { const sc = META.scenarios[S.scenario]; return sc ? (LANG === "he" ? sc.title_he : sc.title) : ""; };
+function recap() {   // the raid is over: tonight's figures and every moment, each one replayable
+  const tt = T();
+  return `<p class="kicker">${tt.raidOver}</p><h2 class="threat">${esc(scenTitle())}</h2>
+    <p class="dline">${tt.recap}</p>${(S.moments || []).map((m) => `<button class="obj" data-m="${m.id}">
+      <span class="obj-main"><span class="obj-name">${esc(tt.mom[m.type])}</span><span class="obj-sub">${esc(nm(META.threat_types[m.kind]))}${m.site ? " · " + esc(siteName(m.site)) : ""}</span></span>
+      <span class="obj-st tone-${m.type === "hit" ? "hit" : "sub"}">${m.type === "letfall" ? m.count : m.key && m.type !== "hit" && m.type !== "holdfire" ? esc(actLabel(m.key)) : ""}</span></button>`).join("")}`;
+}
+
 function renderList() {
   const el = $("#list"); if (!S || !META) return;
-  if (S.mode === "focus" && !S.drill) return renderStory();
+  $("#tonight").style.display = S.drill ? "none" : "";
+  if (S.mode === "focus" || S.drill) return renderStory();
   renderStory.last = null;
+  el.classList.remove("story-mode");
   const tt = T(), top = el.scrollTop;
-  const tracks = [...S.tracks].sort((a, b) => DONE.includes(a.status) - DONE.includes(b.status) || a.impact - b.impact);
+  const tracks = [...S.tracks].sort((a, b) => a.impact - b.impact);   // stable: a row never jumps when its status changes
   const sec = (k, n, body) => `<section class="sec"><button class="sec-h" data-sec="${k}" aria-expanded="${!collapsed[k]}"><span>${tt.sec[k]}</span><span class="num">${n}</span></button>${collapsed[k] ? "" : body}</section>`;
   const tRow = (tr) => {
     const ty = META.threat_types[tr.kind], done = DONE.includes(tr.status);
@@ -545,10 +657,7 @@ function renderList() {
     return row("t", tr.id, nm(ty).replace(/ (MRBM|SRBM)$/i, ""), dest, trackStatus(tr), done ? null : tr.impact) + (isFocus("t", tr.id) ? threatDetail() : "");
   };
   const groups = new Map();   // a salvo: same class, same origin, launched within 3 minutes
-  for (const tr of tracks) {
-    const g = `${PATHS[tr.id]?.origin}|${tr.cls}|${Math.floor(tr.t0 / 180)}`;
-    groups.set(g, [...(groups.get(g) || []), tr]);
-  }
+  for (const tr of tracks) groups.set(gkey(tr), [...(groups.get(gkey(tr)) || []), tr]);
   const tRows = [...groups.entries()].map(([g, members]) => {
     if (members.length < 3) return members.map(tRow).join("");
     const n = (f) => members.filter(f).length, live = members.filter((x) => !DONE.includes(x.status));
@@ -561,11 +670,11 @@ function renderList() {
       <span class="obj-st tone-${hits ? "hit" : "sub"}">${hits ? esc(tt.tally.hits(hits)) : ""}</span>${eta == null ? "" : `<span class="obj-eta num eta" data-impact="${eta}"></span>`}</button>`
       + (open ? `<div class="grp-body">${members.map(tRow).join("")}</div>` : "");
   }).join("");
-  const uRows = S.units.map((u) => row("u", u.id, u.name, `${T().act.air[u.kind]} · ${weaponsLine(u)}`,
+  const uRows = S.units.map((u) => row("u", u.id, nm(u), `${T().act.air[u.kind]} · ${weaponsLine(u)}`,
     [u.state === "tasked" && u.task ? `${tt.unit.tasked} ${threatName(u.task)}` : tt.unit[u.state], u.state === "tasked" ? "ink" : "sub"]) + (isFocus("u", u.id) ? unitDetail(u) : "")).join("");
   const bRows = S.batteries.map((b) => row("b", b.id, b.id, `${effName(b.eff)} · ${b.stock == null ? tt.bat.unlimited : tt.bat.sub(b.ready, b.stock)}`, battStatus(b)) + (isFocus("b", b.id) ? battDetail(b) : "")).join("");
   const live = tracks.filter((x) => !DONE.includes(x.status)).length;
-  const html = (tracks.length ? sec("t", live, tRows) : `<p class="empty">${tt.empty}</p>`) + sec("u", S.units.length, uRows) + sec("b", S.batteries.length, bRows);
+  const html = (tracks.length ? sec("t", tt.inAir(live, S.total), tRows) : `<p class="empty">${tt.empty}</p>`) + sec("u", S.units.length, uRows) + sec("b", S.batteries.length, bRows);
   if (html === renderList.last) return;   // re-render only on change: countdowns tick per frame (stripNow), clicks survive
   renderList.last = html;
   el.innerHTML = html;
@@ -597,7 +706,7 @@ function threatDetail(story = false) {   // the call on the expanded threat: wha
   if (caption && caption.tid === focus.id && !pinned) return "";   // the caption card is explaining this one
   if (!D || D.id !== focus.id) return `<div class="obj-detail"><p class="empty">${tt.deciding}</p></div>`;
   const done = DONE.includes(D.status), i = D.info;
-  let h = pinned ? `<p class="kicker"><button id="followBtn" class="linkish">${tt.follow}</button></p>` : "";
+  let h = pinned && S.mode === "focus" && !S.drill ? `<p class="kicker"><button id="followBtn" class="linkish">${tt.backStory}</button></p>` : "";
   if (done) return `<div class="obj-detail">${h}<div class="what" style="color:${D.status === "leaked" ? "var(--hit)" : "var(--dc-ink-2)"}">${tt.status[D.status]}</div></div>`;
   if (!i) return `<div class="obj-detail">${h}<p class="empty">${tt.notYet}</p></div>`;
   h += `<div class="what">${esc(actLabel(D.choice))}</div><p class="why">${esc(reason(i, D))}</p>${localLine(D)}`;
@@ -610,26 +719,28 @@ function threatDetail(story = false) {   // the call on the expanded threat: wha
 let detailOpen = false;
 
 // ---------------------------------------------------------------- tonight
-function renderDrill() {   // the curated case's simulated outcomes, and who picked what
-  const D = S.drill, tt = T(), d = tt.drill, tol = Math.max(0.05, 0.02 * D.costs[0][1]);
-  const tags = (k) => ["typical", "planner"].filter((w) => D[w] === k).map((w) => `<span class="tag${w === "typical" ? " ty" : ""}">${d.who[w]}</span>`).join("");
-  $("#tonight").innerHTML = `<p class="kicker">${d.kicker(D.case + 1, D.cases)}</p><p class="dline">${esc(d.blurb[D.family])}</p>
-    <p class="dline">${d.played}</p>
-    ${D.costs.map(([k, c]) => `<div class="alt"><span>${c - D.costs[0][1] <= tol ? `<b>${esc(actLabel(k))}</b> · ${d.best}` : esc(actLabel(k))}${tags(k)}</span><span class="num">${money(c)}</span></div>`).join("")}
+function drillCard() {   // the curated case: every option played out to the end, the best marked, Typical's pick marked
+  const D = S.drill, tt = T(), d = tt.drill, tol = Math.max(0.05, 0.02 * D.costs[0][1]), lo = D.costs[0][1], hi = Math.max(...D.costs.map((c) => c[1]), 1e-9);
+  return `<div class="drill"><p class="kicker">${d.kicker(D.case + 1, D.cases)}</p><p class="dline">${d.played}</p>
+    ${D.costs.map(([k, c]) => `<div class="opt${D.typical === k ? " on" : ""}"><span class="opt-l">${esc(actLabel(k))}${c - lo <= tol ? ` · ${d.best}` : ""}</span>
+      <span class="opt-bar"><i style="width:${Math.max(1, Math.round(100 * c / hi))}%"></i></span><span class="opt-p num">${money(c)}</span></div>`).join("")}
     ${D.typical ? "" : `<p class="dline">${d.thinking}</p>`}
-    ${D.cases > 1 ? `<button id="nextCase" class="dc-pill dc-pill--secondary dc-pill--sm">${d.next}</button>` : ""}`;
+    ${D.cases > 1 ? `<button id="nextCase" class="dc-pill dc-pill--secondary dc-pill--sm">${d.next}</button>` : ""}</div>`;
 }
 
 function renderTonight() {
-  if (!S) return;
-  if (S.drill) return renderDrill();
+  if (!S || S.drill) return;
   const L = S.ledger, ty = L.typical, tt = T();
   if (!ty) return;
   $("#tonight").innerHTML = `<p class="kicker">${tt.tonight}</p><div class="stats three">
       <div class="stat"><div class="v num">${money(ty.spent)}</div><div class="l">${tt.spent}</div></div>
       <div class="stat"><div class="v num">${ty.kills}</div><div class="l">${tt.intercepted}</div></div>
       <div class="stat"><div class="v num ${ty.leaks ? "hit" : ""}">${ty.leaks}</div><div class="l">${tt.hits}</div></div>
-    </div>`;
+    </div>${S.stats && (S.stats.fall || S.stats.cheaper) ? `<p class="held">${esc(tt.held(S.stats.fall, S.stats.cheaper, "\u2066" + money(S.stats.kept) + "\u2069"))}</p>` : ""}
+    <div class="mags">${["arrow3", "arrow2", "dsling", ...(S.cfg.allied ? ["thaad"] : [])].filter((e) => ty.init?.[e]).map((e) => {
+      const l = ty.left[e], n = ty.init[e];
+      return `<div class="mag"><span>${esc(effName(e))}</span><span class="opt-bar"><i style="width:${Math.round(100 * l / n)}%"></i></span><span class="num">${l}/${n}</span></div>`;
+    }).join("")}</div>`;
 }
 
 // ---------------------------------------------------------------- flight strip (the threat's story over time)
@@ -637,22 +748,27 @@ let stripGeom = null;
 function renderStrip() {   // one lifeline per threat: launch -> impact, the calls on it, shots as ticks, now as a blue dot
   const el = $("#life"), tt = T();
   if (!detail || !META) { el.innerHTML = ""; stripGeom = null; return; }
-  const D = detail, W = Math.max(el.clientWidth - 48, 400), Y = 46, PAD = 8;
-  const X = (t) => PAD + ((Math.min(Math.max(t, D.t0), D.impact) - D.t0) / Math.max(D.impact - D.t0, 1)) * (W - 2 * PAD - 70);
+  const D = detail, W = Math.max(el.clientWidth, 400), Y = 46, PAD = 92;
+  const X = (t) => PAD + ((Math.min(Math.max(t, D.t0), D.impact) - D.t0) / Math.max(D.impact - D.t0, 1)) * (W - PAD - 80);
   let g = `<line x1="${X(D.t0)}" x2="${X(D.impact)}" y1="${Y}" y2="${Y}" stroke="#e2e2e4" stroke-width="4" stroke-linecap="round"/>
     <line id="pastline" x1="${X(D.t0)}" x2="${X(D.t0)}" y1="${Y}" y2="${Y}" stroke="#101010" stroke-width="4" stroke-linecap="round"/>`;
-  let lastX = -1e9, row = 0;
-  D.history.forEach(([t, key], n) => {   // calls above the line; alternate height only when labels would collide
-    const x = X(t), last = n === D.history.length - 1;
-    row = x - lastX < 150 ? (row + 1) % 3 : 0; lastX = x;
-    const y = Y - 14 - row * 16, col = last ? "#2548f6" : "#5d5d5d";
-    g += `<line x1="${x}" x2="${x}" y1="${y + 3}" y2="${Y}" stroke="${col}" stroke-width="1"/><text x="${x}" y="${y}" style="fill:${col};font-size:13px${last ? ";font-weight:500" : ""}">${esc(actLabel(key))}</text>`;
-  });
+  const seen = new Set(), calls = [];   // each call once (A, B, A, B -> A, B), the final call always
+  D.history.forEach(([t, key], n) => { if (!seen.has(key) || n === D.history.length - 1) { seen.add(key); calls.push([t, key, n === D.history.length - 1]); } });
+  let lastEnd = -1e9;
+  for (let n = calls.length - 1, right = 1e9; n >= 0; n--) {   // from the final call back: drop a label that would collide
+    const [t, key, last] = calls[n], x = X(t), w = 8 * actLabel(key).length + 10;
+    if (!last && x + w > right) continue;
+    right = x;
+    const col = last ? "#2548f6" : "#5d5d5d";
+    g += `<line x1="${x}" x2="${x}" y1="${Y - 12}" y2="${Y}" stroke="${col}" stroke-width="1"/><text x="${x}" y="${Y - 16}" style="fill:${col}${last ? ";font-weight:500" : ""}">${esc(actLabel(key))}</text>`;
+    lastEnd = Math.max(lastEnd, x + w);
+  }
   for (const s of D.shots) {   // shots below the line
     const fin = D.t >= s.t1;
-    g += `<text x="${X(fin ? s.t1 : s.t0)}" y="${Y + 22}" text-anchor="middle" style="fill:${fin ? (s.hit ? "#101010" : "#8a8a8e") : "#2548f6"};font-size:13px">${fin ? (s.hit ? "✓" : "✕") : "↑"} ${esc(effName(s.eff))}</text>`;
+    g += `<text x="${X(fin ? s.t1 : s.t0)}" y="${Y + 24}" text-anchor="middle" style="fill:${fin ? (s.hit ? "#101010" : "#686868") : "#2548f6"}">${fin ? (s.hit ? "✓" : "✕") : "↑"} ${esc(effName(s.eff))}</text>`;
   }
-  g += `<text x="${X(D.impact) + 10}" y="${Y + 4}" style="fill:#101010;font-size:13px">${tt.impact}</text>`;
+  g += `<text x="${X(D.impact) + 10}" y="${Y + 5}" style="fill:#101010">${tt.impact[0].toUpperCase() + tt.impact.slice(1)}</text>`;
+  g += `<text x="4" y="${Y + 5}" class="cap">${tt.threatLine}</text>`;
   g += `<circle id="nowdot" cx="0" cy="${Y}" r="6" fill="#2548f6" stroke="#fff" stroke-width="2"/>`;
   el.innerHTML = `<svg viewBox="0 0 ${W} 80" width="${W}" height="80" direction="ltr">${g}</svg>`;
   stripGeom = { X, t0: D.t0 };

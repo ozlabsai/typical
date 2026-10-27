@@ -21,7 +21,7 @@ from pydantic import BaseModel
 import planner
 from director import Director
 from engine import BAT, DONE, World, label
-from sim import (AIR_KINDS, BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, ORIGINS, SCENARIOS, SITE_HE, SITES, THREAT_HE,
+from sim import (AIR_HE, AIR_KINDS, BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, ORIGINS, SCENARIOS, SITE_HE, SITES, THREAT_HE,
                  THREATS, consequence)
 
 ROOT = Path(__file__).parent
@@ -78,6 +78,8 @@ def loop():
         real, last = min(t0 - last, 1.0), t0
         with lock:
             w = S["world"]
+            if S["director"] and not S["running"]:
+                S["director"].hold(real)               # paused: the moment on screen keeps its time
             if S["drill"] and not S["running"] and w.t <= w.end:
                 w.step(0.0)                            # a paused drill still gets its calls made, at the frozen moment
             elif S["running"] and w and w.t < w.end:
@@ -186,8 +188,8 @@ def state(policy: str = "typical"):
                     scenario=w.scenario, model=S["model_name"], cfg=w.cfg, tracks=tracks,
                     flights=[dict(b=f[1], th=f[2], t0=f[3], t1=f[4], lat=f[5], lon=f[6], alt=f[7] * 1000, hit=f[8],
                                   slat=f[9], slon=f[10], eff=f[11]) for f in w.flights if f[0] == policy],
-                    units=[dict(id=u.id, kind=u.kind, name=u.name, lat=u.lat, lon=u.lon, state=u.state, task=u.task,
-                                goal=u.goal, weapons=u.weapons) for u in pol.units.values()],
+                    units=[dict(id=u.id, kind=u.kind, name=u.name, name_he=AIR_HE.get(u.id, u.name), lat=u.lat, lon=u.lon, state=u.state,
+                                task=u.task, goal=u.goal, weapons=u.weapons) for u in pol.units.values()],
                     batteries=[battery(w, pol, bid) for bid, eff, *_ in BATTERIES if w.cfg["allied"] or not EFFECTORS[eff].get("allied")],
                     killed={tid: s["killed_at"] for tid, s in pol.st.items() if s.get("killed_at")},
                     ledger=w.ledger(), attacker_cost=w.attacker_cost, **(S["director"].public() if S["director"] else {}), launched=sum(th.t0 <= w.t for th in w.threats),

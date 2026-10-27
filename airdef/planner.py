@@ -217,9 +217,13 @@ def local_facts(th, t, unit_kind, channels_free, channels, stock, engaging, p_hi
                 ready=None, reload_eta=None, turn=False, friendly=False):
     """Everything the fire unit knows when asked "how many now?". shot / later_shot: (launch, intercept, lat, lon, alt).
     ready: rounds on launchers (None = no launcher limit); reload_eta: seconds until the next launcher is reloaded;
-    turn: the sector radar had to turn first; friendly: own aircraft near the intercept point."""
+    turn: the sector radar had to turn first; friendly: own aircraft near the intercept point.
+    Debris over the threat's own target is no reason to hold: holding only lets it hit there."""
+    debris = debris_site(*shot[2:5]) if shot else None
+    if debris and debris == debris_site(*th.predicted_impact(t)[:2], 0):
+        debris = None
     return dict(channels_free=channels_free, channels=channels, stock=stock, engaging=engaging, firm=firm(p_hit),
-                p_hit=p_hit, debris=debris_site(*shot[2:5]) if shot else None,
+                p_hit=p_hit, debris=debris,
                 later_open=bool(later_shot) and debris_site(*later_shot[2:5]) is None,
                 last=not any_later, look=any_later, unit_kind=unit_kind, ready=stock if ready is None else ready,
                 reload_eta=reload_eta, turn=turn, friendly=friendly)
