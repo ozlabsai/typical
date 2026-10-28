@@ -10,7 +10,11 @@ import time
 
 from sim import EFFECTORS, consequence
 
-BEAT_S = 7.0        # wall seconds a featured moment stays on screen
+BEAT_S = 7.0        # wall seconds a short moment (salvo let fall, holding fire, hit) stays on screen
+FOLLOW = ("air", "cheaper", "payoff", "engage")   # moments that open a story: Focus stays with the threat until it is resolved
+STORY_S = 25.0      # wall seconds the rest of a followed threat's flight takes on screen
+FOLLOW_MAX = 60.0   # wall seconds at most on one story
+OUTCOME_S = 3.5     # wall seconds the outcome stays before the next story
 BEAT_SPEED = 1.0    # sim speed during a beat
 GAP_S = 3.0         # wall seconds after a beat before the next one may start
 SEEK_SPEED = 60.0   # Focus between moments (and "next"): fast-forward until the next featured moment
@@ -89,6 +93,8 @@ class Director:
             return None
         if key == "cheaper":
             return self._new(w, th, s, "cheaper", 1.0 + (delta or 0), delta=delta)
+        if key.startswith("now:") and th.cls in "BC" and prev in (None, "wait"):   # a missile gets its interceptor
+            return self._new(w, th, s, "engage", 2.0)
         return None
 
     @staticmethod
@@ -108,7 +114,7 @@ class Director:
             again = next((x for x in self.moments if x["type"] == m["type"] and x["tid"] == m["tid"]), None)
             if again:   # replaying: the same moment comes round again -- show it, do not add a duplicate marker
                 if self.slow:
-                    self.beat, self.seek = dict(id=again["id"], until=time.monotonic() + BEAT_S), False
+                    self._start(again)
                 return again
             if m["type"] != "hit" and m["type"] in recent:   # variety: no type twice in four (a hit always shows)
                 continue
@@ -119,14 +125,23 @@ class Director:
                 self.moments.append(m)
                 self.snaps.append(self.snapshot(w))
                 if self.slow:
-                    self.beat, self.seek = dict(id=m["id"], until=time.monotonic() + BEAT_S), False
+                    self._start(m)
                 else:
                     self.free_at = time.monotonic() + BEAT_S + GAP_S   # same spacing on the timeline, no stop
                 return m
         return None
 
-    def tick(self):
-        if self.beat and time.monotonic() > self.beat["until"]:
+    def _start(self, m):
+        follow = m["type"] in FOLLOW
+        self.beat = dict(id=m["id"], tid=m["tid"], follow=follow, done=False,
+                         until=time.monotonic() + (FOLLOW_MAX if follow else BEAT_S))
+        self.seek = False
+
+    def tick(self, w):
+        b = self.beat
+        if b and b["follow"] and not b["done"] and w.policies["typical"].st[b["tid"]]["status"] in ("killed", "leaked", "fell_open"):
+            b["done"], b["until"] = True, min(b["until"], time.monotonic() + OUTCOME_S)   # resolved: hold the outcome, then move on
+        if b and time.monotonic() > b["until"]:
             self.end_beat()
         if self.slow and not self.beat and not self.seek and time.monotonic() > self.free_at:
             self.seek = True   # Focus is moment to moment: nothing between moments is worth watching at play speed
@@ -139,8 +154,13 @@ class Director:
     def end_beat(self):
         self.beat, self.free_at = None, time.monotonic() + GAP_S
 
-    def speed(self, normal):
-        return BEAT_SPEED if self.beat else SEEK_SPEED if self.seek else normal
+    def speed(self, w, normal):
+        """A story plays the rest of the threat's flight in about STORY_S: every re-ask happens on screen."""
+        b = self.beat
+        if b and b["follow"] and not b["done"]:
+            th = w.by_id[b["tid"]]
+            return min(max((th.t0 + th.T - w.t) / STORY_S, 1.0), 300.0)
+        return BEAT_SPEED if b else SEEK_SPEED if self.seek else normal
 
     def next(self):
         self.beat, self.free_at, self.seek = None, 0.0, True
@@ -162,5 +182,6 @@ class Director:
 
     def public(self):
         return dict(moments=[{k: v for k, v in m.items() if k not in ("score", "worth", "t_last")} for m in self.moments],
-                    beat=self.beat and dict(id=self.beat["id"], left=max(0.0, self.beat["until"] - time.monotonic())),
+                    beat=self.beat and dict(id=self.beat["id"], tid=self.beat["tid"], follow=self.beat["follow"], done=self.beat["done"],
+                                            left=max(0.0, self.beat["until"] - time.monotonic())),
                     seek=self.seek, stats=self.stats)

@@ -84,10 +84,10 @@ def loop():
                 w.step(0.0)                            # a paused drill still gets its calls made, at the frozen moment
             elif S["running"] and w and w.t < w.end:
                 d = S["director"]
-                w.step(real * (d.speed(S["speed"]) if d else S["speed"]))   # decide, resolve, fly aircraft, advance
+                w.step(real * (d.speed(w, S["speed"]) if d else S["speed"]))   # decide, resolve, fly aircraft, advance
                 if d:
                     try:
-                        d.tick()
+                        d.tick(w)
                         d.offer(w, d.scan(w))          # a key moment slows the clock and gets a caption
                     except Exception:                  # the story layer must never stop the clock: log, play on without it
                         traceback.print_exc()
@@ -223,7 +223,7 @@ def track(tid: str, policy: str = "typical"):
                     site=sid, open_ground=bool(dist > sigma), priority=sid in w.cfg["priority_sites"],
                     windows=planner.spans(th, w.t, pol.stock, w.cfg),
                     shots=[dict(b=f[1], eff=f[11], t0=f[3], t1=f[4], hit=f[8]) for f in w.flights if f[0] == policy and f[2] == tid],
-                    history=s["history"], info=s["info"], local=s.get("local"), assign=s.get("assign"),
+                    history=s["history"], log=s.get("log", []), info=s["info"], local=s.get("local"), assign=s.get("assign"),
                     escalated=s["escalated"], choice=s.get("choice"),
                     others={n: p.st[tid].get("choice") for n, p in w.policies.items()},
                     labels={o[0]: o[1] for o in (s["info"] or {}).get("opts", [])})

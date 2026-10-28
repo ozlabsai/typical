@@ -171,6 +171,20 @@ details.detail pre { margin: 0; white-space: pre-wrap; font: .8125rem/1.6 var(--
 #list .past { opacity: .5; }
 #list .seek { margin-top: 1.25rem; font-size: .9375rem; color: var(--dc-text-sub); }
 #list .intro { font-size: 2.25rem; line-height: 1.12; letter-spacing: -.04em; font-weight: 400; color: var(--dc-ink-2); margin: .75rem 0 .5rem; }
+#list .what.ink { color: var(--dc-ink-2); } #list .what.hit { color: var(--hit); }
+.opts.live .opt-bar i { transition: width .5s var(--dc-ease); }
+.prog { margin-top: 1.75rem; }
+.prog .kicker { margin: 0 0 .25rem; }
+.prog .step:first-of-type { border-top: 0; }
+.step { display: grid; grid-template-columns: 4.25rem 1fr auto; gap: .75rem; align-items: baseline; padding: .4375rem 0; border-top: 1px solid var(--dc-line);
+  font-size: .9375rem; color: var(--dc-text-sub); }
+.step .t { color: var(--dc-grey); font-size: .8125rem; }
+.step .c b { font-weight: 500; color: var(--dc-ink-2); }
+.step .c i { display: block; font-style: normal; font-size: .8125rem; color: var(--dc-text-sub); margin-top: .125rem; }
+.step .p { color: var(--dc-ink-2); white-space: nowrap; }
+.step.ok .c { color: var(--dc-ink-2); font-weight: 500; } .step.miss .c { color: var(--dc-text-sub); }
+.step.new { animation: stepin .6s var(--dc-ease); }
+@keyframes stepin { from { background: #e4e8fd; } to { background: transparent; } }
 #list .drill { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--dc-line); }
 #list .drill .opt { grid-template-columns: minmax(8rem, auto) 1fr 4.5rem; }
 #list .story { margin-top: .25rem; }

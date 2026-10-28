@@ -43,15 +43,16 @@ const I18N = {
     unit: { ground: "On alert", cap: "On patrol", tasked: "Intercepting", rtb: "Returning to base", rearm: "Rearming",
       weapons: "Weapons left", task: "Task", state: "State" },
     legend: { engaged: "Engaged", waiting: "Waiting", fall: "Let it fall", unit: "Fire unit", air: "Aircraft" },
+    prog: "How the call developed", shotHit: (e) => `✓ ${e} intercepted it`, shotMiss: (e) => `✕ ${e} missed`,
     intro: "Every threat, one question: which interceptor, and when.", pressPlay: "Press Play.",
     seeking: "On to the next moment", raidOver: "Raid over", recap: "Tonight's moments", restart: "Restart", backStory: "Back to the story",
     shotsLine: (e, n) => `${e} fired ${n}; missed.`, noShot: "Nothing could reach it in time.",
     inAir: (n, total) => `${n} in the air · ${total}`, mags: "Magazines",
     held: (f, c, k) => `Held back: ${f} let fall · ${c} waited for a cheaper interceptor · ${k} kept`,
-    markShort: { air: "Aircraft", cheaper: "Wait", payoff: "Paid off", letfall: "Fall", holdfire: "Hold", hit: "Hit" },
+    markShort: { engage: "Engage", air: "Aircraft", cheaper: "Wait", payoff: "Paid off", letfall: "Fall", holdfire: "Hold", hit: "Hit" },
     raidLine: "Raid", threatLine: "This threat",
     next: "Next moment", modes: { general: "General", focus: "Focus" }, showAll: "Show everything",
-    mom: { air: "Aircraft sent", cheaper: "Wait for cheaper", payoff: "The wait paid off", letfall: "Salvo let fall",
+    mom: { engage: "Engagement", air: "Aircraft sent", cheaper: "Wait for cheaper", payoff: "The wait paid off", letfall: "Salvo let fall",
       holdfire: "Holding fire", hit: "Hit" },
     letfall: (n) => `${n} land in open ground. No interceptor spent on them.`,
     salvoOf: (c, o) => `${c} from ${o}`,
@@ -114,15 +115,16 @@ const I18N = {
     unit: { ground: "בכוננות", cap: "בסיור", tasked: "ביירוט", rtb: "חוזר לבסיס", rearm: "בחימוש",
       weapons: "חימוש שנותר", task: "משימה", state: "מצב" },
     legend: { engaged: "ביירוט", waiting: "בהמתנה", fall: "ליפול", unit: "יחידת אש", air: "כלי טיס" },
+    prog: "איך ההחלטה התפתחה", shotHit: (e) => `✓ ${e} יירט אותו`, shotMiss: (e) => `✕ ${e} החטיא`,
     intro: "לכל איום, שאלה אחת: איזה מיירט, ומתי.", pressPlay: "לחצו הפעל.",
     seeking: "ממשיכים לרגע הבא", raidOver: "המתקפה הסתיימה", recap: "הרגעים של הלילה", restart: "מההתחלה", backStory: "חזרה לסיפור",
     shotsLine: (e, n) => `${e} ירה ${n}; החטיא.`, noShot: "שום מיירט לא הגיע אליו בזמן.",
     inAir: (n, total) => `${n} באוויר · ${total}`, mags: "מלאים",
     held: (f, c, k) => `נחסך: ${f} נפלו בשטח פתוח · ${c} המתינו למיירט זול יותר · ${k} נשמרו`,
-    markShort: { air: "כלי טיס", cheaper: "המתנה", payoff: "השתלם", letfall: "נפילה", holdfire: "עצירה", hit: "פגיעה" },
+    markShort: { engage: "יירוט", air: "כלי טיס", cheaper: "המתנה", payoff: "השתלם", letfall: "נפילה", holdfire: "עצירה", hit: "פגיעה" },
     raidLine: "המתקפה", threatLine: "האיום",
     next: "הרגע הבא", modes: { general: "תמונה כללית", focus: "מיקוד" }, showAll: "הצג הכול",
-    mom: { air: "שיגור כלי טיס", cheaper: "להמתין לזול יותר", payoff: "ההמתנה השתלמה", letfall: "מטח שנופל בשטח פתוח",
+    mom: { engage: "יירוט", air: "שיגור כלי טיס", cheaper: "להמתין לזול יותר", payoff: "ההמתנה השתלמה", letfall: "מטח שנופל בשטח פתוח",
       holdfire: "עצירת אש", hit: "פגיעה" },
     letfall: (n) => `${n} נופלים בשטח פתוח. אף מיירט לא נורה עליהם.`,
     salvoOf: (c, o) => `${c} מ${o}`,
@@ -245,7 +247,7 @@ async function init() {
   applyLang();
   flyTo(viewOf(S.scenario));
   setInterval(poll, 250);
-  setInterval(loadDetail, 600);
+  setInterval(loadDetail, 400);
   requestAnimationFrame(frame);
 }
 
@@ -342,6 +344,9 @@ function syncSelected() {
 async function loadDetail() {
   if (!selected) { detail = null; renderList(); renderStrip(); return; }
   try { detail = await api(`/api/track/${selected}?policy=${viewPol}`); } catch { return; }
+  const u = detail.assign?.unit;
+  if (S.mode === "focus" && caption?.tid === detail.id && u && u !== loadDetail.unit) flyToMoment({ ...caption, unit: u });   // the camera takes in who takes it
+  loadDetail.unit = u;
   renderList(); renderStrip();
 }
 
@@ -521,6 +526,43 @@ function localLine(D) {   // the fire unit's call, in one line: who, how many, a
 }
 
 // ---------------------------------------------------------------- key moments: the caption card and the raid timeline
+const barsNode = document.createElement("div");   // the live bars keep their DOM across re-renders, so widths animate
+barsNode.className = "opts live";
+function liveBars(dist, chosen) {   // update the live bars in place: a row per option, sorted, the call highlighted
+  if (!dist) { barsNode.innerHTML = ""; return; }
+  const keys = Object.keys(dist).sort((a, b) => dist[b] - dist[a]);
+  if (barsNode.dataset.keys !== keys.join() || barsNode.dataset.lang !== LANG) {
+    barsNode.dataset.keys = keys.join(); barsNode.dataset.lang = LANG;
+    barsNode.innerHTML = `<p class="kicker">${T().options}</p>` + keys.map((k) => `<div class="opt" data-o="${esc(k)}"><span class="opt-l">${esc(actLabel(k))}</span>
+      <span class="opt-bar"><i></i></span><span class="opt-p num"></span></div>`).join("");
+  }
+  for (const row of barsNode.querySelectorAll("[data-o]")) {
+    const v = dist[row.dataset.o];
+    row.classList.toggle("on", row.dataset.o === chosen);
+    row.querySelector("i").style.width = `${Math.max(1, Math.round(v * 100))}%`;
+    row.querySelector(".opt-p").textContent = `${v < 0.005 ? "<1" : Math.round(v * 100)}%`;
+  }
+}
+function progression(D) {   // the threat's story so far: each call as it was made and firmed up, each shot, the outcome
+  const tt = T(), rows = [];
+  for (const e of D.log || []) {
+    if (e.fire) { rows.push({ t: e.t, html: `<b>${esc(tt.local.fires(unitName(e.unit), e.fire))}</b>` }); continue; }
+    const prev = rows.at(-1);
+    if (prev?.key === e.key) { prev.p1 = e.p; continue; }
+    rows.push({ t: e.t, key: e.key, p0: e.p, p1: e.p, opts: e.opts });
+  }
+  for (const sh of D.shots || []) if (D.t >= sh.t1) rows.push({ t: sh.t1, html: esc(sh.hit ? tt.shotHit(effName(sh.eff)) : tt.shotMiss(effName(sh.eff))), hit: sh.hit, miss: !sh.hit });
+  rows.sort((a, b) => a.t - b.t);
+  if (!rows.length) return "";
+  const pct = (v) => (v == null ? "" : `${Math.round(v * 100)}%`);
+  return `<div class="prog"><p class="kicker">${tt.prog}</p>${rows.map((r, n) => {
+    const t = `<span class="t num">−${fmtT(Math.max(0, D.impact - r.t))}</span>`;
+    if (!r.key) return `<div class="step${r.hit ? " ok" : r.miss ? " miss" : ""}${n === rows.length - 1 ? " new" : ""}">${t}<span class="c">${r.html}</span><span class="p"></span></div>`;
+    const why = r.opts ? reason({ t: r.t, opts: r.opts }, { choice: r.key, open_ground: D.open_ground }).split(". ")[0].replace(/\.$/, "") : "";
+    const firm = r.p1 != null && r.p0 != null && Math.abs(r.p1 - r.p0) >= 0.05 ? `${pct(r.p0)} → ${pct(r.p1)}` : pct(r.p1);
+    return `<div class="step call${n === rows.length - 1 ? " new" : ""}">${t}<span class="c"><b>${esc(actLabel(r.key))}</b>${why ? `<i>${esc(why)}</i>` : ""}</span><span class="p num">${firm}</span></div>`;
+  }).join("")}</div>`;
+}
 function optionBars(dist, chosen) {   // every option Typical weighed, its probability as a bar, the call highlighted
   if (!dist) return "";
   const keys = Object.keys(dist).sort((a, b) => dist[b] - dist[a]);
@@ -608,10 +650,17 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
       const past = m && S.beat?.id !== m.id;
       h = `<div class="${past ? "past" : ""}"><p class="kicker">${kick}</p>
         <div class="row"><div><h2 class="threat">${title}</h2><div class="target">${dest}</div></div>${live && m?.type !== "letfall" ? `<div class="etabox"><span class="kicker">${tt.impactIn}</span><div class="eta num" data-impact="${tr.impact}"></div></div>` : ""}</div>`;
-      if (m) {
+      const D = detail?.id === focus.id ? detail : null;
+      if (m?.type === "letfall" || (m && !D)) {
         const call = m.type === "letfall" || m.type === "hit" || m.type === "holdfire" ? "" : `<div class="what">${esc(actLabel(m.key))}</div>`;
-        const unitLine = m.type !== "holdfire" && detail?.id === m.tid ? localLine(detail) : "";
-        h += `<div class="story">${call}${captionBody(m)}${unitLine}${m.type === "letfall" || m.type === "hit" ? "" : optionBars(m.info.dist, m.key)}</div></div>`;
+        h += `<div class="story">${call}${captionBody(m)}</div></div>`;
+      } else if (D) {   // the story so far, live: the call now, why, the unit's call, the options, and how it got here
+        const done = DONE.includes(D.status), i = D.info;
+        const head = done ? `<div class="what ${D.status === "leaked" ? "hit" : "ink"}">${tt.status[D.status]}</div>`
+          : `<div class="what">${esc(actLabel(D.choice))}</div>${i ? `<p class="why">${esc(reason(i, D))}</p>` : ""}${localLine(D)}`;
+        const extra = m && (m.type === "holdfire" || m.type === "hit") ? captionBody(m) : "";
+        h += `<div class="story">${head}${extra}${done ? "" : '<div id="bars"></div>'}${progression(D)}</div></div>`;
+        liveBars(done ? null : i?.dist, D.choice);
       } else {
         h += threatDetail(true).replace('<div class="obj-detail">', '<div class="story">');
         if (detail?.id === focus.id && detail.info?.dist && !DONE.includes(detail.status)) h += optionBars(detail.info.dist, detail.choice);
@@ -630,7 +679,11 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
   if (!S.drill && !raidOver() && S.running && !S.beat) h += `<p class="seek">${tt.seeking}…</p>`;
   if (!S.drill) h += `<p class="showall"><button class="linkish" data-mode="general">${tt.showAll}</button></p>`;
   el.classList.add("story-mode");
-  if (h !== renderStory.last) { el.innerHTML = h; renderStory.last = h; stripNow(tNow); }
+  if (h !== renderStory.last) {
+    el.innerHTML = h; renderStory.last = h; stripNow(tNow);
+    el.querySelector("#bars")?.replaceWith(barsNode);   // the same bar elements every time: their widths animate
+    el.querySelector(".prog .step.new")?.scrollIntoView({ block: "nearest" });
+  }
   renderList.last = null;
 }
 

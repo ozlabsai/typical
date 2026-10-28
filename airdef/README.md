@@ -43,9 +43,11 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 
 ## Five-minute demo script
 
-The panel has two modes (header). **Focus** (default) autoplays key moments: aircraft sent, a wait for a cheaper
-interceptor and its payoff (only when that interceptor is the one that fires), a salvo let fall, a unit holding fire, a
-hit (with what was fired). The clock slows, the camera frames the decision (the threat, where it lands, who takes it),
+The panel has two modes (header). **Focus** (default) tells the raid as stories: when a missile is engaged, aircraft
+are sent, or Typical waits for a cheaper interceptor, Focus follows that threat to its outcome. The clock plays the
+rest of its flight in about 25 s, so every re-ask happens on screen: the live call, why, the fire unit's call, the
+option bars moving, and underneath how the call developed (each call with its probability as it firms up, each shot,
+the outcome). A salvo let fall, a unit holding fire and a hit are short moments. The clock slows, the camera frames the decision (the threat, where it lands, who takes it),
 the rest of the map dims, and the panel tells it: the call, why, the fire unit's call, every option with its
 probability. Between moments it fast-forwards. *Next moment* skips; the markers on the timeline replay any moment; at
 the end, *Raid over* lists every moment. **General** is the whole raid: salvos, aircraft and fire units with their

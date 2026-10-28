@@ -354,6 +354,11 @@ class World:
             if not s["history"] or s["history"][-1][1] != opt.key:
                 s["history"].append((self.t, opt.key))
             s.update(info=info, cfgv=self.cfg_version, choice=opt.key)
+            log, p = s.setdefault("log", []), (info.get("dist") or {}).get(opt.key)
+            last = next((x for x in reversed(log) if "key" in x), None)   # the progression: a row when the call or its probability moves
+            if not last or last["key"] != opt.key or (p is not None and last["p"] is not None and abs(p - last["p"]) >= 0.05):
+                log.append(dict(t=self.t, key=opt.key, p=p, opts=info["opts"] if not last or last["key"] != opt.key else None))
+                del log[:-60]
             self.apply_global(pol, th, opt)
             if opt.key == "cheaper" or opt.key.startswith("now:"):   # later threats in this same tick must see this booking
                 bookings.setdefault(opt.eff, []).append(opt.launch)
@@ -494,6 +499,7 @@ class World:
             info["fired"] = n
             s["local"] = info
             if n:
+                s.setdefault("log", []).append(dict(t=self.t, fire=n, unit=s["assign"]["unit"], eff=eff))
                 self.fire(pol, th, shot, n)
         return calls
 
