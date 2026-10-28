@@ -22,7 +22,7 @@ const I18N = {
     act: { hold: "Let it fall", wait: "Wait", cheaper: "Wait for cheaper", air: { fighter: "Fighter jets", helicopter: "Helicopter" } },
     whyAir: (u, m, pk) => `${u} can meet it in ${m} and ${pk}.`,
     whyTrack: "The track is not firm yet. Deciding later keeps every layer that still reaches it open.",
-    local: { fires: (u, n) => `${u} fires ${n}`, holds: (u) => `${u} holds`, busy: "all launch channels are busy", reload: "its launchers are reloading",
+    local: { fires: (u, n) => `${u} fires ${n}`, holds: (u) => `${u} holds`, left: (n) => `${n} left`, busy: "all launch channels are busy", reload: "its launchers are reloading",
       friendly: "own aircraft are near the intercept point", debris: (s) => `a later intercept keeps the debris off ${s}`,
       last: "the last chance to engage it", nolook: "no time for a second look", look: "time to look before a second shot" },
     pk: ["is almost certain to stop it", "is very likely to stop it", "is likely to stop it", "may stop it", "is unlikely to stop it"],
@@ -93,7 +93,7 @@ const I18N = {
     act: { hold: "לתת לו ליפול", wait: "להמתין", cheaper: "להמתין לזול יותר", air: { fighter: "מטוסי קרב", helicopter: "מסוק" } },
     whyAir: (u, m, pk) => `${u} יכולים לפגוש אותו בעוד ${m}, ו${pk}.`,
     whyTrack: "המסלול עוד לא יציב. החלטה מאוחרת יותר שומרת את כל השכבות שעוד מגיעות אליו.",
-    local: { fires: (u, n) => `${u} יורה ${n}`, holds: (u) => `${u} ממתין`, busy: "כל ערוצי השיגור תפוסים", reload: "המשגרים בטעינה",
+    local: { fires: (u, n) => `${u} יורה ${n}`, holds: (u) => `${u} ממתין`, left: (n) => `נותרו ${n}`, busy: "כל ערוצי השיגור תפוסים", reload: "המשגרים בטעינה",
       friendly: "מטוסים שלנו קרובים לנקודת היירוט", debris: (s) => `יירוט מאוחר יותר ירחיק את הרסיסים מ${s}`,
       last: "ההזדמנות האחרונה", nolook: "אין זמן לבדוק לפני ירי נוסף", look: "יש זמן לבדוק לפני ירי נוסף" },
     pk: ["כמעט בטוח שיעצור אותו", "סביר מאוד שיעצור אותו", "סביר שיעצור אותו", "עשוי לעצור אותו", "לא סביר שיעצור אותו"],
@@ -270,7 +270,7 @@ async function poll() {
   if (S.scenario !== PATH_SCEN) {
     const P = await api("/api/paths");
     PATHS = Object.fromEntries(P.threats.map((t) => [t.id, t]));
-    PATH_SCEN = P.scenario; flashSeen.clear(); openGroups.clear(); caption = null;
+    PATH_SCEN = P.scenario; flashSeen.clear(); openGroups.clear(); caption = null; firedAt = {};
     if (S.drill) setTimeout(() => flyToThreat(S.drill.threat), 300);
   }
   const story = S.mode === "focus", beat = story && S.beat && S.moments?.[S.beat.id];
@@ -516,7 +516,8 @@ function localLine(D) {   // the fire unit's call, in one line: who, how many, a
   const f = L.facts || {}, who = D.assign?.kind === "air" ? unitName(L.unit) : L.unit;
   const why = L.fired ? (f.last ? tt.last : f.look ? tt.look : tt.nolook)
     : f.channels_free < 1 ? tt.busy : f.ready < 1 ? tt.reload : f.friendly ? tt.friendly : f.debris ? tt.debris(siteName(f.debris)) : "";
-  return `<p class="local"><b>${esc(L.fired ? tt.fires(who, L.fired) : tt.holds(who))}</b>${why ? " · " + esc(why) : ""}</p>`;
+  const left = D.assign?.kind === "air" ? null : S.batteries.find((b) => b.id === L.unit)?.stock;
+  return `<p class="local"><b>${esc(L.fired ? tt.fires(who, L.fired) : tt.holds(who))}</b>${why ? " · " + esc(why) : ""}${L.fired && left != null ? " · " + esc(tt.left(left)) : ""}</p>`;
 }
 
 // ---------------------------------------------------------------- key moments: the caption card and the raid timeline
@@ -737,10 +738,22 @@ function renderTonight() {
       <div class="stat"><div class="v num">${ty.kills}</div><div class="l">${tt.intercepted}</div></div>
       <div class="stat"><div class="v num ${ty.leaks ? "hit" : ""}">${ty.leaks}</div><div class="l">${tt.hits}</div></div>
     </div>${S.stats && (S.stats.fall || S.stats.cheaper) ? `<p class="held">${esc(tt.held(S.stats.fall, S.stats.cheaper, "\u2066" + money(S.stats.kept) + "\u2069"))}</p>` : ""}
-    <div class="mags">${["arrow3", "arrow2", "dsling", ...(S.cfg.allied ? ["thaad"] : [])].filter((e) => ty.init?.[e]).map((e) => {
-      const l = ty.left[e], n = ty.init[e];
-      return `<div class="mag"><span>${esc(effName(e))}</span><span class="opt-bar"><i style="width:${Math.round(100 * l / n)}%"></i></span><span class="num">${l}/${n}</span></div>`;
-    }).join("")}</div>`;
+    <div class="mags">${magRows(ty)}</div>`;
+}
+
+const MAG_ORDER = ["arrow3", "arrow2", "thaad", "sm3", "dsling", "sm6", "ironDome", "ironBeam", "ew"];
+const MAG_ALWAYS = ["arrow3", "arrow2", "dsling", "ironDome"];
+let firedAt = {};   // interceptor -> [rounds fired tonight, when that last changed]: a row lights up as it fires
+function magRows(ty) {   // every interceptor in play: what is left, what tonight has used; unlimited ones (laser, EW) as a count
+  const fired = ty.rounds || {}, now = performance.now(), tt = T();
+  return MAG_ORDER.filter((e) => fired[e] || (MAG_ALWAYS.includes(e) && ty.init?.[e])).map((e) => {
+    const n = fired[e] || 0;
+    if (!firedAt[e] || firedAt[e][0] !== n) firedAt[e] = [n, firedAt[e] ? now : -1e9];   // first sight is not a shot
+    const init = ty.init?.[e], left = ty.left?.[e];
+    const stock = init ? `<span class="opt-bar"><i style="width:${Math.round(100 * left / init)}%"></i></span><span class="num">${left}/${init}</span>`
+      : `<span class="opt-bar"></span><span class="num">∞</span>`;
+    return `<div class="mag${now - firedAt[e][1] < 1500 ? " fresh" : ""}"><span>${esc(effName(e))}</span>${stock}<span class="num d">${n ? "−" + n : ""}</span></div>`;
+  }).join("");
 }
 
 // ---------------------------------------------------------------- flight strip (the threat's story over time)

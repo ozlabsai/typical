@@ -84,7 +84,10 @@ details.detail pre { margin: 0; white-space: pre-wrap; font: .8125rem/1.6 var(--
 .tonight { padding: 1.25rem .75rem 1.25rem; background: var(--dc-surface); margin: 0 1rem 1rem; border-radius: var(--dc-r-band); }
 .tonight .held { margin: .75rem 0 0; font-size: .875rem; line-height: 1.45; color: var(--dc-text-sub); }
 .mags { margin-top: .625rem; display: grid; gap: .3125rem; }
-.mag { display: grid; grid-template-columns: 6.5rem 1fr 3.5rem; gap: .75rem; align-items: center; font-size: .8125rem; color: var(--dc-text-sub); }
+.mag { display: grid; grid-template-columns: 6.5rem 1fr 4.25rem 2.25rem; gap: .625rem; align-items: center; font-size: .8125rem; color: var(--dc-text-sub);
+  border-radius: 6px; padding: 0 .25rem; margin: 0 -.25rem; transition: background-color .6s var(--dc-ease); }
+.mag .d { color: var(--dc-ink-2); font-weight: 500; }
+.mag.fresh { background: #e4e8fd; transition: none; } .mag.fresh .d { color: var(--dc-blue); }
 .mag .opt-bar { background: #e6e6e9; } .mag .opt-bar i { background: var(--dc-ink-2); } .mag .num { text-align: end; }
 .menuhead { padding: .75rem 1rem .25rem; border-top: 1px solid var(--dc-line, #e2e2e4); margin-top: .25rem; }
 .tag.ty { border-color: var(--accent, #2548f6); color: var(--accent, #2548f6); }
