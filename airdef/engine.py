@@ -20,6 +20,8 @@ from sim import (AIR, AIR_KINDS, BATTERIES, EFFECTORS, ORIGINS, SCENARIOS, SITE,
 HORIZON_S = 300        # a threat is decided once some interceptor can launch at it within this horizon
 RECHECK_S = {"B": 8, "R": 6, "C": 20, "D": 30}
 PRICE_S = 10
+DT = 4.0               # live demo: the world always moves in steps of DT sim seconds, so pacing never changes the trajectory
+QUIET_S = 15           # auto-skip: jump ahead when nothing happens for longer than this (sim seconds)
 BUDGET_S = 1.0   # the model's latency budget in wall seconds (live demo): past it the planner's call stands in, flagged
 ORIGIN_NAME = {"iran_w": "western Iran", "iran_nw": "north-western Iran", "iran_c": "central Iran", "iraq": "Iraq",
                "yemen": "Yemen", "lebanon_s": "southern Lebanon", "lebanon_bq": "the Beqaa valley", "gaza": "Gaza"}
@@ -243,6 +245,8 @@ class World:
                 return None
             t0 = time.perf_counter()
             d = self.model.choice(text, q, list(labels))
+            if d is None:   # a recorded-answers model that never saw this situation: the caller's stand-in takes it
+                return None
             self.memo[key] = (d, (time.perf_counter() - t0) * 1000)
             pol.L["calls"] += 1
             pol.L["ms"] += self.memo[key][1]
@@ -330,7 +334,7 @@ class World:
                     calls += 1
                 ans = self.ask(pol, Q_GLOBAL, text, [label(o.key) for o in opts], th.t0 + th.T, th.id)
                 if ans is None:
-                    if not self.late(pol, s, "g"):
+                    if not self.late(pol, s, "g", urgent=not self.async_model):
                         continue
                     opt = top
                     info["late"] = True
@@ -477,7 +481,7 @@ class World:
                     calls += 1
                 ans = self.ask(pol, Q_LOCAL, text, LEVELS, shot[0], th.id)
                 if ans is None:
-                    if not self.late(pol, s, "l", urgent=f["last"]):
+                    if not self.late(pol, s, "l", urgent=f["last"] or not self.async_model):
                         continue
                     n = teach
                     info["late"] = True
@@ -564,6 +568,22 @@ class World:
             self.resolve(p)
         self.advance(dt)
         return calls
+
+    def run_for(self, sim_dt, on_step=None):
+        """Live demo clock: owe sim_dt seconds, pay them in fixed DT steps, jump over quiet stretches. The steps (and so
+        every decision and every question Typical is asked) are the same whatever the speed, pauses or replays.
+        -> sim seconds skipped."""
+        self.owed = getattr(self, "owed", 0.0) + sim_dt
+        skipped = 0.0
+        while self.owed >= DT and self.t < self.end:
+            self.owed -= DT
+            self.step(DT)
+            if on_step:
+                on_step(self)
+            if (nxt := self.next_event()) - self.t > QUIET_S:
+                skipped += nxt - 5 - self.t
+                self.advance(nxt - 5 - self.t)
+        return skipped
 
     def advance(self, dt):
         for p in self.policies.values():

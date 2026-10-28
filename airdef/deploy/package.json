@@ -1,0 +1,7 @@
+{
+  "name": "typical-ad",
+  "private": true,
+  "scripts": { "deploy": "wrangler deploy" },
+  "dependencies": { "@cloudflare/containers": "latest" },
+  "devDependencies": { "wrangler": "latest" }
+}

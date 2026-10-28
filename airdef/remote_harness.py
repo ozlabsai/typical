@@ -6,6 +6,7 @@ Reuses scripts/typically_job.Job for the pod lifecycle (create / ssh / delete-in
 .context/airdef/remote/<run id>/*.json; the pod log in .context/typically/jobs/airdef_eval/job.log.
 """
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -33,8 +34,7 @@ fi
 uv run --no-sync python -c "from huggingface_hub import snapshot_download, hf_hub_download; snapshot_download('Qwen/Qwen3-1.7B-Base'); hf_hub_download('OzLabs/typical-small', 'best.pt')"
 mkdir -p out
 # one job per (scenario, seed, model), longest scenarios first, so 10 parallel jobs stay busy to the end
-for sc in {scenarios}; do for sd in {seeds}; do for m in {models}; do echo "$m $sc $sd"; done; done; done | \\
-  xargs -P 10 -L 1 bash -c 'uv run --no-sync python airdef/harness.py "$1" --model "$(cat ckpt/$0.path)" --seeds $2 --json out/$0__$1__$2.json > out/$0__$1__$2.log 2>&1'
+{jobs}
 touch /workspace/done
 """
 
@@ -46,6 +46,8 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
     ap.add_argument("--models", nargs="+", default=["base", "tuned"])
     ap.add_argument("--scenarios", nargs="+", default=["northern_barrage", "april_mixed", "october_saturation", "june_attrition", "houthi_eilat"])
+    ap.add_argument("--record", action="store_true", help="record Typical's answers (record.py) instead: one job per scenario / drill family")
+    ap.add_argument("--limit", type=int, default=LIMIT_S // 60, help="minutes for the whole remote run (keep below any caller's own timeout)")
     a = ap.parse_args()
     run_id = time.strftime("%Y%m%d-%H%M%S")
     out = ROOT / ".context/airdef/remote" / run_id
@@ -67,7 +69,15 @@ def main():
                 for name, path in ckpts:
                     (tmp / f"{name}.path").write_text(path)
                     t.add(tmp / f"{name}.path", arcname=f"ckpt/{name}.path")
-            (tmp / "run.sh").write_text(RUN_SH.format(models=" ".join(a.models), scenarios=" ".join(a.scenarios), seeds=" ".join(map(str, a.seeds))))
+            if a.record:   # the model is the first --ckpts entry; drills are recorded per family
+                fams = sorted({json.loads(x)["meta"]["family"] for x in (ROOT / "airdef/recorded/drill_ui.jsonl").read_text().splitlines()})
+                names = " ".join(a.scenarios + [f"drill:{f}" for f in fams])
+                jobs = (f'for j in {names}; do echo "$j"; done | xargs -P 12 -L 1 bash -c \'uv run --no-sync python airdef/record.py '
+                        f'--model "$(cat ckpt/{a.ckpts[0].split("=")[0]}.path)" --only "$0" --out "out/$(echo $0 | tr : _).json.gz" > "out/$(echo $0 | tr : _).log" 2>&1\'')
+            else:   # one job per (scenario, seed, model), longest scenarios first, so 10 parallel jobs stay busy to the end
+                jobs = (f'for sc in {" ".join(a.scenarios)}; do for sd in {" ".join(map(str, a.seeds))}; do for m in {" ".join(a.models)}; do echo "$m $sc $sd"; done; done; done | \\\n'
+                        f'  xargs -P 10 -L 1 bash -c \'uv run --no-sync python airdef/harness.py "$1" --model "$(cat ckpt/$0.path)" --seeds $2 --json out/$0__$1__$2.json > out/$0__$1__$2.log 2>&1\'')
+            (tmp / "run.sh").write_text(RUN_SH.format(jobs=jobs))
             print(f"tarball {j.tar.stat().st_size / 1e6:.0f} MB; asking RunPod for an H100", flush=True)
             j.create()
             j.wait_ssh()
@@ -80,7 +90,7 @@ def main():
             # launch on its own line: backgrounding a whole `a && b &` chain keeps ssh's stdout open until it ends
             j.ssh("setsid nohup bash /workspace/run.sh > /workspace/run.log 2>&1 < /dev/null & echo $! > /workspace/run.pid", 60)
             print(f"running on {j.gpu}; polling", flush=True)
-            j.deadline = time.monotonic() + LIMIT_S   # this harness's own limit, not the training job's 75 min
+            j.deadline = time.monotonic() + a.limit * 60   # this harness's own limit, not the training job's 75 min
             bad = 0
             while time.monotonic() < j.deadline - 300:   # leave time to fetch whatever finished
                 time.sleep(30)
@@ -97,7 +107,7 @@ def main():
                 if state.startswith("DONE"):
                     break
             else:
-                print(f"not finished in {LIMIT_S // 60} minutes: fetching the runs that did", flush=True)
+                print(f"not finished in {a.limit} minutes: fetching the runs that did", flush=True)
         finally:
             if j.host:   # fetch before delete on every path: partial results are still results
                 j.deadline = max(j.deadline, time.monotonic() + 400)

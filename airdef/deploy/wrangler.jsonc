@@ -1,0 +1,13 @@
+{
+  // typical-ad.ozlabs.ai: the air-defence demo, password protected, one container per signed-in visitor.
+  "name": "typical-ad",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "routes": [{ "pattern": "typical-ad.ozlabs.ai", "custom_domain": true }],
+  "containers": [
+    { "class_name": "AirdefDemo", "image": "./Dockerfile", "image_build_context": "..", "instance_type": "standard", "max_instances": 10 }
+  ],
+  "durable_objects": { "bindings": [{ "class_name": "AirdefDemo", "name": "AIRDEF" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AirdefDemo"] }],
+  "observability": { "enabled": true }
+}

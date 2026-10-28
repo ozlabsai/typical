@@ -27,6 +27,8 @@ from sim import (AIR_HE, AIR_KINDS, BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFE
 ROOT = Path(__file__).parent
 TUNED = ROOT.parent / ".context/typically/results/co_airdef_v3/best.pt"   # v3: v4 wins per decision but under-fires in saturation raids (README)
 MODEL_ID = os.environ.get("AIRDEF_MODEL") or (str(TUNED) if TUNED.exists() else "OzLabs/typical-small")
+ASYNC = not MODEL_ID.startswith("recorded")   # a live model answers off-clock; recorded answers are instant and in step
+POLICIES = ("typical",)   # the demo shows Typical only (the doctrine/planner benchmarks are harness.py's job)
 TICK_S = 0.25          # real seconds per loop tick
 BUDGET = 6             # Typical calls per tick; the sim slows down when decisions back up
 
@@ -34,12 +36,15 @@ app = FastAPI()
 lock = threading.Lock()   # one lock for world + model (MPS crashes on concurrent calls)
 S = dict(world=None, running=False, speed=10.0, model=None, model_name="planner only", backlog=False, skipped=0.0, drill=None,
          director=None, mode="focus")
-DRILL = ROOT.parent / ".context/airdef/drill_ui.jsonl"   # situations.py --instances 3 --rollouts 40 --out <this>
-QUIET_S = 15           # auto-skip: jump when nothing happens for longer than this (sim seconds)
+DRILL = ROOT / "recorded" / "drill_ui.jsonl"   # situations.py --instances 3 --rollouts 40 --out <this>
 
 
 def load_model():
     if MODEL_ID == "none":
+        return
+    if MODEL_ID.startswith("recorded"):   # Typical's recorded answers (record.py): no model, no GPU
+        import record
+        S["model"], S["model_name"], S["batch"] = record.Recorded(MODEL_ID.partition(":")[2] or None), "typical-small · tuned", 1
         return
     import scorer   # the training repo's decider; see scorer.py for why not inference/typical
     m = scorer.load(MODEL_ID)
@@ -49,7 +54,7 @@ def load_model():
 
 
 def new_world(scenario, seed=7, cfg=None):
-    S["world"] = World(scenario, cfg or DEFAULT_CONFIG, S["model"], seed, async_model=True)
+    S["world"] = World(scenario, cfg or DEFAULT_CONFIG, S["model"], seed, policies=POLICIES, async_model=ASYNC)
     S["running"], S["drill"], S["director"] = False, None, Director()
     S["director"].slow = S["mode"] == "focus"
 
@@ -62,7 +67,7 @@ def new_drill(fam, n):
         raise HTTPException(400, "unknown drill")
     m = rows[n % len(rows)]["meta"]
     w, th, t = situations.case(fam, m["inst"])
-    w.t, w.model, w.async_model, w.scenario = t, S["model"], True, f"drill:{fam}:{n % len(rows)}"
+    w.t, w.model, w.async_model, w.scenario = t, S["model"], ASYNC, f"drill:{fam}:{n % len(rows)}"
     w.policies["typical"] = copy.deepcopy(w.policies["planner"])
     w.policies["typical"].name = "typical"
     S.update(world=w, running=False, director=None, drill=dict(family=fam, case=n % len(rows), cases=len(rows), threat=th.id,
@@ -84,17 +89,21 @@ def loop():
                 w.step(0.0)                            # a paused drill still gets its calls made, at the frozen moment
             elif S["running"] and w and w.t < w.end:
                 d = S["director"]
-                w.step(real * (d.speed(w, S["speed"]) if d else S["speed"]))   # decide, resolve, fly aircraft, advance
-                if d:
-                    try:
-                        d.tick(w)
-                        d.offer(w, d.scan(w))          # a key moment slows the clock and gets a caption
-                    except Exception:                  # the story layer must never stop the clock: log, play on without it
-                        traceback.print_exc()
-                        S["director"] = d = None
-                if (not d or not d.beat) and (nxt := w.next_event()) - w.t > QUIET_S:
-                    S["skipped"] = nxt - 5 - w.t       # the UI shows "skipped mm:ss"
-                    w.advance(nxt - 5 - w.t)
+                S["rate"] = rate = d.speed(w, S["speed"]) if d else S["speed"]
+
+                def on_step(w):                        # a key moment is caught at the step it happens
+                    if S["director"]:
+                        try:
+                            S["director"].tick(w)
+                            S["director"].offer(w, S["director"].scan(w))
+                        except Exception:              # the story layer must never stop the clock: log, play on without it
+                            traceback.print_exc()
+                            S["director"] = None
+                skipped = w.run_for(real * rate, on_step)   # fixed steps: decide, resolve, fly aircraft, skip quiet time
+                if skipped:
+                    S["skipped"] = skipped             # the UI shows "skipped mm:ss"
+                if S["director"]:
+                    S["director"].tick(w)
             S["backlog"] = len(w.requests) if w else 0
         time.sleep(max(0.0, TICK_S - (time.perf_counter() - t0)))
 
@@ -183,7 +192,8 @@ def state(policy: str = "typical"):
                                wait_eff=s.get("wait_eff") if s["status"] == "waiting" else None,
                                wait_until=s.get("wait_until") if s["status"] == "waiting" else None,
                                fired=(s.get("local") or {}).get("fired")))
-        return dict(t=w.t, end=w.end, running=S["running"], speed=S["speed"], backlog=S["backlog"],
+        return dict(t=w.t + getattr(w, "owed", 0.0), end=w.end, running=S["running"], speed=S["speed"], rate=S.get("rate", S["speed"]),
+                    backlog=S["backlog"],
                     skipped=S["skipped"],
                     scenario=w.scenario, model=S["model_name"], cfg=w.cfg, tracks=tracks,
                     flights=[dict(b=f[1], th=f[2], t0=f[3], t1=f[4], lat=f[5], lon=f[6], alt=f[7] * 1000, hit=f[8],

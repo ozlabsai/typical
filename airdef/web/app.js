@@ -358,9 +358,10 @@ function simNow() {
   const now = performance.now(), dtr = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
   const live = S.running;
-  const target = live ? Math.min(S.end, S.t + ((now - fetchedAt) / 1000) * S.speed) : S.t;
-  if (shown === null || !S.running || Math.abs(target - shown) > Math.max(30, 4 * S.speed)) return (shown = target);
-  const step = live ? dtr * S.speed : 0;
+  const rate = S.rate ?? S.speed;   // the playback rate actually running (a story slows it, fast-forward raises it)
+  const target = live ? Math.min(S.end, S.t + ((now - fetchedAt) / 1000) * rate) : S.t;
+  if (shown === null || !S.running || Math.abs(target - shown) > Math.max(30, 4 * rate)) return (shown = target);
+  const step = live ? dtr * rate : 0;
   shown = Math.max(shown, shown + step + (target - shown - step) * Math.min(1, dtr * 3));
   return shown;
 }
