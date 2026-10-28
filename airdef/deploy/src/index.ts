@@ -56,6 +56,7 @@ function loginPage(error = "", status = 200): Response {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    if (!env.DEMO_PASSWORD) return new Response("Not configured.", { status: 503 });   // never open without a password
     const url = new URL(req.url);
     if (url.pathname === "/login" && req.method === "POST") {
       const password = String((await req.formData()).get("password") || "");
