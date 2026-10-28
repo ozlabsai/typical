@@ -1,4 +1,4 @@
-// typical-ad.ozlabs.ai: a shared-password login in front of the static demo (each visitor's browser plays the raid).
+// typical-airdefence.ozlabs.ai: a shared-password login in front of the static demo (each visitor's browser plays the raid).
 interface Env {
   ASSETS: Fetcher;
   DEMO_PASSWORD: string; // wrangler secret put DEMO_PASSWORD
@@ -50,6 +50,10 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     if (!env.DEMO_PASSWORD) return new Response("Not configured.", { status: 503 });   // never open without a password
     const url = new URL(req.url);
+    if (url.hostname === "typical-ad.ozlabs.ai") {   // the first address: links already sent keep working
+      url.hostname = "typical-airdefence.ozlabs.ai";
+      return Response.redirect(url.toString(), 301);
+    }
     if (url.pathname === "/login" && req.method === "POST") {
       const password = String((await req.formData()).get("password") || "");
       if (!(await sameSecret(password, env.DEMO_PASSWORD))) return loginPage("Wrong password.", 401);

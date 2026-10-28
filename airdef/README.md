@@ -41,7 +41,7 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 - Quiet stretches are skipped automatically; a plain *Wait* on a drone hours out is re-asked at ~10% of its remaining
   flight. Whole scenarios at 20x: Red Sea ~50 s, northern ~70 s, October ~70 s, June ~100 s, April ~2 min.
 
-## Hosted demo (typical-ad.ozlabs.ai)
+## Hosted demo (typical-airdefence.ozlabs.ai; typical-ad redirects)
 
 A static site behind a shared-password Worker (Cloudflare free plan; no server, no model). `record.py` recorded
 Typical's real answers once; the sim is deterministic (fixed DT steps, stable text), so `bake.py` plays every scenario
