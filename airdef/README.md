@@ -41,6 +41,21 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 - Quiet stretches are skipped automatically; a plain *Wait* on a drone hours out is re-asked at ~10% of its remaining
   flight. Whole scenarios at 20x: Red Sea ~50 s, northern ~70 s, October ~70 s, June ~100 s, April ~2 min.
 
+## Hosted demo (typical-ad.ozlabs.ai)
+
+A static site behind a shared-password Worker (Cloudflare free plan; no server, no model). `record.py` recorded
+Typical's real answers once; the sim is deterministic (fixed DT steps, stable text), so `bake.py` plays every scenario
+and drill case through the live server's own clock and director and writes a tape per scenario; `web/tape.js` plays
+it in the browser through the same API `app.js` uses. Everything works except Settings (hidden: a recording cannot
+re-run the raid with other settings). The local server keeps Settings for live presentations.
+
+```bash
+AIRDEF_MODEL=recorded uv run --no-sync python airdef/bake.py      # -> airdef/static (about 8 MB)
+cd airdef/deploy && npx wrangler deploy                            # password: npx wrangler secret put DEMO_PASSWORD
+```
+
+The zone's bot protection shows non-browser clients a "Just a moment..." check; browsers pass it.
+
 ## Five-minute demo script
 
 The panel has two modes (header). **Focus** (default) tells the raid as stories: when a missile is engaged, aircraft

@@ -211,7 +211,8 @@ const LABEL = { fontFamily: "Figtree, Heebo, Arial, sans-serif", characterSet: "
 const bearing = (u) => (u.goal ? (Math.atan2((u.goal[1] - u.lon) * Math.cos(u.lat * Math.PI / 180), u.goal[0] - u.lat) * 180) / Math.PI : 0);
 map.addControl(overlay);
 const flyTo = (v) => { const [lon, lat, zoom, pitch] = VIEWS[v]; map.flyTo({ center: [lon, lat], zoom, pitch, duration: 1600 }); };
-const api = (p, body) => fetch(p, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}).then((r) => r.json());
+const STATIC = !!window.AIRDEF_STATIC;   // the hosted build: a baked tape (tape.js) plays in place of the live server
+const api = STATIC ? window.tapeApi : (p, body) => fetch(p, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}).then((r) => r.json());
 
 async function init() {
   META = await api("/api/meta");
@@ -233,6 +234,7 @@ async function init() {
     pinned = false; detail = null; api("/api/control", { action: "moment", index: +m.dataset.m });
   };
   $("#gear").onclick = () => { const o = $("#sheet").classList.toggle("open"); $("#gear").setAttribute("aria-expanded", o); };
+  if (STATIC) $("#gear").style.display = "none";   // a recording cannot re-run the raid with other settings
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#sheet").classList.remove("open"); $("#gear").setAttribute("aria-expanded", false); } });
   $("#list").onclick = (e) => {
     if (e.target.closest("#followBtn")) { pinned = false; focus = null; renderList(); return; }

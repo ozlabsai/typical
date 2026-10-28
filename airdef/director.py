@@ -74,7 +74,8 @@ class Director:
             if th.id not in waited:
                 self.stats["cheaper"] += 1
             # what the wait keeps, in interceptor prices: the cheapest round that could fire now minus the one waited for
-            price = [EFFECTORS[k.split(":")[1]]["cost"] for k in cost if k.startswith("now:")]
+            # against the cheapest round that could fire now AND is likely to stop it (pk >= 0.7): not a long shot
+            price = [EFFECTORS[o[0].split(":")[1]]["cost"] for o in info.get("opts", []) if o[0].startswith("now:") and o[4] >= 0.7]
             waited[th.id] = (s["wait_eff"], max(min(price) - EFFECTORS[s["wait_eff"]]["cost"], 0.0) if price else 0.0)
         if key == "hold":
             if self.salvo and w.t - self.salvo["t_last"] < SALVO_S and self.salvo["cls"] == th.cls:
@@ -88,7 +89,9 @@ class Director:
         if prev == "cheaper" and key.startswith("now:") and th.id in waited:
             eff, kept = waited.pop(th.id)
             if key == "now:" + eff:   # the wait paid off only if the interceptor it waited for is the one that fires
-                self.stats["kept"] += kept
+                if th.id not in self.seen.setdefault("credited", set()):   # once per threat, however often the call flips
+                    self.seen["credited"].add(th.id)
+                    self.stats["kept"] += kept
                 return self._new(w, th, s, "payoff", 2.5, kept=kept)
             return None
         if key == "cheaper":

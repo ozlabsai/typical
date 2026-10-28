@@ -1,13 +1,14 @@
 {
-  // typical-ad.ozlabs.ai: the air-defence demo, password protected, one container per signed-in visitor.
+  // typical-ad.ozlabs.ai: the air-defence demo as a static site (bake.py tapes played by web/tape.js), behind a
+  // shared-password Worker. Free plan: Workers + static assets, no containers. Build: bake.py writes ../static.
   "name": "typical-ad",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
   "routes": [{ "pattern": "typical-ad.ozlabs.ai", "custom_domain": true }],
-  "containers": [
-    { "class_name": "AirdefDemo", "image": "./Dockerfile", "image_build_context": "..", "instance_type": "standard", "max_instances": 10 }
-  ],
-  "durable_objects": { "bindings": [{ "class_name": "AirdefDemo", "name": "AIRDEF" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AirdefDemo"] }],
+  "assets": { "directory": "../static", "binding": "ASSETS", "run_worker_first": true },
+  // v1 came from a first, container-based attempt (never served); v2 removes its empty Durable Object class
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AirdefDemo"] }, { "tag": "v2", "deleted_classes": ["AirdefDemo"] }],
   "observability": { "enabled": true }
 }

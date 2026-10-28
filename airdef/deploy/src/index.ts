@@ -1,14 +1,6 @@
-// typical-ad.ozlabs.ai: a shared-password login in front of the demo; each signed-in visitor gets their own
-// container (its own raid, clock and settings), which sleeps when they leave.
-import { Container, getContainer } from "@cloudflare/containers";
-
-export class AirdefDemo extends Container {
-  defaultPort = 8790;
-  sleepAfter = "20m";
-}
-
+// typical-ad.ozlabs.ai: a shared-password login in front of the static demo (each visitor's browser plays the raid).
 interface Env {
-  AIRDEF: DurableObjectNamespace<AirdefDemo>;
+  ASSETS: Fetcher;
   DEMO_PASSWORD: string; // wrangler secret put DEMO_PASSWORD
 }
 
@@ -68,7 +60,7 @@ export default {
       });
     }
     const sid = await session(req, env);
-    if (!sid) return url.pathname.startsWith("/api/") ? new Response("unauthorized", { status: 401 }) : loginPage();
-    return getContainer(env.AIRDEF, sid).fetch(req);
+    if (!sid) return url.pathname.startsWith("/data/") ? new Response("unauthorized", { status: 401 }) : loginPage();
+    return env.ASSETS.fetch(req);
   },
 };

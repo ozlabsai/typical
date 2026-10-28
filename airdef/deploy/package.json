@@ -1,7 +1,6 @@
 {
   "name": "typical-ad",
   "private": true,
-  "scripts": { "deploy": "wrangler deploy" },
-  "dependencies": { "@cloudflare/containers": "latest" },
+  "scripts": { "build": "cd ../.. && AIRDEF_MODEL=recorded uv run --no-sync python airdef/bake.py", "deploy": "wrangler deploy" },
   "devDependencies": { "wrangler": "latest" }
 }

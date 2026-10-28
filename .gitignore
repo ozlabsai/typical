@@ -50,3 +50,4 @@ site/app/
 # deploy/runpod.sh: secrets and the running host pod id
 deploy/hosted.env
 deploy/.pod
+airdef/static/
