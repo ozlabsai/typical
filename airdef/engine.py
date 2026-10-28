@@ -99,7 +99,8 @@ def global_text(th, t, opts, prices, left, inbound, cfg, units):
         lines.append("No ground interceptor can reach it.")
     elif not now and later and later[0].launch - t > 600:
         lines.append(f"No ground interceptor can reach it for {in_words(later[0].launch - t)}.")
-    used = sorted({o.eff for o in now + later if not EFFECTORS[o.eff].get("unlimited")}, key=lambda e: -EFFECTORS[e]["layer"])
+    # name breaks layer ties: a set's string order changes with every process (hash randomisation), and the text must not
+    used = sorted({o.eff for o in now + later if not EFFECTORS[o.eff].get("unlimited")}, key=lambda e: (-EFFECTORS[e]["layer"], e))
     raid = [f"{SHORT[e]} is {'short' if prices.get(e, (0, 0))[0] > 0 else 'enough'} tonight ({left.get(e, 0):.0f} left)" for e in used]
     lines.append(f"Tonight: {inbound} more {CLASS_WORD[th.cls]}s in flight or expected" + (". " + "; ".join(raid) if raid else "") + ".")
     camp = [SHORT[e] for e in used if prices.get(e, (0, 0))[1] > EFFECTORS[e]["cost"] * 2]
