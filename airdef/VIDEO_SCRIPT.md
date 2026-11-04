@@ -1,6 +1,6 @@
 # Typical · Air defence: demo video flow
 
-The points the video gets across, in order. `make_video.py` records it (about 2 minutes).
+The points the video gets across, in order. `make_video.py` records it (about 4 minutes: 3 minutes of explanation, then a 1-minute uncaptioned run).
 
 1. **The problem.** 120 ballistic missiles in 12 minutes. Every one needs a call: which interceptor, when, or none
    at all.
@@ -28,4 +28,7 @@ The points the video gets across, in order. `make_video.py` records it (about 2 
    - With magazines set to critical, Typical lets it fall (94%).
    - With Tiberias made a priority site, Typical fires David's Sling (99%).
 
-6. **The close.** Every call explained. Every call yours to set.
+6. **The whole raid, uninterrupted.** The Red Sea raid plays on its own with no captions: 11 missiles and drones,
+   11 intercepted.
+
+7. **The close.** Every call explained. Every call yours to set.

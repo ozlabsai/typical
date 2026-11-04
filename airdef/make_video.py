@@ -8,6 +8,7 @@ Acts 1-4 play the recorded tapes (deterministic: every take is the same); act 5 
 so each new call is Typical's real answer. A scripted camera zooms to the element being explained.
 """
 import argparse
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -15,12 +16,18 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 W, H = 1920, 1080
+WPS = 2.8   # reading speed, words per second (~170 wpm): every caption and card stays at least this long
+
+
+def read_time(html, floor=2.4):
+    words = len(re.sub(r"<[^>]+>", " ", html).split())
+    return max(floor, 1.0 + words / WPS)
 
 KIT = """
 (() => {
   const st = document.createElement('style');
   st.textContent = `
-  body { transform-origin: 0 0; transition: transform 1s cubic-bezier(.2,.7,.2,1); }
+  body { transform-origin: 0 0; transition: transform 1.4s cubic-bezier(.25,.6,.2,1); }
   .vring { outline: 3px solid #2548f6 !important; outline-offset: 6px; border-radius: 10px; }
   #vcap { position: fixed; left: 32px; bottom: 40px; max-width: 760px; z-index: 50; padding: 16px 22px; border-radius: 14px;
     background: rgba(16,16,16,.88); color: #fff; font: 500 30px/1.3 Figtree, Heebo, Arial, sans-serif; letter-spacing: -.01em;
@@ -72,17 +79,17 @@ class Film:
     def js(self, code, arg=None):
         return self.pg.evaluate(code, arg)
 
-    def card(self, html, secs, during=None):   # `during`: done under the card (e.g. switching scenario), off camera
+    def card(self, html, secs=0.0, during=None):   # `during`: done under the card (e.g. switching scenario), off camera
         self.js("h => VID.card(h)", html); t = time.time()
         if during:
             during()
-        time.sleep(max(0.0, secs - (time.time() - t))); self.js("() => VID.uncard()"); time.sleep(0.5)
+        time.sleep(max(0.0, max(secs, read_time(html, 3.0)) - (time.time() - t))); self.js("() => VID.uncard()"); time.sleep(0.7)
 
-    def cap(self, html, secs=0.0):
-        self.js("h => VID.cap(h)", html); time.sleep(secs)
+    def cap(self, html, secs=0.0):   # at least the reading time, so nothing is gone before it is read
+        self.js("h => VID.cap(h)", html); time.sleep(max(secs, read_time(html)))
 
-    def zoom(self, sel, max=2.4, fill=0.8):
-        self.js("a => VID.zoom(a[0], a[1], a[2])", [sel, max, fill])
+    def zoom(self, sel, max=2.4, fill=0.8):   # the camera moves, then a breath before anything is said about it
+        self.js("a => VID.zoom(a[0], a[1], a[2])", [sel, max, fill]); time.sleep(1.1)
 
     def ring(self, sel):
         self.js("s => VID.ring(s)", sel)
@@ -206,7 +213,6 @@ def raids(f):
 
 # ---------------------------------------------------------------- act 5: the policy is yours (live server, live model)
 def policy(f):
-    f.js("() => VID.uncard()")
     f.card("You set the policy.<small>Typical follows it.</small>", 4.0, lambda: (f.scenario("drill:last_chance:0"), time.sleep(1.5)))
     f.until("detail && detail.info && detail.info.dist", 20); time.sleep(0.6)
     f.cap("A rocket to Tiberias, seconds from impact. One David's Sling battery reaches it.", 3.0)
@@ -231,9 +237,19 @@ def policy(f):
     f.until("detail && detail.choice === 'now:dsling' && detail.info.dist['now:dsling'] > 0.9", 15); time.sleep(0.8)
     f.zoom("#list .opts.live", max=2.3, fill=0.6); f.ring("#list .opts.live")
     f.cap(f"Typical fires David's Sling: <b>{pct('now:dsling')}%</b>.", 2.6)
-    f.wide(0.3); f.js("() => VID.uncap()")
+    f.wide(0.6); f.js("() => VID.uncap()")
     f.pg.click("#gear"); time.sleep(0.3); f.pg.click('#prio [data-site="tiberias"]'); time.sleep(0.3); f.pg.click("#gear")   # leave the server as found
-    f.card("Typical<small>Every call explained. Every call yours to set.</small>", 3.2)
+
+
+# ---------------------------------------------------------------- the full run: the same system, on its own (static site)
+def fullrun(f):
+    def to_red_sea():
+        f.scenario("houthi_eilat")
+        f.control({"action": "speed", "speed": 20})
+    f.card("Now the whole raid, uninterrupted.<small>Red Sea: 11 missiles and drones. Typical makes every call.</small>", 0, to_red_sea)
+    f.control({"action": "play"})
+    f.until("raidOver()", 240); time.sleep(3.5)
+    f.card("Typical<small>Every call explained. Every call yours to set.</small>", 4.0)
 
 
 def main():
@@ -241,10 +257,10 @@ def main():
     ap.add_argument("--static", default="http://127.0.0.1:8796")
     ap.add_argument("--live", default="http://127.0.0.1:8797")
     ap.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / ".context/airdef/video"))
-    ap.add_argument("--only", choices=["raids", "policy"])
+    ap.add_argument("--only", choices=["raids", "policy", "fullrun"])
     a = ap.parse_args()
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
-    acts = {"raids": (raids, a.static), "policy": (policy, a.live)}
+    acts = {"raids": (raids, a.static), "policy": (policy, a.live), "fullrun": (fullrun, a.static)}
     clips = [record(url, out, act) for name, (act, url) in acts.items() if not a.only or a.only == name]
     if a.only:
         print(clips[0]); return
