@@ -2,7 +2,7 @@
 // State at any time is rebuilt from the tape's frames (each holds only what changed); the clock, the quiet-time skips
 // and Focus's story pacing (director.py) run here.
 (() => {
-  const DT = 4, QUIET_S = 15, STORY_S = 25, SEEK = 60, BEAT_S = 7, OUTCOME_S = 3.5, FOLLOW_MAX = 60;
+  const DT = 4, QUIET_S = 15, STORY_S = 20, SEEK = 60, BEAT_S = 7, OUTCOME_S = 3.5, FOLLOW_MAX = 60;
   const tapes = {};
   let meta = null;
   const V = { name: null, tape: null, t: 0, maxT: 0, running: false, speed: 10, rate: 10, mode: "focus", last: performance.now(),
@@ -69,9 +69,8 @@
     if (focus) {
       const b = V.beat;
       if (b) {
-        const th = V.tape.threats[b.m.tid];
         if (b.follow && !b.done && V.t >= b.m.t_done) { b.done = true; b.until = Math.min(b.until, now + OUTCOME_S * 1000); }
-        rate = b.follow && !b.done ? Math.min(Math.max((th.impact - V.t) / STORY_S, 1), 300) : 1;
+        rate = b.follow && !b.done ? b.rate : 1;
         if (now > b.until) { V.beat = null; V.next = b.id + 1; }
       } else rate = SEEK;   // between stories: fast-forward to the next one
     }
@@ -87,7 +86,9 @@
   }
   function startBeat(id, now = performance.now()) {
     const m = V.tape.moments[id], follow = ["air", "cheaper", "payoff", "engage"].includes(m.type);
-    V.beat = { id, m, follow, done: false, until: now + (follow ? FOLLOW_MAX : BEAT_S) * 1000 };
+    // the tape knows when the story ends: every story takes about STORY_S from its first call to its outcome
+    const rate = Math.min(Math.max((m.t_done - m.t) / STORY_S, 1), 300);
+    V.beat = { id, m, follow, done: false, rate, until: now + (follow ? FOLLOW_MAX : BEAT_S) * 1000 };
   }
 
   // ---------------------------------------------------------------- the API app.js calls
