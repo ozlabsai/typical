@@ -532,7 +532,7 @@ function localLine(D) {   // the fire unit's call, in one line: who, how many, a
 const barsNode = document.createElement("div");   // the live bars keep their DOM across re-renders, so widths animate
 barsNode.className = "opts live";
 function liveBars(dist, chosen) {   // update the live bars in place: a row per option, sorted, the call highlighted
-  if (!dist) { barsNode.innerHTML = ""; return; }
+  if (!dist) { barsNode.innerHTML = ""; barsNode.dataset.keys = ""; return; }   // forget the rows, so the next call rebuilds them
   const keys = Object.keys(dist).sort((a, b) => dist[b] - dist[a]);
   if (barsNode.dataset.keys !== keys.join() || barsNode.dataset.lang !== LANG) {
     barsNode.dataset.keys = keys.join(); barsNode.dataset.lang = LANG;

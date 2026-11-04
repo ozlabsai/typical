@@ -120,10 +120,11 @@
   async function control(c) {
     if (c.action === "play") { V.running = true; V.last = performance.now(); }
     else if (c.action === "pause") V.running = false;
+    else if (c.action === "seek") seekTo(+c.t);   // jump within the tape (the video recorder uses it)
     else if (c.action === "speed") V.speed = Math.max(0.25, Math.min(+c.speed, 600));
     else if (c.action === "mode") { V.mode = c.mode; if (c.mode === "general") V.beat = null; }
     else if (c.action === "next") { V.beat = null; V.running = true; V.next = V.tape.moments.findIndex((m) => m.t > V.t + 1e-6); if (V.next < 0) V.next = V.tape.moments.length; }
-    else if (c.action === "moment") { const m = V.tape.moments[c.index]; if (m) { seekTo(m.t); V.next = m.id + 1; startBeat(m.id); V.running = true; } }
+    else if (c.action === "moment") { const m = V.tape.moments[c.index]; if (m) { seekTo(m.t + 0.01); V.next = m.id + 1; startBeat(m.id); V.running = true; } }   // +0.01: tape times are rounded
     else if (c.action === "reset") await reset(c.scenario || V.tape.drill && `drill:${V.tape.drill.family}:${V.tape.drill.case}` || V.tape.scenario);
     return { ok: true };
   }

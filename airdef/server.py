@@ -59,8 +59,9 @@ def new_world(scenario, seed=7, cfg=None):
     S["director"].slow = S["mode"] == "focus"
 
 
-def new_drill(fam, n):
-    """One curated situation (situations.py), frozen at its decision moment, with every option's simulated outcome."""
+def new_drill(fam, n, patch=None):
+    """One curated situation (situations.py), frozen at its decision moment, with every option's simulated outcome.
+    patch: Settings changed on this drill -- the frozen decision is re-asked from scratch under them."""
     import situations
     rows = [r for r in map(json.loads, DRILL.read_text().splitlines()) if r["meta"]["family"] == fam]
     if not rows:
@@ -70,6 +71,9 @@ def new_drill(fam, n):
     w.t, w.model, w.async_model, w.scenario = t, S["model"], ASYNC, f"drill:{fam}:{n % len(rows)}"
     w.policies["typical"] = copy.deepcopy(w.policies["planner"])
     w.policies["typical"].name = "typical"
+    if patch:
+        w.set_config(patch)
+    S["drill_patch"] = patch or {}
     S.update(world=w, running=False, director=None, drill=dict(family=fam, case=n % len(rows), cases=len(rows), threat=th.id,
                                                 costs=sorted(m["costs"].items(), key=lambda kv: kv[1]),
                                                 best=m["best"], planner=m["planner"], doctrine=m["doctrine"]))
@@ -293,7 +297,11 @@ def config(patch: dict):
                      "tier_value": set(DEFAULT_CONFIG["tier_value"])}[k]
             patch[k] = {kk: min(max(float(v), 0.0), 100_000.0) for kk, v in dict(patch[k]).items() if kk in known}
     with lock:
-        S["world"].set_config(patch)
+        if S["drill"]:   # a drill is one frozen decision: re-ask it from scratch under the new settings
+            d = S["drill"]
+            new_drill(d["family"], d["case"], {**S.get("drill_patch", {}), **patch})
+        else:
+            S["world"].set_config(patch)
         return {"ok": True, "cfg": S["world"].cfg}
 
 

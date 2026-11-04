@@ -1,31 +1,31 @@
 # Typical · Air defence: demo video flow
 
-The points the video should get across, in order.
+The points the video gets across, in order. `make_video.py` records it (about 2 minutes).
 
-1. **The problem.** A missile raid is thousands of decisions: which interceptor takes each threat, when to fire, or
-   whether to fire at all.
+1. **The problem.** 120 ballistic missiles in 12 minutes. Every one needs a call: which interceptor, when, or none
+   at all.
 
-2. **Typical makes those calls.** For every threat in the air it picks the response, such as Arrow 3, Iron Dome,
-   fighter jets, waiting for a cheaper interceptor, or letting it fall. It does this in milliseconds.
+2. **Watch one decision get made.** A Ghadr is heading for Dimona.
+   - **What Typical reads:** the threat; the interceptors that can reach it, with their odds and costs; tonight's
+     stock.
+   - **The options it weighs:** Arrow 3 50%, wait 26%, SM-3 24%.
+   - **The call:** Arrow 3, now.
+   - **The battery's own call:** fire one round, keeping time to look before a second.
+   - **The result:** intercepted, with one round.
 
-3. **It gets the call right.** A ballistic missile heads for Tel Aviv. Typical waits a few seconds for the right
-   interceptor, then Arrow 3 fires and the missile is intercepted.
+3. **As the picture changes, so does the call.** A drone heads for Eilat, where no battery can reach it. Typical
+   asks again as it flies (wait, the track is not firm) until the call turns to sending fighter jets. They
+   intercept it far from Eilat.
 
-4. **It keeps re-deciding as the situation changes.** A drone heads for Eilat, where no battery can reach it.
-   Typical keeps asking as the drone flies, then sends fighter jets.
+4. **It saves money without missing threats.** A barrage of 174 rockets and drones from Lebanon:
+   - David's Sling could fire now, but Iron Dome reaches the rocket in seconds at a twentieth of the price, so
+     Typical waits.
+   - 117 rockets heading for open ground are left to fall. Not one interceptor is spent on them.
+   - The night's bill counts every interceptor: $37M kept by waiting for the cheaper one.
 
-5. **It also decides at the fire unit.** A battery holds fire because its own jets are near the intercept point.
+5. **You set the policy, and Typical follows it.** A rocket heads for Tiberias, seconds from impact, and is a
+   close call: David's Sling 51%, let it fall 49%.
+   - With magazines set to critical, Typical lets it fall (94%).
+   - With Tiberias made a priority site, Typical fires David's Sling (99%).
 
-6. **The result.** Red Sea raid: 11 threats, 11 intercepted, 0 hits.
-
-7. **Scale.** A barrage of 174 rockets and drones from Lebanon. Every threat gets a call as it happens.
-
-8. **It saves money without missing threats.**
-   - It waits seconds for Iron Dome instead of firing David's Sling, at a twentieth of the price.
-   - 117 rockets heading for open ground are left to fall, with no interceptor spent on them.
-   - $37M is kept tonight by waiting for the cheaper interceptor.
-
-9. **The proof.** In a test case, every option is played out to the end 40 times, and Typical's pick is the best
-   one.
-
-10. **The close.** Typical is a decision model that can be fine-tuned to your doctrine and your inventory.
+6. **The close.** Every call explained. Every call yours to set.
