@@ -54,7 +54,7 @@ const I18N = {
     bat2: { rounds: (l, f) => (f ? `${l} rounds · floor ${f}` : `${l} rounds`), below: (n) => `${n} below its floor`, commit: (n) => `committed to ${n} other${n > 1 ? "s" : ""}`,
       free: "nothing else to do", before: "stops it before the border", after: "only after it crosses", isec: (s) => `intercept in ${s}` },
     alert: { prio: (s) => `Heading for ${s}, a priority area`, border: (nm) => `${nm} NM from the border`, lost: (m) => `Contact may be lost in ${m}` },
-    board: "Every threat, its call", policy: "Policy", noPolicy: "This case is a single frozen decision: its settings are fixed.", floor: "Ammo floor, Iron Dome (rounds per battery)", belowFloor: "Below the floor",
+    board: "Every threat, its call", policy: "Policy", noPolicy: "This case is a single frozen decision: its settings are fixed.", floor: "Ammo floor per Iron Dome battery", noFloor: "None", belowFloor: "Below the floor",
     belowOpts: ["Allowed", "Think twice", "Last resort"], borderPref: "Stop it before the border", borderOpts: ["Indifferent", "Prefer", "Strongly"],
     prog: "How the call developed", shotHit: (e) => `✓ ${e} intercepted it`, shotMiss: (e) => `✕ ${e} missed`,
     intro: "Every threat, one question: which interceptor, and when.", pressPlay: "Press Play.",
@@ -95,7 +95,7 @@ const I18N = {
     allied: "US THAAD and Navy", weather: "Cloud cover (laser degraded)", knobs: "Model and sensors", pkScale: "Pk scale", escTop: "Escalate below",
     warn: "Early warning, min", dmg: "Damage weights, $M per hit", tier: { strategic: "Strategic site", city: "City", infra: "Infrastructure" },
     prioMult: "Priority ×", warhead: "Warhead weight (1 = 500 kg)", perSite: "Value per site (blank = by type)",
-    note: "Posture, stock, damage weights and priorities feed every lens. Typical reads them as sentences; the planner reads numbers.",
+    note: "The policy feeds every call. Typical reads it as sentences.",
   },
   he: {
     speed: "מהירות", speedDesc: ["זמן אמת", "הדגמה רגועה", "מתקפה בכמה דקות", "הרצה מהירה"],
@@ -137,7 +137,7 @@ const I18N = {
     bat2: { rounds: (l, f) => (f ? `${l} מיירטים · רצפה ${f}` : `${l} מיירטים`), below: (n) => `${n} מתחת לרצפה`, commit: (n) => `מחויבת ל-${n} נוספים`,
       free: "פנויה", before: "עוצרת אותו לפני הגבול", after: "רק אחרי שיחצה", isec: (s) => `יירוט בעוד ${s}` },
     alert: { prio: (s) => `בדרך ל${s}, אזור בעדיפות`, border: (nm) => `${nm} מייל מהגבול`, lost: (m) => `המגע עלול לאבד בעוד ${m}` },
-    board: "כל איום וההחלטה עליו", policy: "מדיניות", noPolicy: "המקרה הזה הוא החלטה אחת קפואה: ההגדרות שלו קבועות.", floor: "רצפת מיירטים, כיפת ברזל (לסוללה)", belowFloor: "מתחת לרצפה",
+    board: "כל איום וההחלטה עליו", policy: "מדיניות", noPolicy: "המקרה הזה הוא החלטה אחת קפואה: ההגדרות שלו קבועות.", floor: "רצפת מיירטים לסוללת כיפת ברזל", noFloor: "ללא", belowFloor: "מתחת לרצפה",
     belowOpts: ["מותר", "לחשוב פעמיים", "מוצא אחרון"], borderPref: "לעצור לפני הגבול", borderOpts: ["לא משנה", "עדיף", "בהחלט"],
     prog: "איך ההחלטה התפתחה", shotHit: (e) => `✓ ${e} יירט אותו`, shotMiss: (e) => `✕ ${e} החטיא`,
     intro: "לכל איום, שאלה אחת: איזה מיירט, ומתי.", pressPlay: "לחצו הפעל.",
@@ -178,7 +178,7 @@ const I18N = {
     allied: "THAAD וצי ארה״ב", weather: "עננות (לייזר מוגבל)", knobs: "מודל וחיישנים", pkScale: "מקדם Pk", escTop: "למפעיל מתחת",
     warn: "התרעה מוקדמת, דק׳", dmg: "משקלי נזק, מיליון $ לפגיעה", tier: { strategic: "אתר אסטרטגי", city: "עיר", infra: "תשתית" },
     prioMult: "מכפיל עדיפות", warhead: "משקל ראש קרב (1 = 500 ק״ג)", perSite: "ערך לאתר (ריק = לפי סוג)",
-    note: "מצב המלאים, המלאי, משקלי הנזק והעדיפויות נכנסים לכל עדשה. Typical קורא אותם כמשפטים; המתכנן כמספרים.",
+    note: "המדיניות נכנסת לכל החלטה. Typical קורא אותה כמשפטים.",
   },
 };
 let LANG = localStorage.getItem("airdef-lang") || "en";
@@ -943,10 +943,10 @@ function buildSheet() {
   const rng = (attrs, label, val, shown) => `<label class="rng"><span>${label}</span><input type="range" ${attrs} value="${val}"><output class="num">${shown}</output></label>`;
   const heCls = { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" }, enCls = { B: "Ballistic missile", R: "Rocket", C: "Cruise missile", D: "Drone" };
   const whLabel = (k) => (META.threat_types[k] ? nm(META.threat_types[k]) : (LANG === "he" ? heCls : enCls)[k]);
-  const BELOW = [0.3, 1, 5], BORDER_P = [0, 5, 25], idx = (arr, v) => arr.reduce((b, x, i) => (Math.abs(x - v) < Math.abs(arr[b] - v) ? i : b), 0);
+  const BELOW = [0.3, 1, 5], BORDER_P = [0, 5, 25], FLOORS = [0, 12, 20], idx = (arr, v) => arr.reduce((b, x, i) => (Math.abs(x - v) < Math.abs(arr[b] - v) ? i : b), 0);
   $("#sheet").innerHTML = `
     <div class="field"><p class="kicker">${tt.policy}</p>
-      ${rng('id="floor" min="0" max="40" step="1"', tt.floor, c.ammo_floor?.ironDome ?? 0, c.ammo_floor?.ironDome ?? 0)}
+      <p class="sub-k">${tt.floor}</p><div class="dc-tabs dc-tabs--sm" id="floorP">${FLOORS.map((f, k) => `<button class="dc-tab" data-i="${k}" aria-selected="${(c.ammo_floor?.ironDome ?? 0) === f}">${f || tt.noFloor}</button>`).join("")}</div>
       <p class="sub-k">${tt.belowFloor}</p><div class="dc-tabs dc-tabs--sm" id="belowP">${tt.belowOpts.map((p, k) => `<button class="dc-tab" data-i="${k}" aria-selected="${idx(BELOW, c.floor_price) === k}">${p}</button>`).join("")}</div>
       <p class="sub-k">${tt.borderPref}</p><div class="dc-tabs dc-tabs--sm" id="borderP">${tt.borderOpts.map((p, k) => `<button class="dc-tab" data-i="${k}" aria-selected="${idx(BORDER_P, c.border_price) === k}">${p}</button>`).join("")}</div></div>
     <div class="field"><p class="kicker">${tt.posture}</p><div class="dc-tabs dc-tabs--sm" id="reserve">${tt.postures.map((p, k) => `<button class="dc-tab" data-r="${k}" aria-selected="${c.reserve === k}">${p}</button>`).join("")}</div></div>
@@ -966,7 +966,7 @@ function buildSheet() {
     document.querySelectorAll(`${id} .dc-tab`).forEach((x) => x.setAttribute("aria-selected", x === b)); cb(+b.dataset.i); });
   tabs("#belowP", (i) => set({ floor_price: BELOW[i] }));
   tabs("#borderP", (i) => set({ border_price: BORDER_P[i] }));
-  $("#floor").onchange = (e) => { e.target.nextElementSibling.textContent = e.target.value; set({ ammo_floor: { ...(S.cfg.ammo_floor || {}), ironDome: +e.target.value } }); };
+  tabs("#floorP", (i) => set({ ammo_floor: { ...(S.cfg.ammo_floor || {}), ironDome: FLOORS[i] } }));
   $("#reserve").onclick = (e) => { const b = e.target.closest("[data-r]"); if (!b) return; document.querySelectorAll("#reserve .dc-tab").forEach((x) => x.setAttribute("aria-selected", x === b)); set({ reserve: +b.dataset.r }); };
   const press = (b) => { const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", on); return on; };
   $("#prio").onclick = (e) => { const b = e.target.closest("[data-site]"); if (!b) return; press(b); set({ priority_sites: [...document.querySelectorAll('#prio [aria-pressed="true"]')].map((x) => x.dataset.site) }); };
