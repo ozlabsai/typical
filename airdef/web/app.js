@@ -21,7 +21,7 @@ const I18N = {
     cls: { B: "Ballistic missile", R: "Rocket", C: "Cruise missile", D: "Drone" },
     to: "to", openGround: "Open ground near", priority: "priority", impactIn: "Impact in", follow: "Follow the most urgent",
     following: "In focus",
-    act: { hold: "Let it fall", wait: "Wait", cheaper: "Wait for cheaper", air: { fighter: "Fighter jets", helicopter: "Helicopter" } },
+    act: { hold: "Let it fall", wait: "Keep tracking", cheaper: "Wait for cheaper", air: { fighter: "Fighter jets", helicopter: "Helicopter" } },
     whyAir: (u, m, pk) => `${u} can meet it in ${m} and ${pk}.`,
     whyTrack: "The track is not firm yet. Deciding later keeps every layer that still reaches it open.",
     local: { fires: (u, n) => `${u} fires ${n}`, holds: (u) => `${u} holds`, left: (n) => `${n} left`, busy: "all launch channels are busy", reload: "its launchers are reloading",
@@ -34,10 +34,13 @@ const I18N = {
     whyHoldOpen: "It will land in open ground. Nothing worth an interceptor is at risk.",
     whyHold: "The damage it can do is worth less than any interceptor that can reach it.",
     vs: { raid: (r) => `${r} would spend interceptors tonight's raid still needs.`, campaign: (r) => `${r} would spend stock the campaign has to keep.`,
-      local: (r, d) => `${r} costs ${d} more for this threat, in interceptors and risk.` },
+      local: (r, d) => `The next best, “${r}”, costs ${d} more in interceptors and risk.` },
+    pkS: ["almost certain", "very likely", "likely", "may stop it", "unlikely"],
+    optWhy: { now: "now", in: (m) => `in ${m}`, wait: "decide later, when the track is firmer", open: "lands in open ground", hits: (s) => `would hit ${s}`, cost: (c) => `${c} expected` },
+    optLegend: "Typical's probability for each option; expected cost = interceptors + damage risk.",
     status: { killed: "Intercepted", leaked: "Hit a defended site", fell_open: "Fell in open ground" },
     sec: { t: "Threats", u: "Aircraft", b: "Fire units" }, options: "Options weighed",
-    st: { out: "Tracking", wait: "Wait", cheaper: (e) => `Wait for ${e}`, hold: "Let it fall", ground: (e, u) => `${e} · ${u}`,
+    st: { out: "Tracking", wait: "Keep tracking", cheaper: (e) => `Wait for ${e}`, hold: "Let it fall", ground: (e, u) => `${e} · ${u}`,
       air: (u) => `${u} en route`, fired: (u, n) => `${u} fired ${n}`, hit: (s) => `Hit ${s}` },
     bat: { ready: "Ready", engaging: (n) => `Engaging ${n}`, reloading: "Reloading", empty: "Empty", unlimited: "Unlimited",
       onLaunchers: "Ready on launchers", left: "Rounds left", channels: "Channels in use", reload: "Next reload", firedTonight: "Fired tonight",
@@ -91,7 +94,7 @@ const I18N = {
     details: "Details",
     planner: "Planner",
     strip: (id, t, s) => `Flight of ${id} · ${t} to ${s}`, now: "now", impact: "impact", calls: "Calls", hit: "hit", miss: "miss",
-    posture: "Magazine posture", postures: ["Healthy", "Conserve", "Critical"], prio: "Priority sites", assets: "Assets and conditions",
+    posture: "Magazine posture", postures: ["Healthy", "Conserve", "Critical"], prio: "Priority sites", prioArea: "Priority area", prioStd: "Standard", prioStdIs: (x) => `Standard: ${x}`, assets: "Assets and conditions",
     allied: "US THAAD and Navy", weather: "Cloud cover (laser degraded)", knobs: "Model and sensors", pkScale: "Pk scale", escTop: "Escalate below",
     warn: "Early warning, min", dmg: "Damage weights, $M per hit", tier: { strategic: "Strategic site", city: "City", infra: "Infrastructure" },
     prioMult: "Priority ×", warhead: "Warhead weight (1 = 500 kg)", perSite: "Value per site (blank = by type)",
@@ -104,7 +107,7 @@ const I18N = {
     cls: { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" },
     to: "לעבר", openGround: "שטח פתוח ליד", priority: "בעדיפות", impactIn: "פגיעה בעוד", follow: "עקוב אחרי הדחוף",
     following: "בפוקוס",
-    act: { hold: "לתת לו ליפול", wait: "להמתין", cheaper: "להמתין לזול יותר", air: { fighter: "מטוסי קרב", helicopter: "מסוק" } },
+    act: { hold: "לתת לו ליפול", wait: "להמשיך במעקב", cheaper: "להמתין לזול יותר", air: { fighter: "מטוסי קרב", helicopter: "מסוק" } },
     whyAir: (u, m, pk) => `${u} יכולים לפגוש אותו בעוד ${m}, ו${pk}.`,
     whyTrack: "המסלול עוד לא יציב. החלטה מאוחרת יותר שומרת את כל השכבות שעוד מגיעות אליו.",
     local: { fires: (u, n) => `${u} יורה ${n}`, holds: (u) => `${u} ממתין`, left: (n) => `נותרו ${n}`, busy: "כל ערוצי השיגור תפוסים", reload: "המשגרים בטעינה",
@@ -117,10 +120,13 @@ const I18N = {
     whyHoldOpen: "הוא ייפול בשטח פתוח. אין שם דבר ששווה מיירט.",
     whyHold: "הנזק שהוא יכול לגרום שווה פחות מכל מיירט שמגיע אליו.",
     vs: { raid: (r) => `${r} ינצל מיירטים שהמתקפה הלילה עוד צריכה.`, campaign: (r) => `${r} ינצל מלאי שהמערכה חייבת לשמור.`,
-      local: (r, d) => `${r} עולה ${d} יותר על האיום הזה, במיירטים ובסיכון.` },
+      local: (r, d) => `האפשרות הבאה, „${r}”, עולה ${d} יותר במיירטים ובסיכון.` },
+    pkS: ["כמעט בטוח", "סביר מאוד", "סביר", "עשוי לעצור", "לא סביר"],
+    optWhy: { now: "עכשיו", in: (m) => `בעוד ${m}`, wait: "בדיקה חוזרת כשהמסלול יתייצב", open: "ייפול בשטח פתוח", hits: (s) => `יפגע ב${s}`, cost: (c) => `${c} עלות צפויה` },
+    optLegend: "ההסתברות של Typical לכל אפשרות; עלות צפויה = מיירטים + סיכון נזק.",
     status: { killed: "יורט", leaked: "פגע באתר מוגן", fell_open: "נפל בשטח פתוח" },
     sec: { t: "איומים", u: "כלי טיס", b: "יחידות אש" }, options: "האפשרויות שנשקלו",
-    st: { out: "במעקב", wait: "להמתין", cheaper: (e) => `להמתין ל${e}`, hold: "לתת לו ליפול", ground: (e, u) => `${e} · ${u}`,
+    st: { out: "במעקב", wait: "להמשיך במעקב", cheaper: (e) => `להמתין ל${e}`, hold: "לתת לו ליפול", ground: (e, u) => `${e} · ${u}`,
       air: (u) => `${u} בדרך`, fired: (u, n) => `${u} ירה ${n}`, hit: (s) => `פגע ב${s}` },
     bat: { ready: "מוכנה", engaging: (n) => `מיירטת ${n}`, reloading: "בטעינה", empty: "ריקה", unlimited: "ללא הגבלה",
       onLaunchers: "מוכנים במשגרים", left: "מיירטים שנותרו", channels: "ערוצים בשימוש", reload: "טעינה הבאה", firedTonight: "נורו הלילה",
@@ -174,7 +180,7 @@ const I18N = {
     details: "פרטים",
     planner: "מתכנן",
     strip: (id, t, s) => `מסלול ${id} · ${t} לעבר ${s}`, now: "עכשיו", impact: "פגיעה", calls: "החלטות", hit: "פגע", miss: "החטיא",
-    posture: "מצב מלאים", postures: ["תקין", "שימור", "קריטי"], prio: "אתרים בעדיפות", assets: "נכסים ותנאים",
+    posture: "מצב מלאים", postures: ["תקין", "שימור", "קריטי"], prio: "אתרים בעדיפות", prioArea: "אזור בעדיפות", prioStd: "רגיל", prioStdIs: (x) => `רגיל: ${x}`, assets: "נכסים ותנאים",
     allied: "THAAD וצי ארה״ב", weather: "עננות (לייזר מוגבל)", knobs: "מודל וחיישנים", pkScale: "מקדם Pk", escTop: "למפעיל מתחת",
     warn: "התרעה מוקדמת, דק׳", dmg: "משקלי נזק, מיליון $ לפגיעה", tier: { strategic: "אתר אסטרטגי", city: "עיר", infra: "תשתית" },
     prioMult: "מכפיל עדיפות", warhead: "משקל ראש קרב (1 = 500 ק״ג)", perSite: "ערך לאתר (ריק = לפי סוג)",
@@ -574,19 +580,19 @@ function localLine(D) {   // the fire unit's call, in one line: who, how many, a
 // ---------------------------------------------------------------- key moments: the caption card and the raid timeline
 const barsNode = document.createElement("div");   // the live bars keep their DOM across re-renders, so widths animate
 barsNode.className = "opts live";
-function liveBars(dist, chosen) {   // update the live bars in place: a row per option, sorted, the call highlighted
-  if (!dist) { barsNode.innerHTML = ""; barsNode.dataset.keys = ""; return; }   // forget the rows, so the next call rebuilds them
-  const keys = Object.keys(dist).sort((a, b) => dist[b] - dist[a]);
+function liveBars(info, chosen, D) {   // update the live rows in place (widths animate): every option, its probability, why
+  if (!info?.opts) { barsNode.innerHTML = ""; barsNode.dataset.keys = ""; return; }   // forget the rows, so the next call rebuilds them
+  const { keys, opts, dist } = optOrder(info);
   if (barsNode.dataset.keys !== keys.join() || barsNode.dataset.lang !== LANG) {
     barsNode.dataset.keys = keys.join(); barsNode.dataset.lang = LANG;
-    barsNode.innerHTML = `<p class="kicker">${T().options}</p>` + keys.map((k) => `<div class="opt" data-o="${esc(k)}"><span class="opt-l">${esc(actLabel(k))}</span>
-      <span class="opt-bar"><i></i></span><span class="opt-p num"></span></div>`).join("");
+    barsNode.innerHTML = optionRows(info, chosen, D);
   }
   for (const row of barsNode.querySelectorAll("[data-o]")) {
-    const v = dist[row.dataset.o];
-    row.classList.toggle("on", row.dataset.o === chosen);
-    row.querySelector("i").style.width = `${Math.max(1, Math.round(v * 100))}%`;
-    row.querySelector(".opt-p").textContent = `${v < 0.005 ? "<1" : Math.round(v * 100)}%`;
+    const k = row.dataset.o, v = dist?.[k];
+    row.classList.toggle("on", k === chosen);
+    row.querySelector("i").style.width = `${v == null ? 0 : Math.max(1, Math.round(v * 100))}%`;
+    row.querySelector(".opt-p").textContent = pctTxt(v);
+    row.querySelector(".opt-s").textContent = optSub(opts[k], D);
   }
 }
 function progression(D) {   // the threat's story so far: each call as it was made and firmed up, each shot, the outcome
@@ -651,13 +657,25 @@ function groupBoard() {   // levels 3-4: every threat at once, ranked by time to
       ${live ? `<span class="obj-eta num eta" data-impact="${tr.impact}"></span>` : "<span></span>"}</button>`;
   }).join("")}</div>`;
 }
-function optionBars(dist, chosen) {   // every option Typical weighed, its probability as a bar, the call highlighted
-  if (!dist) return "";
-  const keys = Object.keys(dist).sort((a, b) => dist[b] - dist[a]);
-  return `<div class="opts"><p class="kicker">${T().options}</p>${keys.map((k) => `<div class="opt${k === chosen ? " on" : ""}">
-    <span class="opt-l">${esc(actLabel(k))}</span><span class="opt-bar"><i style="width:${Math.max(1, Math.round(dist[k] * 100))}%"></i></span>
-    <span class="opt-p num">${dist[k] < 0.005 ? "<1" : Math.round(dist[k] * 100)}%</span></div>`).join("")}</div>`;
+const pctTxt = (v) => (v == null ? "" : v < 0.005 ? "<1%" : `${Math.round(v * 100)}%`);
+function optOrder(info) {   // Typical's options, most likely first (by expected cost when there is no answer to show)
+  const opts = Object.fromEntries(info.opts.map((o) => [o[0], o])), dist = info.dist;
+  return { opts, dist, keys: Object.keys(opts).sort((a, b) => (dist ? dist[b] - dist[a] : opts[a][2] - opts[b][2])) };
 }
+function optSub(o, D) {   // why this option: when, how likely to stop it (or what happens), what it costs in expectation
+  const tt = T(), w = tt.optWhy, [k, , total, , pk, launch] = o, a = k.split(":")[0];
+  const facts = a === "wait" ? [w.wait] : a === "hold" ? [D.open_ground ? w.open : w.hits(siteName(D.site))]
+    : [a === "now" ? w.now : launch != null ? w.in(mins(Math.max(0, launch - D.t))) : null, tt.pkS[pkIdx(pk)]];
+  return [...facts.filter(Boolean), w.cost(money(total))].join(" · ");
+}
+function optionRows(info, chosen, D) {   // every option Typical weighed: its probability as a bar, the call highlighted, why
+  const { keys, opts, dist } = optOrder(info);
+  return `<p class="kicker">${T().options}</p>${keys.map((k) => `<div class="opt${k === chosen ? " on" : ""}" data-o="${esc(k)}">
+    <span class="opt-l">${esc(callLabel(k, info))}</span><span class="opt-bar"><i style="width:${dist ? Math.max(1, Math.round(dist[k] * 100)) : 0}%"></i></span>
+    <span class="opt-p num">${pctTxt(dist?.[k])}</span><span class="opt-s">${esc(optSub(opts[k], D))}</span></div>`).join("")}
+    <p class="opt-legend">${T().optLegend}</p>`;
+}
+const optionBars = (info, chosen, D) => (info?.opts ? `<div class="opts">${optionRows(info, chosen, D)}</div>` : "");
 function captionBody(m) {   // the moment in one or two plain sentences
   const tt = T(), name = nm(META.threat_types[m.kind]).replace(/ (MRBM|SRBM)$/i, "");
   if (m.type === "letfall") return `<p class="why">${esc(tt.letfall(m.count))}</p>`;
@@ -750,10 +768,10 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
           : `<div class="what">${esc(callLabel(D.choice, i))}</div>${i ? `<p class="why">${esc(reason(i, D))}</p>` : ""}${localLine(D)}`;
         const extra = m && (m.type === "holdfire" || m.type === "hit") ? captionBody(m) : "";
         h += `<div class="story">${head}${extra}${done ? "" : '<div id="bars"></div>'}${batteryBlock(D)}${progression(D)}</div></div>`;
-        liveBars(done ? null : i?.dist, D.choice);
+        liveBars(done ? null : i, D.choice, D);
       } else {
         h += threatDetail(true).replace('<div class="obj-detail">', '<div class="story">');
-        if (detail?.id === focus.id && detail.info?.dist && !DONE.includes(detail.status)) h += optionBars(detail.info.dist, detail.choice);
+        if (detail?.id === focus.id && !DONE.includes(detail.status)) h += optionBars(detail.info, detail.choice, detail);
         h += "</div>";
       }
     }
@@ -961,7 +979,7 @@ function buildSheet() {
       <details class="more"><summary>${tt.warhead}</summary>${Object.keys(c.warhead).map((k) => rng(`data-wh="${k}" min="0" max="2" step="0.01"`, esc(whLabel(k)), c.warhead[k], c.warhead[k])).join("")}</details>
       <details class="more"><summary>${tt.perSite}</summary><div class="sitegrid">${META.sites.map((s) => `<span>${esc(nm(s))}</span><input data-sv="${s.id}" type="number" min="0" step="50" value="${c.site_value[s.id] ?? ""}" placeholder="${Math.round(c.tier_value[s.tier])}" aria-label="${esc(nm(s))}">`).join("")}</div></details></div>
     <p class="note">${tt.note}</p>`;
-  const set = (patch) => api("/api/config", patch).then((r) => { S.cfg = r.cfg; renderStory.last = renderList.last = null; });
+  const set = (patch) => api("/api/config", patch).then((r) => { S.cfg = r.cfg; renderStory.last = renderList.last = null; if (STATIC) buildSheet(); });   // hosted: show the policy actually playing
   const tabs = (id, cb) => ($(id).onclick = (e) => { const b = e.target.closest("[data-i]"); if (!b) return;
     document.querySelectorAll(`${id} .dc-tab`).forEach((x) => x.setAttribute("aria-selected", x === b)); cb(+b.dataset.i); });
   tabs("#belowP", (i) => set({ floor_price: BELOW[i] }));
@@ -981,8 +999,18 @@ function buildSheet() {
   document.querySelectorAll("[data-wh]").forEach((r) => slide(r, (v) => v, () => ({ warhead: all("[data-wh]", "wh") })));
   document.querySelectorAll("[data-sv]").forEach((inp) => (inp.onchange = () => set({ site_value: Object.fromEntries([...document.querySelectorAll("[data-sv]")].filter((x) => x.value !== "").map((x) => [x.dataset.sv, +x.value])) })));
   if (STATIC) {   // the hosted demo plays recordings: keep only what was recorded for this scenario
-    const vs = window.tapeVariants ? window.tapeVariants() : [], level = vs.length > 3;
+    const vs = window.tapeVariants ? window.tapeVariants() : [], level = vs.some((k) => k.includes("-f0-"));
     [...$("#sheet").querySelectorAll(".field")].forEach((f, i) => { if (i > 1 || (i === 0 && !level)) f.remove(); });
+    // priority area: the default list, or one of the sites this scenario's threats head for (each one recorded)
+    const sites = [...new Set(vs.map((k) => k.split("-s")[1]).filter(Boolean))], cur = c.priority_sites.length === 1 ? c.priority_sites[0] : null;
+    if (sites.length) {
+      $("#reserve").closest(".field").insertAdjacentHTML("afterend", `<div class="field"><p class="kicker">${tt.prioArea}</p><div class="dc-tabs dc-tabs--sm" id="prioA">${[null, ...sites].map((x) =>
+        `<button class="dc-tab" data-site="${x || ""}" aria-selected="${x === cur}">${x ? esc(siteName(x)) : tt.prioStd}</button>`).join("")}</div>
+        <p class="sub-k">${tt.prioStdIs(META.default_priority.map(siteName).join(", "))}</p></div>`);
+      $("#prioA").onclick = (e) => { const b = e.target.closest("[data-site]"); if (!b) return;
+        document.querySelectorAll("#prioA .dc-tab").forEach((x) => x.setAttribute("aria-selected", x === b));
+        set({ priority_sites: b.dataset.site ? [b.dataset.site] : META.default_priority }); };
+    }
     if (!vs.length) $("#sheet").innerHTML = `<p class="note">${tt.noPolicy}</p>`;
   }
 }

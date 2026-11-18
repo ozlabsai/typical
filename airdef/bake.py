@@ -49,11 +49,13 @@ def detail_of(w, th):
                 site=sid, open_ground=bool(dist > sigma), priority=sid in w.cfg["priority_sites"])
 
 
-def bake(scenario=None, drill=None, variant=None):
+def bake(scenario=None, drill=None, variant=None, model=None):
+    """model: the recorded answers by default; record.py passes the real model, so it records exactly the questions
+    this loop asks (the director's stories change when quiet stretches are skipped, and so when calls are re-asked)."""
     clock = Clock()
     director.time = clock   # the director only reads time.monotonic()
     S = server.S
-    S.update(model=record.Recorded(), model_name="typical-small · tuned", batch=1, mode="focus", speed=SPEED)
+    S.update(model=model or record.Recorded(server.MODEL_ID.partition(":")[2] or None), model_name="typical-small · tuned", batch=1, mode="focus", speed=SPEED)
     if drill:
         server.new_drill(*drill)
     else:
@@ -153,10 +155,11 @@ if __name__ == "__main__":
     page = page.replace('<script src="/web/app.js"></script>',
                         '<script>window.AIRDEF_STATIC = true;</script><script src="/web/tape.js"></script><script src="/web/app.js"></script>')
     (out / "index.html").write_text(page)
-    from sim import DEFAULT_VARIANT, policy_variants
+    from sim import DEFAULT_CONFIG, DEFAULT_VARIANT, policy_variants
     meta = server.meta()
     meta["variants"] = {sc: policy_variants(sc) for sc in SCENARIOS}   # the hosted Settings: which policies were recorded
     meta["default_variant"] = DEFAULT_VARIANT
+    meta["default_priority"] = DEFAULT_CONFIG["priority_sites"]
     (out / "data" / "meta.json").write_text(json.dumps(meta))
     jobs = [(sc, None, v) for sc in SCENARIOS for v in policy_variants(sc)]
     jobs += [(None, (r["meta"]["family"], n), None) for fam in sorted({json.loads(x)["meta"]["family"] for x in server.DRILL.read_text().splitlines()})

@@ -134,10 +134,16 @@
   }
 
   // Settings on the hosted demo: every recorded policy is its own tape. A change switches to that tape at the same moment.
-  const keyOf = (c) => `r${c.reserve}-f${c.ammo_floor?.ironDome ?? 0}-b${c.floor_price}-p${c.border_price}`;
+  const keyOf = (c) => `r${c.reserve}-f${c.ammo_floor?.ironDome ?? 0}-b${c.floor_price}-p${c.border_price}`
+    + (c.priority_sites?.length === 1 ? `-s${c.priority_sites[0]}` : "");   // one priority area, or the default list
   async function setPolicy(patch) {
-    const cfg = { ...V.tape.cfg, ...patch }, key = keyOf(cfg), base = V.name.split("@")[0];
-    if (!(meta.variants?.[base] || []).includes(key)) return { ok: false, cfg: V.tape.cfg };
+    const base = V.name.split("@")[0], vars = meta.variants?.[base] || [];
+    const parts = (k) => { const x = k.split("-"); return [...x.slice(0, 4), x[4] || ""]; };
+    const want = parts(keyOf({ ...V.tape.cfg, ...patch })), now = parts(keyOf(V.tape.cfg));
+    const changed = want.map((x, i) => x !== now[i]);   // not recorded together: the closest recorded policy with the change asked for
+    const score = (k) => { const p = parts(k); return p.every((x, i) => !changed[i] || x === want[i]) ? p.filter((x, i) => x === want[i]).length : -1; };
+    const key = vars.reduce((b, k) => (score(k) > score(b) ? k : b), vars[0] || "");
+    if (!key || score(key) < 0) return { ok: false, cfg: V.tape.cfg };
     const t = V.t, running = V.running;
     const name = key === meta.default_variant ? base : `${base}@${key}`;
     await load(name);

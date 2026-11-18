@@ -188,28 +188,39 @@ DEFAULT_CONFIG = {
 # The hosted demo cannot re-run a raid, so it plays one recording per policy: every combination of these for the
 # step-by-step levels, magazine posture alone for the full raids. A variant is named by its key.
 POLICY_GRID = dict(reserve=[0, 1, 2], floor=[0, 12, 20], floor_price=[0.3, 1.0, 5.0], border_price=[0.0, 5.0, 25.0])
+# the hosted Settings' priority area: the default list, or one of the sites the scenario's threats head for (most first)
+PRIORITY = dict(level1=["jerusalem"], level2_a=["haifa_bay"], level2_b=["haifa_bay"], level2_c=["haifa_bay"], level2_d=["tiberias"],
+                level3=["haifa_bay", "nahariya", "tiberias"], level4=["dimona", "jerusalem", "nevatim", "beer_sheva"],
+                northern_barrage=["kiryat_shmona", "haifa", "ramat_david"], april_mixed=["nevatim", "dimona", "ramat_david"],
+                october_saturation=["tel_aviv", "nevatim", "dimona"], june_attrition=["beer_sheva", "tiberias", "nevatim"],
+                houthi_eilat=["eilat"])
 
 
-def variant_key(reserve, floor, floor_price, border_price):
-    return f"r{reserve}-f{floor}-b{floor_price:g}-p{border_price:g}"
+def variant_key(reserve, floor, floor_price, border_price, site=None):
+    return f"r{reserve}-f{floor}-b{floor_price:g}-p{border_price:g}" + (f"-s{site}" if site else "")
 
 
 def variant_patch(key):
-    r, f, b, p = (x[1:] for x in key.split("-"))
-    return dict(reserve=int(r), ammo_floor={"ironDome": int(f)}, floor_price=float(b), border_price=float(p))
+    r, f, b, p, *site = (x[1:] for x in key.split("-"))
+    return dict(reserve=int(r), ammo_floor={"ironDome": int(f)}, floor_price=float(b), border_price=float(p),
+                **(dict(priority_sites=site) if site else {}))
 
 
 DEFAULT_VARIANT = variant_key(1, 12, 1.0, 5.0)
 
 
-def policy_variants(scenario, reserve=None):
-    """Every recorded policy for a scenario (optionally one magazine posture only)."""
+def policy_variants(scenario, reserve=None, site=None):
+    """Every recorded policy for a scenario (optionally one magazine posture, or one priority option: 0 = the default
+    list, i = PRIORITY[scenario][i - 1]). A level: the whole grid x every priority option. A raid: each posture, and
+    each priority area at the default posture."""
     from itertools import product
     g = POLICY_GRID
     rs = [reserve] if reserve is not None else g["reserve"]
+    sites = [None] + PRIORITY.get(scenario, [])
+    sites = [sites[site]] if site is not None else sites
     if "level" in SCENARIOS[scenario]:
-        return [variant_key(*v) for v in product(rs, g["floor"], g["floor_price"], g["border_price"])]
-    return [variant_key(r, 12, 1.0, 5.0) for r in rs]
+        return [variant_key(*v) for v in product(rs, g["floor"], g["floor_price"], g["border_price"], sites)]
+    return [variant_key(r, 12, 1.0, 5.0, s) for s in sites for r in rs if s is None or r == 1]
 
 
 EARTH_KM = 6371.0
