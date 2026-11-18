@@ -8,10 +8,12 @@ a salvo let fall, a unit holding fire, a hit.
 import copy
 import time
 
-from sim import EFFECTORS, consequence
+DONE = ("killed", "leaked", "fell_open")
+
+from sim import EFFECTORS, SCENARIOS, consequence
 
 BEAT_S = 7.0        # wall seconds a short moment (salvo let fall, holding fire, hit) stays on screen
-FOLLOW = ("air", "cheaper", "payoff", "engage")   # moments that open a story: Focus stays with the threat until it is resolved
+FOLLOW = ("air", "cheaper", "payoff", "engage", "detect", "battery", "group")   # moments that open a story: Focus stays with the threat until it is resolved
 STORY_S = 25.0      # wall seconds the rest of a followed threat's flight takes on screen
 FOLLOW_MAX = 60.0   # wall seconds at most on one story
 OUTCOME_S = 3.5     # wall seconds the outcome stays before the next story
@@ -23,7 +25,8 @@ SALVO_S = 120.0     # holds this close together (sim seconds) count as one "let 
 
 
 class Director:
-    def __init__(self):
+    def __init__(self, scenario=""):
+        self.scenario = scenario
         self.moments, self.snaps = [], []
         self.seen = dict(h={}, local={}, status={}, waited={})
         self.salvo = None
@@ -35,9 +38,20 @@ class Director:
     def scan(self, w):
         """-> candidate moments since the last tick, best first."""
         typ = w.policies["typical"]
+        level = SCENARIOS.get(w.scenario, {}).get("level")
         out = []
         for th in w.threats:
             s = typ.st[th.id]
+            # a level tells every threat from its first plots; offered every tick until it gets the screen. A group level
+            # (several at once) is one story: the whole group, until every threat in it is resolved.
+            if level and SCENARIOS[w.scenario].get("group"):
+                if "group" not in self.seen and th.seen_t <= w.t:
+                    out.append(self._new(w, th, s, "group", 6.0))
+            elif level and th.seen_t <= w.t and th.id not in self.seen.setdefault("detect", set()) and s["status"] not in DONE:
+                out.append(self._new(w, th, s, "detect", 6.0 - 0.0001 * th.seen_t))
+            if th.lost and th.lost[0] <= w.t < th.lost[1] and th.id not in self.seen.setdefault("lost", set()) and s["status"] not in ("killed", "leaked", "fell_open"):
+                self.seen["lost"].add(th.id)
+                out.append(self._new(w, th, s, "lost", 3.0))
             h, n0 = s["history"], self.seen["h"].get(th.id, 0)
             for i in range(n0, len(h)):
                 m = self._call(w, th, s, h[i][1], h[i - 1][1] if i else None)
@@ -110,9 +124,9 @@ class Director:
     # ------------------------------------------------------------ featuring
     def offer(self, w, cands):
         """Feature the best candidate if the screen is free; snapshot it so the timeline can replay it."""
-        if self.beat or time.monotonic() < self.free_at:
-            return None
-        recent = [x["type"] for x in self.moments[-4:]]
+        if self.beat or (time.monotonic() < self.free_at and not any(m["type"] in ("detect", "group") for m in cands)):
+            return None   # a level's next threat does not wait for the gap: it would be over before the gap is
+        recent = [x["type"] for x in self.moments[-4:] if x["type"] not in ("detect", "battery")]   # a level tells every one
         for m in cands:
             again = next((x for x in self.moments if x["type"] == m["type"] and x["tid"] == m["tid"]), None)
             if again:   # replaying: the same moment comes round again -- show it, do not add a duplicate marker
@@ -123,6 +137,10 @@ class Director:
                 continue
             if m["type"] == "letfall" and m["count"] < 3:   # a salvo is a salvo from its third rocket on
                 continue
+            if m["type"] == "detect":
+                self.seen.setdefault("detect", set()).add(m["tid"])
+            if m["type"] == "group":
+                self.seen["group"] = True
             if m["worth"] and (m["type"] not in ("cheaper",) or (m.get("delta") or 0) >= MIN_DELTA):
                 m["id"] = len(self.moments)
                 self.moments.append(m)
@@ -136,13 +154,17 @@ class Director:
 
     def _start(self, m):
         follow = m["type"] in FOLLOW
+        sc = SCENARIOS.get(self.scenario, {})
         self.beat = dict(id=m["id"], tid=m["tid"], follow=follow, done=False,
-                         until=time.monotonic() + (FOLLOW_MAX if follow else BEAT_S))
+                         until=time.monotonic() + (sc.get("follow_max", FOLLOW_MAX) if follow else BEAT_S))
         self.seek = False
 
     def tick(self, w):
         b = self.beat
-        if b and b["follow"] and not b["done"] and w.policies["typical"].st[b["tid"]]["status"] in ("killed", "leaked", "fell_open"):
+        st = w.policies["typical"].st
+        group = b and self.moments[b["id"]]["type"] == "group"
+        if b and b["follow"] and not b["done"] and (all(st[x.id]["status"] in DONE for x in w.threats) if group
+                                                   else st[b["tid"]]["status"] in DONE):
             b["done"], b["until"] = True, min(b["until"], time.monotonic() + OUTCOME_S)   # resolved: hold the outcome, then move on
         if b and time.monotonic() > b["until"]:
             self.end_beat()
@@ -161,8 +183,12 @@ class Director:
         """A story plays the rest of the threat's flight in about STORY_S: every re-ask happens on screen."""
         b = self.beat
         if b and b["follow"] and not b["done"]:
-            th = w.by_id[b["tid"]]
-            return min(max((th.t0 + th.T - w.t) / STORY_S, 1.0), 300.0)
+            sc = SCENARIOS.get(w.scenario, {})
+            if self.moments[b["id"]]["type"] == "group":   # the group's story runs until its last threat lands
+                end = max(x.t0 + x.T for x in w.threats if w.policies["typical"].st[x.id]["status"] not in DONE)
+            else:
+                end = w.by_id[b["tid"]].t0 + w.by_id[b["tid"]].T
+            return min(max((end - w.t) / sc.get("story_s", STORY_S), 1.0), sc.get("story_rate_max", 300.0))
         return BEAT_SPEED if b else SEEK_SPEED if self.seek else normal
 
     def next(self):

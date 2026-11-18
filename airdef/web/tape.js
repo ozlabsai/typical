@@ -85,10 +85,10 @@
     seekTo(t2);
   }
   function startBeat(id, now = performance.now()) {
-    const m = V.tape.moments[id], follow = ["air", "cheaper", "payoff", "engage"].includes(m.type);
+    const m = V.tape.moments[id], follow = ["air", "cheaper", "payoff", "engage", "detect", "battery"].includes(m.type);
     // the tape knows when the story ends: every story takes about STORY_S from its first call to its outcome
-    const rate = Math.min(Math.max((m.t_done - m.t) / STORY_S, 1), 300);
-    V.beat = { id, m, follow, done: false, rate, until: now + (follow ? FOLLOW_MAX : BEAT_S) * 1000 };
+    const st = V.tape.story || {}, rate = Math.min(Math.max((m.t_done - m.t) / (st.story_s || STORY_S), 1), st.rate_max || 300);
+    V.beat = { id, m, follow, done: false, rate, until: now + (follow ? st.follow_max || FOLLOW_MAX : BEAT_S) * 1000 };
   }
 
   // ---------------------------------------------------------------- the API app.js calls

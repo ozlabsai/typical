@@ -39,6 +39,38 @@ class Option:
     detail: dict = field(default_factory=dict)
 
 
+COMMIT_PRICE = 0.3   # $M per other engagement a battery is committed to: a busy battery is the worse pick, all else equal
+TIME_PRICE = 0.05    # $M per minute until the intercept: of two equal batteries, the one that stops it sooner
+
+
+def battery_terms(th, t, bid, shot, avail, cfg, commit):
+    """What makes one battery a better or worse pick for this threat, priced in $M (the policy's floor and border)."""
+    eff = BAT_EFF[bid]
+    left, n_commit = avail.get(bid, 0), (commit or {}).get(bid, 0)
+    floor = cfg.get("ammo_floor", {}).get(eff, 0)
+    after = left - n_commit - 1 if left != math.inf else math.inf   # once its commitments and this shot are spent
+    below = max(0, floor - after) if after != math.inf else 0
+    crosses = t < th.cross_t < math.inf
+    before = not crosses or shot[1] < th.cross_t
+    return dict(bid=bid, eff=eff, launch=shot[0], intercept=shot[1], left=left, floor=floor, after=after, below=below,
+                commit=n_commit, before_border=before, crossed=th.cross_t <= t,
+                cost=below * cfg.get("floor_price", 0) + n_commit * COMMIT_PRICE + (0 if before else cfg.get("border_price", 0))
+                + TIME_PRICE * max(0.0, shot[1] - t) / 60)
+
+
+def candidates(th, t, avail, cfg, free_at=None):
+    """ground effector -> [(battery, launch, intercept, lat, lon, alt)] for every battery that can shoot."""
+    out = {}
+    for bid in th.samples:
+        eff = BAT_EFF[bid]
+        if (EFFECTORS[eff].get("allied") and not cfg["allied"]) or avail.get(bid, 0) < 1:
+            continue
+        s = first_shot(th, bid, max(t + REACT_S, (free_at or {}).get(bid, 0.0)))
+        if s:
+            out.setdefault(eff, []).append((bid, *s))
+    return out
+
+
 def windows(th, t, avail, cfg, free_at=None):
     """ground effector -> (battery, launch, intercept) of the earliest shot from a battery with stock and, when
     free_at is given (battery -> when a launch channel frees), a channel free at launch time."""
@@ -73,10 +105,13 @@ def p_channel(eff, launch, bookings, cfg, span=60.0):
     return min(1.0, channels / (load + 1))
 
 
-def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit=1.0, free_at=None, bookings=None):
+def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit=1.0, free_at=None, bookings=None, commit=None):
     """Global options for one threat at time t. prices: eff -> (raid, campaign) $M per round. units: air units.
-    full_dmg / p_hit: damage if it does hit a site, and how likely that is now (for the value of waiting)."""
+    full_dmg / p_hit: damage if it does hit a site, and how likely that is now (for the value of waiting).
+    commit: battery -> other engagements it is committed to (the battery choice weighs them, with the floor and border)."""
     win = windows(th, t, avail, cfg, free_at)
+    cand = candidates(th, t, avail, cfg, free_at)
+    border = cfg.get("border_price", 0) if t < th.cross_t < math.inf else 0.0   # letting it cross before it is stopped
     lam = {e: max(prices.get(e, (0, 0))) for e in win}
 
     def dp(d):
@@ -113,13 +148,28 @@ def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit
                                              "campaign": best_n * lam_e if bind == "campaign" else 0.0},
                       1 - (1 - pk) ** best_n, unit, {"salvo": best_n, "intercept": t_int})
 
-    opts = [Option("hold", None, None, dmg, {"local": dmg, "raid": 0.0, "campaign": 0.0})]
+    opts = [Option("hold", None, None, dmg + border, {"local": dmg + border, "raid": 0.0, "campaign": 0.0})]
     now, later = [], []
     for e, (bid, launch, t_int) in win.items():
         later_one = launch > t + OPEN_S
-        o = priced(f"later:{e}" if later_one else f"now:{e}", e, t_int, launch, bid,
-                   pfree=p_channel(e, launch, bookings, cfg) if later_one else 1.0)
-        (now if launch <= t + OPEN_S else later).append(o)
+        if later_one:
+            o = priced(f"later:{e}", e, t_int, launch, bid, extra_cost=border if t_int >= th.cross_t else 0.0,
+                       pfree=p_channel(e, launch, bookings, cfg))
+            later.append(o)
+            continue
+        # this type can fire now: every battery of the type that can engage it (now, or when its own window opens) is a
+        # candidate, priced with its own terms; the best one stands for the type
+        bats = []
+        for b, l, ti, *_ in cand.get(e, []):
+            terms = battery_terms(th, t, b, (l, ti), avail, cfg, commit)
+            ob = priced(f"now:{e}", e, ti, l, b, extra_cost=terms["cost"])
+            terms.update(total=ob.total, pk=ob.pk)
+            bats.append((ob, terms))
+        if not any(x[0].launch <= t + OPEN_S for x in bats):
+            continue
+        o, _ = min(bats, key=lambda x: x[0].total)
+        o.detail["batteries"] = sorted((x[1] for x in bats), key=lambda d: d["bid"])
+        now.append(o)
     opts += now
     for kind in AIR_KINDS:   # the best free unit of each kind
         best = None
@@ -129,7 +179,8 @@ def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit
             r = u.reach(th, t, cfg)
             if r:
                 t_eng, *_, w, pk, fly = r
-                o = priced(f"air:{kind}", w, t_eng, t_eng, u.id, extra_cost=AIR_KINDS[kind]["hour_cost"] * 2 * fly / 3600)
+                o = priced(f"air:{kind}", w, t_eng, t_eng, u.id, extra_cost=AIR_KINDS[kind]["hour_cost"] * 2 * fly / 3600
+                           + (border if t_eng >= th.cross_t else 0.0))
                 if best is None or o.total < best.total:
                     best = o
         if best:
@@ -147,7 +198,7 @@ def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit
             follow_full = dp(full_dmg)
             best_later = min(EFFECTORS[o.eff]["cost"] + lam.get(o.eff, 0) + (1 - o.pk) * follow_full(o.detail["intercept"] + LOOK_S, 1)
                              for o in after)
-            v = p_hit * min(best_later, full_dmg)
+            v = p_hit * min(best_later, full_dmg) + border
             opts.append(Option("wait", None, None, v, {"local": v, "raid": 0.0, "campaign": 0.0}))
     return opts
 

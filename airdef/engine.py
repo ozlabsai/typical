@@ -6,6 +6,7 @@ planner (planner.py at both levels -- the teacher), typical (the model at both l
 operator, who takes the planner's call).
 """
 import copy
+import dataclasses
 import math
 import random
 import re
@@ -13,7 +14,7 @@ import time
 
 import air
 import planner
-from sim import (AIR, AIR_KINDS, BATTERIES, EFFECTORS, ORIGINS, SCENARIOS, SITE, THREATS, TURN_S, DEFAULT_CONFIG, build_raid,
+from sim import (AIR, AIR_KINDS, BATTERIES, EFFECTORS, NM_KM, ORIGINS, SCENARIOS, SITE, THREATS, TURN_S, DEFAULT_CONFIG, build_raid,
                  consequence, effective_pk, first_shot, haversine, money, precompute_windows, radar_turn, site_hit,
                  site_value, u01)
 
@@ -28,6 +29,7 @@ ORIGIN_NAME = {"iran_w": "western Iran", "iran_nw": "north-western Iran", "iran_
 CLASS_WORD = {"B": "ballistic missile", "R": "rocket", "C": "cruise missile", "D": "drone"}
 Q_GLOBAL = "Which interceptor should take this threat?"
 Q_LOCAL = "How many interceptors should this unit fire at the threat now?"
+Q_BATTERY = "Which battery should take this threat?"
 LEVELS = ["0", "1", "2", "3"]   # a Score: 0 = hold
 DONE = ("killed", "leaked", "fell_open")
 SHORT = {e: d["name"].replace(" laser", "").replace("GPS jamming (EW)", "EW jamming") for e, d in EFFECTORS.items()}
@@ -55,6 +57,11 @@ def in_words(s):
     return f"about {round(s / 3600)} hours"
 
 
+def soon_words(s):
+    """Finer than in_words for the next two minutes: battery choices are often seconds apart."""
+    return "seconds" if s < 8 else f"{round(s / 5) * 5} seconds" if s < 120 else in_words(s)
+
+
 def pk_word(p):
     return "almost certain to stop it" if p >= .95 else "very likely to stop it" if p >= .85 else \
         "likely to stop it" if p >= .7 else "may stop it" if p >= .5 else "unlikely to stop it"
@@ -80,17 +87,45 @@ def target_line(th, t, cfg):
     return f"It may hit {site}, a {'priority' if prio else 'secondary'} site{heavy}; the track is not firm yet."
 
 
+def track_lines(th, t):
+    """Where it is relative to the border, how fast, and the radar picture (contact lost / expected to be lost)."""
+    out = []
+    if th.cls in "CD":
+        v = float(haversine(*th.origin, *th.impact)) / th.T   # km/s
+        if t < th.cross_t < math.inf:
+            out.append(f"It is about {v * (th.cross_t - t) / NM_KM:.0f} nautical miles from the border, flying at {th.speed_kts():.0f} knots.")
+        elif th.cross_t <= t:
+            out.append("It has crossed the border.")
+    if th.lost and t < th.lost[0]:
+        out.append(f"Radar contact is expected to be lost in {in_words(th.lost[0] - t)} and to return {in_words(th.lost[1] - t)} from now.")
+    elif th.lost and t < th.lost[1]:
+        out.append(f"Radar contact is lost; its position is estimated. Contact should return in {in_words(th.lost[1] - t)}.")
+    return out
+
+
+def border_word(th, t, intercept):
+    if not (t < th.cross_t < math.inf):
+        return ""
+    return ", before the border" if intercept < th.cross_t else ", only after it crosses the border"
+
+
 def global_text(th, t, opts, prices, left, inbound, cfg, units):
     """What the battle manager reads: the threat, every operative option, the raid and campaign lenses."""
-    lines = [threat_line(th), target_line(th, t, cfg), f"It arrives in {in_words(th.t0 + th.T - t)}."]
+    lines = [threat_line(th), target_line(th, t, cfg), f"It arrives in {in_words(th.t0 + th.T - t)}.", *track_lines(th, t)]
     now = [o for o in opts if o.key.startswith("now:")]
     later = sorted((o for o in opts if o.key == "cheaper"), key=lambda o: o.launch)
     airo = [o for o in opts if o.key.startswith("air:")]
+
+    def floor_word(o):
+        b = next((x for x in o.detail.get("batteries", []) if x["bid"] == o.unit), None)
+        return f", takes {b['bid']} below its floor of {b['floor']}" if b and b["below"] else ""
     if now:
-        lines.append("Can fire now: " + "; ".join(f"{SHORT[o.eff]}, {pk_word(o.pk)}, {money(EFFECTORS[o.eff]['cost'])}" for o in now) + ".")
+        lines.append("Can fire now: " + "; ".join(f"{SHORT[o.eff]}, {pk_word(o.pk)}, {money(EFFECTORS[o.eff]['cost'])}"
+                                                  f"{border_word(th, t, o.detail.get('intercept', o.launch))}{floor_word(o)}" for o in now) + ".")
     if later:
         o = later[0]
-        lines.append(f"Cheaper later: {SHORT[o.eff]} in {in_words(o.launch - t)}, {pk_word(o.pk)}, {money(EFFECTORS[o.eff]['cost'])}.")
+        lines.append(f"Cheaper later: {SHORT[o.eff]} in {in_words(o.launch - t)}, {pk_word(o.pk)}, {money(EFFECTORS[o.eff]['cost'])}"
+                     f"{border_word(th, t, o.detail.get('intercept', o.launch))}.")
     for o in airo:
         u = units[o.unit]
         lines.append(f"Aircraft: {AIR_KINDS[u.kind]['label'].lower()} ({u.name}) can intercept it in {in_words(o.launch - t)}, "
@@ -109,6 +144,24 @@ def global_text(th, t, opts, prices, left, inbound, cfg, units):
     return "\n".join(lines)
 
 
+def battery_text(th, t, eff, bats, cfg):
+    """What the battle manager reads to pick one battery among those that can fire now."""
+    lines = [threat_line(th), target_line(th, t, cfg), f"It arrives in {in_words(th.t0 + th.T - t)}.", *track_lines(th, t),
+             f"{SHORT[eff]} will take it. {len(bats)} batteries can engage it:"]
+    for b in bats:
+        if b["left"] == math.inf:
+            ammo = "unlimited shots"
+        elif b["floor"]:
+            ammo = (f"{b['left']} rounds left, floor {b['floor']}; this shot would leave it {b['below']} below the floor" if b["below"]
+                    else f"{b['left']} rounds left, floor {b['floor']}")
+        else:
+            ammo = f"{b['left']} rounds left"
+        busy = (f"committed to {b['commit']} other engagement{'s' if b['commit'] > 1 else ''}" if b["commit"] else "no other engagements")
+        lines.append(f"- {b['bid']}: {ammo}; {busy}; can launch in {soon_words(max(0, b['launch'] - t))}, intercept in "
+                     f"{soon_words(max(0, b['intercept'] - t))}{border_word(th, t, b['intercept'])}; {pk_word(b['pk'])}.")
+    return "\n".join(lines)
+
+
 def local_text(th, t, cfg, unit_line, f):
     """What the fire unit reads before it fires."""
     _, sid, p_hit, *_ = consequence(th, t, cfg)
@@ -123,6 +176,9 @@ def local_text(th, t, cfg, unit_line, f):
     else:
         lines.append(f"Ready on the launchers: {f['ready']} of {f['stock']} left"
                      + (f"; a launcher is reloading, ready in {in_words(f['reload_eta'])}." if f["reload_eta"] else "."))
+    if f.get("floor") and f["stock"] != math.inf:
+        lines.append(f"Its floor is {f['floor']} rounds; " + ("every round fired now takes it further below." if f["stock"] - 1 < f["floor"]
+                                                             else f"{f['stock'] - f['floor']} rounds above it."))
     if f["turn"]:
         lines.append("The radar is staring away from it and has to turn first (about 10 seconds).")
     if f["friendly"]:
@@ -138,20 +194,28 @@ def local_text(th, t, cfg, unit_line, f):
 
 
 class Policy:
-    def __init__(self, name, threats, stock_scale):
+    def __init__(self, name, threats, stock_scale, sc=None):
         self.name = name
+        sc = sc or {}
         self.stock = {bid: math.inf if EFFECTORS[eff].get("unlimited") else round(n * stock_scale.get(eff, 1))
                       for bid, eff, *_, n in BATTERIES}
+        if "batteries" in sc:   # a step-by-step level: only its own batteries (None = unlimited, e.g. the laser)
+            self.stock = {bid: (math.inf if sc["batteries"][bid] is None else sc["batteries"][bid]) if bid in sc["batteries"] else 0
+                          for bid in self.stock}
+        self.plans = {bid: n for bid, (n, _) in sc.get("plans", {}).items()}   # other engagements it is committed to
+        self.plans_until = {bid: until for bid, (_, until) in sc.get("plans", {}).items()}
         self.stock_init = dict(self.stock)
         self.busy = {bid: [] for bid in self.stock}           # release times of channels in use
         self.ready = {bid: min(self.stock[bid], self.capacity(bid)) for bid in self.stock}   # rounds on launchers
         self.reload_until = {bid: None for bid in self.stock}
         self.units = {u.id: u for u in air.fleet()}
+        if "units" in sc:   # a level: only its own aircraft fly
+            self.units = {k: u for k, u in self.units.items() if k in sc["units"]}
         self.st = {t.id: dict(status="pending", next=-1.0, cfgv=-1, shots=0, info=None, local=None, history=[],
                               escalated=False, choice=None, assign=None) for t in threats}
         self.prices, self.priced_at, self.priced_cfgv = {}, -1e9, -1
         self.L = dict(spent=0.0, rounds={}, kills=0, leaks=0, damage=0.0, fell_open=0, escalated=0, decisions=0,
-                      agree=0, calls=0, ms=0.0, local_decisions=0, local_agree=0, sorties=0, late=0)
+                      agree=0, calls=0, ms=0.0, local_decisions=0, local_agree=0, sorties=0, late=0, crossed=0)
 
     def type_left(self):
         left, init = {}, {}
@@ -211,14 +275,22 @@ class World:
             precompute_windows(th, BATTERIES)
         self.by_id = {t.id: t for t in self.threats}
         scale = SCENARIOS[scenario].get("stock_scale", {})
-        self.policies = {n: Policy(n, self.threats, scale) for n in policies}
+        self.policies = {n: Policy(n, self.threats, scale, SCENARIOS[scenario]) for n in policies}
         self.t = 0.0
         self.end = max(t.t0 + t.T for t in self.threats) + 5
         self.attacker_cost = sum(THREATS[t.kind][2] for t in self.threats)
         self.flights = []   # (policy, shooter, threat, launch, intercept, lat, lon, alt, hit, shooter lat, shooter lon, weapon)
 
     def live(self, pol, th):
-        return pol.st[th.id]["status"] not in DONE and th.t0 <= self.t < th.t0 + th.T
+        return pol.st[th.id]["status"] not in DONE and th.seen_t <= self.t < th.t0 + th.T
+
+    def commitments(self, pol, th):
+        """battery -> other engagements it is committed to: the level's standing plans, and other threats assigned to it."""
+        out = {b: n for b, n in pol.plans.items() if self.t < pol.plans_until[b]}
+        for tid, x in pol.st.items():
+            if tid != th.id and x["status"] in ("assigned", "inflight") and x.get("assign") and x["assign"]["kind"] == "ground":
+                out[x["assign"]["unit"]] = out.get(x["assign"]["unit"], 0) + 1
+        return out
 
     def expected(self, pol):
         return [th for th in self.threats if pol.st[th.id]["status"] not in DONE and self.t < th.t0 + th.T
@@ -292,7 +364,7 @@ class World:
         left, _ = pol.type_left()
         # assigned-but-unfired threats are revisable too: the track firms up, stock moves, an upgrade may pay off
         due = [th for th in self.threats if self.live(pol, th) and pol.st[th.id]["status"] in ("pending", "waiting", "held", "assigned")
-               and self.in_horizon(th) and (self.t >= pol.st[th.id]["next"] or pol.st[th.id]["cfgv"] != self.cfg_version)]
+               and self.t >= th.hostile_t and self.in_horizon(th) and (self.t >= pol.st[th.id]["next"] or pol.st[th.id]["cfgv"] != self.cfg_version)]
         due.sort(key=lambda th: th.t0 + th.T)
         exp = self.expected(pol)
         inbound = {c: sum(1 for x in exp if x.cls == c) for c in CLASS_WORD}
@@ -308,7 +380,7 @@ class World:
             s = pol.st[th.id]
             dmg, sid, p_hit, *_ = consequence(th, self.t, self.cfg)
             opts = planner.option_values(th, self.t, pol.stock, self.cfg, pol.prices, dmg, pol.units.values(),
-                                         site_value(sid, th.kind, self.cfg), p_hit, free_at, bookings)
+                                         site_value(sid, th.kind, self.cfg), p_hit, free_at, bookings, self.commitments(pol, th))
             if s.get("ew_done"):   # jamming works or it doesn't: one attempt per threat
                 opts = [o for o in opts if o.eff != "ew"]
             c = s.get("commit")   # a forced commitment (situations.py rollouts): the option keeps its meaning to the end
@@ -352,6 +424,10 @@ class World:
                     if not s["escalated"]:
                         pol.L["escalated"] += 1
                         s["escalated"] = True
+            if opt.key.startswith("now:") and len(opt.detail.get("batteries", [])) >= 2:   # which battery of that type
+                opt = self.decide_battery(pol, th, opt, s, info)
+                if opt is None:
+                    continue   # waiting for Typical's answer
             if self.record is not None and pol.name == "planner":
                 self.record.append(dict(level="global", state=text, q=Q_GLOBAL, opts=[(label(o.key), o.total) for o in opts],
                                         best=top.key, kind=th.kind, scenario=self.scenario))
@@ -369,6 +445,38 @@ class World:
                 bookings.setdefault(opt.eff, []).append(opt.launch)
             left, _ = pol.type_left()
         return calls
+
+    def decide_battery(self, pol, th, opt, s, info):
+        """-> the global option with the battery picked (Typical's call; the planner's terms are the teacher), or None while
+        Typical's answer is pending."""
+        bats = opt.detail["batteries"]
+        teach = min(bats, key=lambda b: b["total"])["bid"]
+        text = battery_text(th, self.t, opt.eff, bats, self.cfg)
+        labels = [b["bid"] for b in bats]
+        binfo = dict(state=text, teacher=teach, options=[{k: (None if v == math.inf else v) for k, v in b.items()} for b in bats])
+        if pol.name != "typical" or self.model is None:
+            pick = teach
+        else:
+            ans = self.ask(pol, Q_BATTERY, text, labels, th.t0 + th.T, th.id)
+            if ans is None:
+                if not self.late(pol, s, "b", urgent=not self.async_model):
+                    return None
+                pick = teach
+                binfo["late"] = True
+            else:
+                s.pop("asked_b", None)
+                d, p_null, _ = ans
+                pick = max(labels, key=lambda b: d[b])
+                binfo.update(dist={b: d[b] for b in labels}, p_null=p_null)
+                if self.unsure(d[pick], p_null):
+                    pick, binfo["escalated"] = teach, True
+        if self.record is not None and pol.name == "planner":
+            self.record.append(dict(level="battery", state=text, q=Q_BATTERY, opts=[(b["bid"], b["total"]) for b in bats],
+                                    best=teach, kind=th.kind, scenario=self.scenario))
+        binfo["pick"] = pick
+        info["battery"] = binfo
+        b = next(x for x in bats if x["bid"] == pick)
+        return dataclasses.replace(opt, unit=pick, launch=b["launch"], detail={**opt.detail, "intercept": b["intercept"]})
 
     def apply_global(self, pol, th, opt):
         s = pol.st[th.id]
@@ -466,8 +574,11 @@ class World:
                                                                        self.cfg, pol.prices, dmg))
             else:
                 v_after = dmg
-            teach = planner.local_teacher(f, EFFECTORS[eff]["cost"] + max(pol.prices.get(eff, (0, 0))),
-                                          effective_pk(eff, th, self.cfg), v_after)
+            floor = self.cfg.get("ammo_floor", {}).get(eff, 0) if s["assign"]["kind"] == "ground" else 0
+            f["floor"] = floor
+            below = floor and f["stock"] - 1 < floor
+            teach = planner.local_teacher(f, EFFECTORS[eff]["cost"] + max(pol.prices.get(eff, (0, 0)))
+                                          + (self.cfg.get("floor_price", 0) if below else 0), effective_pk(eff, th, self.cfg), v_after)
             text = local_text(th, self.t, self.cfg, line, f)
             info = dict(teacher=teach, state=text, t=self.t, unit=s["assign"]["unit"],
                         facts={k: (None if v == math.inf else v) for k, v in f.items()})
@@ -544,6 +655,7 @@ class World:
                 if s["hit"]:
                     s.update(status="killed", killed_at=s["resolve"])
                     pol.L["kills"] += 1
+                    pol.L["crossed"] += s["resolve"] >= th.cross_t   # stopped, but only after it crossed
                 else:
                     s.update(status="pending", next=self.t, assign=None)   # missed: back to the battle manager
             if s["status"] not in DONE and self.t >= th.t0 + th.T:
@@ -551,6 +663,7 @@ class World:
                     pol.units[s["assign"]["unit"]].release(self.t)
                 sid = site_hit(*th.impact)
                 s["site"] = sid
+                pol.L["crossed"] += th.cross_t < math.inf
                 if sid:
                     pol.L["leaks"] += 1
                     pol.L["damage"] += site_value(sid, th.kind, self.cfg)
@@ -570,7 +683,7 @@ class World:
         self.advance(dt)
         return calls
 
-    def run_for(self, sim_dt, on_step=None):
+    def run_for(self, sim_dt, on_step=None, quiet=None):
         """Live demo clock: owe sim_dt seconds, pay them in fixed DT steps, jump over quiet stretches. The steps (and so
         every decision and every question Typical is asked) are the same whatever the speed, pauses or replays.
         -> sim seconds skipped."""
@@ -581,7 +694,7 @@ class World:
             self.step(DT)
             if on_step:
                 on_step(self)
-            if (nxt := self.next_event()) - self.t > QUIET_S:
+            if (quiet is None or quiet()) and (nxt := self.next_event()) - self.t > QUIET_S:   # quiet(): may we skip now?
                 skipped += nxt - 5 - self.t
                 self.advance(nxt - 5 - self.t)
         return skipped
@@ -631,7 +744,9 @@ class World:
         out = {}
         for n, p in self.policies.items():
             left, init = p.type_left()
-            out[n] = {**p.L, "rounds": dict(p.L["rounds"]), "left": left, "init": init, "total": p.L["spent"] + p.L["damage"]}
+            # the night's cost under the policy: interceptors, damage, and every threat that crossed before it was stopped
+            out[n] = {**p.L, "rounds": dict(p.L["rounds"]), "left": left, "init": init,
+                      "total": p.L["spent"] + p.L["damage"] + p.L["crossed"] * self.cfg.get("border_price", 0)}
         return out
 
 

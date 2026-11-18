@@ -21,8 +21,8 @@ from pydantic import BaseModel
 import planner
 from director import Director
 from engine import BAT, DONE, World, label
-from sim import (AIR_HE, AIR_KINDS, BATTERIES, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, ORIGINS, SCENARIOS, SITE_HE, SITES, THREAT_HE,
-                 THREATS, consequence)
+from sim import (AIR_HE, AIR_KINDS, BATTERIES, BORDER, NM_KM, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, ORIGINS, SCENARIOS, SITE_HE, SITES, THREAT_HE,
+                 THREATS, consequence, haversine)
 
 ROOT = Path(__file__).parent
 TUNED = ROOT.parent / ".context/typically/results/co_airdef_v3/best.pt"   # v3: v4 wins per decision but under-fires in saturation raids (README)
@@ -55,7 +55,7 @@ def load_model():
 
 def new_world(scenario, seed=7, cfg=None):
     S["world"] = World(scenario, cfg or DEFAULT_CONFIG, S["model"], seed, policies=POLICIES, async_model=ASYNC)
-    S["running"], S["drill"], S["director"] = False, None, Director()
+    S["running"], S["drill"], S["director"] = False, None, Director(scenario)
     S["director"].slow = S["mode"] == "focus"
 
 
@@ -103,7 +103,8 @@ def loop():
                         except Exception:              # the story layer must never stop the clock: log, play on without it
                             traceback.print_exc()
                             S["director"] = None
-                skipped = w.run_for(real * rate, on_step)   # fixed steps: decide, resolve, fly aircraft, skip quiet time
+                skipped = w.run_for(real * rate, on_step,   # fixed steps: decide, resolve, fly aircraft, skip quiet time
+                                    quiet=lambda: not (S["director"] and S["director"].beat))   # never during a story
                 if skipped:
                     S["skipped"] = skipped             # the UI shows "skipped mm:ss"
                 if S["director"]:
@@ -140,7 +141,7 @@ def model_worker():
 @app.on_event("startup")
 def startup():
     load_model()
-    new_world("houthi_eilat")
+    new_world("level1")
     threading.Thread(target=loop, daemon=True).start()
     threading.Thread(target=model_worker, daemon=True).start()
 
@@ -149,8 +150,9 @@ def startup():
 @app.get("/api/meta")
 def meta():
     return dict(
-        scenarios={k: dict(title=v["title"], blurb=v["blurb"], title_he=v["title_he"], blurb_he=v["blurb_he"])
-                   for k, v in SCENARIOS.items()},
+        scenarios={k: dict(title=v["title"], blurb=v["blurb"], title_he=v["title_he"], blurb_he=v["blurb_he"],
+                           level=v.get("level"), case=v.get("case")) for k, v in SCENARIOS.items()},
+        border=[[lon, lat] for lat, lon in BORDER],
         sites=[dict(id=s[0], name=s[1], name_he=SITE_HE[s[0]], lat=s[2], lon=s[3], r=s[4], tier=s[5]) for s in SITES],
         batteries=[dict(id=b[0], eff=b[1], lat=b[2], lon=b[3]) for b in BATTERIES],
         effectors={k: dict(name=e["name"], name_he=EFFECTOR_HE.get(k, e["name"]), cost=e["cost"], layer=e["layer"],
@@ -169,7 +171,9 @@ def paths():
         ts = np.linspace(th.t0, th.t0 + th.T, 48 if th.cls in "BR" else 96)
         lat, lon, alt = th.pos(ts)
         origin = min(ORIGINS, key=lambda k: (ORIGINS[k][0] - th.origin[0]) ** 2 + (ORIGINS[k][1] - th.origin[1]) ** 2)
-        out.append(dict(id=th.id, kind=th.kind, cls=th.cls, t0=th.t0, T=th.T, origin=origin,
+        fin = lambda x: None if x == math.inf else round(x, 1)
+        out.append(dict(id=th.id, kind=th.kind, cls=th.cls, t0=th.t0, T=th.T, origin=origin, seen=th.seen_t, hostile=th.hostile_t,
+                        lost=th.lost and [round(x, 1) for x in th.lost], cross=fin(th.cross_t), kts=round(th.speed_kts()),
                         p=[[round(float(a), 4), round(float(b), 4), round(float(c) * 1000), round(float(t), 1)]
                            for a, b, c, t in zip(lon, lat, alt, ts)]))
     return dict(scenario=w.scenario, end=w.end, threats=out)
@@ -183,7 +187,7 @@ def state(policy: str = "typical"):
         tracks = []
         for th in w.threats:
             s = pol.st[th.id]
-            if th.t0 > w.t or (s["status"] in DONE and w.t - (s.get("killed_at") or th.t0 + th.T) > 120 * max(1, S["speed"] / 10)):
+            if th.seen_t > w.t or (s["status"] in DONE and w.t - (s.get("killed_at") or th.t0 + th.T) > 120 * max(1, S["speed"] / 10)):
                 continue
             plat, plon, sigma = th.predicted_impact(w.t)
             d = (s["info"] or {}).get("dist")
@@ -195,7 +199,10 @@ def state(policy: str = "typical"):
                                target=sid, open_ground=bool(dist > sig), unit=a and a["unit"], eff=a and a["eff"],
                                wait_eff=s.get("wait_eff") if s["status"] == "waiting" else None,
                                wait_until=s.get("wait_until") if s["status"] == "waiting" else None,
-                               fired=(s.get("local") or {}).get("fired")))
+                               fired=(s.get("local") or {}).get("fired"),
+                               phase="plot" if w.t < th.hostile_t else "lost" if not th.tracked(w.t) else "track",
+                               to_border=(round(float(haversine(*th.origin, *th.impact)) / th.T * (th.cross_t - w.t) / NM_KM, 1)
+                                          if w.t < th.cross_t < math.inf and th.cls in "CD" else None)))
         return dict(t=w.t + getattr(w, "owed", 0.0), end=w.end, running=S["running"], speed=S["speed"], rate=S.get("rate", S["speed"]),
                     backlog=S["backlog"],
                     skipped=S["skipped"],
@@ -204,7 +211,8 @@ def state(policy: str = "typical"):
                                   slat=f[9], slon=f[10], eff=f[11]) for f in w.flights if f[0] == policy],
                     units=[dict(id=u.id, kind=u.kind, name=u.name, name_he=AIR_HE.get(u.id, u.name), lat=u.lat, lon=u.lon, state=u.state,
                                 task=u.task, goal=u.goal, weapons=u.weapons) for u in pol.units.values()],
-                    batteries=[battery(w, pol, bid) for bid, eff, *_ in BATTERIES if w.cfg["allied"] or not EFFECTORS[eff].get("allied")],
+                    batteries=[battery(w, pol, bid) for bid, eff, *_ in BATTERIES if (w.cfg["allied"] or not EFFECTORS[eff].get("allied"))
+                               and bid in SCENARIOS.get(w.scenario.split(":")[0], {}).get("batteries", {bid: 0})],
                     killed={tid: s["killed_at"] for tid, s in pol.st.items() if s.get("killed_at")},
                     ledger=w.ledger(), attacker_cost=w.attacker_cost, **(S["director"].public() if S["director"] else {}), launched=sum(th.t0 <= w.t for th in w.threats),
                     total=len(w.threats), mode=S["mode"], drill=S["drill"] and dict(
@@ -291,10 +299,13 @@ def config(patch: dict):
     bad = set(patch) - set(DEFAULT_CONFIG)
     if bad:
         raise HTTPException(400, f"unknown keys {sorted(bad)}")
-    for k in ("site_value", "warhead", "tier_value"):   # numeric maps: keep known keys, clamp to sane ranges
+    for k in ("floor_price", "border_price"):
+        if k in patch:
+            patch[k] = min(max(float(patch[k]), 0.0), 1000.0)
+    for k in ("site_value", "warhead", "tier_value", "ammo_floor"):   # numeric maps: keep known keys, clamp to sane ranges
         if k in patch:
             known = {"site_value": {s[0] for s in SITES}, "warhead": set(DEFAULT_CONFIG["warhead"]),
-                     "tier_value": set(DEFAULT_CONFIG["tier_value"])}[k]
+                     "tier_value": set(DEFAULT_CONFIG["tier_value"]), "ammo_floor": set(EFFECTORS)}[k]
             patch[k] = {kk: min(max(float(v), 0.0), 100_000.0) for kk, v in dict(patch[k]).items() if kk in known}
     with lock:
         if S["drill"]:   # a drill is one frozen decision: re-ask it from scratch under the new settings

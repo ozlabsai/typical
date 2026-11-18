@@ -103,7 +103,7 @@ def bake(scenario=None, drill=None):
                 S["director"].tick(w)
                 S["director"].offer(w, S["director"].scan(w))
             capture(w)
-        w.run_for(TICK * rate, on_step)
+        w.run_for(TICK * rate, on_step, quiet=lambda: not (S["director"] and S["director"].beat))
         if S["director"]:
             S["director"].tick(w)
     final = server.state()
@@ -111,8 +111,13 @@ def bake(scenario=None, drill=None):
     moments = final.get("moments", [])
     for m in moments:   # when each story ends: its threat resolved (follow) or a short beat
         res = next((x["t"] for x in details[m["tid"]] if x["status"] in DONE), None)
+        if m["type"] == "group":   # the whole group: until its last threat is resolved
+            res = max((next((x["t"] for x in details[tid] if x["status"] in DONE), w.end) for tid in details), default=None)
         m["t_done"] = res if m["type"] in director.FOLLOW and res is not None else m["t"] + director.BEAT_S
+    sc = SCENARIOS.get(w.scenario, {})
     return dict(
+        story=dict(story_s=sc.get("story_s", director.STORY_S), rate_max=sc.get("story_rate_max", 300.0),
+                   follow_max=sc.get("follow_max", director.FOLLOW_MAX)),
         scenario=w.scenario, end=w.end, total=len(w.threats), cfg=w.cfg, attacker_cost=w.attacker_cost, drill=final.get("drill"),
         paths=server.paths(), frames=frames, flights=final["flights"], killed=final["killed"], moments=moments,
         threats={th.id: dict(id=th.id, kind=th.kind, cls=th.cls, t0=th.t0, impact=th.t0 + th.T, timeline=details[th.id],

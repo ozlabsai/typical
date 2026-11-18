@@ -83,6 +83,24 @@ SITES = [
     ("netanya", "Netanya", 32.33, 34.86, 4, "city"),
 ]
 SITE = {s[0]: s for s in SITES}
+
+# Israel's land border (lat, lon), notional and simplified: Lebanon, the Golan, the Jordan valley, the Arava, Egypt;
+# Gaza is outside. Used for "has it crossed?" and "would the intercept be before the border?".
+BORDER = [(33.093, 35.105), (33.10, 35.33), (33.06, 35.50), (33.28, 35.57), (33.33, 35.62), (33.30, 35.80), (32.95, 35.88),
+          (32.70, 35.78), (32.64, 35.57), (32.20, 35.55), (31.80, 35.53), (31.50, 35.48), (31.10, 35.40), (30.50, 35.15),
+          (29.55, 34.96), (29.49, 34.90), (30.50, 34.55), (31.22, 34.27), (31.32, 34.38), (31.53, 34.55), (31.59, 34.49),
+          (31.80, 34.63), (32.08, 34.77), (32.50, 34.88), (32.83, 34.97), (33.093, 35.105)]
+NM_KM = 1.852
+
+
+def in_israel(lat, lon):
+    """Point-in-polygon (ray casting) against BORDER."""
+    inside, n = False, len(BORDER)
+    for i in range(n - 1):
+        (y1, x1), (y2, x2) = BORDER[i], BORDER[i + 1]
+        if (y1 > lat) != (y2 > lat) and lon < x1 + (lat - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
 THREAT_HE = {"emad": "עמאד", "ghadr": "קדר", "kheibar": "ח׳ייבר שכן", "fattah": "פתאח-1 מתמרן", "palestine2": "פלסטין-2 (חות׳ים)",
              "fateh110": "פאתח-110", "grad": "גראד 122 מ״מ", "fajr5": "פג׳ר-5", "burkan": "בורקאן", "paveh": "טיל שיוט פאווה",
              "shahed": "שאהד-136", "uav_lb": "כטב״ם תקיפה של חזבאללה"}
@@ -159,6 +177,12 @@ DEFAULT_CONFIG = {
     "site_value": {},          # sid -> $M override
     "warhead": dict(WARHEAD),
     "priority_multiplier": 3.0,
+    # policy: a battery's minimum stock (rounds, per interceptor type). Going below is allowed, but each round below
+    # counts as floor_price $M -- "think twice", not "never". And the threats should not cross the border: an option
+    # that lets one cross before it is stopped costs border_price $M more than one that stops it before.
+    "ammo_floor": {"ironDome": 12},
+    "floor_price": 1.0,
+    "border_price": 5.0,
 }
 
 EARTH_KM = 6371.0
@@ -193,6 +217,26 @@ class Threat:
     ipp_sigma0: float = 20.0
     samples: dict = field(default_factory=dict)   # battery id -> (t array, flyout, lat, lon, alt) where feasible
     first_launch: float = float("inf")             # earliest launch any battery could make (stock ignored)
+    # the track as operators see it (None = from launch): first plots, classified hostile, a stretch with no contact
+    detect_t: float | None = None
+    classify_t: float | None = None
+    lost: tuple | None = None                       # (contact lost, contact regained) sim times
+    cross_t: float = float("inf")                   # when it crosses into Israel (precompute_windows)
+
+    @property
+    def seen_t(self):
+        return self.t0 if self.detect_t is None else self.detect_t
+
+    @property
+    def hostile_t(self):
+        return self.seen_t if self.classify_t is None else self.classify_t
+
+    def tracked(self, t):
+        return self.lost is None or not (self.lost[0] <= t < self.lost[1])
+
+    def speed_kts(self):
+        lat, lon, _ = self.pos(np.array([self.t0, self.t0 + self.T]))
+        return float(haversine(lat[0], lon[0], lat[1], lon[1])) / self.T * 3600 / NM_KM
 
     @property
     def cls(self):
@@ -219,6 +263,8 @@ class Threat:
         s = min(max((t - self.t0) / self.T, 0), 1)
         late = 0.15 if self.kind in MANOEUVRING else 0.0
         sigma = self.ipp_sigma0 * max(1 - s, late) + 0.3
+        if self.lost and self.lost[0] <= t < self.lost[1]:   # no contact: dead reckoning, the prediction spreads
+            sigma += 0.004 * (t - self.lost[0])
         k = sigma / 111.0
         return (self.impact[0] + self.ipp_offset[0] * k, self.impact[1] + self.ipp_offset[1] * k, sigma)
 
@@ -247,7 +293,56 @@ def nearest_site(lat, lon):
 
 
 # ---------------------------------------------------------------- scenarios
+def _swarm():
+    """Level 4: fifteen Shaheds from the east at different distances, the closest 120 NM from the border."""
+    rng = random.Random(4)
+    targets = ["jerusalem", "nevatim", "dimona", "beer_sheva", "jerusalem"]
+    out = []
+    for i in range(15):
+        nm = 120 + i * 9 + rng.uniform(0, 6)
+        lat = rng.uniform(30.9, 32.2)
+        out.append(dict(kind="shahed", origin=(lat, 35.5 + nm * NM_KM / 94.0), target=targets[i % 5], classify_s=300))
+    return out
+
+
+LEVEL_CASES = {   # level 2: one drone, two Iron Dome batteries; each case changes one thing
+    "a": ("Two ready batteries", "שתי סוללות מוכנות", "Both have plenty of rounds and nothing else to do.",
+          "לשתיהן מספיק מיירטים ואין להן משימות אחרות.", dict(target="haifa_bay", origin=(33.18, 35.25)), {"ID-N": 40, "ID-H": 40}, {}),
+    "b": ("One near its floor", "אחת קרובה לרצפה", "The closer battery is down to 12 rounds, its floor.",
+          "לסוללה הקרובה נותרו 12 מיירטים, הרצפה שלה.", dict(target="haifa_bay", origin=(33.18, 35.25)), {"ID-N": 12, "ID-H": 40}, {}),
+    "c": ("One already committed", "אחת כבר מחויבת", "The closer battery is committed to 3 other engagements.",
+          "הסוללה הקרובה מחויבת ל-3 יירוטים אחרים.", dict(target="haifa_bay", origin=(33.18, 35.25)), {"ID-N": 40, "ID-H": 40},
+          {"ID-N": (3, 600)}),
+    "d": ("Floor or border", "רצפה או גבול", "Only the battery at its floor can stop it before the border.",
+          "רק הסוללה שברצפה יכולה לעצור אותו לפני הגבול.", dict(target="tiberias", origin=(33.40, 35.59), classify_s=10), {"ID-N": 12, "ID-H": 40}, {}),
+}
+
+
 SCENARIOS = {
+    "level1": dict(
+        level=1, title="Level 1: one drone, one battery", title_he="שלב 1: כטב״ם אחד, סוללה אחת",
+        blurb="Plots 80 NM east of the border; a drone at 40 knots toward Jerusalem; contact is lost 5 NM from the border.",
+        blurb_he="מגעים 80 מייל ממזרח לגבול; כטב״ם ב-40 קשר לעבר ירושלים; הקשר אובד 5 מייל לפני הגבול.",
+        threats=[dict(kind="shahed", origin=(31.85, 37.10), target="jerusalem", kts=40, classify_s=600, lost_nm=(5, 8))],
+        batteries={"ID-J": 40}, units=[], story_s=70, follow_max=150),
+    **{f"level2_{k}": dict(
+        level=2, case=k, title=f"Level 2: {c[0]}", title_he=f"שלב 2: {c[1]}", blurb=c[2], blurb_he=c[3],
+        threats=[dict(kind="uav_lb", **{"classify_s": 20, **c[4]})], batteries=c[5], plans=c[6], units=[], story_s=40, follow_max=90, story_rate_max=3.0)
+       for k, c in LEVEL_CASES.items()},
+    "level3": dict(
+        level=3, title="Level 3: three at once", title_he="שלב 3: שלושה בבת אחת",
+        blurb="Three drones from Lebanon within a minute, two Iron Dome batteries and a laser.",
+        blurb_he="שלושה כטב״מים מלבנון בתוך דקה, שתי סוללות כיפת ברזל ולייזר.",
+        threats=[dict(kind="uav_lb", origin=(33.20, 35.28), target="haifa_bay", classify_s=20),
+                 dict(kind="uav_lb", origin=(33.25, 35.45), target="nahariya", classify_s=20, t0=30),
+                 dict(kind="uav_lb", origin=(33.36, 35.53), target="tiberias", classify_s=20, t0=50)],
+        batteries={"ID-N": 20, "ID-H": 40, "IB-N": None}, units=[], group=True, story_s=45, follow_max=120, story_rate_max=3.0),
+    "level4": dict(
+        level=4, title="Level 4: a swarm from the east", title_he="שלב 4: נחיל ממזרח",
+        blurb="Intelligence warned 8 hours ahead. 15 drones at different distances; the closest is 120 NM out.",
+        blurb_he="המודיעין התריע 8 שעות מראש. 15 כטב״מים במרחקים שונים; הקרוב 120 מייל מהגבול.",
+        threats=_swarm(), batteries={"ID-J": 60, "ID-NV": 60, "ID-BS": 60, "ID-E": 40}, units=["F-E", "H-S"], group=True,
+        story_s=90, follow_max=240),
     "northern_barrage": dict(
         title_he="חזית צפון: מטח חזבאללה", blurb_he="150 רקטות, 20 כטב״מים ו-4 פאתח-110 בתוך 6 דקות. רוב הרקטות נופלות בשטח פתוח.",
         title="Northern front: Hezbollah barrage",
@@ -291,10 +386,44 @@ SCENARIOS = {
 }
 
 
+def _path_cross(th):
+    """When the straight path first enters Israel (inf if never)."""
+    ts = np.linspace(th.t0, th.t0 + th.T, 400)
+    lat, lon, _ = th.pos(ts)
+    inside = [in_israel(a, b) for a, b in zip(lat, lon)]
+    return float(ts[inside.index(True)]) if True in inside else float("inf")
+
+
+def level_threats(specs):
+    """Hand-built threats for the step-by-step levels: origin, target, speed in knots, when it is seen and classified,
+    and where contact is lost (nautical miles before the border) and regained (nautical miles from the target)."""
+    out = []
+    for i, sp in enumerate(specs):
+        o, tgt = sp["origin"], SITE[sp["target"]]
+        impact = (tgt[2], tgt[3])
+        rng_km = float(haversine(*o, *impact))
+        T, apo = _flight(sp["kind"], rng_km)
+        if sp.get("kts"):
+            T = rng_km / (sp["kts"] * NM_KM / 3600)
+        th = Threat(id=sp.get("id", f"T{i + 1:03d}"), kind=sp["kind"], origin=o, impact=impact, t0=sp.get("t0", 0.0), T=T,
+                    apogee=apo, ipp_offset=(0.6, 0.8), ipp_sigma0=sp.get("sigma0", 6.0))
+        th.detect_t = th.t0
+        th.classify_t = th.t0 + sp.get("classify_s", 0.0)
+        if sp.get("lost_nm"):
+            before_nm, regain_nm = sp["lost_nm"]
+            v = rng_km / T   # km/s
+            th.lost = (_path_cross(th) - before_nm * NM_KM / v, th.t0 + T - regain_nm * NM_KM / v)
+        out.append(th)
+    return out
+
+
 def build_raid(name, seed=7):
-    """Arrival-synchronised raid: each wave = (kind, origin, target sites, count, scatter km, t_first, t_last arrival)."""
+    """Arrival-synchronised raid: each wave = (kind, origin, target sites, count, scatter km, t_first, t_last arrival);
+    a step-by-step level lists its threats instead."""
     rng = random.Random(seed)
     sc = SCENARIOS[name]
+    if "threats" in sc:
+        return level_threats(sc["threats"])
     threats = []
     for kind, origin, targets, n, scatter_km, a0, a1 in sc["waves"]:
         olat, olon, ojit = ORIGINS[origin]
@@ -328,6 +457,9 @@ def precompute_windows(th: Threat, batteries):
     n = int(min(max(300, th.T / 4), 3000))
     ts = np.linspace(th.t0, th.t0 + th.T, n)
     lat, lon, alt = th.pos(ts)
+    inside = np.array([in_israel(a, b) for a, b in zip(lat[::4], lon[::4])])
+    if inside.any():
+        th.cross_t = float(ts[::4][np.argmax(inside)])
     for bid, eff, blat, blon, _ in batteries:
         e = EFFECTORS[eff]
         if th.cls not in e["pk"]:
@@ -335,9 +467,13 @@ def precompute_windows(th: Threat, batteries):
         d = haversine(blat, blon, lat, lon)
         ok = (d >= e["rmin"]) & (d <= e["rmax"]) & (alt >= e["hmin"]) & (alt <= e["hmax"])
         ok[-1] = False   # can't intercept at impact
+        fly = e.get("dwell") or np.sqrt(d ** 2 + alt ** 2) / e["v"]
+        launch = ts - fly
+        ok &= launch >= th.hostile_t   # nothing fires at an unclassified plot
+        if th.lost:                    # fire control needs the track from launch to intercept
+            ok &= (ts < th.lost[0]) | (launch >= th.lost[1])
         if not ok.any():
             continue
-        fly = e.get("dwell") or np.sqrt(d ** 2 + alt ** 2) / e["v"]
         th.samples[bid] = (ts[ok], np.broadcast_to(fly, ts.shape)[ok], lat[ok], lon[ok], alt[ok])
         th.first_launch = min(th.first_launch, float((th.samples[bid][0] - th.samples[bid][1]).min()))
 
