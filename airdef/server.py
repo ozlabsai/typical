@@ -155,7 +155,7 @@ def meta():
         border=[[lon, lat] for lat, lon in BORDER],
         sites=[dict(id=s[0], name=s[1], name_he=SITE_HE[s[0]], lat=s[2], lon=s[3], r=s[4], tier=s[5]) for s in SITES],
         batteries=[dict(id=b[0], eff=b[1], lat=b[2], lon=b[3]) for b in BATTERIES],
-        effectors={k: dict(name=e["name"], name_he=EFFECTOR_HE.get(k, e["name"]), cost=e["cost"], layer=e["layer"],
+        effectors={k: dict(name=e["name"], name_he=EFFECTOR_HE.get(k, e["name"]), cost=e["cost"], layer=e["layer"], rmax=e.get("rmax"),
                            allied=e.get("allied", False), air=e.get("air", False)) for k, e in EFFECTORS.items()},
         air_kinds={k: dict(label=v["label"]) for k, v in AIR_KINDS.items()},
         threat_types={k: dict(name=v[0], name_he=THREAT_HE[k], cls=v[1], cost=v[2]) for k, v in THREATS.items()},
@@ -199,6 +199,7 @@ def state(policy: str = "typical"):
                                target=sid, open_ground=bool(dist > sig), unit=a and a["unit"], eff=a and a["eff"],
                                wait_eff=s.get("wait_eff") if s["status"] == "waiting" else None,
                                wait_until=s.get("wait_until") if s["status"] == "waiting" else None,
+                               inrange=any(o[0].startswith("now:") for o in (s.get("info") or {}).get("opts", [])),   # can anything fire on it now
                                fired=(s.get("local") or {}).get("fired"),
                                phase="plot" if w.t < th.hostile_t else "lost" if not th.tracked(w.t) else "track",
                                to_border=(round(float(haversine(*th.origin, *th.impact)) / th.T * (th.cross_t - w.t) / NM_KM, 1)

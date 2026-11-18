@@ -98,8 +98,9 @@ details.detail pre { margin: 0; white-space: pre-wrap; font: .8125rem/1.6 var(--
 /* projector-safe greys: secondary text one step darker than the brand's --dc-grey */
 .kicker, .obj-sub, .stat .l, .dline, #legend { color: var(--dc-text-sub); }
 .obj-sub { font-size: .875rem; }
-#legend .sq { width: .5625rem; height: .5625rem; background: #fff; border: 1.5px solid var(--dc-ink); display: inline-block; }
-#legend .tri { width: 0; height: 0; border-inline: .3125rem solid transparent; border-bottom: .5625rem solid #8a8a8e; display: inline-block; }
+#legend .ic { width: 16px; height: 16px; display: inline-block; -webkit-mask: var(--m) calc(-1 * var(--x)) 0 / 48px 16px no-repeat; mask: var(--m) calc(-1 * var(--x)) 0 / 48px 16px no-repeat; }
+#legend .rng-k { width: 16px; height: 0; border-top: 1.5px dashed #8a8a8e; display: inline-block; }
+#legend .dot.prio { background: #d97706; border-color: #fbe3c0; border-width: 2px; }
 .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.25rem; margin-top: .75rem; }
 .stat .l { font-size: .875rem; color: var(--dc-grey); }
 .stat .v { font-size: 2.25rem; letter-spacing: -.04em; color: var(--dc-ink-2); line-height: 1.1; }
@@ -163,6 +164,10 @@ details.detail pre { margin: 0; white-space: pre-wrap; font: .8125rem/1.6 var(--
 .opt-p { text-align: end; }
 .opt.on { color: var(--dc-blue); font-weight: 500; } .opt.on .opt-bar i { background: var(--dc-blue); }
 .opt-s { grid-column: 1 / -1; margin-top: -.375rem; font-size: .8125rem; font-weight: 400; color: var(--dc-text-sub); }
+.steps { display: flex; gap: .25rem; margin: 0 0 1rem; padding: 0; list-style: none; font-size: .75rem; color: var(--dc-text-sub); }
+.steps li { flex: 1; padding-top: .5rem; border-top: 3px solid #e2e2e4; }
+.steps li.done { border-color: var(--dc-ink); color: var(--dc-ink); }
+.steps li.on { border-color: var(--dc-blue); color: var(--dc-blue); font-weight: 600; }
 .opt-legend { margin-top: .5rem; font-size: .75rem; color: var(--dc-text-sub); }
 .grp .obj-name { color: var(--dc-ink-2); } .grp.gopen { background: var(--dc-surface); }
 .grp-body { padding-inline-start: .75rem; border-inline-start: 2px solid var(--dc-surface); margin: 0 0 .375rem .5rem; }

@@ -31,23 +31,27 @@ const I18N = {
     whyFire: (e, pk) => `${e} can engage now and ${pk}.`,
     whyFire2: (e, pk) => `Two ${e} together: the pair ${pk}.`,
     whyWait: (e, m, pk) => `${e} reaches it in ${m} and ${pk}.`,
+    whyPlan: (e, m, pk, b) => `Nothing can reach it yet. ${e} (${b}) is in range in ${m} and ${pk}.`,
     whyHoldOpen: "It will land in open ground. Nothing worth an interceptor is at risk.",
     whyHold: "The damage it can do is worth less than any interceptor that can reach it.",
     vs: { raid: (r) => `${r} would spend interceptors tonight's raid still needs.`, campaign: (r) => `${r} would spend stock the campaign has to keep.`,
       local: (r, d) => `The next best, “${r}”, costs ${d} more in interceptors and risk.` },
+    older: (n) => `${n} earlier not shown`,
+    noCall: "Not classified yet. Typical makes its first call once the plots are identified as hostile.",
+    steps5: ["Detected", "Hostile", "Plan", "Engaged", "Result"],
     pkS: ["almost certain", "very likely", "likely", "may stop it", "unlikely"],
     optWhy: { now: "now", in: (m) => `in ${m}`, wait: "decide later, when the track is firmer", open: "lands in open ground", hits: (s) => `would hit ${s}`, cost: (c) => `${c} expected` },
     optLegend: "Typical's probability for each option; expected cost = interceptors + damage risk.",
     status: { killed: "Intercepted", leaked: "Hit a defended site", fell_open: "Fell in open ground" },
     sec: { t: "Threats", u: "Aircraft", b: "Fire units" }, options: "Options weighed",
-    st: { out: "Tracking", wait: "Keep tracking", cheaper: (e) => `Wait for ${e}`, hold: "Let it fall", ground: (e, u) => `${e} · ${u}`,
+    st: { out: "Tracking", wait: "Keep tracking", cheaper: (e) => `Wait for ${e}`, plan: (e) => `${e}, once in range`, hold: "Let it fall", ground: (e, u) => `${e} · ${u}`,
       air: (u) => `${u} en route`, fired: (u, n) => `${u} fired ${n}`, hit: (s) => `Hit ${s}` },
     bat: { ready: "Ready", engaging: (n) => `Engaging ${n}`, reloading: "Reloading", empty: "Empty", unlimited: "Unlimited",
       onLaunchers: "Ready on launchers", left: "Rounds left", channels: "Channels in use", reload: "Next reload", firedTonight: "Fired tonight",
       targets: "Engaging", none: "—", sub: (r, l) => `${r} ready · ${l} left` },
     unit: { ground: "On alert", cap: "On patrol", tasked: "Intercepting", rtb: "Returning to base", rearm: "Rearming",
       weapons: "Weapons left", task: "Task", state: "State" },
-    legend: { engaged: "Engaged", waiting: "Waiting", fall: "Let it fall", unit: "Fire unit", air: "Aircraft" },
+    legend: { engaged: "Engaged", waiting: "Waiting", fall: "Let it fall", unit: "Fire unit", range: "Its reach", air: "Aircraft", prio: "Priority area" },
     steps: "Step by step", raids: "Full raids", clsWord: { B: "ballistic missile", R: "rocket", C: "cruise missile", D: "drone" },
     phase: { plot: "Unidentified plot", lost: "No radar contact" },
     fromBorder: (nm, kts) => `${nm} NM from the border · ${kts} knots`, crossed: "Crossed the border", speedKts: (k) => `${k} knots`,
@@ -117,23 +121,27 @@ const I18N = {
     whyFire: (e, pk) => `${e} יכול ליירט עכשיו, ו${pk}.`,
     whyFire2: (e, pk) => `שני ${e} יחד: ${pk}.`,
     whyWait: (e, m, pk) => `${e} יגיע אליו בעוד ${m}, ו${pk}.`,
+    whyPlan: (e, m, pk, b) => `שום מיירט עוד לא מגיע אליו. ${e} (${b}) ייכנס לטווח בעוד ${m}, ו${pk}.`,
     whyHoldOpen: "הוא ייפול בשטח פתוח. אין שם דבר ששווה מיירט.",
     whyHold: "הנזק שהוא יכול לגרום שווה פחות מכל מיירט שמגיע אליו.",
     vs: { raid: (r) => `${r} ינצל מיירטים שהמתקפה הלילה עוד צריכה.`, campaign: (r) => `${r} ינצל מלאי שהמערכה חייבת לשמור.`,
       local: (r, d) => `האפשרות הבאה, „${r}”, עולה ${d} יותר במיירטים ובסיכון.` },
+    older: (n) => `${n} מוקדמים יותר לא מוצגים`,
+    noCall: "עדיין לא סווג. Typical יחליט לראשונה כשהעקבות יזוהו כעוינות.",
+    steps5: ["זוהה", "עוין", "תוכנית", "יירוט", "תוצאה"],
     pkS: ["כמעט בטוח", "סביר מאוד", "סביר", "עשוי לעצור", "לא סביר"],
     optWhy: { now: "עכשיו", in: (m) => `בעוד ${m}`, wait: "בדיקה חוזרת כשהמסלול יתייצב", open: "ייפול בשטח פתוח", hits: (s) => `יפגע ב${s}`, cost: (c) => `${c} עלות צפויה` },
     optLegend: "ההסתברות של Typical לכל אפשרות; עלות צפויה = מיירטים + סיכון נזק.",
     status: { killed: "יורט", leaked: "פגע באתר מוגן", fell_open: "נפל בשטח פתוח" },
     sec: { t: "איומים", u: "כלי טיס", b: "יחידות אש" }, options: "האפשרויות שנשקלו",
-    st: { out: "במעקב", wait: "להמשיך במעקב", cheaper: (e) => `להמתין ל${e}`, hold: "לתת לו ליפול", ground: (e, u) => `${e} · ${u}`,
+    st: { out: "במעקב", wait: "להמשיך במעקב", cheaper: (e) => `להמתין ל${e}`, plan: (e) => `${e}, כשייכנס לטווח`, hold: "לתת לו ליפול", ground: (e, u) => `${e} · ${u}`,
       air: (u) => `${u} בדרך`, fired: (u, n) => `${u} ירה ${n}`, hit: (s) => `פגע ב${s}` },
     bat: { ready: "מוכנה", engaging: (n) => `מיירטת ${n}`, reloading: "בטעינה", empty: "ריקה", unlimited: "ללא הגבלה",
       onLaunchers: "מוכנים במשגרים", left: "מיירטים שנותרו", channels: "ערוצים בשימוש", reload: "טעינה הבאה", firedTonight: "נורו הלילה",
       targets: "מיירטת את", none: "—", sub: (r, l) => `${r} מוכנים · ${l} נותרו` },
     unit: { ground: "בכוננות", cap: "בסיור", tasked: "ביירוט", rtb: "חוזר לבסיס", rearm: "בחימוש",
       weapons: "חימוש שנותר", task: "משימה", state: "מצב" },
-    legend: { engaged: "ביירוט", waiting: "בהמתנה", fall: "ליפול", unit: "יחידת אש", air: "כלי טיס" },
+    legend: { engaged: "ביירוט", waiting: "בהמתנה", fall: "ליפול", unit: "יחידת אש", range: "הטווח שלה", air: "כלי טיס", prio: "אזור בעדיפות" },
     steps: "שלב אחר שלב", raids: "מתקפות מלאות", clsWord: { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" },
     phase: { plot: "מגע לא מזוהה", lost: "אין מגע מכ״מי" },
     fromBorder: (nm, kts) => `${nm} מייל מהגבול · ${kts} קשר`, crossed: "חצה את הגבול", speedKts: (k) => `${k} קשר`,
@@ -201,7 +209,7 @@ const actLabel = (key) => {
 function callLabel(key, info) {   // "Wait for cheaper" only when something can fire now; otherwise name what it waits for
   if (key !== "cheaper" || !info?.opts) return actLabel(key);
   const w = info.opts.find((o) => o[0] === "cheaper");
-  return info.opts.some((o) => o[0].startsWith("now:")) || !w ? actLabel(key) : T().st.cheaper(effName(batEff(w[6]) || ""));
+  return info.opts.some((o) => o[0].startsWith("now:")) || !w ? actLabel(key) : T().st.plan(effName(batEff(w[6]) || ""));   // nothing reaches it yet
 }
 const unitName = (id) => { const u = (S?.units || []).find((x) => x.id === id); return u ? nm(u) : id; };
 const batEff = (id) => META.batteries.find((b) => b.id === id)?.eff;
@@ -234,13 +242,21 @@ map.on("load", () => {   // the basemap is a quiet canvas: no labels of its own 
 const COUNTRIES = [["Lebanon", "לבנון", 34.05, 35.95], ["Syria", "סוריה", 34.9, 38.4], ["Jordan", "ירדן", 30.9, 36.9], ["Iraq", "עיראק", 32.8, 43.6],
   ["Iran", "איראן", 32.4, 53.2], ["Saudi Arabia", "ערב הסעודית", 25.2, 44.2], ["Yemen", "תימן", 15.6, 47.2], ["Egypt", "מצרים", 27.2, 30.6],
   ["Israel", "ישראל", 30.75, 34.85], ["Cyprus", "קפריסין", 35.1, 33.2], ["Turkey", "טורקיה", 38.6, 35.2]].map(([en, he, lat, lon]) => ({ name: en, name_he: he, lat, lon }));
-const ATLAS = (() => {   // two mask icons: a square (fire unit) and a chevron (aircraft); colour comes from the layer
-  const c = document.createElement("canvas"); c.width = 128; c.height = 64; const g = c.getContext("2d");
-  g.fillStyle = "#fff"; g.fillRect(6, 6, 52, 52);
-  g.beginPath(); g.moveTo(96, 4); g.lineTo(122, 60); g.lineTo(96, 46); g.lineTo(70, 60); g.closePath(); g.fill();
+const ATLAS = (() => {   // mask icons, colour from the layer: a dome (fire unit), an arrowhead (threat), a plane (aircraft)
+  const c = document.createElement("canvas"); c.width = 192; c.height = 64; const g = c.getContext("2d"), poly = (dx, pts) => {
+    g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x + dx, y) : g.moveTo(x + dx, y))); g.closePath(); g.fill(); };
+  g.fillStyle = "#fff";
+  g.beginPath(); g.arc(32, 46, 26, Math.PI, 0); g.fill(); g.fillRect(4, 46, 56, 10);   // dome on its base
+  poly(64, [[32, 4], [58, 60], [32, 46], [6, 60]]);   // arrowhead
+  poly(128, [[32, 2], [36, 20], [62, 36], [62, 42], [36, 36], [35, 50], [45, 58], [45, 62], [32, 59], [19, 62], [19, 58], [29, 50], [28, 36], [2, 42], [2, 36], [28, 20]]);
   return c.toDataURL();
 })();
-const ICONS = { sq: { x: 0, y: 0, width: 64, height: 64, mask: true }, tri: { x: 64, y: 0, width: 64, height: 64, mask: true } };
+const ICONS = { dome: { x: 0, y: 0, width: 64, height: 64, mask: true }, arrow: { x: 64, y: 0, width: 64, height: 64, mask: true },
+  plane: { x: 128, y: 0, width: 64, height: 64, mask: true } };
+const AMBER = [217, 119, 6];   // a priority area: the colour of its alert
+const heading = (a, b) => (Math.atan2((b[0] - a[0]) * Math.cos(a[1] * Math.PI / 180), b[1] - a[1]) * 180) / Math.PI;   // degrees from north
+const ring = (lon, lat, km) => Array.from({ length: 73 }, (_, i) => { const a = (i / 72) * 2 * Math.PI;
+  return [lon + (km / (111.32 * Math.cos(lat * Math.PI / 180))) * Math.sin(a), lat + (km / 110.57) * Math.cos(a)]; });
 const LABEL = { fontFamily: "Figtree, Heebo, Arial, sans-serif", characterSet: "auto", outlineWidth: 3, outlineColor: [255, 255, 255, 235],
   fontSettings: { sdf: true }, extensions: [new deck.CollisionFilterExtension()], collisionGroup: "labels" };
 const bearing = (u) => (u.goal ? (Math.atan2((u.goal[1] - u.lon) * Math.cos(u.lat * Math.PI / 180), u.goal[0] - u.lat) * 180) / Math.PI : 0);
@@ -293,8 +309,10 @@ function applyLang() {
   document.documentElement.dir = LANG === "he" ? "rtl" : "ltr";
   document.querySelectorAll("[data-i18n]").forEach((el) => (el.textContent = T()[el.dataset.i18n]));
   const lg = T().legend;
-  $("#legend").innerHTML = `<span><i class="dot ink"></i>${lg.engaged}</span><span><i class="dot hollow"></i>${lg.waiting}</span><span><i class="dot faint"></i>${lg.fall}</span>
-    <span><i class="sq"></i>${lg.unit}</span><span><i class="tri"></i>${lg.air}</span><span><i class="dot blue"></i>${T().following}</span>`;
+  const ic = (k, col) => `<i class="ic" style="--m:url(${ATLAS});--x:${ICONS[k].x / 4}px;background:${col}"></i>`;
+  $("#legend").innerHTML = `<span>${ic("arrow", "#101010")}${lg.engaged}</span><span>${ic("arrow", "#78787c")}${lg.waiting}</span><span>${ic("arrow", "#afafb3")}${lg.fall}</span>
+    <span>${ic("arrow", "#2548f6")}${T().following}</span><span>${ic("dome", "#101010")}${lg.unit}</span><span><i class="rng-k"></i>${lg.range}</span>
+    <span>${ic("plane", "#101010")}${lg.air}</span><span><i class="dot prio"></i>${lg.prio}</span>`;
   $("#lang").textContent = T().lang;
   const item = ([k, v]) => {
     const [title, blurb] = LANG === "he" ? [v.title_he, v.blurb_he] : [v.title, v.blurb];
@@ -437,7 +455,7 @@ function frame() {
     trails.push({ path: past, color: [...col, sel ? 255 : dim ? 40 : 150], w: sel ? 3 : 1.25 });
     const fut = { path: [cur.slice(0, 3), ...path.p.filter((q) => q[3] > t).map((q) => q.slice(0, 3))], color: [...col, sel ? 110 : dim ? 25 : held ? 120 : 45], w: sel ? 2 : 1 };
     (held ? falls : futures).push(fut);
-    live.push({ pos: cur.slice(0, 3), tr, sel, held });
+    live.push({ pos: cur.slice(0, 3), tr, sel, held, ang: -heading(cur, posAt(path, t + 30)) });
   }
   const batt = Object.fromEntries(META.batteries.map((b) => [b.id, b]));
   const shots = [], flashes = [], kills = [], nowMs = performance.now();
@@ -458,26 +476,35 @@ function frame() {
   const leaks = S.tracks.filter((x) => x.status === "leaked").map((x) => PATHS[x.id]?.p.at(-1)).filter(Boolean);
   const batts = S.batteries.map((b) => ({ ...b, ...META.batteries.find((m) => m.id === b.id) }));
   const fb = focus?.k === "b" && batts.find((b) => b.id === focus.id);
+  const targets = new Set(live.filter((l) => !l.held).map((l) => l.tr.target).filter(Boolean));
+  const D = detail?.id === selected ? detail : null, level = !!META.scenarios[S.scenario]?.level;
+  const mine = new Set([D?.assign?.unit, D?.info?.battery?.pick, ...(D?.info?.battery?.options || []).map((o) => o.bid),
+    ...(D?.info?.opts || []).filter((o) => o[0] === "cheaper" || o[0].startsWith("now:")).map((o) => o[6])].filter(Boolean));
+  const pick = D?.assign?.unit || D?.info?.battery?.pick || D?.info?.opts?.find((o) => o[0] === D.choice)?.[6];
+  const ranges = batts.filter((b) => (level || b.id === pick) && META.effectors[b.eff]?.rmax && META.effectors[b.eff].rmax < 400)   // a level: every battery's reach; a raid: the one chosen
+    .map((b) => ({ path: ring(b.lon, b.lat, META.effectors[b.eff].rmax), on: b.id === pick }));
   const links = fb ? fb.tasks.map((tid) => live.find((l) => l.tr.id === tid)).filter(Boolean).map((l) => ({ path: [[fb.lon, fb.lat, 0], l.pos] })) : [];
   overlay.setProps({ layers: [
     new deck.PathLayer({ id: "border", data: [{ path: META.border }], getPath: (d) => d.path, getColor: [16, 16, 16, 110], widthUnits: "pixels",
       getWidth: 1.2, getDashArray: [5, 4], dashJustified: true, extensions: [new deck.PathStyleExtension({ dash: true })] }),
     new deck.TextLayer({ id: "phases", data: live.filter((d) => d.tr.phase === "plot" || d.tr.phase === "lost"), getPosition: (d) => d.pos,
       getText: (d) => (d.tr.phase === "plot" ? "?" : "…"), getSize: 13, getColor: [...INK, 200], getPixelOffset: [12, -10], ...LABEL, extensions: [] }),
-    new deck.ScatterplotLayer({ id: "sites", data: META.sites, getPosition: (d) => [d.lon, d.lat], getRadius: (d) => d.r * 1000,
-      getFillColor: (d) => (prio.has(d.id) ? [16, 16, 16, 14] : [0, 0, 0, 0]), stroked: true, lineWidthUnits: "pixels",
-      getLineWidth: (d) => (prio.has(d.id) ? 1.5 : 0.75), getLineColor: (d) => (prio.has(d.id) ? [...INK, 200] : [197, 197, 199, 255]),
-      updateTriggers: { getFillColor: [...prio].join(), getLineColor: [...prio].join(), getLineWidth: [...prio].join() } }),
+    new deck.ScatterplotLayer({ id: "sites", data: META.sites, getPosition: (d) => [d.lon, d.lat], radiusUnits: "pixels",
+      getRadius: (d) => (prio.has(d.id) ? 5 : 3), getFillColor: (d) => (prio.has(d.id) ? [...AMBER, 255] : [150, 150, 154, 200]),
+      stroked: true, lineWidthUnits: "pixels", getLineWidth: (d) => (prio.has(d.id) ? 4 : 0), getLineColor: [...AMBER, 60],
+      updateTriggers: { getFillColor: [...prio].join(), getRadius: [...prio].join(), getLineWidth: [...prio].join() } }),
     new deck.TextLayer({ id: "countries", data: COUNTRIES, getPosition: (d) => [d.lon, d.lat], getText: (d) => glyphs(nm(d)), getSize: 13,
       getColor: [150, 150, 154, 200], ...LABEL, extensions: [], updateTriggers: { getText: LANG } }),
-    new deck.TextLayer({ id: "siteNames", data: META.sites.filter((s) => prio.has(s.id) || map.getZoom() > 6.2), getPosition: (d) => [d.lon, d.lat],
-      getText: (d) => glyphs(nm(d)), getSize: (d) => (prio.has(d.id) ? 13 : 12), getColor: (d) => (prio.has(d.id) ? [...INK, 230] : [104, 104, 104, 220]),
-      getPixelOffset: [0, -16], fontWeight: 500, ...LABEL, extensions: [],   // few sites, no overlap: always labelled
+    new deck.TextLayer({ id: "siteNames", data: META.sites.filter((s) => prio.has(s.id) || targets.has(s.id) || map.getZoom() > 7.4), getPosition: (d) => [d.lon, d.lat],
+      getText: (d) => glyphs(nm(d)), getSize: (d) => (prio.has(d.id) ? 13 : 12), getColor: (d) => (prio.has(d.id) ? [138, 75, 0, 255] : [96, 96, 96, 235]),
+      getPixelOffset: (d) => [0, d.tier === "city" ? -13 : 13], fontWeight: 500, ...LABEL, extensions: [],   // cities above the dot, installations below: neighbours never overlap
       updateTriggers: { getText: LANG, getSize: [...prio].join(), getColor: [...prio].join() } }),
+    new deck.PathLayer({ id: "ranges", data: ranges, getPath: (d) => d.path, getColor: (d) => (d.on ? [...BLUE, 150] : [...INK, 70]), widthUnits: "pixels",
+      getWidth: (d) => (d.on ? 1.5 : 1), getDashArray: [6, 5], dashJustified: true, extensions: [new deck.PathStyleExtension({ dash: true })] }),
     new deck.PathLayer({ id: "airtask", data: (S.units || []).filter((u) => u.state === "tasked" && u.goal),
       getPath: (u) => [[u.lon, u.lat], [u.goal[1], u.goal[0]]], getColor: [...INK, 90], widthUnits: "pixels", getWidth: 1 }),
-    new deck.IconLayer({ id: "air", data: S.units || [], getPosition: (u) => [u.lon, u.lat], iconAtlas: ATLAS, iconMapping: ICONS, getIcon: () => "tri",
-      sizeUnits: "pixels", getSize: (u) => (isFocus("u", u.id) ? 20 : u.state === "ground" || u.state === "rearm" ? 11 : 15), getAngle: (u) => -bearing(u),
+    new deck.IconLayer({ id: "air", data: S.units || [], getPosition: (u) => [u.lon, u.lat], iconAtlas: ATLAS, iconMapping: ICONS, getIcon: () => "plane",
+      sizeUnits: "pixels", getSize: (u) => (isFocus("u", u.id) ? 26 : u.state === "ground" || u.state === "rearm" ? 14 : 20), getAngle: (u) => -bearing(u),
       getColor: (u) => (isFocus("u", u.id) ? BLUE : u.state === "tasked" ? INK : [...GREY, dim ? 90 : 230]), pickable: true, onClick: (i) => select("u", i.object.id),
       updateTriggers: { getColor: [(S.units || []).map((u) => u.state).join(), focus?.id, dim], getSize: focus?.id } }),
     new deck.TextLayer({ id: "airNames", data: (S.units || []).filter((u) => (u.state !== "ground" && u.state !== "rearm") || isFocus("u", u.id)),
@@ -485,16 +512,12 @@ function frame() {
       getPixelOffset: [0, 16], ...LABEL, extensions: [],   // six aircraft at most: always labelled
       updateTriggers: { getText: LANG, getColor: focus?.id } }),
     new deck.PathLayer({ id: "battlinks", data: links, getPath: (d) => d.path, getColor: [...BLUE, 160], widthUnits: "pixels", getWidth: 1.5 }),
-    new deck.IconLayer({ id: "battEdge", data: batts, getPosition: (d) => [d.lon, d.lat], iconAtlas: ATLAS, iconMapping: ICONS, getIcon: () => "sq",
-      sizeUnits: "pixels", getSize: (d) => (isFocus("b", d.id) ? 17 : 12), pickable: true, onClick: (i) => select("b", i.object.id),
-      getColor: (d) => (isFocus("b", d.id) ? BLUE : d.stock === 0 ? [190, 190, 194, 255] : [...INK, dim ? 90 : 230]),
-      updateTriggers: { getColor: [batts.map((b) => b.stock === 0).join(), focus?.id, dim], getSize: focus?.id } }),
-    new deck.IconLayer({ id: "battFill", data: batts, getPosition: (d) => [d.lon, d.lat], iconAtlas: ATLAS, iconMapping: ICONS, getIcon: () => "sq",
-      sizeUnits: "pixels", getSize: (d) => (isFocus("b", d.id) ? 11 : 8),
-      getColor: (d) => (isFocus("b", d.id) ? [255, 255, 255] : d.tasks.length || d.busy ? INK : d.stock === 0 ? [236, 236, 238] : d.reload ? [180, 180, 184] : [255, 255, 255]),
-      updateTriggers: { getColor: [batts.map((b) => `${b.tasks.length}${b.busy}${b.stock}${!!b.reload}`).join(), focus?.id], getSize: focus?.id } }),
-    new deck.TextLayer({ id: "battNames", data: batts.filter((b) => isFocus("b", b.id) || map.getZoom() > 8.5), getPosition: (d) => [d.lon, d.lat],
-      getText: (d) => d.id, getSize: 12, getColor: (d) => (isFocus("b", d.id) ? [...BLUE, 255] : [...INK, 170]), getPixelOffset: [10, 0], getTextAnchor: "start",
+    new deck.IconLayer({ id: "batt", data: batts, getPosition: (d) => [d.lon, d.lat], iconAtlas: ATLAS, iconMapping: ICONS, getIcon: () => "dome",
+      sizeUnits: "pixels", getSize: (d) => (isFocus("b", d.id) || d.id === pick ? 24 : 17), pickable: true, onClick: (i) => select("b", i.object.id),
+      getColor: (d) => (isFocus("b", d.id) || d.id === pick ? BLUE : d.stock === 0 ? [205, 205, 208, 255] : d.reload ? [150, 150, 154, 255] : [...INK, dim && !mine.has(d.id) ? 110 : 235]),
+      updateTriggers: { getColor: [batts.map((b) => `${b.stock === 0}${!!b.reload}`).join(), focus?.id, dim, pick, [...mine].join()], getSize: [focus?.id, pick] } }),
+    new deck.TextLayer({ id: "battNames", data: batts.filter((b) => level || mine.has(b.id) || isFocus("b", b.id) || map.getZoom() > 8.5), getPosition: (d) => [d.lon, d.lat],
+      getText: (d) => `${d.id} · ${effName(d.eff)}`, getSize: 12, getColor: (d) => (isFocus("b", d.id) || d.id === pick ? [...BLUE, 255] : [...INK, 190]), getPixelOffset: [14, 0], getTextAnchor: "start",
       ...LABEL, getCollisionPriority: (d) => (isFocus("b", d.id) ? 200 : d.tasks.length ? 50 : 5), updateTriggers: { getColor: focus?.id } }),
     selTr && !DONE.includes(selTr.status) && new deck.ScatterplotLayer({ id: "ipp", data: [selTr], getPosition: (d) => [d.ipp[0], d.ipp[1]],
       getRadius: (d) => Math.max(d.ipp[2], 0.6) * 1000, filled: true, stroked: true, getFillColor: [...BLUE, 22], getLineColor: [...BLUE, 220], lineWidthUnits: "pixels", getLineWidth: 1.5 }),
@@ -505,11 +528,13 @@ function frame() {
       fontFamily: "Figtree, Arial, sans-serif", characterSet: "×" }),
     new deck.PathLayer({ id: "trail", data: trails, getPath: (d) => d.path, getColor: (d) => d.color, widthUnits: "pixels", getWidth: (d) => d.w }),
     new deck.PathLayer({ id: "shots", data: shots, getPath: (d) => d.path, getColor: (d) => (d.sel ? [...BLUE, 255] : [...INK, 110]), widthUnits: "pixels", getWidth: (d) => (d.sel ? 2.5 : 1) }),
-    new deck.ScatterplotLayer({ id: "heads", data: live, getPosition: (d) => d.pos, radiusUnits: "pixels", pickable: true, onClick: (i) => select("t", i.object.tr.id),
-      getRadius: (d) => (d.sel ? 8 : 5), stroked: true, lineWidthUnits: "pixels", getLineWidth: (d) => (d.sel ? 2.5 : 1.5),
-      getFillColor: (d) => (d.sel && d.tr.phase !== "plot" ? BLUE : [...(ENGAGED.includes(d.tr.status) ? INK : [255, 255, 255]),
-        d.held || d.tr.phase === "plot" ? 0 : d.tr.phase === "lost" ? 60 : dim ? 70 : 255]),
-      getLineColor: (d) => (d.sel ? [255, 255, 255] : [...(d.held ? [150, 150, 154] : INK), dim ? 60 : 225]) }),
+    new deck.IconLayer({ id: "heads", data: live, getPosition: (d) => d.pos, iconAtlas: ATLAS, iconMapping: ICONS, getIcon: () => "arrow", getAngle: (d) => d.ang,
+      sizeUnits: "pixels", getSize: (d) => (d.sel ? 24 : 15), pickable: true, onClick: (i) => select("t", i.object.tr.id),
+      getColor: (d) => (d.sel ? [...BLUE, d.tr.phase === "plot" ? 140 : 255] : [...(ENGAGED.includes(d.tr.status) ? INK : d.held ? [175, 175, 179] : [120, 120, 124]),
+        d.tr.phase === "plot" || d.tr.phase === "lost" ? 90 : dim ? 80 : 255]) }),
+    new deck.TextLayer({ id: "callout", data: S.mode === "focus" && D?.choice && !DONE.includes(D.status) ? live.filter((l) => l.sel) : [], getPosition: (d) => d.pos,
+      getText: () => glyphs(callLabel(D.choice, D.info) + (D.info?.dist?.[D.choice] != null ? `  ${Math.round(D.info.dist[D.choice] * 100)}%` : "")),
+      getSize: 14, getColor: [...BLUE, 255], getPixelOffset: [0, -24], fontWeight: 600, ...LABEL, extensions: [] }),
     new deck.TextLayer({ id: "kills", data: kills, getPosition: (d) => d.pos, getText: () => "×", getSize: 16, getColor: (d) => [...INK, 200 * d.a],
       fontFamily: "Figtree, Arial, sans-serif", characterSet: "×" }),
     new deck.ScatterplotLayer({ id: "flash", data: flashes, getPosition: (d) => d.pos, radiusUnits: "pixels", getRadius: (d) => 5 + d.age * 22, filled: false,
@@ -556,7 +581,7 @@ function reason(i, D) {
   const [act, x] = D.choice.split(":"), pk = tt.pk[pkIdx(c.pk)];
   let s = act === "now" ? tt.whyFire(effName(x), pk)
     : act === "air" ? tt.whyAir(unitName(c.unit), mins(Math.max(0, c.launch - i.t)), pk)
-    : act === "cheaper" ? tt.whyWait(effName(batEff(c.unit)), mins(Math.max(0, c.launch - i.t)), pk)
+    : act === "cheaper" ? (i.opts.some((o) => o[0].startsWith("now:")) ? tt.whyWait : tt.whyPlan)(effName(batEff(c.unit)), mins(Math.max(0, c.launch - i.t)), pk, c.unit)
     : act === "wait" ? tt.whyTrack : D.open_ground ? tt.whyHoldOpen : tt.whyHold;
   const runner = Object.keys(o).filter((k) => k !== D.choice).sort((a, b) => o[a].total - o[b].total)[0];
   if (runner) {   // why not the runner-up: the lens where it loses most
@@ -567,6 +592,11 @@ function reason(i, D) {
   return s;
 }
 
+function storySteps(tr, D) {   // where this threat's story is: detected, hostile, a plan, engaged, the result
+  const a = (D.choice || "").split(":")[0], shot = (D.shots || []).length || D.status === "inflight";
+  const i = DONE.includes(D.status) ? 4 : shot ? 3 : D.status === "assigned" || ["now", "air", "cheaper", "hold"].includes(a) ? 2 : tr?.phase === "plot" ? 0 : 1;
+  return `<ol class="steps">${T().steps5.map((x, k) => `<li class="${k < i ? "done" : k === i ? "on" : ""}">${esc(x)}</li>`).join("")}</ol>`;
+}
 function localLine(D) {   // the fire unit's call, in one line: who, how many, and the fact that decided it
   const L = D.local, tt = T().local;
   if (!L || D.status !== "assigned" && D.status !== "inflight") return "";
@@ -608,8 +638,10 @@ function progression(D) {   // the threat's story so far: each call as it was ma
   for (const sh of D.shots || []) if (D.t >= sh.t1) rows.push({ t: sh.t1, html: esc(sh.hit ? tt.shotHit(effName(sh.eff)) : tt.shotMiss(effName(sh.eff))), hit: sh.hit, miss: !sh.hit });
   rows.sort((a, b) => a.t - b.t);
   if (!rows.length) return "";
+  const older = rows.length - 5;   // the last five: the story's header (where it is, the call) stays on screen
+  if (older > 0) rows.splice(0, older);
   const pct = (v) => (v == null ? "" : `${Math.round(v * 100)}%`);
-  return `<div class="prog"><p class="kicker">${tt.prog}</p>${rows.map((r, n) => {
+  return `<div class="prog"><p class="kicker">${tt.prog}${older > 0 ? ` · ${tt.older(older)}` : ""}</p>${rows.map((r, n) => {
     const t = `<span class="t num">−${fmtT(Math.max(0, D.impact - r.t))}</span>`;
     if (!r.key) return `<div class="step${r.hit ? " ok" : r.miss ? " miss" : ""}${r.ev ? " ev" : ""}${n === rows.length - 1 ? " new" : ""}">${t}<span class="c">${r.html}</span><span class="p num">${pct(r.p)}</span></div>`;
     const why = r.opts ? reason({ t: r.t, opts: r.opts }, { choice: r.key, open_ground: D.open_ground }).split(". ")[0].replace(/\.$/, "") : "";
@@ -619,7 +651,6 @@ function progression(D) {   // the threat's story so far: each call as it was ma
 }
 function trackFacts(tr) {   // where it is against the border, how fast, and the radar picture
   const tt = T(), p = PATHS[tr.id] || {}, out = [];
-  if (tr.phase === "plot") out.push(tt.phase.plot);
   if (tr.to_border != null) out.push(tt.fromBorder(Math.round(tr.to_border), p.kts));
   else if (p.cross != null && tNow >= p.cross && "CD".includes(tr.cls)) out.push(tt.crossed);
   if (tr.phase === "lost") out.push(tt.lostNow);
@@ -648,7 +679,7 @@ function batteryBlock(D) {   // the battery choice: every battery that can take 
 }
 function groupBoard() {   // levels 3-4: every threat at once, ranked by time to impact, each with its call and its battery
   const tt = T(), rows = [...S.tracks].sort((a, b) => DONE.includes(a.status) - DONE.includes(b.status) || a.impact - b.impact);
-  const alerts = rows.flatMap((tr) => alertsOf(tr).map((a) => `${nm(META.threat_types[tr.kind]).replace(/ (MRBM|SRBM)$/i, "")}: ${a}`)).slice(0, 3);
+  const alerts = [...new Set(rows.flatMap((tr) => alertsOf(tr)))].slice(0, 3);
   return `<p class="kicker">${esc(scenTitle())}</p><h2 class="threat">${tt.board}</h2>${alertPills(alerts)}<div class="board">${rows.map((tr) => {
     const [st, tone] = trackStatus(tr), live = !DONE.includes(tr.status);
     return `<button class="brow" data-k="t" data-id="${esc(tr.id)}"><span class="bn">${esc(nm(META.threat_types[tr.kind]).replace(/ (MRBM|SRBM)$/i, ""))}
@@ -723,7 +754,7 @@ function trackStatus(tr) {   // -> [text, tone]: what is happening to this threa
   if (tr.status === "inflight") return [st.fired(tr.unit, tr.fired || 1), "ink"];
   if (tr.status === "assigned") return [META.effectors[tr.eff]?.air ? st.air(unitName(tr.unit)) : st.ground(effName(tr.eff), tr.unit), "ink"];
   if (tr.status === "held") return [st.hold, "grey"];
-  if (tr.status === "waiting") return [tr.wait_eff ? st.cheaper(effName(tr.wait_eff)) : st.wait, "sub"];
+  if (tr.status === "waiting") return [tr.wait_eff ? (tr.inrange === false ? st.plan : st.cheaper)(effName(tr.wait_eff)) : st.wait, "sub"];
   return [tr.choice ? actLabel(tr.choice) : st.out, "grey"];
 }
 function battStatus(b) {
@@ -765,9 +796,10 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
       } else if (D) {   // the story so far, live: the call now, why, the unit's call, the options, and how it got here
         const done = DONE.includes(D.status), i = D.info;
         const head = done ? `<div class="what ${D.status === "leaked" ? "hit" : "ink"}">${tt.status[D.status]}</div>`
+          : !D.choice ? `<p class="why">${tt.noCall}</p>`   // plots not yet classified: no call to show
           : `<div class="what">${esc(callLabel(D.choice, i))}</div>${i ? `<p class="why">${esc(reason(i, D))}</p>` : ""}${localLine(D)}`;
         const extra = m && (m.type === "holdfire" || m.type === "hit") ? captionBody(m) : "";
-        h += `<div class="story">${head}${extra}${done ? "" : '<div id="bars"></div>'}${batteryBlock(D)}${progression(D)}</div></div>`;
+        h += `<div class="story">${storySteps(tr, D)}${head}${extra}${done ? "" : '<div id="bars"></div>'}${batteryBlock(D)}${progression(D)}</div></div>`;
         liveBars(done ? null : i, D.choice, D);
       } else {
         h += threatDetail(true).replace('<div class="obj-detail">', '<div class="story">');
@@ -789,8 +821,8 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
   el.classList.add("story-mode");
   if (h !== renderStory.last) {
     el.innerHTML = h; renderStory.last = h; stripNow(tNow);
+    if (renderStory.fid !== focus?.id) { el.scrollTop = 0; renderStory.fid = focus?.id; }   // a new story starts at its top
     el.querySelector("#bars")?.replaceWith(barsNode);   // the same bar elements every time: their widths animate
-    el.querySelector(".prog .step.new")?.scrollIntoView({ block: "nearest" });
   }
   renderList.last = null;
 }
@@ -930,11 +962,11 @@ function renderStrip() {   // one lifeline per threat: launch -> impact, the cal
   D.history.forEach(([t, key], n) => { if (!seen.has(key) || n === D.history.length - 1) { seen.add(key); calls.push([t, key, n === D.history.length - 1]); } });
   let lastEnd = -1e9;
   for (let n = calls.length - 1, right = 1e9; n >= 0; n--) {   // from the final call back: drop a label that would collide
-    const [t, key, last] = calls[n], x = X(t), w = 8 * actLabel(key).length + 10;
+    const [t, key, last] = calls[n], x = X(t), lab = last ? callLabel(key, D.info) : actLabel(key), w = 8 * lab.length + 10;
     if (!last && x + w > right) continue;
     right = x;
     const col = last ? "#2548f6" : "#5d5d5d";
-    g += `<line x1="${x}" x2="${x}" y1="${Y - 12}" y2="${Y}" stroke="${col}" stroke-width="1"/><text x="${x}" y="${Y - 16}" style="fill:${col}${last ? ";font-weight:500" : ""}">${esc(actLabel(key))}</text>`;
+    g += `<line x1="${x}" x2="${x}" y1="${Y - 12}" y2="${Y}" stroke="${col}" stroke-width="1"/><text x="${x}" y="${Y - 16}" style="fill:${col}${last ? ";font-weight:500" : ""}">${esc(lab)}</text>`;
     lastEnd = Math.max(lastEnd, x + w);
   }
   for (const s of D.shots) {   // shots below the line
