@@ -25,7 +25,7 @@ from sim import (AIR_HE, AIR_KINDS, BATTERIES, BORDER, NM_KM, DEFAULT_CONFIG, EF
                  THREATS, consequence, haversine)
 
 ROOT = Path(__file__).parent
-TUNED = ROOT.parent / ".context/typically/results/co_airdef_v3/best.pt"   # v3: v4 wins per decision but under-fires in saturation raids (README)
+TUNED = ROOT.parent / ".context/typically/results/co_airdef_v5/best.pt"   # v5: levels, battery choice, floor and border (README)
 MODEL_ID = os.environ.get("AIRDEF_MODEL") or (str(TUNED) if TUNED.exists() else "OzLabs/typical-small")
 ASYNC = not MODEL_ID.startswith("recorded")   # a live model answers off-clock; recorded answers are instant and in step
 POLICIES = ("typical",)   # the demo shows Typical only (the doctrine/planner benchmarks are harness.py's job)

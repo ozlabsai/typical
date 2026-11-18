@@ -18,6 +18,25 @@ The teacher is a planner that prices every option through three lenses:
 Typical is fine-tuned to reproduce the planner's calls from plain-language situation text. The design is in
 `DECISIONS.md`.
 
+## Step by step (levels) and the policy
+
+From customer feedback (2026-11): the menu opens on four levels that build up one decision at a time, each told from
+the threat's first plots (detected, classified hostile, contact lost and regained), in nautical miles and knots:
+
+1. **One drone, one battery.** A Shahed 80 NM east, 40 kts, heading for Jerusalem; contact lost 5 NM before the border.
+   Watch the call change as the track firms up.
+2. **One drone, two Iron Domes.** Which battery takes it (`Q_BATTERY`, a third decision level). Four cases:
+   a) the sooner one; b) the near one is at its 12-round floor; c) the near one has other plans (committed);
+   d) only the battery at its floor stops it before the border, so it fires anyway.
+3. **Three threats** at once, told as one group story.
+4. **A swarm:** 15 drones after an 8-hour warning, the closest 120 NM out.
+
+The policy (Settings, live and hosted) adds three rules the planner prices and Typical reads:
+- **Ammo floor** per Iron Dome battery (None / 12 / 20): not a ban, a cost (*below the floor*, $M per round).
+- **Border:** we prefer no target to cross. An option that lets it cross before it is stopped pays the border price;
+  every crossing counts in the night's total.
+- **Plans:** a battery with other things to do costs more to commit.
+
 All data is simulated. Parameters (costs, ranges, kill probabilities, channels, reload times) are notional, battery
 positions are not real deployments, and the scenarios are loosely modelled on public events.
 
@@ -28,8 +47,8 @@ uv run --no-sync uvicorn --app-dir airdef server:app --port 8790     # open http
 AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 8790   # planner only, no model
 ```
 
-- The server loads `.context/typically/results/co_airdef_v3/best.pt` (the v3 fine-tune) when it exists, otherwise
-  `typical-small`.
+- The server loads `.context/typically/results/co_airdef_v5/best.pt` (the v5 fine-tune: levels, battery choice,
+  floor and border) when it exists, otherwise `typical-small`.
 - Scoring goes through the training repo's decider (`scorer.py`). The public `inference/typical` port used to disagree
   with it on semif checkpoints (an extra eos); fixed, with a parity test on the release.
 - The map tiles need internet. maplibre and deck.gl are vendored.
@@ -46,11 +65,15 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 A static site behind a shared-password Worker (Cloudflare free plan; no server, no model). `record.py` recorded
 Typical's real answers once; the sim is deterministic (fixed DT steps, stable text), so `bake.py` plays every scenario
 and drill case through the live server's own clock and director and writes a tape per scenario; `web/tape.js` plays
-it in the browser through the same API `app.js` uses. Everything works except Settings (hidden: a recording cannot
-re-run the raid with other settings). The local server keeps Settings for live presentations.
+it in the browser through the same API `app.js` uses. Settings work too: every level is recorded and baked for each
+policy in `sim.POLICY_GRID` (magazine posture × ammo floor × below-floor price × border price, 81 per level; posture
+only for the full raids). Changing a setting loads that policy's tape at the same moment (`tape.js` `setPolicy`).
+Priority sites stay live-only.
 
 ```bash
-AIRDEF_MODEL=recorded uv run --no-sync python airdef/bake.py      # -> airdef/static (about 8 MB)
+# record on an H100 (needs runpodctl >= 3: the 2.x CLI calls rest.runpod.io, which no longer resolves)
+uv run --no-project python airdef/remote_harness.py --record --ckpts v5=.context/typically/results/co_airdef_v5/best.pt
+AIRDEF_MODEL=recorded uv run --no-sync python airdef/bake.py --procs 8   # -> airdef/static
 cd airdef/deploy && npx wrangler deploy                            # password: npx wrangler secret put DEMO_PASSWORD
 ```
 
@@ -70,6 +93,8 @@ status; click one, or its map object, to expand it. Map: circle = threat (filled
 dashed path = let it fall), square = fire unit (filled = firing, grey = reloading or empty), triangle = aircraft,
 × = an intercept, red = a hit.
 
+0. **Step by step first** (customers asked for it): Level 1, then Level 2 a–d, then the swarm. In Settings, set the
+   border to *Indifferent* on 2d: the call moves to the battery above its floor.
 1. **0:00 Northern front, Focus, 20x, paused.** The panel reads "Every threat, one question: which interceptor, and
    when." Press Play.
 2. **0:30 The moments arrive.** Hezbollah drone, *Fighter jets*; the wait for Iron Beam pays off; a salvo let fall
@@ -132,6 +157,23 @@ Situation drill: 56 curated cases where every option was played out to the end (
 vs the best option, $M-equivalent (`drill_regret.py`): **planner 0.14, Typical v4 0.44, Typical v3 0.97, doctrine
 1.52.** The planner is optimal on 5 of 6 families; on an unclear early track it waits too often (0.80 per case).
 v3's gap is the helicopter family (4.79; v4 1.84).
+
+### v5 (2026-11-18): levels, battery choice, floor and border
+
+Trained on the levels engine (battery rows, randomised floors, plans and border prices). Held out:
+
+| test | base | v3 | v5 |
+|---|---|---|---|
+| Battery choice | 41% | 43% | **74%** (94% within the planner's acceptable set) |
+| Global call | 7% | 24% | **83%** |
+| Global, commit moments | 8% | — | **86%** |
+| Local fire count | 39% | — | **80%** |
+| Situation drill | 45% | — | **93%** (regret 0.03) |
+
+Level 2 under every recorded policy: v5 matches the planner on 297 of 297 battery picks. Whole raids, v5 vs v3, 6
+seeds: October **33,174 vs 39,852** (v5 better on 5 of 6), Red Sea tied, northern 859 vs 757 (+102 ± 61: v5 worse;
+the follow-up). Totals now include crossings × border price, so they are not comparable with the tables above.
+v5 is less confident (median top choice 0.49; 31% of global calls go to the operator).
 
 ## Files
 
