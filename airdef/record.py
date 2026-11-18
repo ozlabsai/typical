@@ -50,7 +50,7 @@ def merge(paths, out):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", nargs="*", help="scenario names, name@r<posture>@s<priority option> (those policy variants), or drill:<family>")
+    ap.add_argument("--only", nargs="*", help="scenario names, name@r<posture>@f<floor>@s<priority option> (those policy variants), or drill:<family>")
     ap.add_argument("--out", default=str(DEFAULT))
     ap.add_argument("--model", default=str(ROOT / ".context/typically/results/co_airdef_v5/best.pt"))
     a = ap.parse_args()
@@ -65,14 +65,14 @@ if __name__ == "__main__":
     from sim import policy_variants
     jobs = []
     for spec in a.only or list(SCENARIOS) + ["drill:*"]:
-        name, *f = spec.split("@")   # name@r<posture> and/or name@s<priority option>
+        name, *f = spec.split("@")   # name@r<posture>, @f<floor>, @s<priority option>, in any combination
         f = {x[0]: int(x[1:]) for x in f}
         if name.startswith("drill:"):
             fam = name.split(":")[1]
             jobs += [("drill", r["meta"]["family"], r["meta"]["inst"]) for r in map(json.loads, DRILLS.read_text().splitlines())
                      if fam in ("*", r["meta"]["family"])]
         else:   # every recorded policy for the scenario (or for one magazine posture)
-            jobs += [("scenario", name, v) for v in policy_variants(name, f.get("r"), f.get("s"))]
+            jobs += [("scenario", name, v) for v in policy_variants(name, f.get("r"), f.get("s"), f.get("f"))]
     import os
     os.environ.setdefault("AIRDEF_MODEL", "recorded")   # server.ASYNC off: the model answers in step, as the build replays it
     import bake

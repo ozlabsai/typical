@@ -209,18 +209,18 @@ def variant_patch(key):
 DEFAULT_VARIANT = variant_key(1, 12, 1.0, 5.0)
 
 
-def policy_variants(scenario, reserve=None, site=None):
-    """Every recorded policy for a scenario (optionally one magazine posture, or one priority option: 0 = the default
-    list, i = PRIORITY[scenario][i - 1]). A level: the whole grid x every priority option. A raid: each posture, and
-    each priority area at the default posture."""
+def policy_variants(scenario, reserve=None, site=None, floor=None):
+    """Every recorded policy for a scenario, optionally filtered (a posture, an ammo floor, a priority option: 0 = the
+    default list, i = PRIORITY[scenario][i - 1]). A level: the whole grid; a raid: each posture. Either: each priority
+    area at the default policy (choosing one returns the other settings to default -- 5x fewer runs to record)."""
     from itertools import product
     g = POLICY_GRID
-    rs = [reserve] if reserve is not None else g["reserve"]
     sites = [None] + PRIORITY.get(scenario, [])
     sites = [sites[site]] if site is not None else sites
-    if "level" in SCENARIOS[scenario]:
-        return [variant_key(*v) for v in product(rs, g["floor"], g["floor_price"], g["border_price"], sites)]
-    return [variant_key(r, 12, 1.0, 5.0, s) for s in sites for r in rs if s is None or r == 1]
+    grid = product(g["reserve"], g["floor"], g["floor_price"], g["border_price"]) if "level" in SCENARIOS[scenario] \
+        else ((r, 12, 1.0, 5.0) for r in g["reserve"])
+    return [variant_key(*v, s) for v in grid for s in sites
+            if (s is None or variant_key(*v) == DEFAULT_VARIANT) and reserve in (None, v[0]) and floor in (None, v[1])]
 
 
 EARTH_KM = 6371.0
