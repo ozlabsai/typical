@@ -13,6 +13,7 @@ import gzip
 import json
 import os
 import shutil
+from multiprocessing import Pool
 import sys
 from pathlib import Path
 
@@ -48,7 +49,7 @@ def detail_of(w, th):
                 site=sid, open_ground=bool(dist > sigma), priority=sid in w.cfg["priority_sites"])
 
 
-def bake(scenario=None, drill=None):
+def bake(scenario=None, drill=None, variant=None):
     clock = Clock()
     director.time = clock   # the director only reads time.monotonic()
     S = server.S
@@ -56,7 +57,8 @@ def bake(scenario=None, drill=None):
     if drill:
         server.new_drill(*drill)
     else:
-        server.new_world(scenario)
+        from sim import DEFAULT_CONFIG, variant_patch
+        server.new_world(scenario, cfg={**DEFAULT_CONFIG, **(variant_patch(variant) if variant else {})})
     w = S["world"]
     frames, prev_tracks, prev = [], {}, dict(bat={}, ledger=None, stats=None)
     details = {th.id: [] for th in w.threats}
@@ -124,10 +126,23 @@ def bake(scenario=None, drill=None):
                              history=pol.st[th.id]["history"], log=pol.st[th.id].get("log", [])) for th in w.threats})
 
 
+def bake_one(job):
+    """One tape per (scenario, policy variant); the default policy's tape keeps the plain name."""
+    from sim import DEFAULT_VARIANT
+    sc, dr, v, out = job
+    name = sc or f"drill_{dr[0]}_{dr[1]}"
+    tape = bake(sc, dr, v)
+    p = Path(out) / "data" / (f"{name}.json.gz" if v in (None, DEFAULT_VARIANT) else f"{name}@{v}.json.gz")
+    with gzip.open(p, "wt") as f:
+        json.dump(tape, f, separators=(",", ":"), default=str)
+    return f"{p.name:44s} {len(tape['frames']):5d} frames  {len(tape['moments']):2d} moments  {p.stat().st_size / 1e6:5.2f} MB"
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(HERE / "static"))
     ap.add_argument("--only", nargs="*")
+    ap.add_argument("--procs", type=int, default=8)
     a = ap.parse_args()
     out = Path(a.out)
     shutil.rmtree(out, ignore_errors=True)
@@ -138,16 +153,15 @@ if __name__ == "__main__":
     page = page.replace('<script src="/web/app.js"></script>',
                         '<script>window.AIRDEF_STATIC = true;</script><script src="/web/tape.js"></script><script src="/web/app.js"></script>')
     (out / "index.html").write_text(page)
-    (out / "data" / "meta.json").write_text(json.dumps(server.meta()))
-    jobs = [(sc, None) for sc in SCENARIOS]
-    jobs += [(None, (r["meta"]["family"], n)) for fam in sorted({json.loads(x)["meta"]["family"] for x in server.DRILL.read_text().splitlines()})
+    from sim import DEFAULT_VARIANT, policy_variants
+    meta = server.meta()
+    meta["variants"] = {sc: policy_variants(sc) for sc in SCENARIOS}   # the hosted Settings: which policies were recorded
+    meta["default_variant"] = DEFAULT_VARIANT
+    (out / "data" / "meta.json").write_text(json.dumps(meta))
+    jobs = [(sc, None, v) for sc in SCENARIOS for v in policy_variants(sc)]
+    jobs += [(None, (r["meta"]["family"], n), None) for fam in sorted({json.loads(x)["meta"]["family"] for x in server.DRILL.read_text().splitlines()})
              for n, r in enumerate([json.loads(x) for x in server.DRILL.read_text().splitlines() if json.loads(x)["meta"]["family"] == fam])]
-    for sc, dr in jobs:
-        name = sc or f"drill_{dr[0]}_{dr[1]}"
-        if a.only and name not in a.only:
-            continue
-        tape = bake(sc, dr)
-        p = out / "data" / f"{name}.json.gz"
-        with gzip.open(p, "wt") as f:
-            json.dump(tape, f, separators=(",", ":"), default=str)
-        print(f"{name:32s} {len(tape['frames']):5d} frames  {len(tape['moments']):2d} moments  {p.stat().st_size / 1e6:5.2f} MB", flush=True)
+    jobs = [j for j in jobs if not a.only or (j[0] or f"drill_{j[1][0]}_{j[1][1]}") in a.only]
+    with Pool(a.procs) as pool:
+        for line in pool.imap_unordered(bake_one, [(sc, dr, v, str(out)) for sc, dr, v in jobs]):
+            print(line, flush=True)

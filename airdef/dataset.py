@@ -18,11 +18,12 @@ from collections import Counter
 from multiprocessing import Pool
 from pathlib import Path
 
-from engine import LEVELS, run_headless
+from engine import LEVELS, Q_BATTERY, run_headless
 from sim import DEFAULT_CONFIG, SCENARIOS, SITES
 
 ROOT = Path(__file__).resolve().parent.parent
 SPLITS = {"train": range(1000, 1120), "val": range(2000, 2020), "eval": range(3000, 3040)}
+BATTERY_ROWS = 6000
 CLS = re.compile(r", a (ballistic missile|rocket|cruise missile|drone) from")
 
 
@@ -31,7 +32,10 @@ def random_night(rng):
     cfg.update(reserve=rng.choice([0, 1, 1, 2]), allied=rng.random() < 0.8, pk_scale=round(rng.uniform(0.85, 1.05), 2),
                iron_beam_weather="cloudy" if rng.random() < 0.2 else "clear",
                priority_sites=rng.sample([s[0] for s in SITES], rng.randint(1, 5)),
-               priority_multiplier=rng.choice([2.0, 3.0, 5.0]), forecast_s=rng.choice([120, 300, 900, 900, 1800]))
+               priority_multiplier=rng.choice([2.0, 3.0, 5.0]), forecast_s=rng.choice([120, 300, 900, 900, 1800]),
+               # the policy: an ammo floor, how hard to avoid going below it, how much stopping it before the border matters
+               ammo_floor={"ironDome": rng.choice([0, 8, 12, 12, 20])}, floor_price=rng.choice([0.3, 1.0, 1.0, 5.0]),
+               border_price=rng.choice([0.0, 5.0, 5.0, 25.0]))
     cfg["tier_value"] = {k: v * rng.uniform(0.4, 2.5) for k, v in cfg["tier_value"].items()}
     scale = {e: rng.choice([0.2, 0.4, 0.7, 1.0, 1.0, 1.3]) for e in ("arrow3", "arrow2", "thaad", "dsling", "ironDome", "sm3", "sm6")}
     return cfg, scale
@@ -44,17 +48,22 @@ def raid(job):
     rng = random.Random(seed * 7919 + hash(scenario) % 1000)
     cfg, scale = random_night(rng)
     SCENARIOS[scenario]["stock_scale"] = {**SCENARIOS[scenario].get("stock_scale", {}), **scale}   # per-process copy
+    sc = SCENARIOS[scenario]
+    if "batteries" in sc:   # a level: random stocks around the floor and random standing commitments, so every case varies
+        sc["batteries"] = {b: (None if n is None else rng.choice([8, 11, 12, 13, 16, 25, 40])) for b, n in sc["batteries"].items()}
+        sc["plans"] = {b: (rng.choice([1, 2, 3]), 600) for b in sc["batteries"] if rng.random() < 0.3}
     rec = []
     run_headless(scenario, cfg=cfg, seed=seed, policies=("planner",), explore=explore, record=rec)
     for r in rec:
         r["scenario"] = scenario
     g = [r for r in rec if r["level"] == "global"]
     loc = [r for r in rec if r["level"] == "local"]
+    bat = [r for r in rec if r["level"] == "battery"]
     gk = [r for r in g if r["best"] not in ("wait", "hold")]
     gw = [r for r in g if r["best"] in ("wait", "hold")]
     lk = [r for r in loc if r["best"] > 0]
     lh = [r for r in loc if r["best"] == 0]
-    return gk + rng.sample(gw, min(len(gw), 2 * len(gk) + 20)) + lk + rng.sample(lh, min(len(lh), len(lk) + 10))
+    return gk + rng.sample(gw, min(len(gw), 2 * len(gk) + 20)) + lk + rng.sample(lh, min(len(lh), len(lk) + 10)) + bat
 
 
 def to_row(r, rng):
@@ -64,6 +73,17 @@ def to_row(r, rng):
         return {"state": r["state"], "query": r["q"], "candidates": LEVELS, "target": [float(i == n) for i in range(len(LEVELS))],
                 "p_null": 0.0, "task": "airdef_local", "label": n,
                 "meta": {"qtype": "score", "family": "airdef_local", "scenario": r["scenario"], "cls": cls, "best": f"fire{n}", "margin": 0.0}}
+    if r["level"] == "battery":   # which battery: soft target over the planner's per-battery costs, like the global call
+        opts = list(r["opts"])
+        rng.shuffle(opts)
+        cmin = min(c for _, c in opts)
+        tau = 0.15 * max(cmin, 0) + 0.02
+        w = [math.exp(-(c - cmin) / tau) for _, c in opts]
+        z = sum(w)
+        return {"state": r["state"], "query": r["q"], "candidates": [lab for lab, _ in opts], "target": [x / z for x in w], "p_null": 0.0,
+                "task": "airdef_battery", "label": max(range(len(opts)), key=lambda i: w[i]),
+                "meta": {"qtype": "choice", "family": "airdef_battery", "scenario": r["scenario"], "cls": cls, "best": r["best"],
+                         "margin": sorted(w, reverse=True)[1] / z}}
     opts = list(r["opts"])
     rng.shuffle(opts)
     cmin = min(c for _, c in opts)
@@ -95,6 +115,8 @@ def cell(r):
     b = r["meta"]["best"]
     if r["meta"]["family"] == "airdef_local":
         return ("local", b, r["meta"]["cls"])
+    if r["meta"]["family"] == "airdef_battery":   # balance by whether the pick is the earliest-listed... keep it simple: one cell
+        return ("battery", "pick", r["meta"]["cls"])
     a = b.split(":")[0]
     return ("global", a, r["meta"]["cls"])
 
@@ -118,7 +140,7 @@ def balance(rows, n, rng):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(ROOT / ".context/typically/jobs/airdef_v3"))
+    ap.add_argument("--out", default=str(ROOT / ".context/typically/jobs/airdef_v5"))
     ap.add_argument("--global_rows", type=int, default=24000)
     ap.add_argument("--local_rows", type=int, default=12000)
     a = ap.parse_args()
@@ -134,15 +156,18 @@ if __name__ == "__main__":
         f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in data["train"])
     G = lambda rows: [r for r in rows if r["meta"]["family"] == "airdef_global"]
     Lo = lambda rows: [r for r in rows if r["meta"]["family"] == "airdef_local"]
-    train = balance(G(data["train"]), a.global_rows, rng) + balance(Lo(data["train"]), a.local_rows, rng)
-    val = balance(G(data["val"]), 1000, rng) + balance(Lo(data["val"]), 500, rng)
+    Ba = lambda rows: [r for r in rows if r["meta"]["family"] == "airdef_battery"]
+    train = (balance(G(data["train"]), a.global_rows, rng) + balance(Lo(data["train"]), a.local_rows, rng)
+             + balance(Ba(data["train"]), BATTERY_ROWS, rng))
+    val = balance(G(data["val"]), 1000, rng) + balance(Lo(data["val"]), 500, rng) + balance(Ba(data["val"]), 300, rng)
     rng.shuffle(train)
     ev = data["eval"]
     rng.shuffle(ev)
     files = {"train": train, "val": val,
              "eval/airdef_global": G(ev)[:600],
              "eval/airdef_global_commits": [r for r in G(ev) if r["meta"]["best"] not in ("wait", "hold")][:500],
-             "eval/airdef_local": Lo(ev)[:600]}
+             "eval/airdef_local": Lo(ev)[:600],
+             "eval/airdef_battery": Ba(ev)[:600]}
     drill = ROOT / ".context/airdef/situations.jsonl"
     if drill.exists():
         files["eval/airdef_situations"] = [json.loads(x) for x in drill.read_text().splitlines()]

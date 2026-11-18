@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LIMIT_S = 150 * 60   # whole remote run, pod create to fetch
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "airdef"))
 # own pod-name prefix: typically_job's reconcile (run before every training job) deletes "typically-job-*" pods it
 # doesn't own -- on 2026-10-27 it killed this eval pod a minute in. Must be set before the import reads it.
 os.environ["TYPICALLY_POD_PREFIX"] = "airdef-eval-"
@@ -71,7 +72,9 @@ def main():
                     t.add(tmp / f"{name}.path", arcname=f"ckpt/{name}.path")
             if a.record:   # the model is the first --ckpts entry; drills are recorded per family
                 fams = sorted({json.loads(x)["meta"]["family"] for x in (ROOT / "airdef/recorded/drill_ui.jsonl").read_text().splitlines()})
-                names = " ".join(a.scenarios + [f"drill:{f}" for f in fams])
+                from sim import SCENARIOS as SC   # levels: one job per magazine posture (27 policies each); raids: one job
+                names = " ".join([f"{sc}@r{r}" for sc in SC if "level" in SC[sc] for r in (0, 1, 2)]
+                                 + [s for s in a.scenarios if "level" not in SC.get(s, {})] + [f"drill:{f}" for f in fams])
                 jobs = (f'for j in {names}; do echo "$j"; done | xargs -P 12 -L 1 bash -c \'uv run --no-sync python airdef/record.py '
                         f'--model "$(cat ckpt/{a.ckpts[0].split("=")[0]}.path)" --only "$0" --out "out/$(echo $0 | tr : _).json.gz" > "out/$(echo $0 | tr : _).log" 2>&1\'')
             else:   # one job per (scenario, seed, model), longest scenarios first, so 10 parallel jobs stay busy to the end

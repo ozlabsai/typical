@@ -185,6 +185,33 @@ DEFAULT_CONFIG = {
     "border_price": 5.0,
 }
 
+# The hosted demo cannot re-run a raid, so it plays one recording per policy: every combination of these for the
+# step-by-step levels, magazine posture alone for the full raids. A variant is named by its key.
+POLICY_GRID = dict(reserve=[0, 1, 2], floor=[0, 12, 20], floor_price=[0.3, 1.0, 5.0], border_price=[0.0, 5.0, 25.0])
+
+
+def variant_key(reserve, floor, floor_price, border_price):
+    return f"r{reserve}-f{floor}-b{floor_price:g}-p{border_price:g}"
+
+
+def variant_patch(key):
+    r, f, b, p = (x[1:] for x in key.split("-"))
+    return dict(reserve=int(r), ammo_floor={"ironDome": int(f)}, floor_price=float(b), border_price=float(p))
+
+
+DEFAULT_VARIANT = variant_key(1, 12, 1.0, 5.0)
+
+
+def policy_variants(scenario, reserve=None):
+    """Every recorded policy for a scenario (optionally one magazine posture only)."""
+    from itertools import product
+    g = POLICY_GRID
+    rs = [reserve] if reserve is not None else g["reserve"]
+    if "level" in SCENARIOS[scenario]:
+        return [variant_key(*v) for v in product(rs, g["floor"], g["floor_price"], g["border_price"])]
+    return [variant_key(r, 12, 1.0, 5.0) for r in rs]
+
+
 EARTH_KM = 6371.0
 LOOK_S = 8.0       # shoot-look-shoot assessment time
 REACT_S = 4.0      # launch reaction time

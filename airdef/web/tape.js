@@ -19,9 +19,13 @@
     return `drill_${fam}_${+n % k}`;
   };
 
+  async function load(name) {
+    if (!tapes[name]) tapes[name] = await getJSON(`/data/${name}.json.gz`);
+    return tapes[name];
+  }
   async function reset(scenario) {
     const name = tapeName(scenario);
-    if (!tapes[name]) tapes[name] = await getJSON(`/data/${name}.json.gz`);
+    await load(name);
     Object.assign(V, { name, tape: tapes[name], running: false, beat: null, next: 0, skipped: 0, cur: null, fi: -1 });
     V.t = V.maxT = V.tape.frames[0].t;
     seekTo(V.t);
@@ -129,14 +133,30 @@
     return { ok: true };
   }
 
+  // Settings on the hosted demo: every recorded policy is its own tape. A change switches to that tape at the same moment.
+  const keyOf = (c) => `r${c.reserve}-f${c.ammo_floor?.ironDome ?? 0}-b${c.floor_price}-p${c.border_price}`;
+  async function setPolicy(patch) {
+    const cfg = { ...V.tape.cfg, ...patch }, key = keyOf(cfg), base = V.name.split("@")[0];
+    if (!(meta.variants?.[base] || []).includes(key)) return { ok: false, cfg: V.tape.cfg };
+    const t = V.t, running = V.running;
+    const name = key === meta.default_variant ? base : `${base}@${key}`;
+    await load(name);
+    Object.assign(V, { name, tape: tapes[name], beat: null, cur: null, fi: -1, maxT: t });
+    seekTo(t);
+    V.next = V.tape.moments.findIndex((m) => m.t > t); if (V.next < 0) V.next = V.tape.moments.length;
+    V.running = running;
+    return { ok: true, cfg: V.tape.cfg };
+  }
+  window.tapeVariants = () => (meta?.variants?.[V.name?.split("@")[0]] || []);   // the hosted Settings shows what was recorded
+
   window.tapeApi = async (path, body) => {
     if (path === "/api/meta") { meta = meta || await getJSON("/data/meta.json"); return meta; }
-    if (!V.tape) await reset("houthi_eilat");   // the live server also starts on the Red Sea
+    if (!V.tape) await reset("level1");   // like the live server: start at the first step
     if (path === "/api/paths") return V.tape.paths;
     if (path.startsWith("/api/state")) return state();
     if (path.startsWith("/api/track/")) return track(decodeURIComponent(path.split("/")[3].split("?")[0]));
     if (path === "/api/control") return control(body);
-    if (path === "/api/config") return { ok: true, cfg: V.tape.cfg };
+    if (path === "/api/config") return setPolicy(body);
     throw new Error(`no tape route for ${path}`);
   };
 })();

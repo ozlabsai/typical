@@ -475,6 +475,10 @@ class World:
                                     best=teach, kind=th.kind, scenario=self.scenario))
         binfo["pick"] = pick
         info["battery"] = binfo
+        log = s.setdefault("log", [])
+        last = next((e["battery"] for e in reversed(log) if e.get("battery")), None)
+        if last != pick:   # a row when the battery is first picked or changes
+            log.append(dict(t=self.t, battery=pick, p=(binfo.get("dist") or {}).get(pick)))
         b = next(x for x in bats if x["bid"] == pick)
         return dataclasses.replace(opt, unit=pick, launch=b["launch"], detail={**opt.detail, "intercept": b["intercept"]})
 
@@ -678,10 +682,24 @@ class World:
         calls = {}
         for n, p in self.policies.items():
             p.reload(self.t)
+            self.track_events(p)
             calls[n] = self.decide_global(p, budget) + self.decide_local(p, budget)
             self.resolve(p)
         self.advance(dt)
         return calls
+
+    def track_events(self, pol):
+        """The radar picture into each threat's log: first plots, classified hostile, contact lost, contact regained."""
+        for th in self.threats:
+            if th.seen_t > self.t or (th.detect_t is None and th.lost is None):   # only threats with a track story
+                continue
+            s = pol.st[th.id]
+            phase = "plot" if self.t < th.hostile_t else "lost" if not th.tracked(self.t) else "track"
+            if s.get("phase") != phase:
+                prev = s.get("phase")
+                s["phase"] = phase
+                ev = {"plot": "seen", "track": "regained" if prev == "lost" else "classified", "lost": "lost"}[phase]
+                s.setdefault("log", []).append(dict(t=self.t, event=ev))
 
     def run_for(self, sim_dt, on_step=None, quiet=None):
         """Live demo clock: owe sim_dt seconds, pay them in fixed DT steps, jump over quiet stretches. The steps (and so
