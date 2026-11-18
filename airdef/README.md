@@ -31,6 +31,12 @@ the threat's first plots (detected, classified hostile, contact lost and regaine
 3. **Three threats** at once, told as one group story.
 4. **A swarm:** 15 drones after an 8-hour warning, the closest 120 NM out.
 
+On screen, a level opens on its brief (the set-up and what to watch) and ends on its outcome (stopped before or after the
+border, what it took) with the next level as the one button. From Level 2 the picked battery is in the headline, the
+reason names the trade-off, and the batteries are compared side by side as they stood at the call (rounds against the
+floor, other tasks, time to intercept, before or after the border). In Levels 3-4 the threats are numbered on the map
+and in the list; click a row for that threat's story.
+
 The policy (Settings, live and hosted) adds three rules the planner prices and Typical reads:
 - **Ammo floor** per Iron Dome battery (None / 12 / 20): not a ban, a cost (*below the floor*, $M per round).
 - **Border:** we prefer no target to cross. An option that lets it cross before it is stopped pays the border price;
