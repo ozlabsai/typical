@@ -58,13 +58,22 @@ const I18N = {
     lostIn: (m) => `Contact may be lost in ${m}`, lostNow: "Contact lost: position estimated",
     ev: { seen: "First plots", classified: (c) => `Classified: enemy ${c}`, lost: "Contact lost", regained: "Contact regained" },
     batteryCall: (b) => `Battery ${b}`, which: "Which battery",
-    bat2: { rounds: (l, f) => (f ? `${l} rounds · floor ${f}` : `${l} rounds`), below: (n) => `${n} below its floor`, commit: (n) => `committed to ${n} other${n > 1 ? "s" : ""}`,
-      free: "nothing else to do", before: "stops it before the border", after: "only after it crosses", isec: (s) => `intercept in ${s}` },
     alert: { prio: (s) => `Heading for ${s}, a priority area`, border: (nm) => `${nm} NM from the border`, lost: (m) => `Contact may be lost in ${m}` },
     board: "Every threat, its call", policy: "Policy", noPolicy: "This case is a single frozen decision: its settings are fixed.", floor: "Ammo floor per Iron Dome battery", noFloor: "None", belowFloor: "Below the floor",
     belowOpts: ["Allowed", "Think twice", "Last resort"], borderPref: "Stop it before the border", borderOpts: ["Indifferent", "Prefer", "Strongly"],
     prog: "How the call developed", shotHit: (e) => `✓ ${e} intercepted it`, shotMiss: (e) => `✕ ${e} missed`,
     intro: "Every threat, one question: which interceptor, and when.", pressPlay: "Press Play.",
+    watch: { 1: "Watch the call firm up as the track does.", 2: "Watch which battery takes it, and why.", 3: "Watch two batteries shared between three drones.",
+      4: "Watch every drone get its call, hours before it arrives." },
+    batWhy: { first: (p, a, o, b) => `${p} intercepts first: in ${a}, against ${b} for ${o}.`, but: (o, a, why) => `${o} would intercept sooner (in ${a}), but ${why}.`,
+      plain: (o, a, p) => `${o} would intercept sooner (in ${a}); ${p} takes it.`, floor: (f) => `one more shot takes it below its floor of ${f} rounds`,
+      busy: (n) => `it is committed to ${n} other engagement${n > 1 ? "s" : ""}`, still: (p) => `${p} still stops it before the border.`,
+      floorBorder: (p, f) => `${p} goes below its floor of ${f} rounds: only it stops the drone before the border.` },
+    cmp: { rounds: "Rounds left", tasks: "Other tasks", none: "none", n: (n) => `${n} engagement${n > 1 ? "s" : ""}`, icpt: "Intercept", border: "Stops it", before: "before the border", after: "after it crosses",
+      floorAt: (f) => `at its floor of ${f}`, floorOk: (f) => `floor ${f}` },
+    mapRounds: (n) => `${n} rounds`, toBorder: (n) => `${n} NM to border`, backBoard: "All threats", inAirN: (n) => `${n} in the air`, crossedN: (n) => (n ? `${n} crossed the border` : "none crossed the border"),
+    end: { before: "Stopped before the border", after: "Stopped after it crossed the border", many: (k, n) => `${k} of ${n} intercepted`, used: (r, c) => `${r} · ${c}`,
+      next: (x) => `Next: ${x}`, again: "Watch again" },
     seeking: "On to the next moment", raidOver: "Raid over", recap: "Tonight's moments", restart: "Restart", backStory: "Back to the story",
     shotsLine: (e, n) => `${e} fired ${n}; missed.`, noShot: "Nothing could reach it in time.",
     inAir: (n, total) => `${n} in the air · ${total}`, mags: "Magazines",
@@ -148,13 +157,22 @@ const I18N = {
     lostIn: (m) => `המגע עלול לאבד בעוד ${m}`, lostNow: "המגע אבד: המיקום מוערך",
     ev: { seen: "מגעים ראשונים", classified: (c) => `סווג: ${c} עוין`, lost: "המגע אבד", regained: "המגע חזר" },
     batteryCall: (b) => `סוללה ${b}`, which: "איזו סוללה",
-    bat2: { rounds: (l, f) => (f ? `${l} מיירטים · רצפה ${f}` : `${l} מיירטים`), below: (n) => `${n} מתחת לרצפה`, commit: (n) => `מחויבת ל-${n} נוספים`,
-      free: "פנויה", before: "עוצרת אותו לפני הגבול", after: "רק אחרי שיחצה", isec: (s) => `יירוט בעוד ${s}` },
     alert: { prio: (s) => `בדרך ל${s}, אזור בעדיפות`, border: (nm) => `${nm} מייל מהגבול`, lost: (m) => `המגע עלול לאבד בעוד ${m}` },
     board: "כל איום וההחלטה עליו", policy: "מדיניות", noPolicy: "המקרה הזה הוא החלטה אחת קפואה: ההגדרות שלו קבועות.", floor: "רצפת מיירטים לסוללת כיפת ברזל", noFloor: "ללא", belowFloor: "מתחת לרצפה",
     belowOpts: ["מותר", "לחשוב פעמיים", "מוצא אחרון"], borderPref: "לעצור לפני הגבול", borderOpts: ["לא משנה", "עדיף", "בהחלט"],
     prog: "איך ההחלטה התפתחה", shotHit: (e) => `✓ ${e} יירט אותו`, shotMiss: (e) => `✕ ${e} החטיא`,
     intro: "לכל איום, שאלה אחת: איזה מיירט, ומתי.", pressPlay: "לחצו הפעל.",
+    watch: { 1: "שימו לב איך ההחלטה מתגבשת ככל שהמסלול מתייצב.", 2: "שימו לב איזו סוללה לוקחת אותו, ולמה.", 3: "שימו לב איך שתי סוללות מתחלקות בשלושה כטב״מים.",
+      4: "שימו לב שכל כטב״ם מקבל החלטה, שעות לפני שהוא מגיע." },
+    batWhy: { first: (p, a, o, b) => `${p} מיירטת ראשונה: בעוד ${a}, לעומת ${b} ל-${o}.`, but: (o, a, why) => `${o} הייתה מיירטת מוקדם יותר (בעוד ${a}), אבל ${why}.`,
+      plain: (o, a, p) => `${o} הייתה מיירטת מוקדם יותר (בעוד ${a}); ${p} לוקחת אותו.`, floor: (f) => `ירי נוסף יוריד אותה מתחת לרצפה של ${f} מיירטים`,
+      busy: (n) => `היא מחויבת ל-${n} יירוטים אחרים`, still: (p) => `${p} עדיין עוצרת אותו לפני הגבול.`,
+      floorBorder: (p, f) => `${p} יורדת מתחת לרצפה של ${f} מיירטים: רק היא עוצרת את הכטב״ם לפני הגבול.` },
+    cmp: { rounds: "מיירטים שנותרו", tasks: "משימות אחרות", none: "אין", n: (n) => `${n} יירוטים`, icpt: "יירוט", border: "עוצרת אותו", before: "לפני הגבול", after: "אחרי שיחצה",
+      floorAt: (f) => `ברצפה של ${f}`, floorOk: (f) => `רצפה ${f}` },
+    mapRounds: (n) => `${n} מיירטים`, toBorder: (n) => `${n} מייל מהגבול`, backBoard: "כל האיומים", inAirN: (n) => `${n} באוויר`, crossedN: (n) => (n ? `${n} חצו את הגבול` : "אף אחד לא חצה את הגבול"),
+    end: { before: "נעצר לפני הגבול", after: "נעצר אחרי שחצה את הגבול", many: (k, n) => `${k} מתוך ${n} יורטו`, used: (r, c) => `${r} · ${c}`,
+      next: (x) => `הבא: ${x}`, again: "צפו שוב" },
     seeking: "ממשיכים לרגע הבא", raidOver: "המתקפה הסתיימה", recap: "הרגעים של הלילה", restart: "מההתחלה", backStory: "חזרה לסיפור",
     shotsLine: (e, n) => `${e} ירה ${n}; החטיא.`, noShot: "שום מיירט לא הגיע אליו בזמן.",
     inAir: (n, total) => `${n} באוויר · ${total}`, mags: "מלאים",
@@ -198,7 +216,8 @@ const I18N = {
 let LANG = localStorage.getItem("airdef-lang") || "en";
 const T = () => I18N[LANG];
 const nm = (o) => (LANG === "he" && o.name_he ? o.name_he : o.name);
-const glyphs = (s) => (/[\u0590-\u05FF]/.test(s) ? [...s].reverse().join("") : s);   // deck.gl TextLayer has no bidi: flip Hebrew only
+const glyphs = (s) => (/[\u0590-\u05FF]/.test(s)   // deck.gl TextLayer has no bidi: flip a Hebrew label, then put its Latin and number runs back
+  ? [...s].reverse().join("").replace(/%?[A-Za-z0-9](?:[A-Za-z0-9\-.,:]*[A-Za-z0-9])?/g, (m) => [...m].reverse().join("")) : s);
 const effName = (e) => nm(META.effectors[e]).replace("F-15/F-35 ", "").replace("F-16 laser-guided rocket (APKWS)", "APKWS").replace("GPS jamming (EW)", "EW jamming").replace(" laser", "");
 const actLabel = (key) => {
   if (!key) return "—";
@@ -272,9 +291,8 @@ async function init() {
   $("#speedBtn").onclick = (e) => { e.stopPropagation(); $("#speedDrop").classList.toggle("is-open"); };
   document.addEventListener("click", () => document.querySelectorAll(".dc-dropdown").forEach((d) => d.classList.remove("is-open")));
   $("#speedMenu").onclick = (e) => { const x = e.target.closest("[data-x]")?.dataset.x; if (x) api("/api/control", { action: "speed", speed: +x }); };
-  $("#scenMenu").onclick = async (e) => {
-    const s = e.target.closest("[data-s]")?.dataset.s; if (!s) return;
-    focus = selected = null; pinned = false; detail = null; detailOpen = false; await api("/api/control", { action: "reset", scenario: s }); flyTo(viewOf(s));
+  $("#scenMenu").onclick = (e) => {
+    const s = e.target.closest("[data-s]")?.dataset.s; if (s) goScenario(s);
   };
   $("#play").onclick = () => api("/api/control", raidOver() ? { action: "reset" } : { action: S?.running ? "pause" : "play" });
   $("#next").onclick = () => { pinned = false; api("/api/control", { action: "next" }); };
@@ -289,6 +307,8 @@ async function init() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#sheet").classList.remove("open"); $("#gear").setAttribute("aria-expanded", false); } });
   $("#list").onclick = (e) => {
     if (e.target.closest("#followBtn")) { pinned = false; focus = null; renderList(); return; }
+    const ns = e.target.closest("[data-s]"); if (ns) { goScenario(ns.dataset.s); return; }
+    if (e.target.closest("#again")) { api("/api/control", { action: "reset" }); return; }
     if (e.target.closest("#nextCase")) { focus = selected = null; pinned = false; detail = null; api("/api/control", { action: "reset", scenario: `drill:${S.drill.family}:${S.drill.case + 1}` }); return; }
     const mm = e.target.closest("[data-m]"); if (mm) { pinned = false; detail = null; api("/api/control", { action: "moment", index: +mm.dataset.m }); return; }
     const md = e.target.closest("[data-mode]"); if (md) { setMode(md.dataset.mode); return; }
@@ -318,9 +338,9 @@ function applyLang() {
     const [title, blurb] = LANG === "he" ? [v.title_he, v.blurb_he] : [v.title, v.blurb];
     return `<button class="dc-dropdown__item${v.case ? " sub" : ""}" data-s="${k}"><span class="dc-dropdown__text"><span class="dc-dropdown__label">${esc(title)}</span><span class="dc-dropdown__desc">${esc(blurb)}</span></span></button>`;
   };
-  const all = Object.entries(META.scenarios), levels = all.filter(([, v]) => v.level).sort((a, b) => a[0].localeCompare(b[0]));
-  $("#scenMenu").innerHTML = `<p class="dc-dropdown__desc menuhead first">${T().steps}</p>` + levels.map(item).join("")
-    + `<p class="dc-dropdown__desc menuhead">${T().raids}</p>` + all.filter(([, v]) => !v.level).map(item).join("")
+  const order = scenOrder();
+  $("#scenMenu").innerHTML = `<p class="dc-dropdown__desc menuhead first">${T().steps}</p>` + order.filter(([, v]) => v.level).map(item).join("")
+    + `<p class="dc-dropdown__desc menuhead">${T().raids}</p>` + order.filter(([, v]) => !v.level).map(item).join("")
     + `<p class="dc-dropdown__desc menuhead">${T().drills}</p>` + Object.entries(T().drill.fam).map(([k, title]) =>
     `<button class="dc-dropdown__item" data-s="drill:${k}:0"><span class="dc-dropdown__text"><span class="dc-dropdown__label">${esc(title)}</span><span class="dc-dropdown__desc">${esc(T().drill.blurb[k])}</span></span></button>`).join("");
   renderBar(); renderTonight(); renderList(); renderStrip(); buildSheet();
@@ -340,7 +360,7 @@ async function poll() {
   if (beat) caption = beat;                            // and stays (greyed) until the next one
   if (!story || (S.moments || []).length === 0 && !beat) caption = story ? caption : null;
   if (S.drill && !pinned) focus = { k: "t", id: S.drill.threat };
-  else if (story && !pinned) focus = caption ? { k: "t", id: caption.tid } : null;
+  else if (story && !pinned) focus = caption && caption.type !== "group" ? { k: "t", id: caption.tid } : null;   // a group story singles nobody out
   else if (!story && !pinned) focus = null;            // General: nothing is singled out until the viewer clicks
   syncSelected();
   renderBar(); renderTonight(); renderList(); renderRaid();
@@ -352,7 +372,21 @@ function setMode(m) {
   api("/api/control", { action: "mode", mode: m });
   if (S) { S.mode = m; if (m === "general") flyTo(viewOf(S.scenario)); renderBar(); renderList(); }
 }
-const raidOver = () => S && !S.drill && S.t >= S.end - 0.5;
+const isLevel = () => !!META.scenarios[S.scenario]?.level;
+const multi = () => isLevel() && S.total > 1;                                  // a group level: threats are numbered, on the map and in the list
+const threatNo = (id) => Object.keys(PATHS).sort().indexOf(id) + 1;
+let doneAt = 0;
+function levelDone() {   // a level ends with its last threat (after a breath for the result), not with the clock
+  const L = S.ledger?.typical, d = isLevel() && L && L.kills + L.leaks + L.fell_open >= S.total;
+  doneAt = d ? doneAt || performance.now() : 0;
+  return d && performance.now() - doneAt > 2500;
+}
+const raidOver = () => S && !S.drill && (S.t >= S.end - 0.5 || levelDone());
+const scenOrder = () => { const all = Object.entries(META.scenarios);   // the menu's order: the levels, then the full raids
+  return [...all.filter(([, v]) => v.level).sort((a, b) => a[0].localeCompare(b[0])), ...all.filter(([, v]) => !v.level)]; };
+async function goScenario(s) {
+  focus = selected = null; pinned = false; detail = null; detailOpen = false; await api("/api/control", { action: "reset", scenario: s }); flyTo(viewOf(s));
+}
 const gkey = (tr) => `${PATHS[tr.id]?.origin}|${tr.cls}|${Math.floor(tr.t0 / 180)}`;   // a salvo: same origin, class, 3 minutes
 const salvoOf = (m) => { const tr = S.tracks.find((x) => x.id === m.tid), g = tr && gkey(tr);
   return g ? S.tracks.filter((x) => gkey(x) === g && (x.status === "held" || x.status === "fell_open")) : []; };
@@ -443,7 +477,7 @@ function posAt(path, t) {
 function frame() {
   requestAnimationFrame(frame);
   if (!S || !META) return;
-  const t = (tNow = simNow()), prio = new Set(S.cfg.priority_sites), dim = S.mode === "focus" && !!caption;
+  const t = (tNow = simNow()), prio = new Set(S.cfg.priority_sites), dim = S.mode === "focus" && !!caption && caption.type !== "group";
   const hl = S.mode === "focus" && caption?.type === "letfall" ? new Set(salvoOf(caption).map((x) => x.id)) : null;   // the whole salvo
   const live = [], trails = [], futures = [], falls = [];
   for (const tr of S.tracks) {
@@ -477,7 +511,7 @@ function frame() {
   const batts = S.batteries.map((b) => ({ ...b, ...META.batteries.find((m) => m.id === b.id) }));
   const fb = focus?.k === "b" && batts.find((b) => b.id === focus.id);
   const targets = new Set(live.filter((l) => !l.held).map((l) => l.tr.target).filter(Boolean));
-  const D = detail?.id === selected ? detail : null, level = !!META.scenarios[S.scenario]?.level;
+  const D = detail?.id === selected ? detail : null, level = isLevel();
   const mine = new Set([D?.assign?.unit, D?.info?.battery?.pick, ...(D?.info?.battery?.options || []).map((o) => o.bid),
     ...(D?.info?.opts || []).filter((o) => o[0] === "cheaper" || o[0].startsWith("now:")).map((o) => o[6])].filter(Boolean));
   const pick = D?.assign?.unit || D?.info?.battery?.pick || D?.info?.opts?.find((o) => o[0] === D.choice)?.[6];
@@ -516,9 +550,10 @@ function frame() {
       sizeUnits: "pixels", getSize: (d) => (isFocus("b", d.id) || d.id === pick ? 24 : 17), pickable: true, onClick: (i) => select("b", i.object.id),
       getColor: (d) => (isFocus("b", d.id) || d.id === pick ? BLUE : d.stock === 0 ? [205, 205, 208, 255] : d.reload ? [150, 150, 154, 255] : [...INK, dim && !mine.has(d.id) ? 110 : 235]),
       updateTriggers: { getColor: [batts.map((b) => `${b.stock === 0}${!!b.reload}`).join(), focus?.id, dim, pick, [...mine].join()], getSize: [focus?.id, pick] } }),
-    new deck.TextLayer({ id: "battNames", data: batts.filter((b) => level || mine.has(b.id) || isFocus("b", b.id) || map.getZoom() > 8.5), getPosition: (d) => [d.lon, d.lat],
-      getText: (d) => `${d.id} · ${effName(d.eff)}`, getSize: 12, getColor: (d) => (isFocus("b", d.id) || d.id === pick ? [...BLUE, 255] : [...INK, 190]), getPixelOffset: [14, 0], getTextAnchor: "start",
-      ...LABEL, getCollisionPriority: (d) => (isFocus("b", d.id) ? 200 : d.tasks.length ? 50 : 5), updateTriggers: { getColor: focus?.id } }),
+    new deck.TextLayer({ id: "battNames", data: batts.filter((b) => (level ? map.getZoom() > 6.8 : b.id === pick) || isFocus("b", b.id)), getPosition: (d) => [d.lon, d.lat],
+      getText: (d) => glyphs(level && d.stock != null ? `${d.id} · ${T().mapRounds(d.stock)}` : `${d.id} · ${effName(d.eff)}`),   // a level: the rounds are the story
+      getSize: 13, getColor: (d) => (isFocus("b", d.id) || d.id === pick ? [...BLUE, 255] : [...INK, 220]), getPixelOffset: (d) => [0, level && d.stock == null ? -16 : 18], fontWeight: 600,   // a laser beside a battery: its name above, the battery's below
+      ...LABEL, extensions: [], updateTriggers: { getColor: [focus?.id, pick], getText: [LANG, batts.map((b) => b.stock).join()] } }),
     selTr && !DONE.includes(selTr.status) && new deck.ScatterplotLayer({ id: "ipp", data: [selTr], getPosition: (d) => [d.ipp[0], d.ipp[1]],
       getRadius: (d) => Math.max(d.ipp[2], 0.6) * 1000, filled: true, stroked: true, getFillColor: [...BLUE, 22], getLineColor: [...BLUE, 220], lineWidthUnits: "pixels", getLineWidth: 1.5 }),
     new deck.PathLayer({ id: "future", data: futures, getPath: (d) => d.path, getColor: (d) => d.color, widthUnits: "pixels", getWidth: (d) => d.w }),
@@ -532,6 +567,8 @@ function frame() {
       sizeUnits: "pixels", getSize: (d) => (d.sel ? 24 : 15), pickable: true, onClick: (i) => select("t", i.object.tr.id),
       getColor: (d) => (d.sel ? [...BLUE, d.tr.phase === "plot" ? 140 : 255] : [...(ENGAGED.includes(d.tr.status) ? INK : d.held ? [175, 175, 179] : [120, 120, 124]),
         d.tr.phase === "plot" || d.tr.phase === "lost" ? 90 : dim ? 80 : 255]) }),
+    new deck.TextLayer({ id: "nums", data: multi() ? live : [], getPosition: (d) => d.pos, getText: (d) => String(threatNo(d.tr.id)), getSize: 13, fontWeight: 600,
+      getColor: (d) => (d.sel ? [...BLUE, 255] : [...INK, 230]), getPixelOffset: [14, -12], ...LABEL, extensions: [], updateTriggers: { getColor: selected } }),
     new deck.TextLayer({ id: "callout", data: S.mode === "focus" && D?.choice && !DONE.includes(D.status) ? live.filter((l) => l.sel) : [], getPosition: (d) => d.pos,
       getText: () => glyphs(callLabel(D.choice, D.info) + (D.info?.dist?.[D.choice] != null ? `  ${Math.round(D.info.dist[D.choice] * 100)}%` : "")),
       getSize: 14, getColor: [...BLUE, 255], getPixelOffset: [0, -24], fontWeight: 600, ...LABEL, extensions: [] }),
@@ -554,7 +591,7 @@ const SPEEDS = [[1, 0], [5, 1], [20, 2], [60, 3]];
 function renderBar() {
   if (!S) return;
   $("#play").textContent = raidOver() ? T().restart : S.running ? T().pause : T().play;
-  $("#play").className = `dc-pill dc-pill--sm ${S.running ? "dc-pill--secondary" : "dc-pill--primary"}`;   // one blue: Play only when it is the next thing to do
+  $("#play").className = `dc-pill dc-pill--sm ${S.running || (raidOver() && isLevel()) ? "dc-pill--secondary" : "dc-pill--primary"}`;   // one blue: Play only when it is the next thing to do
   $("#next").textContent = T().next; $("#next").style.display = S.drill || S.mode !== "focus" ? "none" : "";
   $("#mode").style.display = S.drill ? "none" : "";
   if (renderBar.mode !== S.mode + LANG) {
@@ -587,7 +624,7 @@ function reason(i, D) {
   if (runner) {   // why not the runner-up: the lens where it loses most
     const r = o[runner], d = Object.fromEntries(["local", "raid", "campaign"].map((k) => [k, (r.lenses[k] || 0) - (c.lenses[k] || 0)]));
     const k = Object.keys(d).sort((a, b) => d[b] - d[a])[0];
-    if (d[k] > 0.0005) s += " " + (k === "local" ? tt.vs.local(actLabel(runner), money(d[k])) : tt.vs[k](actLabel(runner)));
+    if (d[k] > 0.0005) s += " " + (k === "local" ? tt.vs.local(callLabel(runner, i), money(d[k])) : tt.vs[k](callLabel(runner, i)));
   }
   return s;
 }
@@ -666,25 +703,36 @@ function alertsOf(tr) {   // rule-based alerts (not Typical): a priority area ah
   return out;
 }
 const alertPills = (list) => (list.length ? `<div class="alerts">${list.map((a) => `<span class="alert">${esc(a)}</span>`).join("")}</div>` : "");
-function batteryBlock(D) {   // the battery choice: every battery that can take it, what counts for and against it, the pick
-  const B = D.info?.battery; if (!B || DONE.includes(D.status)) return "";
-  const tt = T(), t2 = tt.bat2, dist = B.dist || {};
-  return `<div class="bats"><p class="kicker">${tt.which}</p>${B.options.map((o) => {
-    const facts = [t2.rounds(o.left ?? "∞", o.floor), o.below ? t2.below(o.below) : null, o.commit ? t2.commit(o.commit) : t2.free,
-      t2.isec(mins(Math.max(0, o.intercept - D.t))), o.crossed ? null : o.before_border ? t2.before : t2.after].filter(Boolean);
-    const neg = (f) => (f === t2.after || (o.below && f === t2.below(o.below)) || (o.commit && f === t2.commit(o.commit)));
-    return `<div class="bat${o.bid === B.pick ? " on" : ""}"><span class="bn">${esc(o.bid)}</span><span class="bf">${facts.map((f) => `<i class="${neg(f) ? "neg" : ""}">${esc(f)}</i>`).join("")}</span>
-      <span class="bp num">${dist[o.bid] != null ? Math.round(dist[o.bid] * 100) + "%" : o.bid === B.pick ? "✓" : ""}</span></div>`;
-  }).join("")}</div>`;
+const batOpts = (D) => { const B = D.info?.battery; return B && B.options.length > 1 && B.options.some((o) => o.bid === B.pick) ? B : null; };
+function batWhy(B, t0) {   // why this battery and not the one that would get there first: its floor, its other tasks, the border
+  const w = T().batWhy, P = B.options.find((o) => o.bid === B.pick), O = B.options.filter((o) => o !== P).sort((a, b) => a.intercept - b.intercept)[0];
+  const inT = (o) => mins(Math.max(0, o.intercept - t0)), stops = (o) => o.before_border && !o.crossed;
+  if (P.below && stops(P) && !stops(O)) return w.floorBorder(P.bid, P.floor);
+  if (P.intercept <= O.intercept) return w.first(P.bid, inT(P), O.bid, inT(O));
+  const why = O.below && !P.below ? w.floor(O.floor) : O.commit > P.commit ? w.busy(O.commit) : null;
+  return (why ? w.but(O.bid, inT(O), why) : w.plain(O.bid, inT(O), P.bid)) + (stops(P) ? " " + w.still(P.bid) : "");
 }
-function groupBoard() {   // levels 3-4: every threat at once, ranked by time to impact, each with its call and its battery
+function batteryBlock(D, kicker) {   // the battery choice side by side: the pick and the batteries it was weighed against, as they stood at the call
+  const B = batOpts(D); if (!B) return "";
+  const c = T().cmp, dist = B.dist || {}, t0 = D.info.t ?? D.t;
+  const os = [...B.options].sort((a, b) => (b.bid === B.pick) - (a.bid === B.pick) || a.intercept - b.intercept).slice(0, 3);
+  const rows = [
+    ["", (o) => `<b>${esc(o.bid)}</b>${dist[o.bid] != null ? ` <span class="num">${Math.round(dist[o.bid] * 100)}%</span>` : ""}`],
+    [c.rounds, (o) => (o.left == null ? "∞" : `<span class="num">${o.left}</span> <small class="${o.below ? "neg" : ""}">${o.floor ? (o.below ? c.floorAt(o.floor) : c.floorOk(o.floor)) : ""}</small>`)],
+    [c.tasks, (o) => (o.commit ? `<span class="neg">${c.n(o.commit)}</span>` : c.none)],
+    [c.icpt, (o) => esc(T().optWhy.in(mins(Math.max(0, o.intercept - t0))))],
+    os.every((o) => o.crossed) ? null : [c.border, (o) => (o.before_border && !o.crossed ? c.before : `<span class="neg">${c.after}</span>`)]].filter(Boolean);
+  return `${kicker ? `<p class="kicker cmp-k">${kicker}</p>` : ""}<div class="cmp" style="--n:${os.length}">${rows.map(([l, f], r) => `<span class="cl">${l}</span>${os.map((o) =>
+    `<span class="cc${o.bid === B.pick ? " on" : ""}${r === 0 ? " hd" : r === rows.length - 1 ? " ft" : ""}">${f(o)}</span>`).join("")}`).join("")}</div>`;
+}
+function groupBoard() {   // levels 3-4: every threat at once, numbered as on the map, each with its call and its battery
   const tt = T(), rows = [...S.tracks].sort((a, b) => DONE.includes(a.status) - DONE.includes(b.status) || a.impact - b.impact);
-  const alerts = [...new Set(rows.flatMap((tr) => alertsOf(tr)))].slice(0, 3);
-  return `<p class="kicker">${esc(scenTitle())}</p><h2 class="threat">${tt.board}</h2>${alertPills(alerts)}<div class="board">${rows.map((tr) => {
+  const alerts = [...new Set(rows.flatMap((tr) => alertsOf(tr)))].slice(0, 3), L = S.ledger.typical || {};
+  const tally = [tt.inAirN(rows.filter((x) => !DONE.includes(x.status)).length), tt.tally.killed(L.kills || 0), L.leaks ? tt.tally.hits(L.leaks) : null, tt.crossedN(L.crossed || 0)].filter(Boolean).join(" · ");
+  return `<p class="kicker">${esc(scenTitle())}</p><h2 class="threat">${tt.board}</h2><p class="facts-line">${esc(tally)}</p>${alertPills(alerts)}<div class="board">${rows.map((tr) => {
     const [st, tone] = trackStatus(tr), live = !DONE.includes(tr.status);
-    return `<button class="brow" data-k="t" data-id="${esc(tr.id)}"><span class="bn">${esc(nm(META.threat_types[tr.kind]).replace(/ (MRBM|SRBM)$/i, ""))}
-      <small>${esc(siteName(tr.target))}${tr.to_border != null ? " · " + esc(tt.fromBorder(Math.round(tr.to_border), PATHS[tr.id]?.kts)) : ""}</small></span>
-      <span class="obj-st tone-${tr.phase === "plot" ? "grey" : tone}">${esc(tr.phase === "plot" ? tt.phase.plot : st)}</span>
+    return `<button class="brow${live ? "" : " done"}" data-k="t" data-id="${esc(tr.id)}"><span class="no num">${threatNo(tr.id)}</span><span class="bn">${esc(tt.to)} ${esc(siteName(tr.target))}
+      <small><b class="tone-${tr.phase === "plot" ? "grey" : tone}">${esc(tr.phase === "plot" ? tt.phase.plot : st)}</b>${live && tr.to_border != null ? " · " + esc(tt.toBorder(Math.round(tr.to_border))) : live && PATHS[tr.id]?.cross != null && tNow >= PATHS[tr.id].cross ? " · " + esc(tt.crossed) : ""}</small></span>
       ${live ? `<span class="obj-eta num eta" data-impact="${tr.impact}"></span>` : "<span></span>"}</button>`;
   }).join("")}</div>`;
 }
@@ -785,8 +833,9 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
       const dest = m?.type === "letfall" ? "" : site ? (open ? `${tt.openGround} ${esc(siteName(site))}` : `${tt.to} ${esc(siteName(site))}`) : "";
       const live = tr && !DONE.includes(tr.status);
       const kick = m && tt.mom[m.type] && tt.mom[m.type] !== actLabel(m.key) ? tt.mom[m.type] : tt.cls[src.cls];   // never the call twice
-      const past = m && S.beat?.id !== m.id;
-      h = `<div class="${past ? "past" : ""}"><p class="kicker">${tr?.phase === "plot" ? tt.phase.plot : kick}</p>
+      const past = m && S.beat?.id !== m.id && !isLevel();   // a level is one story: its result stays lit
+      const back = pinned && multi() ? `<button id="followBtn" class="linkish">← ${tt.backBoard}</button> · ` : "";
+      h = `<div class="${past ? "past" : ""}"><p class="kicker">${back}${tr?.phase === "plot" ? tt.phase.plot : kick}${multi() ? ` ${threatNo(src.id ?? src.tid)}` : ""}</p>
         <div class="row"><div><h2 class="threat">${title}</h2><div class="target">${dest}</div></div>${live && m?.type !== "letfall" ? `<div class="etabox"><span class="kicker">${tt.impactIn}</span><div class="eta num" data-impact="${tr.impact}"></div></div>` : ""}</div>
         ${tr ? trackFacts(tr) + alertPills(alertsOf(tr)) : ""}`;
       const D = detail?.id === focus.id ? detail : null;
@@ -794,12 +843,12 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
         const call = m.type === "letfall" || m.type === "hit" || m.type === "holdfire" ? "" : `<div class="what">${esc(actLabel(m.key))}</div>`;
         h += `<div class="story">${call}${captionBody(m)}</div></div>`;
       } else if (D) {   // the story so far, live: the call now, why, the unit's call, the options, and how it got here
-        const done = DONE.includes(D.status), i = D.info;
+        const done = DONE.includes(D.status), i = D.info, B = !done && isLevel() && D.choice?.startsWith("now:") && batOpts(D);   // a level: which battery is the story, so the pick is the headline
         const head = done ? `<div class="what ${D.status === "leaked" ? "hit" : "ink"}">${tt.status[D.status]}</div>`
           : !D.choice ? `<p class="why">${tt.noCall}</p>`   // plots not yet classified: no call to show
-          : `<div class="what">${esc(callLabel(D.choice, i))}</div>${i ? `<p class="why">${esc(reason(i, D))}</p>` : ""}${localLine(D)}`;
+          : `<div class="what">${esc(callLabel(D.choice, i))}${B ? ` <span class="unit">${esc(B.pick)}</span>` : ""}</div>${i ? `<p class="why">${esc(B ? batWhy(B, i.t ?? D.t) : reason(i, D))}</p>` : ""}${B ? batteryBlock(D) : ""}${localLine(D)}`;
         const extra = m && (m.type === "holdfire" || m.type === "hit") ? captionBody(m) : "";
-        h += `<div class="story">${storySteps(tr, D)}${head}${extra}${done ? "" : '<div id="bars"></div>'}${batteryBlock(D)}${progression(D)}</div></div>`;
+        h += `<div class="story">${storySteps(tr, D)}${head}${extra}${done ? "" : '<div id="bars"></div>'}${B || done ? "" : batteryBlock(D, tt.which)}${progression(D)}</div></div>`;
         liveBars(done ? null : i, D.choice, D);
       } else {
         h += threatDetail(true).replace('<div class="obj-detail">', '<div class="story">');
@@ -815,7 +864,7 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
     if (u) h = `<p class="kicker">${esc(T().act.air[u.kind])}</p><h2 class="threat">${esc(nm(u))}</h2>${unitDetail(u)}`;
   }
   if (S.drill) h += drillCard();
-  else if (!h) h = (S.moments || []).length || S.running ? "" : `<p class="kicker">${esc(scenTitle())}</p><h2 class="intro">${tt.intro}</h2><p class="why">${tt.pressPlay}</p>`;
+  else if (!h) h = (S.moments || []).length || S.running ? "" : brief();
   if (!S.drill && !raidOver() && S.running && !S.beat) h += `<p class="seek">${tt.seeking}…</p>`;
   if (!S.drill) h += `<p class="showall"><button class="linkish" data-mode="general">${tt.showAll}</button></p>`;
   el.classList.add("story-mode");
@@ -827,9 +876,23 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
   renderList.last = null;
 }
 
+function brief() {   // how a story begins: what it is, the set-up, what to watch
+  const tt = T(), sc = META.scenarios[S.scenario], [a, b] = scenTitle().split(/: (.*)/s);
+  return `<p class="kicker">${esc(a)}</p><h2 class="intro">${esc((b || a).replace(/^./, (c) => c.toUpperCase()))}</h2>
+    <p class="why">${esc(LANG === "he" ? sc.blurb_he : sc.blurb)}</p><p class="why watch">${tt.watch[sc.level] || tt.intro}</p><p class="why sub">${tt.pressPlay}</p>`;
+}
 const scenTitle = () => { const sc = META.scenarios[S.scenario]; return sc ? (LANG === "he" ? sc.title_he : sc.title) : ""; };
 function recap() {   // the raid is over: tonight's figures and every moment, each one replayable
   const tt = T();
+  if (isLevel()) {
+    const L = S.ledger.typical, e = tt.end, order = scenOrder(), nx = order[order.findIndex(([k]) => k === S.scenario) + 1];
+    const title = (v) => (LANG === "he" ? v.title_he : v.title);
+    const used = Object.entries(L.rounds || {}).map(([k, n]) => `${n} × ${effName(k)}`).join(", ");
+    const what = L.leaks ? `<div class="what hit">${esc(tt.tally.hits(L.leaks))}</div>` : `<div class="what ink">${esc(S.total > 1 ? e.many(L.kills, S.total) : L.crossed ? e.after : e.before)}</div>`;
+    return `<p class="kicker">${esc(scenTitle())}</p><div class="story">${what}
+      <p class="why">${esc([S.total > 1 ? tt.crossedN(L.crossed || 0).replace(/^./, (c) => c.toUpperCase()) : null, used ? e.used(used, money(L.spent)) : null].filter(Boolean).join(". "))}.</p>
+      <p class="endnav">${nx ? `<button class="dc-pill dc-pill--primary dc-pill--sm" data-s="${nx[0]}">${esc(e.next(title(nx[1])))}</button>` : ""}<button id="again" class="linkish">${e.again}</button></p></div>`;
+  }
   return `<p class="kicker">${tt.raidOver}</p><h2 class="threat">${esc(scenTitle())}</h2>
     <p class="dline">${tt.recap}</p>${(S.moments || []).map((m) => `<button class="obj" data-m="${m.id}">
       <span class="obj-main"><span class="obj-name">${esc(tt.mom[m.type])}</span><span class="obj-sub">${esc(nm(META.threat_types[m.kind]))}${m.site ? " · " + esc(siteName(m.site)) : ""}</span></span>
@@ -903,10 +966,10 @@ function threatDetail(story = false) {   // the call on the expanded threat: wha
   let h = pinned && S.mode === "focus" && !S.drill ? `<p class="kicker"><button id="followBtn" class="linkish">${tt.backStory}</button></p>` : "";
   if (done) return `<div class="obj-detail">${h}<div class="what" style="color:${D.status === "leaked" ? "var(--hit)" : "var(--dc-ink-2)"}">${tt.status[D.status]}</div></div>`;
   if (!i) return `<div class="obj-detail">${h}<p class="empty">${tt.notYet}</p></div>`;
-  h += `<div class="what">${esc(actLabel(D.choice))}</div><p class="why">${esc(reason(i, D))}</p>${localLine(D)}`;
+  h += `<div class="what">${esc(callLabel(D.choice, i))}</div><p class="why">${esc(reason(i, D))}</p>${localLine(D)}`;
   const opts = i.dist ? Object.keys(i.dist).sort((a, b) => i.dist[b] - i.dist[a]) : [];
   h += `<details class="detail" ${detailOpen ? "open" : ""} ontoggle="detailOpen = this.open"><summary>${tt.details}</summary>
-    ${opts.length && !story ? `<p class="dline">${tt.options}</p>${opts.map((k) => `<div class="alt${k === D.choice ? " chosen" : ""}"><span>${esc(actLabel(k))}</span><span class="num">${Math.round(i.dist[k] * 100)}%</span></div>`).join("")}` : ""}
+    ${opts.length && !story ? `<p class="dline">${tt.options}</p>${opts.map((k) => `<div class="alt${k === D.choice ? " chosen" : ""}"><span>${esc(callLabel(k, i))}</span><span class="num">${Math.round(i.dist[k] * 100)}%</span></div>`).join("")}` : ""}
     <p class="dline">${tt.reads}</p><pre>${esc(i.state)}</pre></details>`;
   return `<div class="obj-detail">${h}</div>`;
 }
@@ -930,7 +993,7 @@ function renderTonight() {
       <div class="stat"><div class="v num">${money(ty.spent)}</div><div class="l">${tt.spent}</div></div>
       <div class="stat"><div class="v num">${ty.kills}</div><div class="l">${tt.intercepted}</div></div>
       <div class="stat"><div class="v num ${ty.leaks ? "hit" : ""}">${ty.leaks}</div><div class="l">${tt.hits}</div></div>
-    </div>${S.stats && (S.stats.fall || S.stats.cheaper) ? `<p class="held">${esc(tt.held(S.stats.fall, S.stats.cheaper, "\u2066" + money(S.stats.kept) + "\u2069"))}</p>` : ""}
+    </div>${S.stats && !isLevel() && (S.stats.fall || S.stats.cheaper) ? `<p class="held">${esc(tt.held(S.stats.fall, S.stats.cheaper, "\u2066" + money(S.stats.kept) + "\u2069"))}</p>` : ""}
     <div class="mags">${magRows(ty)}</div>`;
 }
 
@@ -962,7 +1025,7 @@ function renderStrip() {   // one lifeline per threat: launch -> impact, the cal
   D.history.forEach(([t, key], n) => { if (!seen.has(key) || n === D.history.length - 1) { seen.add(key); calls.push([t, key, n === D.history.length - 1]); } });
   let lastEnd = -1e9;
   for (let n = calls.length - 1, right = 1e9; n >= 0; n--) {   // from the final call back: drop a label that would collide
-    const [t, key, last] = calls[n], x = X(t), lab = last ? callLabel(key, D.info) : actLabel(key), w = 8 * lab.length + 10;
+    const [t, key, last] = calls[n], x = X(t), lab = callLabel(key, last ? D.info : (D.log || []).find((e) => e.key === key && e.opts)), w = 8 * lab.length + 10;
     if (!last && x + w > right) continue;
     right = x;
     const col = last ? "#2548f6" : "#5d5d5d";
