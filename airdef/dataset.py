@@ -19,11 +19,13 @@ from multiprocessing import Pool
 from pathlib import Path
 
 from engine import LEVELS, Q_BATTERY, run_headless
-from sim import DEFAULT_CONFIG, SCENARIOS, SITES
+from sim import DEFAULT_CONFIG, SCENARIOS, SITES, in_israel
 
 ROOT = Path(__file__).resolve().parent.parent
 SPLITS = {"train": range(1000, 1120), "val": range(2000, 2020), "eval": range(3000, 3040)}
 BATTERY_ROWS = 6000
+LEVEL_BOOST = 8    # extra level-2 raids per seed, each with its own route: the floor-vs-border trade-off is rare in raids
+NORTH = ["haifa_bay", "haifa", "tiberias", "nahariya", "kiryat_shmona", "ramat_david"]
 CLS = re.compile(r", a (ballistic missile|rocket|cruise missile|drone) from")
 
 
@@ -49,6 +51,13 @@ def raid(job):
     cfg, scale = random_night(rng)
     SCENARIOS[scenario]["stock_scale"] = {**SCENARIOS[scenario].get("stock_scale", {}), **scale}   # per-process copy
     sc = SCENARIOS[scenario]
+    if sc.get("level") == 2:   # a new route each time: from just across the northern border to a northern site, seen late or early
+        while True:
+            lon = rng.uniform(35.2, 35.9)
+            o = (rng.uniform(33.35 if lon > 35.5 else 33.15, 33.7), lon)
+            if not in_israel(*o):
+                break
+        sc["threats"] = [{**sc["threats"][0], "origin": o, "target": rng.choice(NORTH), "classify_s": rng.choice([5, 10, 20, 40, 60])}]
     if "batteries" in sc:   # a level: random stocks around the floor and random standing commitments, so every case varies
         sc["batteries"] = {b: (None if n is None else rng.choice([8, 11, 12, 13, 16, 25, 40])) for b, n in sc["batteries"].items()}
         sc["plans"] = {b: (rng.choice([1, 2, 3]), 600) for b in sc["batteries"] if rng.random() < 0.3}
@@ -100,6 +109,7 @@ def to_row(r, rng):
 
 def collect(seeds, explore, procs=10):
     jobs = [(sc, s, explore) for s in seeds for sc in SCENARIOS]
+    jobs += [(f"level2_{c}", s * 100 + k, explore) for s in seeds for c in "abcd" for k in range(LEVEL_BOOST // 4)]
     with Pool(procs) as p:
         recs = [r for out in p.imap_unordered(raid, jobs) for r in out]
     seen, out = set(), []
@@ -118,6 +128,8 @@ def cell(r):
     if r["meta"]["family"] == "airdef_battery":   # balance by whether the pick is the earliest-listed... keep it simple: one cell
         return ("battery", "pick", r["meta"]["cls"])
     a = b.split(":")[0]
+    if r["meta"]["scenario"].startswith("level"):   # the levels' own quota: their trade-offs never drown in raid drones
+        return ("level", a)
     return ("global", a, r["meta"]["cls"])
 
 
