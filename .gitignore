@@ -51,3 +51,4 @@ site/app/
 deploy/hosted.env
 deploy/.pod
 airdef/static/
+.DS_Store
