@@ -7,6 +7,7 @@ the server's clock, the director and its stories -- with the real model, so the 
 Recording on any other clock misses re-asks: a story disables the quiet-time skip, which moves when calls are re-asked.
 """
 import argparse
+import functools
 import gzip
 import json
 from pathlib import Path
@@ -16,18 +17,49 @@ DEFAULT = Path(__file__).resolve().parent / "recorded" / "answers.json.gz"
 DRILLS = Path(__file__).resolve().parent / "recorded" / "drill_ui.jsonl"
 
 
-class Recorded:
-    """model.choice(state, question, labels) from the recording; None for a situation it never saw."""
+@functools.lru_cache(maxsize=2)
+def _load(path):
+    with gzip.open(path, "rt") as f:
+        data = json.load(f)
+    jobs = data["jobs"] if isinstance(data, dict) else {"*": data}   # a plain list: one recording, no per-job split
+    return {spec: {(q, s, tuple(lab)): d for q, s, lab, d in rows} for spec, rows in jobs.items()}
 
-    def __init__(self, path=None):
-        with gzip.open(path or DEFAULT, "rt") as f:
-            self.memo = {(q, s, tuple(lab)): d for q, s, lab, d in json.load(f)}
+
+class Recorded:
+    """model.choice(state, question, labels) from the recording; None for a situation it never saw.
+    tape: replay one tape from the job that recorded it. The GPU answers a question slightly differently from one job to
+    the next (up to ~0.03), and a near-tie that flips sends the replay down a path nobody recorded."""
+
+    def __init__(self, path=None, tape=None):
+        jobs = _load(str(path or DEFAULT))
+        own = next((m for spec, m in jobs.items() if tape and tape in tapes_of(spec)), None)
+        self.memo = own if own is not None else {k: d for m in reversed(list(jobs.values())) for k, d in m.items()}
         self.misses = 0
 
     def choice(self, state, question, labels):
         d = self.memo.get((question, state, tuple(labels)))
         self.misses += d is None
         return d
+
+
+def tape_name(scenario, variant=None, drill=None):
+    from sim import DEFAULT_VARIANT
+    if drill:
+        return f"drill_{drill[0]}_{drill[1]}"
+    return scenario if variant in (None, DEFAULT_VARIANT) else f"{scenario}@{variant}"
+
+
+@functools.lru_cache(maxsize=None)
+def tapes_of(spec):
+    """The tapes a recording job covered, from its spec (= its file name): name@r<posture>@f<floor>@s<priority>, drill_<family>."""
+    from sim import policy_variants
+    if spec.startswith("drill"):
+        fam = spec.replace("drill:", "drill_").split("_", 1)[1]
+        return frozenset(tape_name(None, drill=(r["family"], r["inst"])) for r in (json.loads(x)["meta"] for x in DRILLS.read_text().splitlines())
+                         if fam in ("*", r["family"]))
+    name, *f = spec.split("@")
+    f = {x[0]: int(x[1:]) for x in f}
+    return frozenset(tape_name(name, v) for v in policy_variants(name, f.get("r"), f.get("s"), f.get("f")))
 
 
 def save(rows, out):
@@ -39,13 +71,16 @@ def save(rows, out):
 
 
 def merge(paths, out):
-    """Several recordings (one per remote job) -> one file."""
-    rows = {}
+    """Recordings (one per remote job, named by its spec) -> one file that keeps each job's answers apart."""
+    jobs = {}
     for p in paths:
         with gzip.open(p, "rt") as f:
-            rows.update({(q, s, tuple(lab)): d for q, s, lab, d in json.load(f)})
-    save(rows, Path(out))
-    return len(rows)
+            jobs[Path(p).name.removesuffix(".json.gz")] = json.load(f)
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(out, "wt") as f:
+        json.dump({"jobs": jobs}, f)
+    return sum(map(len, jobs.values()))
 
 
 if __name__ == "__main__":

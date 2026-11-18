@@ -274,6 +274,7 @@ class Job:
             try:
                 pod = json.loads(self.call(["runpodctl", "pod", "create", "--name", self.name, "--image", IMAGE, "--gpu-id", "NVIDIA H100 80GB HBM3",
                                              "--cloud-type", "SECURE", "--container-disk-in-gb", "150", "--ports", "22/tcp",
+                                             *(["--country-code", os.environ["RUNPOD_COUNTRY"]] if os.environ.get("RUNPOD_COUNTRY") else []),   # steer off a flaky host
                                              "--env", json.dumps({"PUBLIC_KEY": pub})], 180, out))
                 self.gpu = (pod.get("machine") or {}).get("gpuDisplayName")   # e.g. "H100 SXM"; the pod's nvidia-smi names it exactly later
                 return pod["id"]

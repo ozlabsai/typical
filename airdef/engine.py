@@ -136,7 +136,9 @@ def global_text(th, t, opts, prices, left, inbound, cfg, units):
 
     def floor_word(o):
         b = next((x for x in o.detail.get("batteries", []) if x["bid"] == o.unit), None)
-        return f", takes {b['bid']} below its floor of {b['floor']}" if b and b["below"] else ""
+        if not (b and b["below"]):
+            return ""
+        return f", takes {b['bid']} below its floor of {b['floor']}" if b["floor"] else f", leaves {b['bid']} short for its other engagements"
     if now:
         lines.append("Can fire now: " + "; ".join(f"{SHORT[o.eff]}, {pk_word(o.pk)}, {money(EFFECTORS[o.eff]['cost'])}"
                                                   f"{border_word(th, t, o.detail.get('intercept', o.launch))}{floor_word(o)}" for o in now) + ".")

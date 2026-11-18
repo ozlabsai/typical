@@ -55,7 +55,7 @@ def bake(scenario=None, drill=None, variant=None, model=None):
     clock = Clock()
     director.time = clock   # the director only reads time.monotonic()
     S = server.S
-    S.update(model=model or record.Recorded(server.MODEL_ID.partition(":")[2] or None), model_name="typical-small · tuned", batch=1, mode="focus", speed=SPEED)
+    S.update(model=model or record.Recorded(server.MODEL_ID.partition(":")[2] or None, record.tape_name(scenario, variant, drill)), model_name="typical-small · tuned", batch=1, mode="focus", speed=SPEED)
     if drill:
         server.new_drill(*drill)
     else:
@@ -130,11 +130,9 @@ def bake(scenario=None, drill=None, variant=None, model=None):
 
 def bake_one(job):
     """One tape per (scenario, policy variant); the default policy's tape keeps the plain name."""
-    from sim import DEFAULT_VARIANT
     sc, dr, v, out = job
-    name = sc or f"drill_{dr[0]}_{dr[1]}"
     tape = bake(sc, dr, v)
-    p = Path(out) / "data" / (f"{name}.json.gz" if v in (None, DEFAULT_VARIANT) else f"{name}@{v}.json.gz")
+    p = Path(out) / "data" / f"{record.tape_name(sc, v, dr)}.json.gz"
     with gzip.open(p, "wt") as f:
         json.dump(tape, f, separators=(",", ":"), default=str)
     return f"{p.name:44s} {len(tape['frames']):5d} frames  {len(tape['moments']):2d} moments  {p.stat().st_size / 1e6:5.2f} MB"
