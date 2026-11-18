@@ -93,7 +93,8 @@ def track_lines(th, t):
     if th.cls in "CD":
         v = float(haversine(*th.origin, *th.impact)) / th.T   # km/s
         if t < th.cross_t < math.inf:
-            out.append(f"It is about {v * (th.cross_t - t) / NM_KM:.0f} nautical miles from the border, flying at {th.speed_kts():.0f} knots.")
+            out.append(f"It is about {v * (th.cross_t - t) / NM_KM:.0f} nautical miles from the border, flying at {th.speed_kts():.0f} knots; "
+                       f"it crosses in {in_words(th.cross_t - t)} unless stopped.")
         elif th.cross_t <= t:
             out.append("It has crossed the border.")
     if th.lost and t < th.lost[0]:
@@ -107,6 +108,23 @@ def border_word(th, t, intercept):
     if not (t < th.cross_t < math.inf):
         return ""
     return ", before the border" if intercept < th.cross_t else ", only after it crosses the border"
+
+
+def border_policy(cfg):   # the user's policy in words: the model has to read it (the prices alone are invisible to it)
+    bp = cfg.get("border_price", 0)
+    return "Policy: it may cross the border." if bp < 1 else "Policy: stop it before the border if possible." if bp < 15 \
+        else "Policy: it must not cross the border."
+
+
+def floor_policy(cfg):
+    fp = cfg.get("floor_price", 0)
+    return "allowed" if fp < 0.5 else "a reason to think twice" if fp < 2 else "a last resort"
+
+
+def policy_lines(th, t, cfg, floors):
+    """The standing policy that bears on this call: the border while it has not crossed; ammo floors when one is in play."""
+    return ([border_policy(cfg)] if t < th.cross_t < math.inf else []) + \
+        ([f"Policy: going below a battery's ammo floor is {floor_policy(cfg)}."] if floors else [])
 
 
 def global_text(th, t, opts, prices, left, inbound, cfg, units):
@@ -141,6 +159,7 @@ def global_text(th, t, opts, prices, left, inbound, cfg, units):
     camp = [SHORT[e] for e in used if prices.get(e, (0, 0))[1] > EFFECTORS[e]["cost"] * 2]
     if camp:
         lines.append(f"The campaign: {', '.join(camp)} must last more nights.")
+    lines += policy_lines(th, t, cfg, any(floor_word(o) for o in now + later))
     return "\n".join(lines)
 
 
@@ -159,7 +178,7 @@ def battery_text(th, t, eff, bats, cfg):
         busy = (f"committed to {b['commit']} other engagement{'s' if b['commit'] > 1 else ''}" if b["commit"] else "no other engagements")
         lines.append(f"- {b['bid']}: {ammo}; {busy}; can launch in {soon_words(max(0, b['launch'] - t))}, intercept in "
                      f"{soon_words(max(0, b['intercept'] - t))}{border_word(th, t, b['intercept'])}; {pk_word(b['pk'])}.")
-    return "\n".join(lines)
+    return "\n".join(lines + policy_lines(th, t, cfg, any(b["floor"] for b in bats)))
 
 
 def local_text(th, t, cfg, unit_line, f):
@@ -178,7 +197,8 @@ def local_text(th, t, cfg, unit_line, f):
                      + (f"; a launcher is reloading, ready in {in_words(f['reload_eta'])}." if f["reload_eta"] else "."))
     if f.get("floor") and f["stock"] != math.inf:
         lines.append(f"Its floor is {f['floor']} rounds; " + ("every round fired now takes it further below." if f["stock"] - 1 < f["floor"]
-                                                             else f"{f['stock'] - f['floor']} rounds above it."))
+                                                             else f"{f['stock'] - f['floor']} rounds above it.")
+                     + f" Policy: going below it is {floor_policy(cfg)}.")
     if f["turn"]:
         lines.append("The radar is staring away from it and has to turn first (about 10 seconds).")
     if f["friendly"]:
