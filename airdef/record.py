@@ -87,7 +87,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="*", help="scenario names, name@r<posture>@f<floor>@s<priority option> (those policy variants), or drill:<family>")
     ap.add_argument("--out", default=str(DEFAULT))
-    ap.add_argument("--model", default=str(ROOT / ".context/typically/results/co_airdef_v5/best.pt"))
+    ap.add_argument("--model", default=str(ROOT / ".context/typically/results/co_airdef_v8/best.pt"))
     a = ap.parse_args()
     import scorer
     from sim import SCENARIOS

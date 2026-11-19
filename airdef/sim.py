@@ -169,7 +169,7 @@ DEFAULT_CONFIG = {
     "allied": True,            # THAAD + US Navy available
     "iron_beam_weather": "clear",  # clear | cloudy (laser Pk x0.4)
     "pk_scale": 1.0,
-    "conf_threshold": 0.42,    # escalate to the operator when Typical's top action is below this...
+    "conf_threshold": 0.5,     # escalate to the operator when Typical's top action is below this...
     "abstain_threshold": 0.9,
     "forecast_s": 900,         # early warning: threats launching within this many seconds count as tonight's demand  # ...or when its ∅ ("none of these") mass is above this
     # damage model, all user-configurable: value of a site hit = site_value[sid] (else tier_value[tier])
