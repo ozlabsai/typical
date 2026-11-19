@@ -21,7 +21,7 @@ from pydantic import BaseModel
 import planner
 from director import Director
 from engine import BAT, DONE, World, label
-from sim import (AIR_HE, AIR_KINDS, BATTERIES, BORDER, NM_KM, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, ORIGINS, SCENARIOS, SITE_HE, SITES, THREAT_HE,
+from sim import (in_israel, AIR_HE, AIR_KINDS, BATTERIES, BORDER, NM_KM, DEFAULT_CONFIG, EFFECTOR_HE, EFFECTORS, ORIGINS, SCENARIOS, SITE_HE, SITES, THREAT_HE,
                  THREATS, consequence, haversine)
 
 ROOT = Path(__file__).parent
@@ -244,6 +244,7 @@ def track(tid: str, policy: str = "typical"):
         _, sid, _, _, dist, sigma = consequence(th, w.t, w.cfg)
         return dict(id=tid, kind=th.kind, cls=th.cls, status=s["status"], t=w.t, t0=th.t0, impact=th.t0 + th.T,
                     site=sid, open_ground=bool(dist > sigma), priority=sid in w.cfg["priority_sites"],
+                    inside=bool(in_israel(*th.predicted_impact(w.t)[:2])),   # where it would come down, inside the border or not
                     windows=planner.spans(th, w.t, pol.stock, w.cfg),
                     shots=[dict(b=f[1], eff=f[11], t0=f[3], t1=f[4], hit=f[8]) for f in w.flights if f[0] == policy and f[2] == tid],
                     history=s["history"], log=s.get("log", []), info=s["info"], local=s.get("local"), assign=s.get("assign"),

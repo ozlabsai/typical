@@ -25,7 +25,7 @@ import director   # noqa: E402
 import record     # noqa: E402
 import server     # noqa: E402
 from engine import DONE   # noqa: E402
-from sim import SCENARIOS, consequence   # noqa: E402
+from sim import SCENARIOS, consequence, in_israel   # noqa: E402
 
 TICK = 0.25        # wall seconds per server tick, as server.loop
 SPEED = 20.0       # the autoplay speed the Focus stories are picked at
@@ -46,7 +46,8 @@ def detail_of(w, th):
     s = w.policies["typical"].st[th.id]
     _, sid, _, _, dist, sigma = consequence(th, w.t, w.cfg)
     return dict(status=s["status"], choice=s.get("choice"), info=s["info"], local=s.get("local"), assign=s.get("assign"),
-                site=sid, open_ground=bool(dist > sigma), priority=sid in w.cfg["priority_sites"])
+                site=sid, open_ground=bool(dist > sigma), priority=sid in w.cfg["priority_sites"],
+                inside=bool(in_israel(*th.predicted_impact(w.t)[:2])))
 
 
 def bake(scenario=None, drill=None, variant=None, model=None):

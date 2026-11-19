@@ -117,7 +117,7 @@
     if (!th) return null;
     const d = [...th.timeline].reverse().find((x) => x.t <= t) || { status: "pending", choice: null, info: null, local: null, assign: null };
     return { id: tid, kind: th.kind, cls: th.cls, t, t0: th.t0, impact: th.impact, status: d.status, choice: d.choice, info: d.info,
-      local: d.local, assign: d.assign, site: d.site, open_ground: d.open_ground, priority: d.priority, escalated: false,
+      local: d.local, assign: d.assign, site: d.site, open_ground: d.open_ground, priority: d.priority, inside: d.inside, escalated: false,
       history: th.history.filter((h) => h[0] <= t), log: th.log.filter((e) => e.t <= t),
       shots: V.tape.flights.filter((f) => f.th === tid && f.t0 <= t).map((f) => ({ b: f.b, eff: f.eff, t0: f.t0, t1: f.t1, hit: f.hit })) };
   }

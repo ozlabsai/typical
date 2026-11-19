@@ -52,8 +52,10 @@ def battery_terms(th, t, bid, shot, avail, cfg, commit):
     below = max(0, floor - after) if after != math.inf else 0
     crosses = t < th.cross_t < math.inf
     before = not crosses or shot[1] < th.cross_t
+    parts = {"floor": below * cfg.get("floor_price", 0), "tasks": n_commit * COMMIT_PRICE,
+             "border": 0 if before else cfg.get("border_price", 0), "time": TIME_PRICE * max(0.0, shot[1] - t) / 60}
     return dict(bid=bid, eff=eff, launch=shot[0], intercept=shot[1], left=left, floor=floor, after=after, below=below,
-                commit=n_commit, before_border=before, crossed=th.cross_t <= t,
+                commit=n_commit, before_border=before, crossed=th.cross_t <= t, parts=parts,
                 cost=below * cfg.get("floor_price", 0) + n_commit * COMMIT_PRICE + (0 if before else cfg.get("border_price", 0))
                 + TIME_PRICE * max(0.0, shot[1] - t) / 60)
 
@@ -133,7 +135,7 @@ def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit
 
     follow = dp(dmg)
 
-    def priced(key, e, t_int, launch, unit, extra_cost=0.0, pfree=1.0):
+    def priced(key, e, t_int, launch, unit, extra_cost=0.0, pfree=1.0, parts=None):
         pk = effective_pk(e, th, cfg) * pfree   # a later layer only helps if a channel is free by then (congestion)
         lam_e = lam.get(e, 0.0)
         raid, camp = prices.get(e, (0, 0))
@@ -144,17 +146,21 @@ def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit
                 best_n, best = n, tot
         local = best - best_n * lam_e
         bind = "raid" if raid >= camp else "campaign"
+        rounds = best_n * EFFECTORS[e]["cost"]   # display: what the total is made of (the parts sum to it)
+        parts = {"rounds": rounds, "reserve": best_n * lam_e, **(parts or {"other": extra_cost}),
+                 "risk": best - rounds - best_n * lam_e - extra_cost}
         return Option(key, e, launch, best, {"local": local, "raid": best_n * lam_e if bind == "raid" else 0.0,
-                                             "campaign": best_n * lam_e if bind == "campaign" else 0.0},
+                                             "campaign": best_n * lam_e if bind == "campaign" else 0.0, "parts": parts},
                       1 - (1 - pk) ** best_n, unit, {"salvo": best_n, "intercept": t_int})
 
-    opts = [Option("hold", None, None, dmg + border, {"local": dmg + border, "raid": 0.0, "campaign": 0.0})]
+    opts = [Option("hold", None, None, dmg + border, {"local": dmg + border, "raid": 0.0, "campaign": 0.0,
+                                                      "parts": {"risk": dmg, "border": border}})]
     now, later = [], []
     for e, (bid, launch, t_int) in win.items():
         later_one = launch > t + OPEN_S
         if later_one:
             o = priced(f"later:{e}", e, t_int, launch, bid, extra_cost=border if t_int >= th.cross_t else 0.0,
-                       pfree=p_channel(e, launch, bookings, cfg))
+                       pfree=p_channel(e, launch, bookings, cfg), parts={"border": border if t_int >= th.cross_t else 0.0})
             later.append(o)
             continue
         # this type can fire now: every battery of the type that can engage it (now, or when its own window opens) is a
@@ -162,7 +168,7 @@ def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit
         bats = []
         for b, l, ti, *_ in cand.get(e, []):
             terms = battery_terms(th, t, b, (l, ti), avail, cfg, commit)
-            ob = priced(f"now:{e}", e, ti, l, b, extra_cost=terms["cost"])
+            ob = priced(f"now:{e}", e, ti, l, b, extra_cost=terms["cost"], parts=terms["parts"])
             terms.update(total=ob.total, pk=ob.pk)
             bats.append((ob, terms))
         if not any(x[0].launch <= t + OPEN_S for x in bats):
@@ -180,7 +186,8 @@ def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit
             if r:
                 t_eng, *_, w, pk, fly = r
                 o = priced(f"air:{kind}", w, t_eng, t_eng, u.id, extra_cost=AIR_KINDS[kind]["hour_cost"] * 2 * fly / 3600
-                           + (border if t_eng >= th.cross_t else 0.0))
+                           + (border if t_eng >= th.cross_t else 0.0),
+                           parts={"flight": AIR_KINDS[kind]["hour_cost"] * 2 * fly / 3600, "border": border if t_eng >= th.cross_t else 0.0})
                 if best is None or o.total < best.total:
                     best = o
         if best:
@@ -199,7 +206,7 @@ def option_values(th, t, avail, cfg, prices, dmg, units=(), full_dmg=None, p_hit
             best_later = min(EFFECTORS[o.eff]["cost"] + lam.get(o.eff, 0) + (1 - o.pk) * follow_full(o.detail["intercept"] + LOOK_S, 1)
                              for o in after)
             v = p_hit * min(best_later, full_dmg) + border
-            opts.append(Option("wait", None, None, v, {"local": v, "raid": 0.0, "campaign": 0.0}))
+            opts.append(Option("wait", None, None, v, {"local": v, "raid": 0.0, "campaign": 0.0, "parts": {"risk": v - border, "border": border}}))
     return opts
 
 

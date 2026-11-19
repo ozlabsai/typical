@@ -39,6 +39,13 @@ const I18N = {
     older: (n) => `${n} earlier not shown`,
     noCall: "Not classified yet. Typical makes its first call once the plots are identified as hostile.",
     steps5: ["Detected", "Hostile", "Plan", "Engaged", "Result"],
+    beforeImpact: (x) => `${x} before impact`, stepEmpty: "Nothing new in this step.", replayFrom: "Replay from here", backNow: "Back to now",
+    wt: { title: "What went into the call", where: "Where it comes down", inside: "inside Israel", outside: "outside Israel's border",
+      open: (s) => `open ground near ${s}`, site: (s, p) => `${s}${p ? ", a priority area" : ""}`,
+      cost: "Expected cost of each option", policy: "Policy in force", border: "Border", floor: "Ammo floor", posture: "Magazines", prio: "Priority areas",
+      read: "What Typical read",
+      parts: { rounds: "interceptors", reserve: "stock needed later", risk: "risk of a hit", border: "crossing the border", floor: "below the ammo floor",
+        tasks: "other tasks", flight: "flight hours", time: "time to intercept", other: "other" } },
     pkS: ["almost certain", "very likely", "likely", "may stop it", "unlikely"],
     optWhy: { now: "now", in: (m) => `in ${m}`, wait: "decide later, when the track is firmer", open: "lands in open ground", hits: (s) => `would hit ${s}`, cost: (c) => `${c} expected` },
     optLegend: "Typical's probability for each option; expected cost = interceptors + damage risk.",
@@ -138,6 +145,13 @@ const I18N = {
     older: (n) => `${n} מוקדמים יותר לא מוצגים`,
     noCall: "עדיין לא סווג. Typical יחליט לראשונה כשהעקבות יזוהו כעוינות.",
     steps5: ["זוהה", "עוין", "תוכנית", "יירוט", "תוצאה"],
+    beforeImpact: (x) => `${x} לפני הפגיעה`, stepEmpty: "אין חדש בשלב הזה.", replayFrom: "הצג שוב מכאן", backNow: "חזרה לעכשיו",
+    wt: { title: "מה נכנס להחלטה", where: "איפה הוא ייפול", inside: "בתוך ישראל", outside: "מחוץ לגבול ישראל",
+      open: (s) => `שטח פתוח ליד ${s}`, site: (s, p) => `${s}${p ? ", אזור בעדיפות" : ""}`,
+      cost: "העלות הצפויה של כל אפשרות", policy: "המדיניות בתוקף", border: "גבול", floor: "רצפת מיירטים", posture: "מלאים", prio: "אזורים בעדיפות",
+      read: "מה Typical קרא",
+      parts: { rounds: "מיירטים", reserve: "מלאי שיידרש בהמשך", risk: "סיכון פגיעה", border: "חציית הגבול", floor: "מתחת לרצפה",
+        tasks: "משימות אחרות", flight: "שעות טיסה", time: "זמן עד היירוט", other: "אחר" } },
     pkS: ["כמעט בטוח", "סביר מאוד", "סביר", "עשוי לעצור", "לא סביר"],
     optWhy: { now: "עכשיו", in: (m) => `בעוד ${m}`, wait: "בדיקה חוזרת כשהמסלול יתייצב", open: "ייפול בשטח פתוח", hits: (s) => `יפגע ב${s}`, cost: (c) => `${c} עלות צפויה` },
     optLegend: "ההסתברות של Typical לכל אפשרות; עלות צפויה = מיירטים + סיכון נזק.",
@@ -312,6 +326,8 @@ async function init() {
     if (e.target.closest("#nextCase")) { focus = selected = null; pinned = false; detail = null; api("/api/control", { action: "reset", scenario: `drill:${S.drill.family}:${S.drill.case + 1}` }); return; }
     const mm = e.target.closest("[data-m]"); if (mm) { pinned = false; detail = null; api("/api/control", { action: "moment", index: +mm.dataset.m }); return; }
     const md = e.target.closest("[data-mode]"); if (md) { setMode(md.dataset.mode); return; }
+    const st = e.target.closest("[data-step]"); if (st) { stepSel = st.dataset.step === "" ? null : +st.dataset.step; renderStory.last = null; renderStory(); return; }
+    const sk = e.target.closest("[data-seek]"); if (sk) { stepSel = null; api("/api/control", { action: "seek", t: +sk.dataset.seek }); api("/api/control", { action: "play" }); return; }
     const sec = e.target.closest("[data-sec]"); if (sec) { collapsed[sec.dataset.sec] = !collapsed[sec.dataset.sec]; renderList(); return; }
     const g = e.target.closest("[data-g]"); if (g) { openGroups.has(g.dataset.g) ? openGroups.delete(g.dataset.g) : openGroups.add(g.dataset.g); renderList(); return; }
     const o = e.target.closest("[data-k]"); if (o && !e.target.closest("details")) select(o.dataset.k, o.dataset.id);
@@ -629,10 +645,31 @@ function reason(i, D) {
   return s;
 }
 
-function storySteps(tr, D) {   // where this threat's story is: detected, hostile, a plan, engaged, the result
+let stepSel = null;   // the step the viewer opened (null: follow the story as it plays)
+function stepTimes(D) {   // when each step began: first plots, classified hostile, the first call, the first battery or shot, the result
+  const L = D.log || [], first = (f) => L.find(f)?.t, h0 = D.history?.[0]?.[0];
+  const hit = (D.shots || []).find((x) => x.hit && D.t >= x.t1);
+  return [first((e) => e.event === "seen") ?? D.t0, first((e) => e.event === "classified") ?? h0, h0,
+    first((e) => e.fire || e.battery) ?? D.shots?.[0]?.t0, DONE.includes(D.status) ? (hit ? hit.t1 : D.impact) : undefined];
+}
+function stepNow(tr, D) {   // the step the story is at
   const a = (D.choice || "").split(":")[0], shot = (D.shots || []).length || D.status === "inflight";
-  const i = DONE.includes(D.status) ? 4 : shot ? 3 : D.status === "assigned" || ["now", "air", "cheaper", "hold"].includes(a) ? 2 : tr?.phase === "plot" ? 0 : 1;
-  return `<ol class="steps">${T().steps5.map((x, k) => `<li class="${k < i ? "done" : k === i ? "on" : ""}">${esc(x)}</li>`).join("")}</ol>`;
+  return DONE.includes(D.status) ? 4 : shot || D.status === "assigned" ? 3 : D.choice && ["now", "air", "cheaper", "hold", "wait"].includes(a) ? 2 : tr?.phase === "plot" ? 0 : 1;
+}
+function storySteps(tr, D) {   // the story's five steps; a reached step opens what happened in it
+  const i = stepNow(tr, D), sel = stepSel ?? i;
+  return `<ol class="steps">${T().steps5.map((x, k) => `<li><button data-step="${k}" class="${k < i ? "done" : k === i ? "on" : ""}${k === sel ? " sel" : ""}"
+    ${k > i ? "disabled" : ""}>${esc(x)}</button></li>`).join("")}</ol>`;
+}
+function stepView(D, k) {   // a past step: what happened in it, the call made then, and (hosted) replay from there
+  const tt = T(), ts = stepTimes(D), t0 = ts[k];
+  const stepOf = (r) => r.ev === "seen" ? 0 : r.ev === "classified" ? 1 : r.hit ? 4 : r.eng || r.miss ? 3   // by what it is; else by when
+    : r.key ? (ts[3] != null && r.t >= ts[3] ? 3 : 2) : ts.reduce((b, x, n) => (x != null && r.t >= x ? n : b), 0);
+  const rows = progRows(D).filter((r) => stepOf(r) === k);
+  return `<div class="stepview"><p class="kicker">${esc(tt.steps5[k])} · ${esc(tt.beforeImpact(fmtT(Math.max(0, D.impact - t0))))}</p>
+    ${rows.length ? rowsHtml(rows, D) : `<p class="why">${tt.stepEmpty}</p>`}
+    <p class="endnav">${STATIC ? `<button class="dc-pill dc-pill--sm dc-pill--secondary" data-seek="${t0}">${tt.replayFrom}</button>` : ""}
+    <button class="linkish" data-step="">${tt.backNow}</button></p></div>`;
 }
 function localLine(D) {   // the fire unit's call, in one line: who, how many, and the fact that decided it
   const L = D.local, tt = T().local;
@@ -662,29 +699,48 @@ function liveBars(info, chosen, D) {   // update the live rows in place (widths 
     row.querySelector(".opt-s").textContent = optSub(opts[k], D);
   }
 }
-function progression(D) {   // the threat's story so far: each call as it was made and firmed up, each shot, the outcome
+function progRows(D) {   // the threat's story: each call as it was made and firmed up, each event, battery, shot and outcome
   const tt = T(), rows = [];
   for (const e of D.log || []) {
-    if (e.fire) { rows.push({ t: e.t, html: `<b>${esc(tt.local.fires(unitName(e.unit), e.fire))}</b>` }); continue; }
-    if (e.event) { rows.push({ t: e.t, html: esc(e.event === "classified" ? tt.ev.classified(tt.clsWord[D.cls]) : tt.ev[e.event]), ev: true }); continue; }
-    if (e.battery) { rows.push({ t: e.t, html: `<b>${esc(tt.batteryCall(e.battery))}</b>`, p: e.p }); continue; }
+    if (e.fire) { rows.push({ t: e.t, html: `<b>${esc(tt.local.fires(unitName(e.unit), e.fire))}</b>`, eng: true }); continue; }
+    if (e.event) { rows.push({ t: e.t, html: esc(e.event === "classified" ? tt.ev.classified(tt.clsWord[D.cls]) : tt.ev[e.event]), ev: e.event }); continue; }
+    if (e.battery) { rows.push({ t: e.t, html: `<b>${esc(tt.batteryCall(e.battery))}</b>`, p: e.p, eng: true }); continue; }
     const prev = rows.at(-1);
     if (prev?.key === e.key) { prev.p1 = e.p; continue; }
     rows.push({ t: e.t, key: e.key, p0: e.p, p1: e.p, opts: e.opts });
   }
   for (const sh of D.shots || []) if (D.t >= sh.t1) rows.push({ t: sh.t1, html: esc(sh.hit ? tt.shotHit(effName(sh.eff)) : tt.shotMiss(effName(sh.eff))), hit: sh.hit, miss: !sh.hit });
-  rows.sort((a, b) => a.t - b.t);
-  if (!rows.length) return "";
-  const older = rows.length - 5;   // the last five: the story's header (where it is, the call) stays on screen
-  if (older > 0) rows.splice(0, older);
+  return rows.sort((a, b) => a.t - b.t);
+}
+function rowsHtml(rows, D) {
   const pct = (v) => (v == null ? "" : `${Math.round(v * 100)}%`);
-  return `<div class="prog"><p class="kicker">${tt.prog}${older > 0 ? ` · ${tt.older(older)}` : ""}</p>${rows.map((r, n) => {
+  return `<div class="prog">${rows.map((r) => {
     const t = `<span class="t num">−${fmtT(Math.max(0, D.impact - r.t))}</span>`;
-    if (!r.key) return `<div class="step${r.hit ? " ok" : r.miss ? " miss" : ""}${r.ev ? " ev" : ""}${n === rows.length - 1 ? " new" : ""}">${t}<span class="c">${r.html}</span><span class="p num">${pct(r.p)}</span></div>`;
+    if (!r.key) return `<div class="step${r.hit ? " ok" : r.miss ? " miss" : ""}${r.ev ? " ev" : ""}">${t}<span class="c">${r.html}</span><span class="p num">${pct(r.p)}</span></div>`;
     const why = r.opts ? reason({ t: r.t, opts: r.opts }, { choice: r.key, open_ground: D.open_ground }).split(". ")[0].replace(/\.$/, "") : "";
     const firm = r.p1 != null && r.p0 != null && Math.abs(r.p1 - r.p0) >= 0.05 ? `${pct(r.p0)} → ${pct(r.p1)}` : pct(r.p1);
-    return `<div class="step call${n === rows.length - 1 ? " new" : ""}">${t}<span class="c"><b>${esc(callLabel(r.key, r.opts && { opts: r.opts }))}</b>${why ? `<i>${esc(why)}</i>` : ""}</span><span class="p num">${firm}</span></div>`;
+    return `<div class="step call">${t}<span class="c"><b>${esc(callLabel(r.key, r.opts && { opts: r.opts }))}</b>${why ? `<i>${esc(why)}</i>` : ""}</span><span class="p num">${firm}</span></div>`;
   }).join("")}</div>`;
+}
+const PARTS = ["rounds", "reserve", "risk", "border", "floor", "tasks", "flight", "time", "other"];
+function weighed(D) {   // the drill-down: where it comes down, the policy in force, what each option's cost is made of, what Typical read
+  const tt = T(), w = tt.wt, i = D.info; if (!i?.opts) return "";
+  const { keys, opts } = optOrder(i), top = Math.max(...keys.map((k) => opts[k][2]), 1e-9);
+  const where = [D.inside == null ? null : D.inside ? w.inside : w.outside, D.open_ground ? w.open(siteName(D.site)) : D.site ? w.site(siteName(D.site), D.priority) : null].filter(Boolean);
+  const c = S.cfg, idx = (arr, v) => arr.reduce((b, x, n) => (Math.abs(x - v) < Math.abs(arr[b] - v) ? n : b), 0);
+  const pol = [[w.border, tt.borderOpts[idx([0, 5, 25], c.border_price)]], [w.floor, c.ammo_floor?.ironDome ? `${c.ammo_floor.ironDome} · ${tt.belowOpts[idx([0.3, 1, 5], c.floor_price)]}` : tt.noFloor],
+    [w.posture, tt.postures[c.reserve]], [w.prio, c.priority_sites.map(siteName).join(", ") || "—"]];
+  const cost = keys.map((k) => {
+    const o = opts[k], parts = o[3]?.parts || { other: o[2] }, segs = PARTS.filter((x) => (parts[x] || 0) > 0.0005);
+    return `<div class="wc${k === D.choice ? " on" : ""}"><span class="wl">${esc(callLabel(k, i))}</span><span class="num">${money(o[2])}</span>
+      <span class="wbar">${segs.map((x) => `<i class="p-${x}" style="width:${(100 * parts[x] / top).toFixed(1)}%" title="${esc(w.parts[x])} ${money(parts[x])}"></i>`).join("")}</span>
+      <span class="ws">${segs.map((x) => `<b class="k p-${x}"></b>${esc(w.parts[x])} ${money(parts[x])}`).join(" · ")}</span></div>`;
+  }).join("");
+  return `<details class="weighed"><summary>${w.title}</summary>
+    ${where.length ? `<p class="kicker">${w.where}</p><p class="wline">${esc(where.join(" · "))}</p>` : ""}
+    <p class="kicker">${w.cost}</p><div class="wcost">${cost}</div><p class="opt-legend">${tt.optLegend}</p>
+    <p class="kicker">${w.policy}</p><dl class="facts">${pol.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    ${i.state ? `<p class="kicker">${w.read}</p><ul class="read">${i.state.split("\n").map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}</details>`;
 }
 function trackFacts(tr) {   // where it is against the border, how fast, and the radar picture
   const tt = T(), p = PATHS[tr.id] || {}, out = [];
@@ -752,7 +808,7 @@ function optionRows(info, chosen, D) {   // every option Typical weighed: its pr
   return `<p class="kicker">${T().options}</p>${keys.map((k) => `<div class="opt${k === chosen ? " on" : ""}" data-o="${esc(k)}">
     <span class="opt-l">${esc(callLabel(k, info))}</span><span class="opt-bar"><i style="width:${dist ? Math.max(1, Math.round(dist[k] * 100)) : 0}%"></i></span>
     <span class="opt-p num">${pctTxt(dist?.[k])}</span><span class="opt-s">${esc(optSub(opts[k], D))}</span></div>`).join("")}
-    <p class="opt-legend">${T().optLegend}</p>`;
+`;
 }
 const optionBars = (info, chosen, D) => (info?.opts ? `<div class="opts">${optionRows(info, chosen, D)}</div>` : "");
 function captionBody(m) {   // the moment in one or two plain sentences
@@ -770,6 +826,7 @@ function captionBody(m) {   // the moment in one or two plain sentences
 let raidX = null;
 function renderRaid() {   // the whole raid on one line: launches as a histogram (the raid's shape), a labelled marker per key moment
   const el = $("#raid"); if (!S || !META) return;
+  el.style.display = isLevel() && S.total <= 1 ? "none" : "";   // one threat: its own line says it all
   const W = Math.max(el.clientWidth, 400), L = 92, R = 12, end = Math.max(S.end, 1), x = (t) => L + (Math.min(Math.max(t, 0), end) / end) * (W - L - R);
   const ms = S.moments || [], tt = T(), NB = 120, bin = Math.floor(tNow * NB / end);
   const key = `${W}|${end}|${ms.length}|${S.beat?.id}|${LANG}|${bin}|${PATH_SCEN}`;
@@ -848,8 +905,11 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
           : !D.choice ? `<p class="why">${tt.noCall}</p>`   // plots not yet classified: no call to show
           : `<div class="what">${esc(callLabel(D.choice, i))}${B ? ` <span class="unit">${esc(B.pick)}</span>` : ""}</div>${i ? `<p class="why">${esc(B ? batWhy(B, i.t ?? D.t) : reason(i, D))}</p>` : ""}${B ? batteryBlock(D) : ""}${localLine(D)}`;
         const extra = m && (m.type === "holdfire" || m.type === "hit") ? captionBody(m) : "";
-        h += `<div class="story">${storySteps(tr, D)}${head}${extra}${done ? "" : '<div id="bars"></div>'}${B || done ? "" : batteryBlock(D, tt.which)}${progression(D)}</div></div>`;
-        liveBars(done ? null : i, D.choice, D);
+        if (renderStory.sid !== D.id) { stepSel = null; renderStory.sid = D.id; }   // a new threat: follow its story
+        const now = stepNow(tr, D), past = stepSel != null && stepSel !== now;
+        h += `<div class="story">${storySteps(tr, D)}${past ? stepView(D, stepSel)
+          : `${head}${extra}${done ? "" : '<div id="bars"></div>'}${B || done ? "" : batteryBlock(D, tt.which)}${done ? "" : weighed(D)}`}</div></div>`;
+        liveBars(done || past ? null : i, D.choice, D);
       } else {
         h += threatDetail(true).replace('<div class="obj-detail">', '<div class="story">');
         if (detail?.id === focus.id && !DONE.includes(detail.status)) h += optionBars(detail.info, detail.choice, detail);
@@ -866,7 +926,6 @@ function renderStory() {   // Focus mode: one object, its moment and its call --
   if (S.drill) h += drillCard();
   else if (!h) h = (S.moments || []).length || S.running ? "" : brief();
   if (!S.drill && !raidOver() && S.running && !S.beat) h += `<p class="seek">${tt.seeking}…</p>`;
-  if (!S.drill) h += `<p class="showall"><button class="linkish" data-mode="general">${tt.showAll}</button></p>`;
   el.classList.add("story-mode");
   if (h !== renderStory.last) {
     el.innerHTML = h; renderStory.last = h; stripNow(tNow);
