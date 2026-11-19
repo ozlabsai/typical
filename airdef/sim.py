@@ -197,7 +197,9 @@ PRIORITY = dict(level1=["jerusalem"], level2_a=["haifa_bay"], level2_b=["haifa_b
 
 
 # weights the hosted Settings offers, one at a time from the default: what a hit on a kind of site is worth, x the default
-WEIGHTS = ["city0.5", "city2", "strategic0.5", "strategic2", "infra0.5", "infra2", "prio2", "prio5"]
+# ponytail: none recorded -- x0.5..x2 on what a hit is worth barely moves even the planner (an Iron Dome round is $50k
+# against hits in the $M; 0-1 of 15 swarm calls changed) and v9/v10 never learned it (README). The machinery stays.
+WEIGHTS = []
 
 
 def weight_patch(w):

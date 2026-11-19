@@ -82,12 +82,9 @@ def target_line(th, t, cfg):
     if p_hit < planner.FIRM:
         return f"It will land in open ground near {site}."
     heavy = ", a heavy warhead" if site_value(sid, th.kind, cfg) >= 400 else ""
-    v = site_value(sid, th.kind, cfg)   # the user's weights, in words the model reads (it reads words better than dollar figures)
-    word = "negligible" if v < 0.5 else "minor" if v < 5 else "serious" if v < 50 else "severe" if v < 500 else "catastrophic"
-    worth = f" Policy: a hit there would be {word} (valued at {money(v)})."
     if planner.firm(p_hit):
-        return f"It will hit {site}, a {'priority' if prio else 'secondary'} site{heavy}.{worth}"
-    return f"It may hit {site}, a {'priority' if prio else 'secondary'} site{heavy}; the track is not firm yet.{worth}"
+        return f"It will hit {site}, a {'priority' if prio else 'secondary'} site{heavy}."
+    return f"It may hit {site}, a {'priority' if prio else 'secondary'} site{heavy}; the track is not firm yet."
 
 
 def track_lines(th, t):

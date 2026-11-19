@@ -119,7 +119,7 @@ const I18N = {
     warn: "Early warning, min", dmg: "Damage weights, $M per hit", tier: { strategic: "Military sites", city: "Cities", infra: "Infrastructure" },
     prioMult: "Priority areas", warhead: "Warhead weight (1 = 500 kg)", perSite: "Value per site (blank = by type)",
     note: "The policy feeds every call. Typical reads it as sentences.",
-    noteHosted: "Each setting here was played through with Typical in advance. Priority areas and weights apply one at a time.",
+    noteHosted: "Each setting here was played through with Typical in advance. A priority area applies on its own.",
     sl: { border: "Border", floor: "Ammo floor", below: "Below the floor", mags: "Magazines" },
     weights: "Weights", weightsSub: "What a hit is worth, against the interceptors spent to stop it.", lmh: ["Low", "Normal", "High"], advanced: "Advanced",
   },
@@ -228,7 +228,7 @@ const I18N = {
     warn: "התרעה מוקדמת, דק׳", dmg: "משקלי נזק, מיליון $ לפגיעה", tier: { strategic: "אתרים צבאיים", city: "ערים", infra: "תשתיות" },
     prioMult: "אזורים בעדיפות", warhead: "משקל ראש קרב (1 = 500 ק״ג)", perSite: "ערך לאתר (ריק = לפי סוג)",
     note: "המדיניות נכנסת לכל החלטה. Typical קורא אותה כמשפטים.",
-    noteHosted: "כל הגדרה כאן הורצה מראש עם Typical. אזורים בעדיפות ומשקלים חלים אחד בכל פעם.",
+    noteHosted: "כל הגדרה כאן הורצה מראש עם Typical. אזור בעדיפות חל לבדו.",
     sl: { border: "גבול", floor: "רצפת מיירטים", below: "מתחת לרצפה", mags: "מלאים" },
     weights: "משקלים", weightsSub: "כמה שווה פגיעה, מול המיירטים שיידרשו לעצירתה.", lmh: ["נמוך", "רגיל", "גבוה"], advanced: "מתקדם",
   },
@@ -1138,9 +1138,9 @@ function buildSheet() {   // Settings: the policy, priority areas, weights; the 
       ? `<button class="chip" data-site="" aria-pressed="${c.priority_sites.length > 1}">${tt.prioStd}</button>`
       : `<button class="chip" data-site="${id}" aria-pressed="${prioOn(id)}">${esc(siteName(id))}</button>`).join("")}</div>
       ${vs ? `<p class="sub-k">${tt.prioStdIs(META.default_priority.map(siteName).join(", "))}</p>` : ""}</div>
-    <div class="field"><p class="kicker">${tt.weights}</p><p class="sub-k">${tt.weightsSub}</p>
+    ${!vs || !vs.some((k) => k.includes("-w")) ? "" : `<div class="field"><p class="kicker">${tt.weights}</p><p class="sub-k">${tt.weightsSub}</p>
       ${["city", "strategic", "infra"].map((t) => row(tt.tier[t], tabs(`w-${t}`, tt.lmh, tierSel(t), rec(`w${t}2`)))).join("")}
-      ${row(tt.prioMult, tabs("w-prio", PRIO.map((x) => `×${x}`), idx(PRIO, c.priority_multiplier), rec("wprio5")))}</div>
+      ${row(tt.prioMult, tabs("w-prio", PRIO.map((x) => `×${x}`), idx(PRIO, c.priority_multiplier), rec("wprio5")))}</div>`}
     ${vs ? "" : `<details class="more field"><summary>${tt.advanced}</summary>
       <div class="chips"><button class="chip" id="allied" aria-pressed="${c.allied}">${tt.allied}</button><button class="chip" id="weather" aria-pressed="${c.iron_beam_weather === "cloudy"}">${tt.weather}</button></div>
       <label class="rng"><span>${tt.pkScale}</span><input type="range" id="pk" min="0.6" max="1.1" step="0.05" value="${c.pk_scale}"><output class="num">${c.pk_scale}</output></label>
