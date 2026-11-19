@@ -42,6 +42,14 @@ AIRDEF_CACHE=1 AIRDEF_LIVE_TOKEN={token} setsid nohup uv run --no-sync uvicorn -
 """
 
 
+UA = {"User-Agent": "Mozilla/5.0 (Macintosh) airdef-live"}   # RunPod's proxy turns away bare script clients
+
+
+def answers(url, token, timeout=10):
+    req = urllib.request.Request(url + "/api/meta", headers={"x-live-token": token, **UA})
+    return bool(json.loads(urllib.request.urlopen(req, timeout=timeout).read()).get("scenarios"))
+
+
 def wrangler(*args, stdin=None):
     subprocess.run(["npx", "wrangler", *args], cwd=ROOT / "airdef/deploy", input=stdin, text=True, check=True, capture_output=True)
 
@@ -81,18 +89,31 @@ def up():
             j.ssh("tar xzf /workspace/repo.tar.gz -C /workspace/pcdm", 300)
             print(f"setting up on {j.gpu or gpu} (pod {j.pod_id})", flush=True)
             j.ssh("bash /workspace/setup.sh > /workspace/setup.log 2>&1", 1800)
+            for _ in range(90):   # the model loads, then the server answers -- on the pod first
+                if '"scenarios"' in j.ssh(f"curl -s -H 'x-live-token: {token}' localhost:{PORT}/api/meta | head -c 200 || true", 60):
+                    break
+                time.sleep(10)
+            else:
+                raise RuntimeError("the server did not start on the pod")
             url = f"https://{j.pod_id}-{PORT}.proxy.runpod.net"
-            for _ in range(60):   # the model loads, then the server answers
+            for _ in range(30):   # then through RunPod's proxy (it takes a minute to route a new pod)
                 try:
-                    req = urllib.request.Request(url + "/api/meta", headers={"x-live-token": token})
-                    if json.loads(urllib.request.urlopen(req, timeout=10).read()).get("scenarios"):
+                    if answers(url, token):
                         break
                 except Exception:
                     pass
                 time.sleep(10)
             else:
-                raise RuntimeError("the server did not answer: see /workspace/server.log on the pod")
+                raise RuntimeError(f"the server runs on the pod but {url} does not reach it")
         except BaseException:
+            logs = ROOT / ".context/airdef/live_fail"
+            logs.mkdir(parents=True, exist_ok=True)
+            for f in ("setup.log", "server.log"):   # what went wrong, before the pod (and its logs) go
+                try:
+                    j.call(["scp", *tj.SSH_OPTS, "-P", j.host[1], f"root@{j.host[0]}:/workspace/{f}", str(logs / f)], 60)
+                except Exception:
+                    pass
+            print(f"failed; pod logs in {logs}", flush=True)
             j.delete()
             raise
     STATE.write_text(json.dumps(dict(pod=j.pod_id, url=url, token=token, gpu=gpu, since=time.strftime("%Y-%m-%d %H:%M"))))
@@ -120,8 +141,7 @@ def status():
         return print("down: the site plays its recordings")
     st = json.loads(STATE.read_text())
     try:
-        req = urllib.request.Request(st["url"] + "/api/meta", headers={"x-live-token": st["token"]})
-        ok = bool(json.loads(urllib.request.urlopen(req, timeout=15).read()).get("scenarios"))
+        ok = answers(st["url"], st["token"], 15)
     except Exception:
         ok = False
     print(f"{'up' if ok else 'NOT ANSWERING'}: {st['url']} on {st['gpu']} since {st['since']} (pod {st['pod']})")
