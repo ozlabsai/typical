@@ -26,7 +26,8 @@ import typically_job as tj   # noqa: E402
 STATE = ROOT / ".context/airdef/live.json"
 CKPT = ".context/typically/results/co_airdef_v8/best.pt"
 PORT = 8790
-GPUS = ["NVIDIA RTX 2000 Ada Generation", "NVIDIA GeForce RTX 3090", "NVIDIA A40"]   # cheapest first ($0.24, $0.50, $0.59 / h)
+GPUS = ["NVIDIA RTX 2000 Ada Generation", "NVIDIA GeForce RTX 3090", "NVIDIA A40", "NVIDIA RTX A6000", "NVIDIA RTX PRO 4500 Blackwell",
+        "NVIDIA GeForce RTX 4090", "NVIDIA RTX 6000 Ada Generation"]   # cheapest first ($0.24 .. $1.09 / h, secure cloud)
 SETUP = """set -e
 export PATH=$HOME/.local/bin:$PATH UV_HTTP_TIMEOUT=300 UV_PROJECT_ENVIRONMENT=/workspace/venv
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
