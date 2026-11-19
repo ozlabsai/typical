@@ -125,8 +125,8 @@ def cell(r):
     b = r["meta"]["best"]
     if r["meta"]["family"] == "airdef_local":
         return ("local", b, r["meta"]["cls"])
-    if r["meta"]["family"] == "airdef_battery":   # balance by whether the pick is the earliest-listed... keep it simple: one cell
-        return ("battery", "pick", r["meta"]["cls"])
+    if r["meta"]["family"] == "airdef_battery":   # the levels' battery choices (floor, plans, border) get half the quota
+        return ("battery", r["meta"]["scenario"].startswith("level"))
     a = b.split(":")[0]
     if r["meta"]["scenario"].startswith("level"):   # the levels' own quota: their trade-offs never drown in raid drones
         return ("level", a)
