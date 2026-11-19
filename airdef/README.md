@@ -213,6 +213,15 @@ Whole raids, 6 seeds, vs v5: at the old escalation bar (0.42) v8 escalated 0.8 c
 took 1.2 more hits (northern 1,014 vs 859, worse on 6/6). At **0.5**: northern 881 vs 859 (+22 ± 25), October 34,151
 vs 33,174 (+977 ± 2,255), Red Sea tied -- level with v5, and the levels tell the right story. Shipped: v8 at 0.5.
 
+### v9-v10 (2026-11-19): weights on what a hit is worth -- not shipped
+
+Settings briefly offered Low/Normal/High for what a hit on a city, military site or infrastructure is worth. v9 read
+it as dollars, v10 as words (negligible..catastrophic); neither used it (P(let it fall) on 60 held-out rows: 0.046
+either way) and both regressed Level 2d. The reason is upstream: x0.5..x2 on hit values barely moves the planner
+either (0-1 of 15 swarm first calls, 0-24 of 174 northern) -- an Iron Dome round is $50k against hits in the $M.
+`sim.WEIGHTS = []` keeps the machinery; the text is v8's. Trade-offs that do move calls (time vs certainty, a battery's
+other tasks) are the candidates for the next steerable setting.
+
 ## Files
 
 | file | what |
