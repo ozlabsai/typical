@@ -191,7 +191,7 @@ POLICY_GRID = dict(reserve=[0, 1, 2], floor=[0, 12, 20], floor_price=[0.3, 1.0, 
 # the hosted Settings' priority area: the default list, or one of the sites the scenario's threats head for (most first)
 PRIORITY = dict(level1=["jerusalem"], level2_a=["haifa_bay"], level2_b=["haifa_bay"], level2_c=["haifa_bay"], level2_d=["tiberias"],
                 level3=["haifa_bay", "nahariya", "tiberias"], level4=["dimona", "jerusalem", "nevatim", "beer_sheva"],
-                northern_barrage=["kiryat_shmona", "haifa", "ramat_david"], april_mixed=["nevatim", "dimona", "ramat_david"],
+                northern_barrage=["kiryat_shmona", "haifa", "ramat_david"], april_mixed=["nevatim", "dimona"],
                 october_saturation=["tel_aviv", "nevatim", "dimona"], june_attrition=["beer_sheva", "tiberias", "nevatim"],
                 houthi_eilat=["eilat"])
 
@@ -216,7 +216,7 @@ def policy_variants(scenario, reserve=None, site=None, floor=None):
     from itertools import product
     g = POLICY_GRID
     sites = [None] + PRIORITY.get(scenario, [])
-    sites = [sites[site]] if site is not None else sites
+    sites = sites[site:site + 1] if site is not None else sites   # a dropped option: no tapes
     grid = product(g["reserve"], g["floor"], g["floor_price"], g["border_price"]) if "level" in SCENARIOS[scenario] \
         else ((r, 12, 1.0, 5.0) for r in g["reserve"])
     return [variant_key(*v, s) for v in grid for s in sites
