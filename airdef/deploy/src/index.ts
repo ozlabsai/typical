@@ -11,7 +11,8 @@ interface Env {
 }
 
 const runpod = (env: Env, action: "start" | "stop") =>
-  fetch(`https://api.runpod.io/v2/pods/${env.LIVE_POD}/${action}`, { method: "POST", headers: { Authorization: `Bearer ${env.RUNPOD_API_KEY}` } });
+  fetch(`https://api.runpod.io/v2/pods/${env.LIVE_POD}/action`, {   // the call runpodctl makes
+    method: "POST", headers: { Authorization: `Bearer ${env.RUNPOD_API_KEY}`, "content-type": "application/json" }, body: JSON.stringify({ action }) });
 
 const COOKIE = "airdef_session";
 const enc = new TextEncoder();

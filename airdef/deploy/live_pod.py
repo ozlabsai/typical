@@ -67,7 +67,8 @@ def key():
 
 
 def runpod(pod, action):   # POST start / stop: the same call the Worker makes
-    req = urllib.request.Request(f"https://api.runpod.io/v2/pods/{pod}/{action}", method="POST", headers={"Authorization": f"Bearer {key()}", **UA})
+    req = urllib.request.Request(f"https://api.runpod.io/v2/pods/{pod}/action", method="POST", data=json.dumps({"action": action}).encode(),
+                                 headers={"Authorization": f"Bearer {key()}", "content-type": "application/json", **UA})
     return urllib.request.urlopen(req, timeout=60).status
 
 
