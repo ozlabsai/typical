@@ -118,7 +118,7 @@ def up():
             j.ssh("mkdir -p /workspace/pcdm")
             j.call([*scp, str(j.tar), dest + "/workspace/repo.tar.gz"], 900)
             j.call([*scp, str(tmp / "setup.sh"), dest + "/workspace/setup.sh"], 120)
-            j.ssh("tar xzf /workspace/repo.tar.gz -C /workspace/pcdm", 300)
+            j.ssh("tar xzf /workspace/repo.tar.gz --no-same-owner -C /workspace/pcdm", 300)   # the volume refuses chown
             print(f"setting up on {j.gpu or gpu} (pod {j.pod_id})", flush=True)
             j.ssh("bash /workspace/setup.sh > /workspace/setup.log 2>&1", 1800)
             for _ in range(90):   # the model loads, then the server answers -- on the pod first
