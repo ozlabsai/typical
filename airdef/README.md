@@ -70,6 +70,19 @@ AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 87
 
 ## Hosted demo (typical-airdefence.ozlabs.ai; typical-ad redirects)
 
+**Live mode (2026-11-19).** When the live server is up, the hosted page runs live instead of playing tapes: every
+setting, any combination of priority areas, one world per viewer, Typical v8 answering (its recorded answers first, so
+default settings are instant). The page asks `/api/meta` at load; the Worker forwards `/api/*` to `LIVE_URL` with a
+token only it holds (`LIVE_TOKEN`); without an answer the page plays its recordings, as below.
+
+```bash
+uv run --no-project python airdef/deploy/live_pod.py up       # cheapest free GPU (RTX 2000 Ada .. RTX 6000 Ada), ~15 min
+uv run --no-project python airdef/deploy/live_pod.py status
+uv run --no-project python airdef/deploy/live_pod.py down     # delete the pod; the site plays its recordings again
+```
+
+Cost: the pod runs until `down` (RTX 3090 $0.50/h, about $360 a month left on).
+
 A static site behind a shared-password Worker (Cloudflare free plan; no server, no model). `record.py` recorded
 Typical's real answers once; the sim is deterministic (fixed DT steps, stable text), so `bake.py` plays every scenario
 and drill case through the live server's own clock and director and writes a tape per scenario; `web/tape.js` plays
