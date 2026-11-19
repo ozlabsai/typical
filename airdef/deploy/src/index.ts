@@ -2,6 +2,8 @@
 interface Env {
   ASSETS: Fetcher;
   DEMO_PASSWORD: string; // wrangler secret put DEMO_PASSWORD
+  LIVE_URL?: string; // the live server on a RunPod GPU (deploy/live_pod.py sets it); unset: the recorded demo only
+  LIVE_TOKEN?: string; // shared with the live server: only this Worker may call it
 }
 
 const COOKIE = "airdef_session";
@@ -64,7 +66,17 @@ export default {
       });
     }
     const sid = await session(req, env);
-    if (!sid) return url.pathname.startsWith("/data/") ? new Response("unauthorized", { status: 401 }) : loginPage();
+    if (!sid) return url.pathname.startsWith("/data/") || url.pathname.startsWith("/api/") ? new Response("unauthorized", { status: 401 }) : loginPage();
+    if (url.pathname.startsWith("/api/")) {   // the live server; the page falls back to the recordings when this fails
+      if (!env.LIVE_URL || !env.LIVE_TOKEN) return new Response("no live server", { status: 503 });
+      const headers = new Headers({ "x-live-token": env.LIVE_TOKEN, "x-session": req.headers.get("x-session") || sid });
+      if (req.headers.get("content-type")) headers.set("content-type", req.headers.get("content-type")!);
+      try {
+        return await fetch(env.LIVE_URL + url.pathname + url.search, { method: req.method, headers, body: req.method === "POST" ? await req.text() : undefined });
+      } catch {
+        return new Response("live server unreachable", { status: 502 });
+      }
+    }
     return env.ASSETS.fetch(req);
   },
 };

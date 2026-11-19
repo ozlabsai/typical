@@ -13,7 +13,9 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from typing import Annotated
+
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -35,7 +37,35 @@ BUDGET = 6             # Typical calls per tick; the sim slows down when decisio
 app = FastAPI()
 lock = threading.Lock()   # one lock for world + model (MPS crashes on concurrent calls)
 S = dict(world=None, running=False, speed=10.0, model=None, model_name="planner only", backlog=False, skipped=0.0, drill=None,
-         director=None, mode="focus")
+         director=None, mode="focus", batch=1)
+S0 = S   # the default session: local use, bake.py and record.py (no session header)
+SESS = {None: S0}   # hosted live demo: one world per viewer (the X-Session header), so viewers never share a raid
+MAX_SESS, IDLE_S = 12, 1800
+TOKEN = os.environ.get("AIRDEF_LIVE_TOKEN")   # behind the hosted site's Worker: only it may call (it adds this header)
+
+
+def sess(sid):
+    """The viewer's session, made on first use; idle ones are dropped, and the oldest when there are too many."""
+    if sid not in SESS:
+        for k in [k for k, v in SESS.items() if k and time.time() - v["seen"] > IDLE_S]:
+            del SESS[k]
+        while len(SESS) > MAX_SESS:
+            del SESS[min((k for k in SESS if k), key=lambda k: SESS[k]["seen"])]
+        SESS[sid] = dict(S0, world=None, running=False, speed=10.0, skipped=0.0, drill=None, director=None, mode="focus", rate=10.0)
+        new_world("level1", S=SESS[sid])
+    SESS[sid]["seen"] = time.time()
+    return SESS[sid]
+
+
+@app.middleware("http")
+async def guard(req: Request, call_next):
+    if TOKEN and req.url.path.startswith("/api") and req.headers.get("x-live-token") != TOKEN:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    return await call_next(req)
+
+
+Sid = Annotated[str | None, Header(alias="x-session")]
 DRILL = ROOT / "recorded" / "drill_ui.jsonl"   # situations.py --instances 3 --rollouts 40 --out <this>
 
 
@@ -48,21 +78,31 @@ def load_model():
         return
     import scorer   # the training repo's decider; see scorer.py for why not inference/typical
     m = scorer.load(MODEL_ID)
+    if os.environ.get("AIRDEF_CACHE") and MODEL_ID.endswith("co_airdef_v8/best.pt"):   # this model's recorded answers first: instant
+        import record
+        memo, score = record.Recorded().memo, m.choices
+        def choices(batch):
+            got = [memo.get((q, t, tuple(lab))) for t, q, lab in batch]
+            new = iter(score([b for b, g in zip(batch, got) if g is None]) if None in got else [])
+            return [g if g is not None else next(new) for g in got]
+        m.choices = choices
     m.choice("warm up", "Is this a warm-up?", ["yes", "no"])
     S["batch"] = 16 if "cuda" in str(m.d.device) else 1
     S["model"], S["model_name"] = m, ("typical-small · tuned" if MODEL_ID.endswith(".pt") else MODEL_ID.split("/")[-1])
 
 
-def new_world(scenario, seed=7, cfg=None):
+def new_world(scenario, seed=7, cfg=None, S=None):
+    S = S or S0
     S["world"] = World(scenario, cfg or DEFAULT_CONFIG, S["model"], seed, policies=POLICIES, async_model=ASYNC)
     S["running"], S["drill"], S["director"] = False, None, Director(scenario)
     S["director"].slow = S["mode"] == "focus"
 
 
-def new_drill(fam, n, patch=None):
+def new_drill(fam, n, patch=None, S=None):
     """One curated situation (situations.py), frozen at its decision moment, with every option's simulated outcome.
     patch: Settings changed on this drill -- the frozen decision is re-asked from scratch under them."""
     import situations
+    S = S or S0
     rows = [r for r in map(json.loads, DRILL.read_text().splitlines()) if r["meta"]["family"] == fam]
     if not rows:
         raise HTTPException(400, "unknown drill")
@@ -86,52 +126,54 @@ def loop():
         t0 = time.perf_counter()
         real, last = min(t0 - last, 1.0), t0
         with lock:
-            w = S["world"]
-            if S["director"] and not S["running"]:
-                S["director"].hold(real)               # paused: the moment on screen keeps its time
-            if S["drill"] and not S["running"] and w.t <= w.end:
-                w.step(0.0)                            # a paused drill still gets its calls made, at the frozen moment
-            elif S["running"] and w and w.t < w.end:
-                d = S["director"]
-                S["rate"] = rate = d.speed(w, S["speed"]) if d else S["speed"]
+            for S in list(SESS.values()):   # every viewer's world
+                w = S["world"]
+                if S["director"] and not S["running"]:
+                    S["director"].hold(real)               # paused: the moment on screen keeps its time
+                if S["drill"] and not S["running"] and w.t <= w.end:
+                    w.step(0.0)                            # a paused drill still gets its calls made, at the frozen moment
+                elif S["running"] and w and w.t < w.end:
+                    d = S["director"]
+                    S["rate"] = rate = d.speed(w, S["speed"]) if d else S["speed"]
 
-                def on_step(w):                        # a key moment is caught at the step it happens
+                    def on_step(w):                        # a key moment is caught at the step it happens
+                        if S["director"]:
+                            try:
+                                S["director"].tick(w)
+                                S["director"].offer(w, S["director"].scan(w))
+                            except Exception:              # the story layer must never stop the clock: log, play on without it
+                                traceback.print_exc()
+                                S["director"] = None
+                    skipped = w.run_for(real * rate, on_step,   # fixed steps: decide, resolve, fly aircraft, skip quiet time
+                                        quiet=lambda: not (S["director"] and S["director"].beat))   # never during a story
+                    if skipped:
+                        S["skipped"] = skipped             # the UI shows "skipped mm:ss"
                     if S["director"]:
-                        try:
-                            S["director"].tick(w)
-                            S["director"].offer(w, S["director"].scan(w))
-                        except Exception:              # the story layer must never stop the clock: log, play on without it
-                            traceback.print_exc()
-                            S["director"] = None
-                skipped = w.run_for(real * rate, on_step,   # fixed steps: decide, resolve, fly aircraft, skip quiet time
-                                    quiet=lambda: not (S["director"] and S["director"].beat))   # never during a story
-                if skipped:
-                    S["skipped"] = skipped             # the UI shows "skipped mm:ss"
-                if S["director"]:
-                    S["director"].tick(w)
-            S["backlog"] = len(w.requests) if w else 0
+                        S["director"].tick(w)
+                S["backlog"] = len(w.requests) if w else 0
         time.sleep(max(0.0, TICK_S - (time.perf_counter() - t0)))
 
 
 def model_worker():
-    """Scores queued situations outside the world lock, most urgent first, and drops each answer into the memo.
-    On CUDA it scores the BATCH most urgent in one forward; on MPS batching measured no faster (150 ms/row either way),
-    so one at a time keeps the most urgent answer's latency low."""
+    """Scores queued situations outside the world lock, most urgent first (across every viewer's world), and drops each
+    answer into its world's memo. On CUDA it scores the BATCH most urgent in one forward; on MPS batching measured no
+    faster (150 ms/row either way), so one at a time keeps the most urgent answer's latency low."""
     while True:
         with lock:
-            w = S["world"]
             # most urgent first: the key is (not on screen, due)
-            jobs = sorted(w.requests.items(), key=lambda kv: kv[1][3])[:S["batch"]] if w and S["model"] else []
+            reqs = [(w, key, r) for v in SESS.values() if (w := v["world"]) for key, r in w.requests.items()] if S0["model"] else []
+            jobs = sorted(reqs, key=lambda x: x[2][3])[:S0["batch"]]
         if not jobs:
             time.sleep(0.02)
             continue
         t0 = time.perf_counter()
-        ds = S["model"].choices([(text, q, labels) for _, (q, text, labels, _) in jobs])
+        ds = S0["model"].choices([(text, q, labels) for _, _, (q, text, labels, _) in jobs])
         ms = (time.perf_counter() - t0) * 1000 / len(jobs)
         with lock:
-            if S["world"] is w:
-                L = w.policies["typical"].L
-                for (key, _), d in zip(jobs, ds):
+            live = {id(v["world"]) for v in SESS.values()}
+            for (w, key, _), d in zip(jobs, ds):
+                if id(w) in live:
+                    L = w.policies["typical"].L
                     w.memo[key] = (d, ms)
                     w.requests.pop(key, None)
                     L["calls"] += 1
@@ -164,9 +206,10 @@ def meta():
 
 
 @app.get("/api/paths")
-def paths():
+def paths(x_session: Sid = None):
     """Full sampled trajectories, once per scenario; the client interpolates positions by sim time."""
-    w = S["world"]
+    with lock:
+        w = sess(x_session)["world"]
     out = []
     for th in w.threats:
         ts = np.linspace(th.t0, th.t0 + th.T, 48 if th.cls in "BR" else 96)
@@ -181,8 +224,9 @@ def paths():
 
 
 @app.get("/api/state")
-def state(policy: str = "typical"):
+def state(policy: str = "typical", x_session: Sid = None):
     with lock:
+        S = sess(x_session)
         w = S["world"]
         pol = w.policies[policy]
         tracks = []
@@ -233,10 +277,10 @@ def battery(w, pol, bid):
 
 
 @app.get("/api/track/{tid}")
-def track(tid: str, policy: str = "typical"):
+def track(tid: str, policy: str = "typical", x_session: Sid = None):
     """Everything the threat card shows: identity, the timeline (windows, shots, past calls) and the current call."""
     with lock:
-        w = S["world"]
+        w = sess(x_session)["world"]
         if tid not in w.by_id:
             raise HTTPException(404)
         th, pol = w.by_id[tid], w.policies[policy]
@@ -264,8 +308,9 @@ class Control(BaseModel):
 
 
 @app.post("/api/control")
-def control(c: Control):
+def control(c: Control, x_session: Sid = None):
     with lock:
+        S = sess(x_session)
         w = S["world"]
         if c.action == "play":
             S["running"] = True
@@ -289,16 +334,16 @@ def control(c: Control):
             w.t = max(w.t, w.next_event() - 5)
         elif c.action == "reset" and (c.scenario or w.scenario).startswith("drill:"):   # drill:<family>:<case>
             _, fam, n = (c.scenario or w.scenario).split(":")
-            new_drill(fam, int(n))
+            new_drill(fam, int(n), S=S)
         elif c.action == "reset":
             if c.scenario and c.scenario not in SCENARIOS:
                 raise HTTPException(400, "unknown scenario")
-            new_world(c.scenario or w.scenario, c.seed or w.seed, w.cfg)
+            new_world(c.scenario or w.scenario, c.seed or w.seed, w.cfg, S=S)
         return {"ok": True}
 
 
 @app.post("/api/config")
-def config(patch: dict):
+def config(patch: dict, x_session: Sid = None):
     bad = set(patch) - set(DEFAULT_CONFIG)
     if bad:
         raise HTTPException(400, f"unknown keys {sorted(bad)}")
@@ -311,9 +356,10 @@ def config(patch: dict):
                      "tier_value": set(DEFAULT_CONFIG["tier_value"]), "ammo_floor": set(EFFECTORS)}[k]
             patch[k] = {kk: min(max(float(v), 0.0), 100_000.0) for kk, v in dict(patch[k]).items() if kk in known}
     with lock:
+        S = sess(x_session)
         if S["drill"]:   # a drill is one frozen decision: re-ask it from scratch under the new settings
             d = S["drill"]
-            new_drill(d["family"], d["case"], {**S.get("drill_patch", {}), **patch})
+            new_drill(d["family"], d["case"], {**S.get("drill_patch", {}), **patch}, S=S)
         else:
             S["world"].set_config(patch)
         return {"ok": True, "cfg": S["world"].cfg}

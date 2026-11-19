@@ -302,10 +302,16 @@ const bearing = (u) => (u.goal ? (Math.atan2((u.goal[1] - u.lon) * Math.cos(u.la
 map.addControl(overlay);
 new ResizeObserver(() => map.resize()).observe(document.getElementById("map"));   // the strip grows and shrinks with what it shows
 const flyTo = (v) => { const [lon, lat, zoom, pitch] = VIEWS[v]; map.flyTo({ center: [lon, lat], zoom, pitch, duration: 1600 }); };
-const STATIC = !!window.AIRDEF_STATIC;   // the hosted build: a baked tape (tape.js) plays in place of the live server
-const api = STATIC ? window.tapeApi : (p, body) => fetch(p, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}).then((r) => r.json());
+let STATIC = !!window.AIRDEF_STATIC;   // the hosted build plays baked tapes (tape.js) -- unless the live server answers (init)
+const SID = sessionStorage.getItem("airdef-sid") || (sessionStorage.setItem("airdef-sid", crypto.randomUUID()), sessionStorage.getItem("airdef-sid"));   // this viewer's world
+const live = (p, body) => fetch(p, { method: body ? "POST" : "GET", headers: { "x-session": SID, ...(body ? { "content-type": "application/json" } : {}) },
+  body: body ? JSON.stringify(body) : undefined }).then((r) => r.json());
+const api = (p, body) => (STATIC ? window.tapeApi(p, body) : live(p, body));
 
 async function init() {
+  if (STATIC) {   // hosted: the live server behind the site plays every setting; when it is off, the recordings do
+    try { const r = await fetch("/api/meta", { signal: AbortSignal.timeout(5000) }); if (r.ok && (await r.json()).scenarios) STATIC = false; } catch { /* recorded */ }
+  }
   META = await api("/api/meta");
   $("#lang").onclick = () => { LANG = LANG === "en" ? "he" : "en"; localStorage.setItem("airdef-lang", LANG); applyLang(); };
   $("#scenBtn").onclick = (e) => { e.stopPropagation(); $("#scenDrop").classList.toggle("is-open"); };
