@@ -4,7 +4,14 @@ interface Env {
   DEMO_PASSWORD: string; // wrangler secret put DEMO_PASSWORD
   LIVE_URL?: string; // the live server on a RunPod GPU (deploy/live_pod.py sets it); unset: the recorded demo only
   LIVE_TOKEN?: string; // shared with the live server: only this Worker may call it
+  LIVE_POD?: string; // its RunPod pod id: woken on a visit, stopped when idle
+  RUNPOD_API_KEY?: string;
+  SCALE_FROM?: string; // ISO time: no scale-down before it
+  IDLE_MIN?: string; // minutes without a viewer before the pod stops (default 30)
 }
+
+const runpod = (env: Env, action: "start" | "stop") =>
+  fetch(`https://api.runpod.io/v2/pods/${env.LIVE_POD}/${action}`, { method: "POST", headers: { Authorization: `Bearer ${env.RUNPOD_API_KEY}` } });
 
 const COOKIE = "airdef_session";
 const enc = new TextEncoder();
@@ -49,7 +56,18 @@ function loginPage(error = "", status = 200): Response {
 }
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  // every 10 minutes: no viewer for IDLE_MIN -> stop the pod (from SCALE_FROM on). A visit wakes it (fetch, below).
+  async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+    if (!env.LIVE_URL || !env.LIVE_POD || !env.RUNPOD_API_KEY || (env.SCALE_FROM && Date.now() < Date.parse(env.SCALE_FROM))) return;
+    try {
+      const r = await fetch(`${env.LIVE_URL}/api/idle`, { headers: { "x-live-token": env.LIVE_TOKEN || "", "user-agent": "Mozilla/5.0 (typical-airdefence worker)" } });
+      if (!r.ok) return;   // asleep already, or waking
+      const { idle_s } = (await r.json()) as { idle_s: number };
+      if (idle_s > 60 * Number(env.IDLE_MIN || 30)) await runpod(env, "stop");
+    } catch { /* unreachable: nothing to stop */ }
+  },
+
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (!env.DEMO_PASSWORD) return new Response("Not configured.", { status: 503 });   // never open without a password
     const url = new URL(req.url);
     if (url.hostname === "typical-ad.ozlabs.ai") {   // the first address: links already sent keep working
@@ -72,9 +90,13 @@ export default {
       const headers = new Headers({ "x-live-token": env.LIVE_TOKEN, "x-session": req.headers.get("x-session") || sid,
         "user-agent": "Mozilla/5.0 (typical-airdefence worker)" });   // RunPod's proxy turns away bare script clients
       if (req.headers.get("content-type")) headers.set("content-type", req.headers.get("content-type")!);
+      const wake = () => env.LIVE_POD && env.RUNPOD_API_KEY && ctx.waitUntil(runpod(env, "start").catch(() => null));
       try {
-        return await fetch(env.LIVE_URL + url.pathname + url.search, { method: req.method, headers, body: req.method === "POST" ? await req.text() : undefined });
+        const r = await fetch(env.LIVE_URL + url.pathname + url.search, { method: req.method, headers, body: req.method === "POST" ? await req.text() : undefined });
+        if (r.status >= 500 || r.status === 404) wake();   // the pod is asleep (RunPod's proxy answers for it): wake it
+        return r;
       } catch {
+        wake();
         return new Response("live server unreachable", { status: 502 });
       }
     }

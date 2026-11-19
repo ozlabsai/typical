@@ -10,5 +10,6 @@
   "assets": { "directory": "../static", "binding": "ASSETS", "run_worker_first": true },
   // v1 came from a first, container-based attempt (never served); v2 removes its empty Durable Object class
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AirdefDemo"] }, { "tag": "v2", "deleted_classes": ["AirdefDemo"] }],
+  "triggers": { "crons": ["*/10 * * * *"] },   // scale-down check (src/index.ts scheduled)
   "observability": { "enabled": true }
 }

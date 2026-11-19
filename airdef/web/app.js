@@ -309,8 +309,10 @@ const live = (p, body) => fetch(p, { method: body ? "POST" : "GET", headers: { "
 const api = (p, body) => (STATIC ? window.tapeApi(p, body) : live(p, body));
 
 async function init() {
-  if (STATIC) {   // hosted: the live server behind the site plays every setting; when it is off, the recordings do
-    try { const r = await fetch("/api/meta", { signal: AbortSignal.timeout(5000) }); if (r.ok && (await r.json()).scenarios) STATIC = false; } catch { /* recorded */ }
+  const liveUp = async () => { try { const r = await fetch("/api/meta", { signal: AbortSignal.timeout(5000) }); return r.ok && !!(await r.json()).scenarios; } catch { return false; } };
+  if (STATIC && window.AIRDEF_STATIC) {   // hosted: the live server plays every setting; asleep, the recordings do while it wakes
+    if (await liveUp()) STATIC = false;
+    else { const poll = setInterval(async () => { if (await liveUp()) { liveReady = true; clearInterval(poll); } }, 20000); setTimeout(() => clearInterval(poll), 600000); }
   }
   META = await api("/api/meta");
   $("#lang").onclick = () => { LANG = LANG === "en" ? "he" : "en"; localStorage.setItem("airdef-lang", LANG); applyLang(); };
@@ -413,7 +415,9 @@ function levelDone() {   // a level ends with its last threat (after a breath fo
 const raidOver = () => S && !S.drill && (S.t >= S.end - 0.5 || levelDone());
 const scenOrder = () => { const all = Object.entries(META.scenarios);   // the menu's order: the levels, then the full raids
   return [...all.filter(([, v]) => v.level).sort((a, b) => a[0].localeCompare(b[0])), ...all.filter(([, v]) => !v.level)]; };
+let liveReady = false;   // the live server woke while this page played recordings: the next scenario runs live
 async function goScenario(s) {
+  if (liveReady && STATIC) { STATIC = false; liveReady = false; PATH_SCEN = null; }
   focus = selected = null; pinned = false; detail = null; detailOpen = false; await api("/api/control", { action: "reset", scenario: s }); flyTo(viewOf(s));
 }
 const gkey = (tr) => `${PATHS[tr.id]?.origin}|${tr.cls}|${Math.floor(tr.t0 / 180)}`;   // a salvo: same origin, class, 3 minutes

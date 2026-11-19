@@ -57,12 +57,23 @@ def sess(sid):
     return SESS[sid]
 
 
+LAST = [time.time()]   # when a viewer last asked for anything (an open page polls every 250 ms)
+
+
 @app.middleware("http")
 async def guard(req: Request, call_next):
     if TOKEN and req.url.path.startswith("/api") and req.headers.get("x-live-token") != TOKEN:
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": "forbidden"}, status_code=403)
+    if req.url.path.startswith("/api") and req.url.path != "/api/idle":
+        LAST[0] = time.time()
     return await call_next(req)
+
+
+@app.get("/api/idle")
+def idle():
+    """Seconds since a viewer last asked: the hosted Worker stops this pod after a while (live_pod.py)."""
+    return {"idle_s": round(time.time() - LAST[0])}
 
 
 Sid = Annotated[str | None, Header(alias="x-session")]

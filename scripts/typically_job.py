@@ -273,7 +273,9 @@ class Job:
             tries.append(1)
             try:
                 pod = json.loads(self.call(["runpodctl", "pod", "create", "--name", self.name, "--image", IMAGE, "--gpu-id", os.environ.get("RUNPOD_GPU") or "NVIDIA H100 80GB HBM3",
-                                             "--cloud-type", "SECURE", "--container-disk-in-gb", "150", "--ports", os.environ.get("RUNPOD_PORTS") or "22/tcp",
+                                             "--cloud-type", "SECURE", "--container-disk-in-gb", os.environ.get("RUNPOD_CONTAINER_GB") or "150", "--ports", os.environ.get("RUNPOD_PORTS") or "22/tcp",
+                                             *(["--volume-in-gb", os.environ["RUNPOD_VOLUME_GB"]] if os.environ.get("RUNPOD_VOLUME_GB") else []),   # survives a stop
+                                             *(["--docker-args", os.environ["RUNPOD_DOCKER_ARGS"]] if os.environ.get("RUNPOD_DOCKER_ARGS") else []),
                                              *(["--country-code", os.environ["RUNPOD_COUNTRY"]] if os.environ.get("RUNPOD_COUNTRY") else []),   # steer off a flaky host
                                              "--env", json.dumps({"PUBLIC_KEY": pub})], 180, out))
                 self.gpu = (pod.get("machine") or {}).get("gpuDisplayName")   # e.g. "H100 SXM"; the pod's nvidia-smi names it exactly later
