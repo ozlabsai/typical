@@ -114,11 +114,14 @@ const I18N = {
     details: "Details",
     planner: "Planner",
     strip: (id, t, s) => `Flight of ${id} · ${t} to ${s}`, now: "now", impact: "impact", calls: "Calls", hit: "hit", miss: "miss",
-    posture: "Magazine posture", postures: ["Healthy", "Conserve", "Critical"], prio: "Priority sites", prioArea: "Priority area", prioStd: "Standard", prioStdIs: (x) => `Standard: ${x}`, assets: "Assets and conditions",
+    posture: "Magazine posture", postures: ["Healthy", "Conserve", "Critical"], prio: "Priority areas", prioArea: "Priority area", prioStd: "Standard", prioStdIs: (x) => `Standard: ${x}`, assets: "Assets and conditions",
     allied: "US THAAD and Navy", weather: "Cloud cover (laser degraded)", knobs: "Model and sensors", pkScale: "Pk scale", escTop: "Escalate below",
-    warn: "Early warning, min", dmg: "Damage weights, $M per hit", tier: { strategic: "Strategic site", city: "City", infra: "Infrastructure" },
-    prioMult: "Priority ×", warhead: "Warhead weight (1 = 500 kg)", perSite: "Value per site (blank = by type)",
+    warn: "Early warning, min", dmg: "Damage weights, $M per hit", tier: { strategic: "Military sites", city: "Cities", infra: "Infrastructure" },
+    prioMult: "Priority areas", warhead: "Warhead weight (1 = 500 kg)", perSite: "Value per site (blank = by type)",
     note: "The policy feeds every call. Typical reads it as sentences.",
+    noteHosted: "Each setting here was played through with Typical in advance. Priority areas and weights apply one at a time.",
+    sl: { border: "Border", floor: "Ammo floor", below: "Below the floor", mags: "Magazines" },
+    weights: "Weights", weightsSub: "What a hit is worth, against the interceptors spent to stop it.", lmh: ["Low", "Normal", "High"], advanced: "Advanced",
   },
   he: {
     speed: "מהירות", speedDesc: ["זמן אמת", "הדגמה רגועה", "מתקפה בכמה דקות", "הרצה מהירה"],
@@ -220,11 +223,14 @@ const I18N = {
     details: "פרטים",
     planner: "מתכנן",
     strip: (id, t, s) => `מסלול ${id} · ${t} לעבר ${s}`, now: "עכשיו", impact: "פגיעה", calls: "החלטות", hit: "פגע", miss: "החטיא",
-    posture: "מצב מלאים", postures: ["תקין", "שימור", "קריטי"], prio: "אתרים בעדיפות", prioArea: "אזור בעדיפות", prioStd: "רגיל", prioStdIs: (x) => `רגיל: ${x}`, assets: "נכסים ותנאים",
+    posture: "מצב מלאים", postures: ["תקין", "שימור", "קריטי"], prio: "אזורים בעדיפות", prioArea: "אזור בעדיפות", prioStd: "רגיל", prioStdIs: (x) => `רגיל: ${x}`, assets: "נכסים ותנאים",
     allied: "THAAD וצי ארה״ב", weather: "עננות (לייזר מוגבל)", knobs: "מודל וחיישנים", pkScale: "מקדם Pk", escTop: "למפעיל מתחת",
-    warn: "התרעה מוקדמת, דק׳", dmg: "משקלי נזק, מיליון $ לפגיעה", tier: { strategic: "אתר אסטרטגי", city: "עיר", infra: "תשתית" },
-    prioMult: "מכפיל עדיפות", warhead: "משקל ראש קרב (1 = 500 ק״ג)", perSite: "ערך לאתר (ריק = לפי סוג)",
+    warn: "התרעה מוקדמת, דק׳", dmg: "משקלי נזק, מיליון $ לפגיעה", tier: { strategic: "אתרים צבאיים", city: "ערים", infra: "תשתיות" },
+    prioMult: "אזורים בעדיפות", warhead: "משקל ראש קרב (1 = 500 ק״ג)", perSite: "ערך לאתר (ריק = לפי סוג)",
     note: "המדיניות נכנסת לכל החלטה. Typical קורא אותה כמשפטים.",
+    noteHosted: "כל הגדרה כאן הורצה מראש עם Typical. אזורים בעדיפות ומשקלים חלים אחד בכל פעם.",
+    sl: { border: "גבול", floor: "רצפת מיירטים", below: "מתחת לרצפה", mags: "מלאים" },
+    weights: "משקלים", weightsSub: "כמה שווה פגיעה, מול המיירטים שיידרשו לעצירתה.", lmh: ["נמוך", "רגיל", "גבוה"], advanced: "מתקדם",
   },
 };
 let LANG = localStorage.getItem("airdef-lang") || "en";
@@ -1109,64 +1115,55 @@ function stripNow(t) {   // the now dot, the flown part and the countdown move e
 }
 
 // ---------------------------------------------------------------- settings sheet
-function buildSheet() {
+function buildSheet() {   // Settings: the policy, priority areas, weights; the technical knobs folded away (live only)
   if (!S) return;
-  const tt = T(), c = S.cfg;
-  const rng = (attrs, label, val, shown) => `<label class="rng"><span>${label}</span><input type="range" ${attrs} value="${val}"><output class="num">${shown}</output></label>`;
-  const heCls = { B: "טיל בליסטי", R: "רקטה", C: "טיל שיוט", D: "כטב״ם" }, enCls = { B: "Ballistic missile", R: "Rocket", C: "Cruise missile", D: "Drone" };
-  const whLabel = (k) => (META.threat_types[k] ? nm(META.threat_types[k]) : (LANG === "he" ? heCls : enCls)[k]);
-  const BELOW = [0.3, 1, 5], BORDER_P = [0, 5, 25], FLOORS = [0, 12, 20], idx = (arr, v) => arr.reduce((b, x, i) => (Math.abs(x - v) < Math.abs(arr[b] - v) ? i : b), 0);
+  const tt = T(), c = S.cfg, D0 = META.default_weights, idx = (arr, v) => arr.reduce((b, x, i) => (Math.abs(x - v) < Math.abs(arr[b] - v) ? i : b), 0);
+  const vs = STATIC && window.tapeVariants ? window.tapeVariants() : null;   // hosted: only what was recorded for this scenario
+  const level = !vs || vs.some((k) => k.includes("-f0-"));
+  const rec = (seg) => !vs || vs.some((k) => k.split("-").includes(seg));   // was this setting recorded here?
+  const tabs = (id, labels, sel, show = true) => (show ? `<div class="dc-tabs dc-tabs--sm" id="${id}">${labels.map((l, k) =>
+    `<button class="dc-tab" data-i="${k}" aria-selected="${k === sel}">${esc(l)}</button>`).join("")}</div>` : "");
+  const row = (label, body) => (body ? `<div class="srow"><span class="sl">${esc(label)}</span>${body}</div>` : "");
+  const BELOW = [0.3, 1, 5], BORDER_P = [0, 5, 25], FLOORS = [0, 12, 20], TIER = [0.5, 1, 2], PRIO = [2, 3, 5];
+  const tierSel = (t) => idx(TIER, (c.tier_value?.[t] ?? D0.tier[t]) / D0.tier[t]);
+  const sites = vs ? [...new Set(vs.map((k) => k.split("-").find((x, i) => i > 3 && x[0] === "s")?.slice(1)).filter(Boolean))] : META.sites.map((x) => x.id);
+  const prioOn = (id) => c.priority_sites.includes(id) && (!vs || c.priority_sites.length === 1);
   $("#sheet").innerHTML = `
     <div class="field"><p class="kicker">${tt.policy}</p>
-      <p class="sub-k">${tt.floor}</p><div class="dc-tabs dc-tabs--sm" id="floorP">${FLOORS.map((f, k) => `<button class="dc-tab" data-i="${k}" aria-selected="${(c.ammo_floor?.ironDome ?? 0) === f}">${f || tt.noFloor}</button>`).join("")}</div>
-      <p class="sub-k">${tt.belowFloor}</p><div class="dc-tabs dc-tabs--sm" id="belowP">${tt.belowOpts.map((p, k) => `<button class="dc-tab" data-i="${k}" aria-selected="${idx(BELOW, c.floor_price) === k}">${p}</button>`).join("")}</div>
-      <p class="sub-k">${tt.borderPref}</p><div class="dc-tabs dc-tabs--sm" id="borderP">${tt.borderOpts.map((p, k) => `<button class="dc-tab" data-i="${k}" aria-selected="${idx(BORDER_P, c.border_price) === k}">${p}</button>`).join("")}</div></div>
-    <div class="field"><p class="kicker">${tt.posture}</p><div class="dc-tabs dc-tabs--sm" id="reserve">${tt.postures.map((p, k) => `<button class="dc-tab" data-r="${k}" aria-selected="${c.reserve === k}">${p}</button>`).join("")}</div></div>
-    <div class="field"><p class="kicker">${tt.prio}</p><div class="chips" id="prio">${META.sites.map((s) => `<button class="chip" data-site="${s.id}" aria-pressed="${c.priority_sites.includes(s.id)}">${esc(nm(s))}</button>`).join("")}</div></div>
-    <div class="field"><p class="kicker">${tt.assets}</p><div class="chips"><button class="chip" id="allied" aria-pressed="${c.allied}">${tt.allied}</button><button class="chip" id="weather" aria-pressed="${c.iron_beam_weather === "cloudy"}">${tt.weather}</button></div></div>
-    <div class="field"><p class="kicker">${tt.knobs}</p>
-      ${rng('id="pk" min="0.6" max="1.1" step="0.05"', tt.pkScale, c.pk_scale, c.pk_scale)}
-      ${rng('id="warn" min="0" max="30" step="1"', tt.warn, Math.round(c.forecast_s / 60), Math.round(c.forecast_s / 60))}</div>
-    <div class="field"><p class="kicker">${tt.dmg}</p>
-      ${Object.keys(c.tier_value).map((k) => rng(`data-tier="${k}" min="0" max="5000" step="50"`, tt.tier[k], Math.round(c.tier_value[k]), `$${Math.round(c.tier_value[k])}M`)).join("")}
-      ${rng('id="pmul" min="1" max="10" step="0.5"', tt.prioMult, c.priority_multiplier, `×${c.priority_multiplier}`)}
-      <details class="more"><summary>${tt.warhead}</summary>${Object.keys(c.warhead).map((k) => rng(`data-wh="${k}" min="0" max="2" step="0.01"`, esc(whLabel(k)), c.warhead[k], c.warhead[k])).join("")}</details>
-      <details class="more"><summary>${tt.perSite}</summary><div class="sitegrid">${META.sites.map((s) => `<span>${esc(nm(s))}</span><input data-sv="${s.id}" type="number" min="0" step="50" value="${c.site_value[s.id] ?? ""}" placeholder="${Math.round(c.tier_value[s.tier])}" aria-label="${esc(nm(s))}">`).join("")}</div></details></div>
-    <p class="note">${tt.note}</p>`;
-  const set = (patch) => api("/api/config", patch).then((r) => { S.cfg = r.cfg; renderStory.last = renderList.last = null; if (STATIC) buildSheet(); });   // hosted: show the policy actually playing
-  const tabs = (id, cb) => ($(id).onclick = (e) => { const b = e.target.closest("[data-i]"); if (!b) return;
-    document.querySelectorAll(`${id} .dc-tab`).forEach((x) => x.setAttribute("aria-selected", x === b)); cb(+b.dataset.i); });
-  tabs("#belowP", (i) => set({ floor_price: BELOW[i] }));
-  tabs("#borderP", (i) => set({ border_price: BORDER_P[i] }));
-  tabs("#floorP", (i) => set({ ammo_floor: { ...(S.cfg.ammo_floor || {}), ironDome: FLOORS[i] } }));
-  $("#reserve").onclick = (e) => { const b = e.target.closest("[data-r]"); if (!b) return; document.querySelectorAll("#reserve .dc-tab").forEach((x) => x.setAttribute("aria-selected", x === b)); set({ reserve: +b.dataset.r }); };
-  const press = (b) => { const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", on); return on; };
-  $("#prio").onclick = (e) => { const b = e.target.closest("[data-site]"); if (!b) return; press(b); set({ priority_sites: [...document.querySelectorAll('#prio [aria-pressed="true"]')].map((x) => x.dataset.site) }); };
-  $("#allied").onclick = (e) => set({ allied: press(e.currentTarget) });
-  $("#weather").onclick = (e) => set({ iron_beam_weather: press(e.currentTarget) ? "cloudy" : "clear" });
-  const slide = (el, fmt, patch) => (el.onchange = () => { el.nextElementSibling.textContent = fmt(el.value); set(patch()); });
-  const all = (sel, key) => Object.fromEntries([...document.querySelectorAll(sel)].map((x) => [x.dataset[key], +x.value]));
-  slide($("#pk"), (v) => v, () => ({ pk_scale: +$("#pk").value }));
-  slide($("#warn"), (v) => v, () => ({ forecast_s: 60 * +$("#warn").value }));
-  slide($("#pmul"), (v) => `×${v}`, () => ({ priority_multiplier: +$("#pmul").value }));
-  document.querySelectorAll("[data-tier]").forEach((r) => slide(r, (v) => `$${v}M`, () => ({ tier_value: all("[data-tier]", "tier") })));
-  document.querySelectorAll("[data-wh]").forEach((r) => slide(r, (v) => v, () => ({ warhead: all("[data-wh]", "wh") })));
-  document.querySelectorAll("[data-sv]").forEach((inp) => (inp.onchange = () => set({ site_value: Object.fromEntries([...document.querySelectorAll("[data-sv]")].filter((x) => x.value !== "").map((x) => [x.dataset.sv, +x.value])) })));
-  if (STATIC) {   // the hosted demo plays recordings: keep only what was recorded for this scenario
-    const vs = window.tapeVariants ? window.tapeVariants() : [], level = vs.some((k) => k.includes("-f0-"));
-    [...$("#sheet").querySelectorAll(".field")].forEach((f, i) => { if (i > 1 || (i === 0 && !level)) f.remove(); });
-    // priority area: the default list, or one of the sites this scenario's threats head for (each one recorded)
-    const sites = [...new Set(vs.map((k) => k.split("-s")[1]).filter(Boolean))], cur = c.priority_sites.length === 1 ? c.priority_sites[0] : null;
-    if (sites.length) {
-      $("#reserve").closest(".field").insertAdjacentHTML("afterend", `<div class="field"><p class="kicker">${tt.prioArea}</p><div class="dc-tabs dc-tabs--sm" id="prioA">${[null, ...sites].map((x) =>
-        `<button class="dc-tab" data-site="${x || ""}" aria-selected="${x === cur}">${x ? esc(siteName(x)) : tt.prioStd}</button>`).join("")}</div>
-        <p class="sub-k">${tt.prioStdIs(META.default_priority.map(siteName).join(", "))}</p></div>`);
-      $("#prioA").onclick = (e) => { const b = e.target.closest("[data-site]"); if (!b) return;
-        document.querySelectorAll("#prioA .dc-tab").forEach((x) => x.setAttribute("aria-selected", x === b));
-        set({ priority_sites: b.dataset.site ? [b.dataset.site] : META.default_priority }); };
-    }
-    if (!vs.length) $("#sheet").innerHTML = `<p class="note">${tt.noPolicy}</p>`;
+      ${row(tt.sl.border, tabs("borderP", tt.borderOpts, idx(BORDER_P, c.border_price), level))}
+      ${row(tt.sl.floor, tabs("floorP", FLOORS.map((f) => f || tt.noFloor), idx(FLOORS, c.ammo_floor?.ironDome ?? 0), level))}
+      ${row(tt.sl.below, tabs("belowP", tt.belowOpts, idx(BELOW, c.floor_price), level))}
+      ${row(tt.sl.mags, tabs("reserve", tt.postures, c.reserve))}</div>
+    <div class="field"><p class="kicker">${tt.prio}</p><div class="chips" id="prio">${(vs ? [null, ...sites] : sites).map((id) => id === null
+      ? `<button class="chip" data-site="" aria-pressed="${c.priority_sites.length > 1}">${tt.prioStd}</button>`
+      : `<button class="chip" data-site="${id}" aria-pressed="${prioOn(id)}">${esc(siteName(id))}</button>`).join("")}</div>
+      ${vs ? `<p class="sub-k">${tt.prioStdIs(META.default_priority.map(siteName).join(", "))}</p>` : ""}</div>
+    <div class="field"><p class="kicker">${tt.weights}</p><p class="sub-k">${tt.weightsSub}</p>
+      ${["city", "strategic", "infra"].map((t) => row(tt.tier[t], tabs(`w-${t}`, tt.lmh, tierSel(t), rec(`w${t}2`)))).join("")}
+      ${row(tt.prioMult, tabs("w-prio", PRIO.map((x) => `×${x}`), idx(PRIO, c.priority_multiplier), rec("wprio5")))}</div>
+    ${vs ? "" : `<details class="more field"><summary>${tt.advanced}</summary>
+      <div class="chips"><button class="chip" id="allied" aria-pressed="${c.allied}">${tt.allied}</button><button class="chip" id="weather" aria-pressed="${c.iron_beam_weather === "cloudy"}">${tt.weather}</button></div>
+      <label class="rng"><span>${tt.pkScale}</span><input type="range" id="pk" min="0.6" max="1.1" step="0.05" value="${c.pk_scale}"><output class="num">${c.pk_scale}</output></label>
+      <label class="rng"><span>${tt.warn}</span><input type="range" id="warn" min="0" max="30" step="1" value="${Math.round(c.forecast_s / 60)}"><output class="num">${Math.round(c.forecast_s / 60)}</output></label></details>`}
+    <p class="note">${vs ? tt.noteHosted : tt.note}</p>`;
+  const set = (patch) => api("/api/config", patch).then((r) => { S.cfg = r.cfg; renderStory.last = renderList.last = null; buildSheet(); });   // the sheet shows the policy actually in force
+  const on = (id, cb) => { const el = $(id); if (el) el.onclick = (e) => { const b = e.target.closest("[data-i]"); if (b) cb(+b.dataset.i); }; };
+  on("#borderP", (i) => set({ border_price: BORDER_P[i] }));
+  on("#belowP", (i) => set({ floor_price: BELOW[i] }));
+  on("#floorP", (i) => set({ ammo_floor: { ...(c.ammo_floor || {}), ironDome: FLOORS[i] } }));
+  on("#reserve", (i) => set({ reserve: i }));
+  for (const t of ["city", "strategic", "infra"]) on(`#w-${t}`, (i) => set({ tier_value: { ...(vs ? D0.tier : c.tier_value), [t]: D0.tier[t] * TIER[i] }, ...(vs ? { priority_multiplier: D0.prio } : {}) }));
+  on("#w-prio", (i) => set({ priority_multiplier: PRIO[i], ...(vs ? { tier_value: D0.tier } : {}) }));
+  $("#prio").onclick = (e) => { const b = e.target.closest("[data-site]"); if (!b) return;
+    if (vs) return set({ priority_sites: b.dataset.site ? [b.dataset.site] : META.default_priority });   // hosted: one area, or the standard list
+    const cur = new Set(c.priority_sites); cur.has(b.dataset.site) ? cur.delete(b.dataset.site) : cur.add(b.dataset.site); set({ priority_sites: [...cur] }); };
+  if (!vs) {
+    $("#allied").onclick = () => set({ allied: !c.allied });
+    $("#weather").onclick = () => set({ iron_beam_weather: c.iron_beam_weather === "cloudy" ? "clear" : "cloudy" });
+    $("#pk").onchange = () => set({ pk_scale: +$("#pk").value });
+    $("#warn").onchange = () => set({ forecast_s: 60 * +$("#warn").value });
   }
+  if (vs && !vs.length) $("#sheet").innerHTML = `<p class="note">${tt.noPolicy}</p>`;
 }
 
 window.addEventListener("resize", () => { renderStrip(); renderRaid.last = null; renderRaid(); });

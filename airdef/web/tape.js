@@ -134,11 +134,16 @@
   }
 
   // Settings on the hosted demo: every recorded policy is its own tape. A change switches to that tape at the same moment.
-  const keyOf = (c) => `r${c.reserve}-f${c.ammo_floor?.ironDome ?? 0}-b${c.floor_price}-p${c.border_price}`
-    + (c.priority_sites?.length === 1 ? `-s${c.priority_sites[0]}` : "");   // one priority area, or the default list
+  const wOf = (c) => {   // the weight that differs from the default, as recorded: city2, strategic0.5, prio5 ...
+    const d = meta.default_weights;
+    for (const t of Object.keys(d.tier)) { const r = (c.tier_value?.[t] ?? d.tier[t]) / d.tier[t]; if (Math.abs(r - 1) > 0.01) return `w${t}${+r.toFixed(2)}`; }
+    return c.priority_multiplier != null && c.priority_multiplier !== d.prio ? `wprio${c.priority_multiplier}` : "";
+  };
+  const keyOf = (c) => [`r${c.reserve}`, `f${c.ammo_floor?.ironDome ?? 0}`, `b${c.floor_price}`, `p${c.border_price}`,
+    c.priority_sites?.length === 1 ? `s${c.priority_sites[0]}` : "", wOf(c)].filter(Boolean).join("-");
   async function setPolicy(patch) {
     const base = V.name.split("@")[0], vars = meta.variants?.[base] || [];
-    const parts = (k) => { const x = k.split("-"); return [...x.slice(0, 4), x[4] || ""]; };
+    const parts = (k) => { const x = k.split("-"); return [...x.slice(0, 4), x.slice(4).find((y) => y[0] === "s") || "", x.slice(4).find((y) => y[0] === "w") || ""]; };
     const want = parts(keyOf({ ...V.tape.cfg, ...patch })), now = parts(keyOf(V.tape.cfg));
     const changed = want.map((x, i) => x !== now[i]);   // not recorded together: the closest recorded policy with the change asked for
     const score = (k) => { const p = parts(k); return p.every((x, i) => !changed[i] || x === want[i]) ? p.filter((x, i) => x === want[i]).length : -1; };

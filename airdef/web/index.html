@@ -252,6 +252,10 @@ details.detail pre { margin: 0; white-space: pre-wrap; font: .8125rem/1.6 var(--
 #sheet.open { display: block; }
 .field { margin-bottom: 1.5rem; }
 .field > .kicker { margin-bottom: .625rem; }
+.srow { display: grid; grid-template-columns: 7.5rem 1fr; align-items: center; gap: .75rem; margin: .5rem 0; }
+.srow .sl { font-size: .875rem; color: var(--dc-text-body); } .srow .dc-tabs { justify-self: start; }
+#sheet { width: 32rem; } #sheet .note { margin-top: .5rem; }
+details.more summary { cursor: pointer; font-size: .875rem; color: var(--dc-text-sub); margin-bottom: .5rem; }
 .chips { display: flex; flex-wrap: wrap; gap: .375rem; }
 .chip { border: 1px solid transparent; background: var(--dc-surface); color: var(--dc-text-pill); border-radius: var(--dc-r-pill); padding: .3125rem .875rem; font-size: .875rem; font-weight: 500; cursor: pointer;
   transition: background-color var(--dc-dur-ui) var(--dc-ease), border-color var(--dc-dur-ui) var(--dc-ease), color var(--dc-dur-ui) var(--dc-ease); }

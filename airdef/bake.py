@@ -159,6 +159,7 @@ if __name__ == "__main__":
     meta["variants"] = {sc: policy_variants(sc) for sc in SCENARIOS}   # the hosted Settings: which policies were recorded
     meta["default_variant"] = DEFAULT_VARIANT
     meta["default_priority"] = DEFAULT_CONFIG["priority_sites"]
+    meta["default_weights"] = dict(tier=DEFAULT_CONFIG["tier_value"], prio=DEFAULT_CONFIG["priority_multiplier"])
     (out / "data" / "meta.json").write_text(json.dumps(meta))
     jobs = [(sc, None, v) for sc in SCENARIOS for v in policy_variants(sc)]
     jobs += [(None, (r["meta"]["family"], n), None) for fam in sorted({json.loads(x)["meta"]["family"] for x in server.DRILL.read_text().splitlines()})

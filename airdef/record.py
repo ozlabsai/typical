@@ -59,7 +59,7 @@ def tapes_of(spec):
                          if fam in ("*", r["family"]))
     name, *f = spec.split("@")
     f = {x[0]: int(x[1:]) for x in f}
-    return frozenset(tape_name(name, v) for v in policy_variants(name, f.get("r"), f.get("s"), f.get("f")))
+    return frozenset(tape_name(name, v) for v in policy_variants(name, f.get("r"), f.get("s"), f.get("f"), f.get("w")))
 
 
 def save(rows, out):
@@ -107,7 +107,7 @@ if __name__ == "__main__":
             jobs += [("drill", r["meta"]["family"], r["meta"]["inst"]) for r in map(json.loads, DRILLS.read_text().splitlines())
                      if fam in ("*", r["meta"]["family"])]
         else:   # every recorded policy for the scenario (or for one magazine posture)
-            jobs += [("scenario", name, v) for v in policy_variants(name, f.get("r"), f.get("s"), f.get("f"))]
+            jobs += [("scenario", name, v) for v in policy_variants(name, f.get("r"), f.get("s"), f.get("f"), f.get("w"))]
     import os
     os.environ.setdefault("AIRDEF_MODEL", "recorded")   # server.ASYNC off: the model answers in step, as the build replays it
     import bake

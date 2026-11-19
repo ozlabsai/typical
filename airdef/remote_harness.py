@@ -74,12 +74,13 @@ def main():
                     t.add(tmp / f"{name}.path", arcname=f"ckpt/{name}.path")
             if a.record:   # the model is the first --ckpts entry; drills are recorded per family
                 fams = sorted({json.loads(x)["meta"]["family"] for x in (ROOT / "airdef/recorded/drill_ui.jsonl").read_text().splitlines()})
-                from sim import POLICY_GRID as G, PRIORITY, SCENARIOS as SC   # small jobs, so 12 at once stay busy to the end
+                from sim import POLICY_GRID as G, PRIORITY, SCENARIOS as SC, WEIGHTS   # small jobs, so 12 at once stay busy to the end
                 levels = [sc for sc in SC if "level" in SC[sc] and (not a.levels or sc in a.levels)]
                 names = " ".join([f"{sc}@r{r}@f{f}@s0" for sc in levels for r in G["reserve"] for f in G["floor"]]
                                  + [f"{sc}@s{i}" for sc in levels + [s for s in a.scenarios if "level" not in SC.get(s, {})]
                                     for i in range(1, 1 + len(PRIORITY.get(sc, [])))]
                                  + [f"{s}@r{r}@s0" for s in a.scenarios if "level" not in SC.get(s, {}) for r in G["reserve"]]   # a raid per posture: April is ~1 h each
+                                 + [f"{sc}@w{i}" for sc in levels + [s for s in a.scenarios if "level" not in SC.get(s, {})] for i in range(1, 1 + len(WEIGHTS))]
                                  + ([f"drill:{f}" for f in fams] if not a.no_drills else []))
                 jobs = (f'for j in {names}; do echo "$j"; done | xargs -P 12 -L 1 bash -c \'uv run --no-sync python airdef/record.py '
                         f'--model "$(cat ckpt/{a.ckpts[0].split("=")[0]}.path)" --only "$0" --out "out/$(echo $0 | tr : _).json.gz" > "out/$(echo $0 | tr : _).log" 2>&1\'')

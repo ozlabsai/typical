@@ -153,6 +153,7 @@ def meta():
         scenarios={k: dict(title=v["title"], blurb=v["blurb"], title_he=v["title_he"], blurb_he=v["blurb_he"],
                            level=v.get("level"), case=v.get("case")) for k, v in SCENARIOS.items()},
         border=[[lon, lat] for lat, lon in BORDER],
+        default_priority=DEFAULT_CONFIG["priority_sites"], default_weights=dict(tier=DEFAULT_CONFIG["tier_value"], prio=DEFAULT_CONFIG["priority_multiplier"]),
         sites=[dict(id=s[0], name=s[1], name_he=SITE_HE[s[0]], lat=s[2], lon=s[3], r=s[4], tier=s[5]) for s in SITES],
         batteries=[dict(id=b[0], eff=b[1], lat=b[2], lon=b[3]) for b in BATTERIES],
         effectors={k: dict(name=e["name"], name_he=EFFECTOR_HE.get(k, e["name"]), cost=e["cost"], layer=e["layer"], rmax=e.get("rmax"),

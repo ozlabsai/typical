@@ -196,31 +196,48 @@ PRIORITY = dict(level1=["jerusalem"], level2_a=["haifa_bay"], level2_b=["haifa_b
                 houthi_eilat=["eilat"])
 
 
-def variant_key(reserve, floor, floor_price, border_price, site=None):
-    return f"r{reserve}-f{floor}-b{floor_price:g}-p{border_price:g}" + (f"-s{site}" if site else "")
+# weights the hosted Settings offers, one at a time from the default: what a hit on a kind of site is worth, x the default
+WEIGHTS = ["city0.5", "city2", "strategic0.5", "strategic2", "infra0.5", "infra2", "prio2", "prio5"]
+
+
+def weight_patch(w):
+    if w.startswith("prio"):
+        return dict(priority_multiplier=float(w[4:]))
+    tier = w.rstrip("0123456789.")
+    return dict(tier_value={**DEFAULT_CONFIG["tier_value"], tier: DEFAULT_CONFIG["tier_value"][tier] * float(w[len(tier):])})
+
+
+def variant_key(reserve, floor, floor_price, border_price, site=None, weight=None):
+    return f"r{reserve}-f{floor}-b{floor_price:g}-p{border_price:g}" + (f"-s{site}" if site else "") + (f"-w{weight}" if weight else "")
 
 
 def variant_patch(key):
-    r, f, b, p, *site = (x[1:] for x in key.split("-"))
+    r, f, b, p, *more = (x[1:] for x in key.split("-"))
+    tags = dict((x[0], x[1:]) for x in key.split("-")[4:])
     return dict(reserve=int(r), ammo_floor={"ironDome": int(f)}, floor_price=float(b), border_price=float(p),
-                **(dict(priority_sites=site) if site else {}))
+                **(dict(priority_sites=[tags["s"]]) if "s" in tags else {}), **(weight_patch(tags["w"]) if "w" in tags else {}))
 
 
 DEFAULT_VARIANT = variant_key(1, 12, 1.0, 5.0)
 
 
-def policy_variants(scenario, reserve=None, site=None, floor=None):
+def policy_variants(scenario, reserve=None, site=None, floor=None, weight=None):
     """Every recorded policy for a scenario, optionally filtered (a posture, an ammo floor, a priority option: 0 = the
-    default list, i = PRIORITY[scenario][i - 1]). A level: the whole grid; a raid: each posture. Either: each priority
-    area at the default policy (choosing one returns the other settings to default -- 5x fewer runs to record)."""
+    default list, i = PRIORITY[scenario][i - 1]; a weight option: i = WEIGHTS[i - 1]). A level: the whole policy grid;
+    a raid: each posture. Either: each priority area and each weight alone, at the default policy (choosing one returns
+    the other settings to default -- recording every combination would take days)."""
     from itertools import product
     g = POLICY_GRID
-    sites = [None] + PRIORITY.get(scenario, [])
-    sites = sites[site:site + 1] if site is not None else sites   # a dropped option: no tapes
     grid = product(g["reserve"], g["floor"], g["floor_price"], g["border_price"]) if "level" in SCENARIOS[scenario] \
         else ((r, 12, 1.0, 5.0) for r in g["reserve"])
-    return [variant_key(*v, s) for v in grid for s in sites
-            if (s is None or variant_key(*v) == DEFAULT_VARIANT) and reserve in (None, v[0]) and floor in (None, v[1])]
+    keep = lambda v: reserve in (None, v[0]) and floor in (None, v[1])
+    every = site is None and weight is None
+    out = [variant_key(*v) for v in grid if keep(v)] if every or site == 0 else []   # site 0: the default priority list
+    dflt = (1, 12, 1.0, 5.0)
+    if keep(dflt):
+        out += [variant_key(*dflt, site=x) for i, x in enumerate(PRIORITY.get(scenario, []), 1) if every or site == i]
+        out += [variant_key(*dflt, weight=x) for i, x in enumerate(WEIGHTS, 1) if every or weight == i]
+    return out
 
 
 EARTH_KM = 6371.0
