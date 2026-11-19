@@ -300,6 +300,7 @@ const LABEL = { fontFamily: "Figtree, Heebo, Arial, sans-serif", characterSet: "
   fontSettings: { sdf: true }, extensions: [new deck.CollisionFilterExtension()], collisionGroup: "labels" };
 const bearing = (u) => (u.goal ? (Math.atan2((u.goal[1] - u.lon) * Math.cos(u.lat * Math.PI / 180), u.goal[0] - u.lat) * 180) / Math.PI : 0);
 map.addControl(overlay);
+new ResizeObserver(() => map.resize()).observe(document.getElementById("map"));   // the strip grows and shrinks with what it shows
 const flyTo = (v) => { const [lon, lat, zoom, pitch] = VIEWS[v]; map.flyTo({ center: [lon, lat], zoom, pitch, duration: 1600 }); };
 const STATIC = !!window.AIRDEF_STATIC;   // the hosted build: a baked tape (tape.js) plays in place of the live server
 const api = STATIC ? window.tapeApi : (p, body) => fetch(p, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}).then((r) => r.json());

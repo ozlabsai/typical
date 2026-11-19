@@ -21,7 +21,7 @@ html[lang=he] { --dc-font-sans: "Heebo", "Figtree", Arial, sans-serif; }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; overflow: hidden; }
 body { font-family: var(--dc-font-sans); color: var(--dc-dark); background: var(--dc-bg-page); -webkit-font-smoothing: antialiased;
-  display: grid; grid-template-columns: 1fr var(--aside-w); grid-template-rows: var(--bar-h) 1fr var(--strip-h); }
+  display: grid; grid-template-columns: 1fr var(--aside-w); grid-template-rows: var(--bar-h) 1fr auto; }   /* the strip takes what it shows; the map the rest */
 .num { font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; }
 .kicker { font-size: .9375rem; line-height: 1.3; letter-spacing: -.01em; color: var(--dc-grey); margin: 0; }
 button { font-family: inherit; }
@@ -143,9 +143,10 @@ details.detail pre { margin: 0; white-space: pre-wrap; font: .8125rem/1.6 var(--
 .dot.ink { background: var(--dc-ink); } .dot.hollow { background: #fff; } .dot.faint { background: #c8c8cc; border-color: #c8c8cc; width: .4rem; height: .4rem; } .dot.blue { background: var(--dc-blue); border-color: var(--dc-blue); }
 
 /* ---------- flight strip ---------- */
-#strip { grid-column: 1; grid-row: 3; background: var(--dc-white); padding: .5rem 1.5rem 0; display: flex; flex-direction: column; min-height: 0; }
+#strip { grid-column: 1; grid-row: 3; background: var(--dc-white); padding: .25rem 1.5rem .875rem; display: flex; flex-direction: column; min-height: 0; }
 #strip svg { width: 100%; display: block; overflow: visible; }
-#life { flex: 1; display: flex; } #life svg { flex: 1; }
+#life { display: flex; } #life svg { flex: 1; }
+#strip:has(#raid[style*="none"]):has(#life:empty) { display: none; }
 #raid { height: 42px; flex: none; }
 #raid .mk text { font-size: 12px; fill: var(--dc-text-sub); }
 #strip svg text.cap, #raid text.cap { font-size: 13px; fill: var(--dc-text-sub); }
