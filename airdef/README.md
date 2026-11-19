@@ -81,7 +81,11 @@ uv run --no-project python airdef/deploy/live_pod.py status
 uv run --no-project python airdef/deploy/live_pod.py down     # delete the pod; the site plays its recordings again
 ```
 
-Cost: the pod runs until `down` (RTX 3090 $0.50/h, about $360 a month left on).
+Scale-down: the Worker's cron (every 10 min) stops the pod after 30 minutes without a viewer, from `SCALE_FROM` on; the
+next visit starts it (~1.5 min: setup lives on the pod's volume, the server starts on boot). Meanwhile the page plays
+the recordings and switches to live at the viewer's next scenario. Cost: the GPU's hourly rate only while running
+(cheapest free at `up`: RTX 2000 Ada $0.24 .. RTX 6000 Ada $1.09; now an RTX A6000, $0.69/h) plus the 60 GB volume
+while stopped (a few $ a month).
 
 A static site behind a shared-password Worker (Cloudflare free plan; no server, no model). `record.py` recorded
 Typical's real answers once; the sim is deterministic (fixed DT steps, stable text), so `bake.py` plays every scenario
