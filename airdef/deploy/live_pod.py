@@ -19,6 +19,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -66,10 +67,22 @@ def key():
     return re.search(r"apikey\s*=\s*['\"]?([^'\"\n]+)", (Path.home() / ".runpod/config.toml").read_text(), re.I).group(1)
 
 
-def runpod(pod, action):   # POST start / stop: the same call the Worker makes
-    req = urllib.request.Request(f"https://api.runpod.io/v2/pods/{pod}/action", method="POST", data=json.dumps({"action": action}).encode(),
+def runpod(pod, action=None):   # POST start / stop (the same call the Worker makes); no action: the pod's status
+    req = urllib.request.Request(f"https://api.runpod.io/v2/pods/{pod}" + ("/action" if action else ""), method="POST" if action else "GET",
+                                 data=json.dumps({"action": action}).encode() if action else None,
                                  headers={"Authorization": f"Bearer {key()}", "content-type": "application/json", **UA})
-    return urllib.request.urlopen(req, timeout=60).status
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=60).read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"RunPod {action or 'status'}: {e.code} {e.read().decode()[:300]}") from None
+
+
+def settle(pod, want, tries=30):   # wait until RunPod reports the pod RUNNING / EXITED
+    for _ in range(tries):
+        if runpod(pod).get("status") == want:
+            return
+        time.sleep(5)
+    raise RuntimeError(f"pod {pod} never reached {want}")
 
 
 def wait_up(url, token, tries=40):
@@ -133,7 +146,7 @@ def up():
                 raise RuntimeError(f"the server runs on the pod but {url} does not reach it")
             print("answers; testing a stop and a wake", flush=True)   # what the Worker will do: it must come back by itself
             runpod(j.pod_id, "stop")
-            time.sleep(45)
+            settle(j.pod_id, "EXITED")
             runpod(j.pod_id, "start")
             t0 = time.monotonic()
             if not wait_up(url, token, 40):
