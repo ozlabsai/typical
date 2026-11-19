@@ -88,8 +88,29 @@
     }
     seekTo(t2);
   }
+  function marks(tid) {   // when something happens to a threat: an event, a new call, a battery pick, a shot, its result
+    const out = []; let key = null;
+    for (const e of V.tape.threats[tid].log) { if (!e.key) out.push(e.t); else if (e.key !== key) { out.push(e.t); key = e.key; } }
+    for (const f of V.tape.flights) if (f.th === tid) out.push(f.t0, f.t1);
+    return out;
+  }
+  function jumpNext() {   // Next: the next thing that happens in the story on screen; after its outcome, the next story
+    const b = V.beat, ms = V.tape.moments, t = V.t + 0.5;
+    if (b && b.follow && !b.done) {
+      const ids = b.m.type === "group" ? Object.keys(V.tape.threats) : [b.m.tid];
+      const nx = Math.min(...ids.flatMap(marks).filter((x) => x > t && x <= b.m.t_done + DT));
+      if (Number.isFinite(nx)) {   // land where the change reaches the screen: the story's next recorded state from then on
+        const shown = Math.min(...ids.flatMap((id) => V.tape.threats[id].timeline.map((x) => x.t)).filter((x) => x >= nx - 0.01));
+        seekTo(Math.min(Number.isFinite(shown) ? shown + 0.01 : nx + DT + 0.5, b.m.t_done + 0.01)); return;
+      }
+    }
+    V.beat = null;
+    const i = ms.findIndex((m) => m.t > V.t + 1e-6 && (!b || m.id > b.id));
+    if (i < 0) { V.next = ms.length; seekTo(V.tape.end); return; }   // nothing left: the end
+    seekTo(ms[i].t + 0.01); V.next = i + 1; startBeat(i);
+  }
   function startBeat(id, now = performance.now()) {
-    const m = V.tape.moments[id], follow = ["air", "cheaper", "payoff", "engage", "detect", "battery"].includes(m.type);
+    const m = V.tape.moments[id], follow = ["air", "cheaper", "payoff", "engage", "detect", "battery", "group"].includes(m.type);
     // the tape knows when the story ends: every story takes about STORY_S from its first call to its outcome
     const st = V.tape.story || {}, rate = Math.min(Math.max((m.t_done - m.t) / (st.story_s || STORY_S), 1), st.rate_max || 300);
     V.beat = { id, m, follow, done: false, rate, until: now + (follow ? st.follow_max || FOLLOW_MAX : BEAT_S) * 1000 };
@@ -127,7 +148,7 @@
     else if (c.action === "seek") seekTo(+c.t);   // jump within the tape (the video recorder uses it)
     else if (c.action === "speed") V.speed = Math.max(0.25, Math.min(+c.speed, 600));
     else if (c.action === "mode") { V.mode = c.mode; if (c.mode === "general") V.beat = null; }
-    else if (c.action === "next") { V.beat = null; V.running = true; V.next = V.tape.moments.findIndex((m) => m.t > V.t + 1e-6); if (V.next < 0) V.next = V.tape.moments.length; }
+    else if (c.action === "next") jumpNext();
     else if (c.action === "moment") { const m = V.tape.moments[c.index]; if (m) { seekTo(m.t + 0.01); V.next = m.id + 1; startBeat(m.id); V.running = true; } }   // +0.01: tape times are rounded
     else if (c.action === "reset") await reset(c.scenario || V.tape.drill && `drill:${V.tape.drill.family}:${V.tape.drill.case}` || V.tape.scenario);
     return { ok: true };

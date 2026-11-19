@@ -19,7 +19,8 @@ FOLLOW_MAX = 60.0   # wall seconds at most on one story
 OUTCOME_S = 3.5     # wall seconds the outcome stays before the next story
 BEAT_SPEED = 1.0    # sim speed during a beat
 GAP_S = 3.0         # wall seconds after a beat before the next one may start
-SEEK_SPEED = 60.0   # Focus between moments (and "next"): fast-forward until the next featured moment
+SEEK_SPEED = 60.0   # Focus between moments: fast-forward until the next featured moment
+JUMP_SPEED = 600.0  # "next" inside a story: run fast until the next thing happens to it
 MIN_DELTA = 0.3     # $M of expected cost: waiting for a cheaper layer that saves less than this is not worth stopping for
 SALVO_S = 120.0     # holds this close together (sim seconds) count as one "let fall" moment
 
@@ -32,6 +33,7 @@ class Director:
         self.salvo = None
         self.stats = dict(fall=0, cheaper=0, kept=0.0, sorties=0)   # tonight's held-back tally, from Typical's own pricing
         self.beat, self.seek, self.free_at = None, False, 0.0
+        self.jumping = None   # "next" inside a story: the story's state when it was pressed
         self.slow = True   # Focus mode: a moment slows the clock and takes the screen; General mode only marks it
 
     # ------------------------------------------------------------ detection
@@ -159,7 +161,15 @@ class Director:
                          until=time.monotonic() + (sc.get("follow_max", FOLLOW_MAX) if follow else BEAT_S))
         self.seek = False
 
+    def mark(self, w):   # what the story on screen looks like: each threat's call, status, events and shots
+        b, pol = self.beat, w.policies["typical"]
+        ids = [x.id for x in w.threats] if self.moments[b["id"]]["type"] == "group" else [b["tid"]]
+        return [(pol.st[i].get("choice"), pol.st[i]["status"], sum(1 for e in pol.st[i].get("log", []) if not e.get("key")),
+                 sum(1 for f in w.flights if f[2] == i)) for i in ids]
+
     def tick(self, w):
+        if self.jumping is not None and (not self.beat or self.mark(w) != self.jumping):
+            self.jumping = None   # it happened: back to the story's pace
         b = self.beat
         st = w.policies["typical"].st
         group = b and self.moments[b["id"]]["type"] == "group"
@@ -182,6 +192,8 @@ class Director:
     def speed(self, w, normal):
         """A story plays the rest of the threat's flight in about STORY_S: every re-ask happens on screen."""
         b = self.beat
+        if b and self.jumping is not None:
+            return JUMP_SPEED
         if b and b["follow"] and not b["done"]:
             sc = SCENARIOS.get(w.scenario, {})
             if self.moments[b["id"]]["type"] == "group":   # the group's story runs until its last threat lands
@@ -191,8 +203,13 @@ class Director:
             return min(max((end - w.t) / sc.get("story_s", STORY_S), 1.0), sc.get("story_rate_max", 300.0))
         return BEAT_SPEED if b else SEEK_SPEED if self.seek else normal
 
-    def next(self):
-        self.beat, self.free_at, self.seek = None, 0.0, True
+    def next(self, w=None):
+        """Inside a story: run on to its next event. Otherwise (or after its outcome): on to the next story."""
+        b = self.beat
+        if w is not None and b and b["follow"] and not b["done"]:
+            self.jumping = self.mark(w)
+            return
+        self.beat, self.free_at, self.seek, self.jumping = None, 0.0, True, None
 
     # ------------------------------------------------------------ replay
     def snapshot(self, w):

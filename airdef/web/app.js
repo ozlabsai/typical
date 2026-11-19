@@ -315,7 +315,7 @@ async function init() {
     const s = e.target.closest("[data-s]")?.dataset.s; if (s) goScenario(s);
   };
   $("#play").onclick = () => api("/api/control", raidOver() ? { action: "reset" } : { action: S?.running ? "pause" : "play" });
-  $("#next").onclick = () => { pinned = false; api("/api/control", { action: "next" }); };
+  $("#next").onclick = () => { pinned = false; stepSel = null; api("/api/control", { action: "next" }); };
   $("#mode").onclick = (e) => { const b = e.target.closest("[data-mode]"); if (b) setMode(b.dataset.mode); };
   $("#raid").onclick = (e) => {   // a moment on the timeline: replay it, in Focus
     const m = e.target.closest("[data-m]"); if (!m) return;

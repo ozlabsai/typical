@@ -280,7 +280,7 @@ def control(c: Control):
                 if c.mode == "general":
                     S["director"].end_beat()
         elif c.action == "next" and S["director"]:   # fast-forward to the next key moment
-            S["director"].next()
+            S["director"].next(w)
             S["running"] = True
         elif c.action == "moment" and S["director"] and c.index is not None and 0 <= c.index < len(S["director"].snaps):
             S["world"] = S["director"].restore(c.index)   # replay from that moment
