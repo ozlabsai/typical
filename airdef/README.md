@@ -37,7 +37,9 @@ reason names the trade-off, and the batteries are compared side by side as they 
 floor, other tasks, time to intercept, before or after the border). In Levels 3-4 the threats are numbered on the map
 and in the list; click a row for that threat's story.
 
-The policy (Settings, live and hosted) adds three rules the planner prices and Typical reads:
+The policy (Settings, live and hosted) adds three rules the planner prices and Typical reads (as sentences: "Policy:
+stop it before the border if possible.", "Policy: going below a battery's ammo floor is a reason to think twice.", and
+"it crosses in about 4 minutes unless stopped"):
 - **Ammo floor** per Iron Dome battery (None / 12 / 20): not a ban, a cost (*below the floor*, $M per round).
 - **Border:** we prefer no target to cross. An option that lets it cross before it is stopped pays the border price;
   every crossing counts in the night's total.
@@ -53,8 +55,8 @@ uv run --no-sync uvicorn --app-dir airdef server:app --port 8790     # open http
 AIRDEF_MODEL=none uv run --no-sync uvicorn --app-dir airdef server:app --port 8790   # planner only, no model
 ```
 
-- The server loads `.context/typically/results/co_airdef_v5/best.pt` (the v5 fine-tune: levels, battery choice,
-  floor and border) when it exists, otherwise `typical-small`.
+- The server loads `.context/typically/results/co_airdef_v8/best.pt` (the v8 fine-tune: reads the policy, level-2
+  trade-offs) when it exists, otherwise `typical-small`. Escalation bar `conf_threshold` 0.5 (see v8 below).
 - Scoring goes through the training repo's decider (`scorer.py`). The public `inference/typical` port used to disagree
   with it on semif checkpoints (an extra eos); fixed, with a parity test on the release.
 - The map tiles need internet. maplibre and deck.gl are vendored.
@@ -73,12 +75,20 @@ Typical's real answers once; the sim is deterministic (fixed DT steps, stable te
 and drill case through the live server's own clock and director and writes a tape per scenario; `web/tape.js` plays
 it in the browser through the same API `app.js` uses. Settings work too: every level is recorded and baked for each
 policy in `sim.POLICY_GRID` (magazine posture × ammo floor × below-floor price × border price, 81 per level; posture
-only for the full raids). Changing a setting loads that policy's tape at the same moment (`tape.js` `setPolicy`).
-Priority sites stay live-only.
+only for the full raids), and each scenario's priority areas (`sim.PRIORITY`) at the default policy. Changing a setting
+loads that policy's tape at the same moment (`tape.js` `setPolicy`); a combination never recorded falls back to the
+closest one with the change asked for, and Settings shows what plays.
+
+Recording has two traps, both handled: (1) record through the build's own loop (`record.py` calls `bake.bake` with the
+real model): a Focus story turns off the quiet-time skip, which moves when calls are re-asked; recorded on any other
+clock, the build asks questions nobody answered. (2) The GPU answers the same question slightly differently from one
+job to the next (up to 0.03); a merged answer flips near-ties on replay. `record.merge` keeps each job apart and
+`Recorded(tape=...)` replays a tape from its own job. Check: `.context/airdef/verify_rec.py` (zero misses on the build
+path). Pods: `RUNPOD_COUNTRY=CA` steers off a flaky host.
 
 ```bash
 # record on an H100 (needs runpodctl >= 3: the 2.x CLI calls rest.runpod.io, which no longer resolves)
-uv run --no-project python airdef/remote_harness.py --record --ckpts v5=.context/typically/results/co_airdef_v5/best.pt
+uv run --no-project python airdef/remote_harness.py --record --ckpts v8=.context/typically/results/co_airdef_v8/best.pt
 AIRDEF_MODEL=recorded uv run --no-sync python airdef/bake.py --procs 8   # -> airdef/static
 cd airdef/deploy && npx wrangler deploy                            # password: npx wrangler secret put DEMO_PASSWORD
 ```
@@ -180,6 +190,28 @@ Level 2 under every recorded policy: v5 matches the planner on 297 of 297 batter
 seeds: October **33,174 vs 39,852** (v5 better on 5 of 6), Red Sea tied, northern 859 vs 757 (+102 ± 61: v5 worse;
 the follow-up). Totals now include crossings × border price, so they are not comparable with the tables above.
 v5 is less confident (median top choice 0.49; 31% of global calls go to the operator).
+
+### v6-v8 (2026-11-19): Typical reads the policy
+
+Fable (a UI review agent) found Level 2d letting the drone cross under the default policy. Cause: the border and floor
+settings only moved the planner's prices; Typical's text was identical under every setting, so it learned their
+average. v6 adds the policy and the time to the border to the text; v7 adds level-2 routes that vary (origin, target,
+when classified) with their own balance quota (~2,000 floor-vs-border rows, from ~20); v8 fixes "below its floor of 0"
+(a battery short for its other engagements). P(fire now) on the 2d text: v5 0.11, v6 0.33, v7 0.51, v8 fires.
+
+v8 on Level 2d: default, *Strongly*, *Allowed*, any posture -> ID-N before the border; *Indifferent* -> ID-H after it
+(as the planner). Off on one setting: *Last resort* + *Prefer* lets it fall first (the planner fires ID-N).
+
+| held out | v5 | v8 |
+|---|---|---|
+| Battery | 74% | 75% (95% acceptable) |
+| Global | 83% | 74% (now 86%, cheaper 71%) |
+| Local fire count | 80% | 79% |
+| Situation drill | 93% | 93% |
+
+Whole raids, 6 seeds, vs v5: at the old escalation bar (0.42) v8 escalated 0.8 calls per northern raid (v5 8.5) and
+took 1.2 more hits (northern 1,014 vs 859, worse on 6/6). At **0.5**: northern 881 vs 859 (+22 ± 25), October 34,151
+vs 33,174 (+977 ± 2,255), Red Sea tied -- level with v5, and the levels tell the right story. Shipped: v8 at 0.5.
 
 ## Files
 
