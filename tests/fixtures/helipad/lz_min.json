@@ -1,0 +1,25 @@
+{
+ "osm_ok": true,
+ "dem_ok": true,
+ "govmap": {"hits": {"5": [], "500": [{"layer": "שטחי אש - ציבורי", "name": "x"}], "1000": []}},
+ "verdict": {
+  "aircraft": 1,
+  "verdict": "לא עומד",
+  "shift": null,
+  "obstacles_sorted": [
+   {"label": "מבנה (house)", "height_m": 8.0, "height_src": "levels", "dist_pad_edge_m": 30.2, "dist_center_m": 52, "in_pad": false,
+    "bearing": [190, 230], "near_bearing": 205, "osm": "way/101", "tags": {"building": "house", "building:levels": "2", "name": "x"}},
+   {"label": "קו חשמל (גובה לא ידוע — נבדק כגבוה)", "height_m": 24, "height_src": "unknown", "dist_pad_edge_m": 140.0, "dist_center_m": 160,
+    "in_pad": false, "bearing": [350, 20], "near_bearing": 8, "osm": "way/202", "tags": {"power": "line"}},
+   {"label": "קו מתח עליון 161 kV", "height_m": 30, "height_src": "iec", "dist_pad_edge_m": 400.0, "dist_center_m": 420,
+    "in_pad": false, "bearing": [80, 120], "near_bearing": 95, "osm": "iec/7", "tags": {"VOLTAGE": "161"}}
+  ],
+  "zones": [
+   {"kind": "military", "name": "zone x", "dist_center_m": 650, "inside_pad": false, "bearing": [160, 200], "near_bearing": 170,
+    "osm": "way/303", "tags": {"military": "danger_area"}}
+  ],
+  "slope": {"available": true, "pad_slope_plane_deg": 1.6, "pad_slope_pixel_max_deg": 3.0, "uncertainty_deg": 6},
+  "canopy": {"available": true, "pad_max_m": 0.4, "max_within_10m_of_pad": 1.1, "max_within_50m_of_pad": 7.9},
+  "dust": {"estimated_level": "בינוני", "reason": "קרקע חשופה"}
+ }
+}

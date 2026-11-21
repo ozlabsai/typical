@@ -349,9 +349,8 @@ class Job:
 
     def upload(self):
         # ponytail: HF token goes through a local temp file (0600) -> scp -> /workspace/.env; never argv, never logged
-        token = os.environ.get("HF_TOKEN") or (Path.home() / ".cache/huggingface/token").read_text().strip()
         env, sh = self.tmp / "env", self.tmp / "job.sh"
-        env.write_text(f"HF_TOKEN={token}\n")
+        env.write_text(pod_env(self.slug, self.id))
         env.chmod(0o600)
         sh.write_text(JOB_SH.format(REMOTE=REMOTE, slug=self.slug, base=self.base, steps=self.steps))
         addr = f"root@{self.host[0]}:"
@@ -589,6 +588,27 @@ def run(slug: str, log=None, base: str = "small", steps: int = 400, prepared: bo
                 _ACTIVE.pop(j.id, None)
 
 
+def _wandb_key() -> str | None:
+    """WANDB_API_KEY (empty = opt out), else the api.wandb.ai entry `wandb login` writes to ~/.netrc; None when neither exists."""
+    if "WANDB_API_KEY" in os.environ:   # set but empty = opt out, even with a ~/.netrc login
+        return os.environ["WANDB_API_KEY"] or None
+    try:
+        import netrc
+        auth = netrc.netrc(str(Path(os.environ.get("HOME", Path.home())) / ".netrc")).authenticators("api.wandb.ai")
+        return auth[2] if auth else None
+    except (FileNotFoundError, netrc.NetrcParseError):
+        return None
+
+
+def pod_env(slug: str, job_id: str) -> str:
+    """/workspace/.env for the pod: the HF token, plus W&B (key, project, a run id unique per job) when a key exists locally."""
+    token = os.environ.get("HF_TOKEN") or (Path.home() / ".cache/huggingface/token").read_text().strip()
+    env = f"HF_TOKEN={token}\n"
+    if key := _wandb_key():
+        env += f"WANDB_API_KEY={key}\nWANDB_PROJECT=decision-factory\nWANDB_RUN_ID={slug}-{job_id}\n"
+    return env
+
+
 def train_flags(company: str, steps: int, run: str, base_args: dict, base: str = "small") -> list[str]:
     """pcdm/train.py argv for a fine-tune of data_co_<company>, warm-started from runs/base/best.pt. The architecture flags come
     from that checkpoint's own ckpt["args"] (`base_args`), so small and medium share this one code path. No value has a space."""
@@ -598,7 +618,8 @@ def train_flags(company: str, steps: int, run: str, base_args: dict, base: str =
             "--max_state", "1024", *BASES[base]["mem"], "--data", "data_v5", "--extra_data", f"data_wf,data_wh,data_u,{d}",
             "--bucket_map", f"data_wh=W,data_u=U,{d}=C", "--family_weights", "C:0.5,W:0.3,E:0.15,U:0.05", "--null_aug", "W:0.20",
             "--steps", str(steps), "--bs", "64", "--val_every", "50", "--log_every", "10", "--ckpt_every", "100", "--eval_every", str(steps),
-            "--eval_limit", "200", "--eval_bs", "8", "--best_on", f"{d}_val", "--no_final_eval"]
+            "--eval_limit", "200", "--eval_bs", "8", "--best_on", f"{d}_val", "--no_final_eval",
+            *(["--wandb"] if os.environ.get("WANDB_API_KEY") else [])]   # set on the pod from /workspace/.env (pod_env)
 
 
 def log_series(path: Path, limit: int = 200, tail: int = 256_000) -> dict:

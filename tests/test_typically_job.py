@@ -705,3 +705,31 @@ def test_a_stale_stop_never_aborts_the_next_run(env, monkeypatch):
     server.start_job(SLUG)
     idle()
     assert seen == [False]
+
+
+def test_train_flags_log_to_wandb_only_when_the_pod_has_a_key(monkeypatch):
+    base = {k: 1 for k in tj.RELEASED_ARGS["small"]}
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    assert "--wandb" not in tj.train_flags("acme", 200, "co_acme", base)
+    monkeypatch.setenv("WANDB_API_KEY", "k")
+    assert "--wandb" in tj.train_flags("acme", 200, "co_acme", base)
+
+
+def test_pod_env_carries_wandb_key_from_netrc_and_a_unique_run_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert tj.pod_env("acme", "ab12") == "HF_TOKEN=hf_x\n"
+    (tmp_path / ".netrc").write_text("machine api.wandb.ai\n  login user\n  password wb_secret\n")
+    (tmp_path / ".netrc").chmod(0o600)
+    env = tj.pod_env("acme", "ab12")
+    assert "WANDB_API_KEY=wb_secret\n" in env and "WANDB_RUN_ID=acme-ab12\n" in env and "WANDB_PROJECT=decision-factory\n" in env
+
+
+def test_empty_wandb_key_opts_out_even_with_netrc(monkeypatch, tmp_path):
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".netrc").write_text("machine api.wandb.ai\n  login user\n  password wb_secret\n")
+    (tmp_path / ".netrc").chmod(0o600)
+    monkeypatch.setenv("WANDB_API_KEY", "")
+    assert tj.pod_env("acme", "ab12") == "HF_TOKEN=hf_x\n"

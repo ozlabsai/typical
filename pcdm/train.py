@@ -953,7 +953,15 @@ def print_table(results):
 
 def init_wandb(args):
     import wandb
-    wandb.init(project="pcdm", name=args.name, id=args.name, resume="allow", config=vars(args))
+    # WANDB_PROJECT / WANDB_RUN_ID (set per Decision Factory job) keep two jobs with the same run name from merging into one run
+    try:
+        wandb.init(project=os.environ.get("WANDB_PROJECT", "pcdm"), name=args.name, id=os.environ.get("WANDB_RUN_ID", args.name),
+                   resume="allow", config=vars(args))
+    except Exception as e:
+        if not os.environ.get("WANDB_RUN_ID"):
+            raise   # a research run asked for W&B explicitly: fail loudly
+        print(f"WARN: W&B unavailable ({e}); this paid Decision Factory job continues without it", flush=True)
+        return None
     return wandb
 
 
