@@ -1,0 +1,700 @@
+{
+ "id": "S4",
+ "name": {
+  "en": "S4",
+  "he": "S4"
+ },
+ "round": "2026-10",
+ "aircraft": 1,
+ "touchdown": {
+  "moved": null
+ },
+ "expert": {
+  "call": "not_approved",
+  "reason": {
+   "en": "Power line north of the pad, inside the 300 m ring.",
+   "he": "קו חשמל צפונית למשטח, בתוך טבעת 300 מ'."
+  }
+ },
+ "verdict": {
+  "status": "probably_fails",
+  "probs": {
+   "approved": 0.0053,
+   "probably_fails": 0.9533,
+   "fails": 0.0414,
+   "not_checked": 0
+  },
+  "deciding": [
+   "high_300",
+   "low_wires"
+  ]
+ },
+ "items": [
+  {
+   "id": "pad",
+   "status": "passes",
+   "probs": {
+    "passes": 0.9961,
+    "not_checked": 0.0025,
+    "probably_fails": 0.001,
+    "fails": 0.0004
+   },
+   "findings": []
+  },
+  {
+   "id": "very_low_10",
+   "status": "passes",
+   "probs": {
+    "passes": 0.989,
+    "not_checked": 0.007,
+    "probably_fails": 0.0029,
+    "fails": 0.001
+   },
+   "findings": []
+  },
+  {
+   "id": "low_50",
+   "status": "passes",
+   "probs": {
+    "passes": 0.9877,
+    "not_checked": 0.0079,
+    "probably_fails": 0.0033,
+    "fails": 0.0011
+   },
+   "findings": []
+  },
+  {
+   "id": "high_300",
+   "status": "probably_fails",
+   "probs": {
+    "probably_fails": 0.869,
+    "not_checked": 0.0837,
+    "passes": 0.0351,
+    "fails": 0.0122
+   },
+   "findings": [
+    0,
+    1
+   ]
+  },
+  {
+   "id": "ultra_1km",
+   "status": "passes",
+   "probs": {
+    "passes": 0.9878,
+    "not_checked": 0.0086,
+    "coordination": 0.0036
+   },
+   "findings": []
+  },
+  {
+   "id": "slope",
+   "status": "passes",
+   "probs": {
+    "passes": 0.9911,
+    "not_checked": 0.0063,
+    "fails": 0.0026
+   },
+   "findings": []
+  },
+  {
+   "id": "zones",
+   "status": "coordination",
+   "probs": {
+    "coordination": 0.9859,
+    "not_checked": 0.0099,
+    "passes": 0.0042
+   },
+   "findings": []
+  },
+  {
+   "id": "belly",
+   "status": "passes",
+   "probs": {
+    "passes": 0.9967,
+    "not_checked": 0.0023,
+    "prep": 0.001
+   },
+   "findings": []
+  },
+  {
+   "id": "dust",
+   "status": "passes",
+   "probs": {
+    "passes": 0.9925,
+    "not_checked": 0.0053,
+    "prep": 0.0022
+   },
+   "findings": []
+  },
+  {
+   "id": "low_wires",
+   "status": "probably_fails",
+   "probs": {
+    "probably_fails": 0.936,
+    "not_checked": 0.0451,
+    "fails": 0.0189
+   },
+   "findings": [
+    7
+   ]
+  },
+  {
+   "id": "minefield_500",
+   "status": "not_checked",
+   "probs": {
+    "not_checked": 0.9942,
+    "fails": 0.0058
+   },
+   "findings": []
+  }
+ ],
+ "conditions": [
+  "minefield_check",
+  "low_wire_walk",
+  "approach_heading",
+  "notam"
+ ],
+ "prep": [],
+ "findings": {
+  "obstacles": [
+   {
+    "kind": "power_line",
+    "label": "power line (voltage unknown)",
+    "height_m": 24,
+    "height_src": "unknown",
+    "dist_m": 142,
+    "bearing": 8,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.5277,
+     0.3026
+    ]
+   },
+   {
+    "kind": "power_pole",
+    "label": "power pole",
+    "height_m": 24,
+    "height_src": "unknown",
+    "dist_m": 151,
+    "bearing": 352,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.4707,
+     0.2914
+    ]
+   },
+   {
+    "kind": "building",
+    "label": "building",
+    "height_m": 8,
+    "height_src": "estimated",
+    "dist_m": 96,
+    "bearing": 210,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.4291,
+     0.6229
+    ]
+   },
+   {
+    "kind": "woodland",
+    "label": "woodland",
+    "height_m": 11,
+    "height_src": "estimated",
+    "dist_m": 72,
+    "bearing": 140,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.5719,
+     0.5857
+    ]
+   },
+   {
+    "kind": "lit_road",
+    "label": "lit road",
+    "height_m": 10,
+    "height_src": "unknown",
+    "dist_m": 260,
+    "bearing": 262,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.1565,
+     0.5483
+    ]
+   },
+   {
+    "kind": "tree",
+    "label": "tree",
+    "height_m": 6,
+    "height_src": "estimated",
+    "dist_m": 58,
+    "bearing": 75,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.5912,
+     0.4756
+    ]
+   },
+   {
+    "kind": "building",
+    "label": "building",
+    "height_m": 5,
+    "height_src": "estimated",
+    "dist_m": 180,
+    "bearing": 110,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.732,
+     0.5844
+    ]
+   },
+   {
+    "kind": "wire",
+    "label": "overhead wire (video; height and distance unknown, treated as within 50 m)",
+    "height_m": 8,
+    "height_src": "unknown",
+    "dist_m": 25,
+    "bearing": null,
+    "in_pad": false,
+    "source": "video",
+    "xy": null
+   }
+  ],
+  "zones": [
+   {
+    "kind": "military_area",
+    "dist_m": 2100,
+    "inside": false,
+    "bearing": null
+   }
+  ],
+  "slope": {
+   "deg": 2.6,
+   "unc": 6
+  },
+  "canopy": {
+   "pad_max_m": 0.3,
+   "max_10_m": 1.2,
+   "max_50_m": 8.1
+  },
+  "dust": "light",
+  "belly": "clear",
+  "layers": {
+   "osm": true,
+   "dem": true,
+   "govmap": true,
+   "corridors": false
+  },
+  "counts": {
+   "obstacles_total": 112,
+   "within_300": 14
+  }
+ },
+ "evidence": {
+  "satellite": {
+   "image": "img/S4_sat.jpg",
+   "half_width_m": 400,
+   "pad_xy": [
+    0.5,
+    0.5
+   ]
+  },
+  "frames": {
+   "source": "model",
+   "items": [
+    {
+     "image": "img/S4_f01.jpg",
+     "t": 1.5,
+     "answers": {
+      "wires": {
+       "yes": 0.7418,
+       "no": 0.1183,
+       "cant_tell": 0.1399
+      },
+      "pole": {
+       "yes": 0.7945,
+       "no": 0.1289,
+       "cant_tell": 0.0766
+      },
+      "tall_structure": {
+       "no": 0.7818,
+       "yes": 0.097,
+       "cant_tell": 0.1211
+      },
+      "tallest_height": {
+       "above_24": 0.9432,
+       "below_1_2": 0.0142,
+       "1_2_to_4_5": 0.0109,
+       "4_5_to_24": 0.0229,
+       "cant_tell": 0.0087
+      },
+      "tallest_distance": {
+       "50_to_300": 0.8682,
+       "below_10": 0.0495,
+       "10_to_50": 0.0337,
+       "above_300": 0.0434,
+       "cant_tell": 0.0052
+      },
+      "tallest_type": {
+       "pole": 0.7802,
+       "tree": 0.04,
+       "building": 0.0552,
+       "wall_or_fence": 0.0099,
+       "vehicle": 0.0581,
+       "none": 0.0308,
+       "cant_tell": 0.0258
+      },
+      "ground": {
+       "hard_earth": 0.8006,
+       "paved": 0.0076,
+       "stony": 0.046,
+       "ploughed": 0.0224,
+       "vegetation": 0.0414,
+       "powdery": 0.0134,
+       "cant_tell": 0.0685
+      },
+      "vegetation_belly": {
+       "no": 0.9013,
+       "yes": 0.0699,
+       "cant_tell": 0.0288
+      },
+      "dust": {
+       "light": 0.6814,
+       "medium": 0.1642,
+       "heavy": 0.1271,
+       "cant_tell": 0.0272
+      }
+     }
+    },
+    {
+     "image": "img/S4_f02.jpg",
+     "t": 4,
+     "answers": {
+      "wires": {
+       "yes": 0.8731,
+       "no": 0.1204,
+       "cant_tell": 0.0065
+      },
+      "pole": {
+       "yes": 0.7789,
+       "no": 0.1247,
+       "cant_tell": 0.0964
+      },
+      "tall_structure": {
+       "no": 0.8032,
+       "yes": 0.1482,
+       "cant_tell": 0.0486
+      },
+      "tallest_height": {
+       "above_24": 0.8732,
+       "below_1_2": 0.0301,
+       "1_2_to_4_5": 0.0376,
+       "4_5_to_24": 0.055,
+       "cant_tell": 0.0041
+      },
+      "tallest_distance": {
+       "50_to_300": 0.6991,
+       "below_10": 0.069,
+       "10_to_50": 0.1042,
+       "above_300": 0.1125,
+       "cant_tell": 0.0152
+      },
+      "tallest_type": {
+       "pole": 0.772,
+       "tree": 0.0366,
+       "building": 0.0547,
+       "wall_or_fence": 0.0353,
+       "vehicle": 0.0176,
+       "none": 0.0403,
+       "cant_tell": 0.0436
+      },
+      "ground": {
+       "hard_earth": 0.7216,
+       "paved": 0.0614,
+       "stony": 0.0503,
+       "ploughed": 0.0141,
+       "vegetation": 0.0632,
+       "powdery": 0.0265,
+       "cant_tell": 0.0629
+      },
+      "vegetation_belly": {
+       "no": 0.9279,
+       "yes": 0.0539,
+       "cant_tell": 0.0182
+      },
+      "dust": {
+       "light": 0.6469,
+       "medium": 0.0223,
+       "heavy": 0.0614,
+       "cant_tell": 0.2695
+      }
+     }
+    },
+    {
+     "image": "img/S4_f03.jpg",
+     "t": 6.5,
+     "answers": {
+      "wires": {
+       "no": 0.6586,
+       "yes": 0.1676,
+       "cant_tell": 0.1738
+      },
+      "pole": {
+       "no": 0.8452,
+       "yes": 0.0744,
+       "cant_tell": 0.0804
+      },
+      "tall_structure": {
+       "no": 0.8411,
+       "yes": 0.1212,
+       "cant_tell": 0.0376
+      },
+      "tallest_height": {
+       "4_5_to_24": 0.8282,
+       "below_1_2": 0.0402,
+       "1_2_to_4_5": 0.0338,
+       "above_24": 0.047,
+       "cant_tell": 0.0508
+      },
+      "tallest_distance": {
+       "50_to_300": 0.8549,
+       "below_10": 0.0118,
+       "10_to_50": 0.0525,
+       "above_300": 0.0661,
+       "cant_tell": 0.0148
+      },
+      "tallest_type": {
+       "tree": 0.713,
+       "building": 0.0548,
+       "wall_or_fence": 0.0296,
+       "pole": 0.0731,
+       "vehicle": 0.0673,
+       "none": 0.0056,
+       "cant_tell": 0.0566
+      },
+      "ground": {
+       "vegetation": 0.7538,
+       "paved": 0.0689,
+       "hard_earth": 0.0406,
+       "stony": 0.0072,
+       "ploughed": 0.0537,
+       "powdery": 0.0071,
+       "cant_tell": 0.0688
+      },
+      "vegetation_belly": {
+       "yes": 0.8221,
+       "no": 0.099,
+       "cant_tell": 0.0789
+      },
+      "dust": {
+       "light": 0.8776,
+       "medium": 0.0302,
+       "heavy": 0.0231,
+       "cant_tell": 0.0691
+      }
+     }
+    },
+    {
+     "image": "img/S4_f04.jpg",
+     "t": 9,
+     "answers": {
+      "wires": {
+       "no": 0.9492,
+       "yes": 0.0378,
+       "cant_tell": 0.0131
+      },
+      "pole": {
+       "no": 0.8695,
+       "yes": 0.0163,
+       "cant_tell": 0.1142
+      },
+      "tall_structure": {
+       "no": 0.724,
+       "yes": 0.1183,
+       "cant_tell": 0.1577
+      },
+      "tallest_height": {
+       "1_2_to_4_5": 0.6666,
+       "below_1_2": 0.0966,
+       "4_5_to_24": 0.0506,
+       "above_24": 0.0991,
+       "cant_tell": 0.0871
+      },
+      "tallest_distance": {
+       "above_300": 0.8831,
+       "below_10": 0.0452,
+       "10_to_50": 0.0188,
+       "50_to_300": 0.0246,
+       "cant_tell": 0.0283
+      },
+      "tallest_type": {
+       "none": 0.8152,
+       "tree": 0.0252,
+       "building": 0.0213,
+       "wall_or_fence": 0.0276,
+       "pole": 0.0334,
+       "vehicle": 0.0352,
+       "cant_tell": 0.0421
+      },
+      "ground": {
+       "ploughed": 0.6654,
+       "paved": 0.0703,
+       "hard_earth": 0.086,
+       "stony": 0.0561,
+       "vegetation": 0.0213,
+       "powdery": 0.0363,
+       "cant_tell": 0.0647
+      },
+      "vegetation_belly": {
+       "no": 0.7485,
+       "yes": 0.0991,
+       "cant_tell": 0.1524
+      },
+      "dust": {
+       "medium": 0.9121,
+       "light": 0.0276,
+       "heavy": 0.0365,
+       "cant_tell": 0.0238
+      }
+     }
+    },
+    {
+     "image": "img/S4_f05.jpg",
+     "t": 11.5,
+     "answers": {
+      "wires": {
+       "no": 0.8924,
+       "yes": 0.0395,
+       "cant_tell": 0.0681
+      },
+      "pole": {
+       "no": 0.9099,
+       "yes": 0.0411,
+       "cant_tell": 0.049
+      },
+      "tall_structure": {
+       "no": 0.6651,
+       "yes": 0.0904,
+       "cant_tell": 0.2445
+      },
+      "tallest_height": {
+       "1_2_to_4_5": 0.8325,
+       "below_1_2": 0.0336,
+       "4_5_to_24": 0.0577,
+       "above_24": 0.0159,
+       "cant_tell": 0.0603
+      },
+      "tallest_distance": {
+       "above_300": 0.8283,
+       "below_10": 0.0064,
+       "10_to_50": 0.015,
+       "50_to_300": 0.0589,
+       "cant_tell": 0.0913
+      },
+      "tallest_type": {
+       "none": 0.8136,
+       "tree": 0.0042,
+       "building": 0.01,
+       "wall_or_fence": 0.0473,
+       "pole": 0.0349,
+       "vehicle": 0.0452,
+       "cant_tell": 0.0447
+      },
+      "ground": {
+       "ploughed": 0.913,
+       "paved": 0.0131,
+       "hard_earth": 0.0203,
+       "stony": 0.0154,
+       "vegetation": 0.0162,
+       "powdery": 0.02,
+       "cant_tell": 0.002
+      },
+      "vegetation_belly": {
+       "no": 0.9136,
+       "yes": 0.0559,
+       "cant_tell": 0.0305
+      },
+      "dust": {
+       "medium": 0.8749,
+       "light": 0.046,
+       "heavy": 0.0641,
+       "cant_tell": 0.0151
+      }
+     }
+    },
+    {
+     "image": "img/S4_f06.jpg",
+     "t": 14,
+     "answers": {
+      "wires": {
+       "yes": 0.8568,
+       "no": 0.0762,
+       "cant_tell": 0.067
+      },
+      "pole": {
+       "yes": 0.8866,
+       "no": 0.0578,
+       "cant_tell": 0.0556
+      },
+      "tall_structure": {
+       "no": 0.8073,
+       "yes": 0.0792,
+       "cant_tell": 0.1134
+      },
+      "tallest_height": {
+       "above_24": 0.8981,
+       "below_1_2": 0.0324,
+       "1_2_to_4_5": 0.0362,
+       "4_5_to_24": 0.0168,
+       "cant_tell": 0.0165
+      },
+      "tallest_distance": {
+       "50_to_300": 0.6657,
+       "below_10": 0.1041,
+       "10_to_50": 0.0739,
+       "above_300": 0.0591,
+       "cant_tell": 0.0973
+      },
+      "tallest_type": {
+       "pole": 0.8879,
+       "tree": 0.0212,
+       "building": 0.0168,
+       "wall_or_fence": 0.0246,
+       "vehicle": 0.0227,
+       "none": 0.0022,
+       "cant_tell": 0.0246
+      },
+      "ground": {
+       "hard_earth": 0.855,
+       "paved": 0.0214,
+       "stony": 0.0294,
+       "ploughed": 0.0225,
+       "vegetation": 0.0204,
+       "powdery": 0.0191,
+       "cant_tell": 0.0322
+      },
+      "vegetation_belly": {
+       "no": 0.7506,
+       "yes": 0.1145,
+       "cant_tell": 0.135
+      },
+      "dust": {
+       "light": 0.7009,
+       "medium": 0.0993,
+       "heavy": 0.067,
+       "cant_tell": 0.1328
+      }
+     }
+    }
+   ]
+  }
+ }
+}

@@ -104,3 +104,16 @@ def test_derive_verdict():                                        # M8: the scor
     assert derive_verdict(("passes", "prep", "coordination", "not_checked"), False) == "approved"
     c = _case(obstacles=[ob("power_line", 24, "unknown", 140)])
     assert verdict(c, judge(c)) == derive_verdict(judge(c).values(), False)
+
+
+def test_triggers_name_the_obstacles_behind_each_failing_item():
+    from helipad.rules import triggers
+    c = _case(obstacles=[ob("power_line", 24, "unknown", 140), ob("tree", 8, "estimated", 400),
+                         ob("building", 9, "levels", 30), ob("fence", 1.8, "estimated", 0, True)])
+    t = triggers(c)
+    assert t["high_300"] == [0] and t["low_50"] == [2] and t["pad"] == [3]
+    assert t["very_low_10"] == [] and all(t[i] == [] for i in ("slope", "dust", "zones"))
+    # consistent with judge: an item has triggers exactly when it fails or probably fails because of an obstacle
+    s = judge(c)
+    for item in ("pad", "very_low_10", "low_50", "high_300"):
+        assert bool(t[item]) == (s[item] in ("fails", "probably_fails"))

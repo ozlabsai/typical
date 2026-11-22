@@ -82,3 +82,67 @@ The verdict was "with fixes": 0 critical, 8 important. All 8 are fixed, each wit
 - **I8, rounding.** Printed numbers never round across a protocol limit. `check` compares the visible case too: 16/16 sites.
 
 Suite: 165 passed, 1 skipped (geo; 4/4 pass in the geo env). Deferred minors are listed in the execution ledger.
+
+## Follow-up: a cautious threshold does not rescue the 800-step model
+
+`scripts/helipad_threshold.py` reports an item as "probably fails" when P(fails) + P(probably fails) ≥ τ. The probabilities are unchanged; every option is still shown with its probability. τ was fitted on half the held-out sites (split by case) and is reported on the other half.
+
+| τ (held-out test half) | Unsafe approvals | False alarms on truly approved sites | Verdict of record |
+|---|---|---|---|
+| none (argmax) | 13.8% | 11.2% | 85.0% |
+| 0.46 | 12.7% | 12.2% | 85.4% |
+| 0.21 | 6.9% | 30.6% | 81.9% |
+| 0.11 | 1.6% | 50.0% | 78.7% |
+| **0.03 (fitted for ≤1%)** | **0.5%** | **75.5%** | 70.7% |
+
+At τ = 0.03:
+- **near-threshold pairs:** 1.1% unsafe, 74.7% false alarms;
+- **real sites:** 0 unsafe, 4 of 9 truly approved sites flagged.
+
+**Reading.** Many ring violations get almost no probability on "fails". The model is confidently wrong, not uncertain, so no threshold separates hazards from clear sites. The fix has to come from the model: a larger dose (the 3,200-step run is next) or ring-relative distances in the case text. Re-scoring used the eval files in the format the 800-step model was trained on, rebuilt deterministically from the pre-cap-change commit.
+
+## Follow-up: 3,200 steps
+
+The 3,200-step run trained through Decision Factory (research step count) on the rebuilt case format (obstacle cap 9, zone cap 4). **Dose and format are confounded**: the 800-step model was trained and scored on the old format. Both checkpoints are scored on the held-out files in their own format. Numbers come from `helipad_score.py` `report()` (full-probability pass, `--limit-cases 0`), except ECE per ring, which is from the Decision Factory `eval_co.json` (same checkpoints, native mode).
+
+| Metric (800 -> 3,200) | 800 steps | 3,200 steps |
+|---|---|---|
+| Item agreement, contrast, overall | .943 | .970 |
+| Item agreement, contrast: very_low_10 / low_50 / high_300 / pad | .924 / .776 / .836 / .984 | .987 / .904 / .838 / .987 |
+| `unsafe_item_rate`, contrast | 24.0% | 8.4% |
+| `unsafe_item_rate`, rule holdout (import one-liner) | 20.7% | 5.3% |
+| `unsafe_record_rate`, contrast | 14.6% | 2.5% |
+| `unsafe_record_rate`, rule holdout | 14.9% | 2.3% |
+| `verdict_of_record_agreement`, contrast | .764 | .896 |
+| `verdict_of_record_agreement`, rule holdout | .855 | .957 |
+| Flipped-pair agreement (contrast) | .726 | .865 |
+| Real sites (S1-S6 and O1-O10): record agreement / unsafe records | .933 / 0 | 1.000 / 0 |
+| Real sites: unsafe item rate | 18.2% | 0% |
+| Expert direction by record | 6/6 | 6/6 |
+| Expert direction, model's own verdict question | 5/6 | 6/6 |
+| Expert item rows | 4/5 | 5/5 |
+| ECE very_low_10 / low_50 / high_300 / pad | .032 / .045 / .086 / .015 | .010 / .047 / .127 / .013 |
+
+Base (frozen) model item agreement on contrast was .491. Two weak spots remain at 3,200: `high_300` did not improve (.836 -> .838) and its ECE got worse; and on `helipad_norule` (no rule text in the prompt) `ultra_1km` collapsed to .09 agreement and overall agreement is only .553, so the model leans on the rule text. The 11-item expert file is too small to read per family.
+
+### Cautious threshold
+
+Same method as above, fitted on half the holdout (split by case), reported on the other half. Fitted tau = 0.44 (largest value with <=1% unsafe record rate on the fit half).
+
+| tau | Unsafe records | False alarms |
+|---|---|---|
+| none (argmax), test half | 3.2% | 5.1% |
+| 0.44 (fitted), fit half | 1.0% | 8.0% |
+| 0.44 (fitted), test half | 2.6% | 5.1% |
+| 0.44 (fitted), contrast | 2.3% | 33.7% |
+| 0.21, full rule holdout | 0.5% | 10.2% |
+| 0.11, full rule holdout | 0.5% | 17.3% |
+| 0.06, full rule holdout | 0.5% | 20.4% |
+| 0.01, full rule holdout | 0.5% | 32.7% |
+
+Real sites: 0 unsafe, 0 false alarms at any tau.
+
+### Verdict
+
+- **Does the dose fix the rings?** Mostly. very_low_10 and low_50 improved clearly, unsafe records fell about six-fold (14.6% -> 2.5% on contrast), and real sites are clean. `high_300` and pad are unchanged, and the no-rule prompt still fails.
+- **At <=1% unsafe approvals with an acceptable false-alarm rate?** Not yet. Unsafe records are 2.3-3.2% at argmax and 2.3-2.6% with the fitted tau, which fell short of the 1% target on the held-out half. The fitted tau is too loose; tau <= 0.21 reaches 0.5% on the full holdout but costs 10-33% false alarms, and on the contrast near-threshold pairs the false-alarm rate is already ~32% at argmax. The threshold now helps, because errors are less confidently wrong than at 800 steps, but it does not close the gap. Next candidates: ring-relative distances in the case text (option 3 above) and more near-threshold training data for `high_300`.
