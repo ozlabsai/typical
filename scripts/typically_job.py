@@ -40,7 +40,8 @@ PROVIDER_DOWN = "The GPU provider stopped responding."
 NO_GPU = re.compile(r"no (longer any )?instances?( currently)? available|does not have the resources", re.I)
 HEARTBEAT = timedelta(minutes=15)   # an active job not owned by this process is orphaned only after this long without a status write
 RECONCILE_S = 300   # the server's periodic reconcile
-STEPS = (200, 400, 800)   # Quick / Balanced / Thorough
+STEPS = (200, 400, 800)   # Quick / Balanced / Thorough (the app's choices: server.Settings.steps)
+RESEARCH_STEPS = (1600, 3200)   # CLI only, for research doses; the app never offers them
 # scale: deadline + stale multiplier. mem: the memory profile of each release's own recipe (medium = 4B: grad-checkpointing, smaller micro-batch).
 BASES = {"small": {"scale": 1, "mem": ["--grad_accum", "8"]}, "medium": {"scale": 2, "mem": ["--grad_ckpt", "--grad_accum", "16"]}}
 # The released checkpoints' ckpt["args"] the fine-tune must match. The pod reads the real ones from runs/base/best.pt (train_flags);
@@ -217,14 +218,14 @@ def delete_pod(pod_id: str) -> None:
 
 class Job:
     def __init__(self, slug: str, log, tmp: Path, base: str = "small", steps: int = 400):
-        if base not in BASES or steps not in STEPS:
-            raise ValueError(f"bad base/steps {base!r}/{steps!r}: need one of {list(BASES)} and {list(STEPS)}")
+        if base not in BASES or steps not in STEPS + RESEARCH_STEPS:
+            raise ValueError(f"bad base/steps {base!r}/{steps!r}: need one of {list(BASES)} and {list(STEPS + RESEARCH_STEPS)}")
         self.slug, self.log, self.tmp, self.id, self.base, self.steps = slug, log, tmp, secrets.token_hex(4), base, steps
         self.name = f"{POD_PREFIX}{slug}-{self.id}"   # unique per job: nothing else can ever match it
         self.dir, self.pod_id, self.host, self.lost, self.gpu = job_dir(slug), None, None, 0.0, None   # lost: seconds spent on failed API calls
         self.gone, self._deleting = False, threading.Lock()   # delete() runs from the job's finally and from shutdown()
         self.settled = False   # shutdown() wrote the outcome: this job writes no more status
-        self.deadline = time.monotonic() + DEADLINE_S * BASES[base]["scale"]
+        self.deadline = time.monotonic() + self.limit_s()
         self.tar = tmp / "repo.tar.gz"
 
     def call(self, argv: list[str], cap: float, out: Path | None = None) -> str:
@@ -232,8 +233,12 @@ class Job:
         check_stop(self.slug)
         left = self.deadline - time.monotonic()
         if left <= 0:
-            raise Deadline(f"it took longer than {DEADLINE_S * BASES[self.base]['scale'] / 60:.0f} minutes, the limit for this setting")
+            raise Deadline(f"it took longer than {self.limit_s() / 60:.0f} minutes, the limit for this setting")
         return _run(argv, min(cap, left), out)
+
+    def limit_s(self) -> float:
+        """The job's single deadline: the base's limit for up to 800 steps, growing in proportion for research doses."""
+        return DEADLINE_S * BASES[self.base]["scale"] * max(1.0, self.steps / max(STEPS))
 
     def to(self, phase: str, message: str, code: str | None = None, **extra):
         if self.settled:

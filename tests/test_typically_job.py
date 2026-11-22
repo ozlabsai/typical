@@ -733,3 +733,16 @@ def test_empty_wandb_key_opts_out_even_with_netrc(monkeypatch, tmp_path):
     (tmp_path / ".netrc").chmod(0o600)
     monkeypatch.setenv("WANDB_API_KEY", "")
     assert tj.pod_env("acme", "ab12") == "HF_TOKEN=hf_x\n"
+
+
+def test_research_step_counts_run_from_the_cli_with_a_deadline_that_scales(tmp_path):
+    short = tj.Job("acme", lambda m: None, tmp_path, "medium", 800)
+    long = tj.Job("acme", lambda m: None, tmp_path, "medium", 3200)
+    assert (long.deadline - short.deadline) == pytest.approx(3 * tj.DEADLINE_S * tj.BASES["medium"]["scale"], abs=5)
+    with pytest.raises(ValueError):
+        tj.Job("acme", lambda m: None, tmp_path, "medium", 1000)
+
+
+def test_the_app_still_offers_only_the_product_step_counts():
+    import typing
+    assert set(typing.get_args(server.Settings.model_fields["steps"].annotation)) == {200, 400, 800}

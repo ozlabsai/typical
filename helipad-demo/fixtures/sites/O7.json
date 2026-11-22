@@ -1,0 +1,275 @@
+{
+ "id": "O7",
+ "name": {
+  "en": "O7",
+  "he": "O7"
+ },
+ "round": "2026-11",
+ "aircraft": 2,
+ "touchdown": {
+  "moved": null
+ },
+ "expert": null,
+ "verdict": {
+  "status": "fails",
+  "probs": {
+   "approved": 0.0035,
+   "probably_fails": 0.028,
+   "fails": 0.9685,
+   "not_checked": 0
+  },
+  "deciding": [
+   "very_low_10",
+   "low_50"
+  ]
+ },
+ "items": [
+  {
+   "id": "pad",
+   "status": "passes",
+   "probs": {
+    "passes": 0.9851,
+    "not_checked": 0.0095,
+    "probably_fails": 0.004,
+    "fails": 0.0014
+   },
+   "findings": []
+  },
+  {
+   "id": "very_low_10",
+   "status": "probably_fails",
+   "probs": {
+    "probably_fails": 0.8668,
+    "not_checked": 0.0851,
+    "passes": 0.0357,
+    "fails": 0.0124
+   },
+   "findings": [
+    1
+   ]
+  },
+  {
+   "id": "low_50",
+   "status": "fails",
+   "probs": {
+    "fails": 0.9675,
+    "not_checked": 0.0208,
+    "passes": 0.0087,
+    "probably_fails": 0.003
+   },
+   "findings": [
+    0,
+    2
+   ]
+  },
+  {
+   "id": "high_300",
+   "status": "passes",
+   "probs": {
+    "passes": 0.9934,
+    "not_checked": 0.0042,
+    "probably_fails": 0.0018,
+    "fails": 0.0006
+   },
+   "findings": []
+  },
+  {
+   "id": "ultra_1km",
+   "status": "coordination",
+   "probs": {
+    "coordination": 0.9913,
+    "not_checked": 0.0061,
+    "passes": 0.0026
+   },
+   "findings": [
+    4
+   ]
+  },
+  {
+   "id": "slope",
+   "status": "passes",
+   "probs": {
+    "passes": 0.9899,
+    "not_checked": 0.0071,
+    "fails": 0.003
+   },
+   "findings": []
+  },
+  {
+   "id": "zones",
+   "status": "not_checked",
+   "probs": {
+    "not_checked": 0.9906,
+    "passes": 0.0066,
+    "coordination": 0.0028
+   },
+   "findings": []
+  },
+  {
+   "id": "belly",
+   "status": "prep",
+   "probs": {
+    "prep": 0.9879,
+    "not_checked": 0.0085,
+    "passes": 0.0036
+   },
+   "findings": []
+  },
+  {
+   "id": "dust",
+   "status": "prep",
+   "probs": {
+    "prep": 0.9916,
+    "not_checked": 0.0059,
+    "passes": 0.0025
+   },
+   "findings": []
+  },
+  {
+   "id": "low_wires",
+   "status": "not_checked",
+   "probs": {
+    "not_checked": 0.9938,
+    "probably_fails": 0.0044,
+    "fails": 0.0018
+   },
+   "findings": []
+  },
+  {
+   "id": "minefield_500",
+   "status": "not_checked",
+   "probs": {
+    "not_checked": 0.9881,
+    "fails": 0.0119
+   },
+   "findings": []
+  }
+ ],
+ "conditions": [
+  "minefield_check",
+  "low_wire_walk",
+  "approach_heading",
+  "notam"
+ ],
+ "prep": [
+  "wetting",
+  "clear_belly_area"
+ ],
+ "findings": {
+  "obstacles": [
+   {
+    "kind": "water_tower",
+    "label": "water tower",
+    "height_m": 18,
+    "height_src": "measured",
+    "dist_m": 32,
+    "bearing": 225,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.4562,
+     0.5438
+    ]
+   },
+   {
+    "kind": "tree",
+    "label": "tree",
+    "height_m": 3,
+    "height_src": "estimated",
+    "dist_m": 6,
+    "bearing": 100,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.5289,
+     0.5051
+    ]
+   },
+   {
+    "kind": "building",
+    "label": "building",
+    "height_m": 9,
+    "height_src": "estimated",
+    "dist_m": 44,
+    "bearing": 300,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.4334,
+     0.4616
+    ]
+   },
+   {
+    "kind": "power_line",
+    "label": "power line (voltage unknown)",
+    "height_m": 24,
+    "height_src": "unknown",
+    "dist_m": 372,
+    "bearing": 45,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.8443,
+     0.1557
+    ]
+   },
+   {
+    "kind": "antenna",
+    "label": "antenna mast",
+    "height_m": 82,
+    "height_src": "tagged",
+    "dist_m": 760,
+    "bearing": 15,
+    "in_pad": false,
+    "source": "map",
+    "xy": null
+   },
+   {
+    "kind": "building",
+    "label": "building",
+    "height_m": 6,
+    "height_src": "estimated",
+    "dist_m": 120,
+    "bearing": 160,
+    "in_pad": false,
+    "source": "map",
+    "xy": [
+     0.5588,
+     0.6615
+    ]
+   }
+  ],
+  "zones": [],
+  "slope": {
+   "deg": 7.5,
+   "unc": 2
+  },
+  "canopy": {
+   "pad_max_m": 0.3,
+   "max_10_m": 1.2,
+   "max_50_m": 8.1
+  },
+  "dust": "heavy",
+  "belly": "obstacles",
+  "layers": {
+   "osm": true,
+   "dem": true,
+   "govmap": false,
+   "corridors": false
+  },
+  "counts": {
+   "obstacles_total": 41,
+   "within_300": 6
+  }
+ },
+ "evidence": {
+  "satellite": {
+   "image": "img/O7_sat.jpg",
+   "half_width_m": 400,
+   "pad_xy": [
+    0.5,
+    0.5
+   ]
+  }
+ }
+}

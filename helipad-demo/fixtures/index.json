@@ -1,0 +1,23 @@
+{
+ "model": {
+  "name": "typical-medium · helipad",
+  "version": "plan1-800"
+ },
+ "sites": [
+  {
+   "id": "S2",
+   "round": "2026-10",
+   "verdict": "approved"
+  },
+  {
+   "id": "S4",
+   "round": "2026-10",
+   "verdict": "probably_fails"
+  },
+  {
+   "id": "O7",
+   "round": "2026-11",
+   "verdict": "fails"
+  }
+ ]
+}
